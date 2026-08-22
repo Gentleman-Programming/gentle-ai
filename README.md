@@ -18,7 +18,7 @@
 ---
 
 > [!IMPORTANT]
-> **Receipt-Driven Development (RDD) is the supported stable path, and it is opt-in.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and once RDD is enabled every route converges on structural proof, bounded review, an exact receipt, and delivery authorization. RDD is off until you enable it with `gentle-ai review mode enable --scope global`.
+> **Receipt-Driven Development (RDD) is opt-in and provides bounded review evidence.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and once RDD is enabled every route can converge on structural proof and an informational bounded-review outcome. Ordinary repository policy owns delivery. RDD is off until you enable it with `gentle-ai review mode enable --scope global`.
 >
 > The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` is the stable channel:
 >
@@ -79,7 +79,7 @@ Every configured agent receives the same outcome-first routing, even when the op
 | Understanding needs 4+ files, reading prepares a write, broad research is needed, or a writer changes 2+ non-trivial files | Delegate the narrow exploration or one focused writer without creating SDD state. |
 | Durable proposal, spec, design, and task artifacts would materially reduce substantial ambiguity | Offer optional SDD; select it only after an explicit request or an accepted proposal. |
 | A candidate is ready for review | Freeze the exact bytes and derive review effort from evidence, never size alone. Interactive starts ask once per clone before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. |
-| Commit, push, PR, or release | Validate the same content-bound receipt at the applicable delivery gate; never silently reopen review or create another budget. |
+| Commit, push, PR, or release | Follow ordinary repository policy. Review outcomes are informational and never authorize, block, or govern delivery. |
 | Scope changes or an operation is interrupted | Use provider-owned status, recovery, and reconciliation; do not infer authority or replay safety from narration. |
 
 Implementation routing does not decide review strength, and per-action test, build, install, or review workers do not change the selected route. Native commands own repository identity, candidate scope, lifecycle transitions, receipts, and safe continuations. See [Organic Implementation Routing](docs/trigger-rules.md), the [Organic RDD architecture](docs/architecture/organic-rdd.md), and the [review authority threat model](docs/review-authority-threat-model.md).
@@ -202,9 +202,9 @@ The managed installer tracks the channel's latest version and does not accept an
 1. **Install and configure.** Run the installer, select the agents and components you want, then open your agent in a project.
 2. **Use the smallest implementation route.** Keep bounded work direct, delegate actions that need fresh context, and use SDD only after an explicit request or an accepted proposal. SDD artifacts can live in **Engram** for cross-session memory, **OpenSpec** for versioned files, or **hybrid** for both.
 3. **Build with discipline.** `/sdd-init` detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
-4. **Review one candidate.** After implementation, bounded native review freezes the candidate and issues one content-bound receipt. Commit, push, and PR validate that same receipt. Releases validate native authority and its receipt, unless the protected-main fast path has the exact tag/current `origin/main` SHA, exact-SHA successful CI, a remote-head recheck, and no fresh risk.
+4. **Review one candidate.** After implementation, bounded native review freezes the candidate and reports an informational outcome. Commit, push, PR, and release remain separate decisions under ordinary repository policy; review does not authorize, block, or govern them.
 
-> **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native authority and delivery gates independently derive what may be trusted.
+> **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native review records bounded evidence while ordinary repository policy owns delivery.
 
 5. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
 
@@ -215,7 +215,7 @@ The managed installer tracks the channel's latest version and does not accept an
 
 ### The flow at a glance
 
-Once you enable it, both implementation routes converge on RDD: a bounded native review freezes the candidate and issues the one receipt that every delivery gate validates — review is never reopened for unchanged content. RDD is opt-in, so with it off both routes deliver under ordinary repository policy instead.
+Once you enable it, both implementation routes can converge on RDD: a bounded native review freezes the candidate and reports an informational outcome — review is never reopened for unchanged content. RDD is opt-in, and ordinary repository policy owns delivery whether it is on or off.
 
 **Organic route (no SDD)** — the agent picks the smallest useful route and RDD enters at the end, over the frozen candidate:
 
@@ -236,7 +236,7 @@ flowchart TD
     J --> L["Reviewers inspect the immutable candidate<br/>(review inspect-candidate)"]
     K --> L
     L --> M{"Severe candidate-caused<br/>findings?"}
-    I --> N["Receipt: approved"]
+    I --> N["Review outcome: approved<br/>(informational)"]
     M -->|"no"| N
     M -->|"yes"| O["One bounded correction<br/>(frozen budget)"]
     O --> P["Fix validator<br/>(read-only, immutable trees)"]
@@ -245,7 +245,7 @@ flowchart TD
     P -->|"no access to the diff"| R["Inconclusive: attempt not<br/>consumed, capture again"]
     R --> P
     Q --> S["review recover<br/>(authorized successor)"]
-    N --> T["Delivery gates<br/>pre-commit → pre-push → pre-pr<br/>validate the SAME receipt"]
+    N --> T["Ordinary repository policy"]
     T --> U["Commit → Push → PR"]
     Z --> U
 
@@ -254,7 +254,7 @@ flowchart TD
     style U fill:#2D4F67,color:#fff
 ```
 
-**SDD route** — durable planning artifacts first, then apply, with RDD reviewing the candidate before verify and archive requiring the receipt:
+**SDD route** — durable planning artifacts first, then apply, independent verify, and an optional RDD review offer; archive and delivery follow ordinary repository policy:
 
 ```mermaid
 flowchart TD
@@ -266,7 +266,9 @@ flowchart TD
     E --> F["Design<br/>architecture decisions"]
     F --> G["Tasks<br/>ordered deliverable checklist"]
     G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
-    H --> I["RDD over the frozen candidate"]
+    H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
+        Q -->|"passes"| I["Optional RDD review offer"]
+        Q -->|"fails"| H
 
     subgraph RDD["RDD — same machine as the organic route"]
         I --> J{"Risk"}
@@ -274,16 +276,15 @@ flowchart TD
         J -->|"standard / high"| L["1 lens or 4R + consent"]
         L --> M{"Severe findings?"}
         M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
-        M -->|"no"| O["Receipt: approved"]
+        M -->|"no"| O["Review outcome: approved<br/>(informational)"]
         K --> O
         N -->|"validates"| O
         N -->|"fails"| P["Escalated → recover"]
     end
 
-    O --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
-    Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle<br/>(requires reviewGate allow or disabled)"]
+    O --> R["Archive<br/>merge delta-specs · close the cycle"]
     Q -->|"fails"| H
-    R --> S["Delivery gates<br/>validate the same receipt"]
+    R --> S["Ordinary repository policy"]
     S --> T["Commit → Push → PR"]
 
     style O fill:#2D4F67,color:#fff
@@ -303,9 +304,9 @@ gentle-ai review mode enable --scope global --cwd .
 gentle-ai review mode disable --cwd .
 ```
 
-`status` is read-only. With no source expressing an opinion the effective mode is `off`, reported as decided by `default`; only an explicit global enable turns review on. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on, so `--scope global` is the only way in. Enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is off, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
+`status` is read-only. With no source expressing an opinion the effective mode is `off`, reported as decided by `default`; only an explicit global enable turns review on. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on, so `--scope global` is the only way in. Enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is off, native review does not run. Review outcomes are informational in every mode, and ordinary repository policy decides delivery without fabricated approval.
 
-Historical note: `v2.2.2` introduced the native delivery-gate `disabled/unmanaged` disposition. Current SDD status does not use that disposition: with review disabled, it skips review authority, emits no `reviewGate`, and pre-verify continues without routing to a review that cannot start. Archive proceeds under ordinary repository policy when `reviewGate` is absent; a present `reviewGate.result: allow` is required only for discovered review activity. This differs from native delivery gates, which report `disabled/unmanaged` when review is disabled.
+Historical note: `v2.2.2` introduced the native `disabled/unmanaged` disposition. Current SDD status does not use that disposition: with review disabled, it skips review authority, emits no `reviewGate`, and pre-verify continues without routing to a review that cannot start. Archive and delivery proceed under ordinary repository policy; any present review outcome is informational.
 
 ### Release verification
 

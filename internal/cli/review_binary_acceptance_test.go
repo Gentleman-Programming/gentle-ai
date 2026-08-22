@@ -109,8 +109,11 @@ exit $LASTEXITCODE
 	var finalized ReviewFacadeFinalizeResult
 	decodeBinaryJSON(t, scriptStdout.Bytes(), &finalized)
 	status := binaryReviewStatus(t, binary, repo, started.LineageID)
-	if finalized.State != reviewtransaction.StateApproved || status.Authority == nil || status.Authority.State != reviewtransaction.StateApproved || status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity == "" {
-		t.Fatalf("approved status = %#v, finalize = %#v", status, finalized)
+	if finalized.State != reviewtransaction.StateApproved || finalized.ReceiptPath != "" ||
+		status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStart || status.Authority != nil ||
+		status.Receipt.Status != ReviewReceiptNotApplicable || status.Receipt.Identity != "" {
+		t.Fatalf("post-burn status = %#v, finalize = %#v", status, finalized)
 	}
 }
 
@@ -159,7 +162,11 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 
 	t.Run("approves corrected linked worktree", func(t *testing.T) {
 		_, corrected, started := prepareBinaryCorrection(t, binary)
-		writeBinaryCandidate(t, corrected, "fixed")
+		writeBinaryCandidate(t, corrected, "fixed-candidate")
+		correctedStatus := binaryReviewStatus(t, binary, corrected, started.LineageID)
+		if correctedStatus.Projection.InitialReviewTree == correctedStatus.Projection.CurrentCandidateTree {
+			t.Fatal("corrected candidate tree remained unchanged")
+		}
 		request := capturePassedBinaryCorrectionEvidence(t, binary, corrected, started.LineageID)
 		validation := filepath.Join(t.TempDir(), "validation.json")
 		writeReviewCLIJSON(t, validation, facadeValidationResult{
@@ -171,23 +178,11 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 		var approved ReviewFacadeFinalizeResult
 		decodeBinaryJSON(t, runReviewBinary(t, binary, true, "finalize", "--cwd", corrected, "--validation", validation, "--captured-evidence"), &approved)
 		status := binaryReviewStatus(t, binary, corrected, started.LineageID)
-		if status.Projection.InitialReviewTree == status.Projection.CurrentCandidateTree {
-			t.Fatal("corrected candidate tree remained unchanged")
-		}
-		if approved.State != reviewtransaction.StateApproved || status.Authority == nil || status.Authority.State != reviewtransaction.StateApproved || status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity == "" {
-			t.Fatalf("approved status = %#v, finalize = %#v", status, approved)
-		}
-		var validated ReviewValidateResult
-		decodeBinaryJSON(t, runReviewBinary(t, binary, true,
-			"validate", "--cwd", corrected, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePostApply)), &validated)
-		if !validated.Allowed || validated.Result != reviewtransaction.GateAllow {
-			t.Fatalf("post-apply validation = %#v", validated)
-		}
-		var binding map[string]any
-		decodeBinaryJSON(t, runReviewBinary(t, binary, true,
-			"bind-sdd", "--cwd", corrected, "--change", "binary-review", "--lineage", started.LineageID, "--expected-binding-revision="), &binding)
-		if binding["schema"] != "gentle-ai.sdd-review-binding/v1" {
-			t.Fatalf("SDD review binding = %#v", binding)
+		if approved.State != reviewtransaction.StateApproved || approved.ReceiptPath != "" ||
+			status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+			status.Action != reviewtransaction.TargetStatusActionStart || status.Authority != nil ||
+			status.Receipt.Status != ReviewReceiptNotApplicable || status.Receipt.Identity != "" {
+			t.Fatalf("post-burn status = %#v, finalize = %#v", status, approved)
 		}
 	})
 
@@ -198,7 +193,7 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	}{
 		{name: "rejects unchanged candidate", wantUnchangedStop: true, mutate: func(t *testing.T, repo string) { writeBinaryCandidate(t, repo, "wrong") }},
 		{name: "rejects path expansion", mutate: func(t *testing.T, repo string) {
-			writeBinaryCandidate(t, repo, "fixed")
+			writeBinaryCandidate(t, repo, "fixed-candidate")
 			if err := os.WriteFile(filepath.Join(repo, "expanded.txt"), []byte("outside frozen scope\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -257,7 +252,7 @@ func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
 	assertBinarySubmissionDescriptor(t, *correction, repo, outside)
 	runReviewBinaryAt(t, binary, outside, true, submissionDescriptorArguments(t, *correction, "1")...)
 
-	writeBinaryCandidate(t, repo, "fixed")
+	writeBinaryCandidate(t, repo, "fixed-candidate")
 	evidence := filepath.Join(t.TempDir(), "evidence.txt")
 	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -181,6 +182,11 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, args, ready, store, index := newTargetedCandidateInspectionReview(t)
+	nonTerminal, err := store.Load()
+	if err != nil || nonTerminal.State.State != reviewtransaction.StateCorrectionRequired ||
+		nonTerminal.Revision != ready.Authority.Revision || nonTerminal.State.CorrectionAttemptConsumed() {
+		t.Fatalf("corrected inspection must use current unconsumed correction authority: %#v, %v", nonTerminal, err)
+	}
 	before := readReviewOperationFile(t, store.StatePath())
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
 	t.Chdir(t.TempDir())
@@ -211,16 +217,25 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 		t.Fatalf("drifted FINALIZE changed correction authority: %#v, %v", stillOpen.State, err)
 	}
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", ready.Authority.LineageID, "--validation", validation, "--captured-evidence=true"}, io.Discard); err != nil {
+	var finalizedOutput bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", ready.Authority.LineageID, "--validation", validation, "--captured-evidence=true"}, &finalizedOutput); err != nil {
 		t.Fatalf("FINALIZE after restoring corrected candidate: %v", err)
 	}
-	terminal, err := store.Load()
-	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
-		t.Fatalf("restored FINALIZE state = %#v, %v", terminal.State, err)
+	var finalized ReviewFacadeFinalizeResult
+	if err := json.Unmarshal(finalizedOutput.Bytes(), &finalized); err != nil || finalized.State != reviewtransaction.StateApproved {
+		t.Fatalf("corrected FINALIZE terminal approval = %#v, %v", finalized, err)
 	}
-	if err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), io.Discard); err == nil ||
-		!strings.Contains(err.Error(), "requires current unconsumed correction authority") || strings.Contains(err.Error(), "repository_context_") {
-		t.Fatalf("terminal corrected inspection error = %v", err)
+	if _, err := store.Load(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal FINALIZE did not burn corrected authority: %v", err)
+	}
+	if _, err := os.Stat(store.StatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal FINALIZE left corrected authority state: %v", err)
+	}
+	if err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), io.Discard); err == nil {
+		t.Fatal("terminal corrected inspection unexpectedly regained authority")
+	}
+	if _, err := os.Stat(store.StatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal corrected inspection recreated authority: %v", err)
 	}
 }
 

@@ -33,7 +33,7 @@ func escalatedSelectionReplayFixture(t *testing.T, lineage string) (string, revi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage,
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage,
 		"--untracked-scope=select", "--expected-untracked-inventory=" + digest,
 		"--intended-untracked", "notes-a.txt"}, io.Discard); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestRecoveryTransitionReplaysAuthorizedUntrackedSelection(t *testing.T) {
 		"--intended-untracked", "notes-a.txt", "--intended-untracked", "notes-b.txt",
 		"--expected-untracked-inventory", digest,
 	}
-	probe := selectorTransitionStatus(t, repo, selection...)
+	probe := selectorTransitionStatus(t, repo, append([]string{"--lineage", predecessor.State.LineageID}, selection...)...)
 	if probe.Action != reviewtransaction.TargetStatusActionRecover ||
 		probe.ActionDisposition != reviewtransaction.RecoveryEscalated || probe.Authority == nil {
 		t.Fatalf("selection-bearing recovery probe = %#v", probe)
@@ -99,7 +99,7 @@ func TestRecoveryTransitionReplaysAuthorizedUntrackedSelection(t *testing.T) {
 	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + predecessor.State.LineageID +
 		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
 		"\nsuccessor_lineage=" + successor + "\nactor=" + actor + "\nreason=" + reason
-	status := selectorTransitionStatus(t, repo, append(append([]string{}, selection...),
+	status := selectorTransitionStatus(t, repo, append(append([]string{"--lineage", predecessor.State.LineageID}, selection...),
 		"--recovery-successor-lineage", successor, "--recovery-reason", reason,
 		"--recovery-actor", actor, "--recovery-authorization", authorization)...)
 	if status.NextTransition == nil || status.NextTransition.Execute == nil ||

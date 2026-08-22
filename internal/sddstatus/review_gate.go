@@ -14,111 +14,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-type compactPreVerifyBridge struct {
-	Eligible bool
-	Relevant bool
-	Reason   string
-	Revision string
-}
-
-type compactPreVerifyInspection struct {
-	store   reviewtransaction.CompactStore
-	record  reviewtransaction.CompactRecord
-	receipt []byte
-}
-
-var afterCompactPreVerifyAuthorityInitialRead = func() error { return nil }
-
-func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, observedRevision string) compactPreVerifyBridge {
-	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
-	if err != nil {
-		return compactPreVerifyBridge{Reason: "no eligible path-bound compact authority found"}
-	}
-	approved := []compactPreVerifyInspection{}
-	nonApproved := []compactPreVerifyInspection{}
-	for _, store := range stores {
-		record, err := store.Load()
-		if err != nil {
-			return compactPreVerifyBridge{Relevant: true, Reason: "compact authority record is malformed"}
-		}
-		bound, pathReason := compactAuthorityPathsBound(record.State, changeName)
-		if !bound {
-			if pathReason != "" {
-				return compactPreVerifyBridge{Relevant: true, Reason: pathReason}
-			}
-			continue
-		}
-		inspection := compactPreVerifyInspection{store: store, record: record}
-		if record.State.State == reviewtransaction.StateApproved {
-			approved = append(approved, inspection)
-		} else {
-			nonApproved = append(nonApproved, inspection)
-		}
-	}
-
-	eligible := 0
-	candidateRevision := ""
-	candidateTree := ""
-	for index := range approved {
-		inspection := &approved[index]
-		payload, err := os.ReadFile(inspection.store.ReceiptPath())
-		if err != nil {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt is missing"}
-		}
-		receipt, err := reviewtransaction.ParseCompactReceipt(payload)
-		authoritative, receiptErr := inspection.record.State.Receipt()
-		if err != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt does not equal approved state"}
-		}
-		inspection.receipt = payload
-		evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID})
-		if evaluation.Result != reviewtransaction.GateAllow {
-			if skipsObservedStalePredecessor(observedRevision, inspection.record.Revision, evaluation.Result) {
-				continue
-			}
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority post-apply gate is not allow"}
-		}
-		eligible++
-		if eligible == 1 {
-			// The revision is immutable store evidence used only for retry routing.
-			// It never authorizes a receipt by itself.
-			candidateRevision = inspection.record.Revision
-			candidateTree = receipt.FinalCandidateTree
-		}
-	}
-	if eligible == 0 {
-		return compactPreVerifyBridge{Reason: "no eligible path-bound compact authority found"}
-	}
-	if eligible > 1 {
-		return compactPreVerifyBridge{Relevant: true, Reason: "multiple eligible path-bound compact authorities found"}
-	}
-	for _, inspection := range nonApproved {
-		if inspection.record.State.CurrentSnapshot.CandidateTree == "" || inspection.record.State.CurrentSnapshot.CandidateTree == candidateTree {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority is not approved"}
-		}
-	}
-	if err := afterCompactPreVerifyAuthorityInitialRead(); err != nil {
-		return compactPreVerifyBridge{Relevant: true, Reason: fmt.Sprintf("compact authority mutation hook failed: %v", err)}
-	}
-	for _, inspection := range append(approved, nonApproved...) {
-		finalRecord, finalErr := inspection.store.Load()
-		if finalErr != nil || finalRecord.Revision != inspection.record.Revision {
-			return compactPreVerifyBridge{Relevant: true, Reason: "compact authority changed during discovery"}
-		}
-		if inspection.receipt != nil {
-			finalPayload, finalReadErr := os.ReadFile(inspection.store.ReceiptPath())
-			if finalReadErr != nil || !reflect.DeepEqual(finalPayload, inspection.receipt) {
-				return compactPreVerifyBridge{Relevant: true, Reason: "compact authority changed during discovery"}
-			}
-		}
-	}
-	return compactPreVerifyBridge{Eligible: true, Revision: candidateRevision}
-}
-
-func skipsObservedStalePredecessor(observedRevision, revision string, result reviewtransaction.GateResult) bool {
-	return observedRevision != "" && observedRevision == revision && result == reviewtransaction.GateScopeChanged
-}
-
 func compactAuthorityPathsBound(state reviewtransaction.CompactState, changeName string) (bool, string) {
 	if !sameCanonicalPaths(state.GenesisPaths, state.InitialSnapshot.Paths) {
 		return false, "path-bound compact authority has inconsistent immutable paths"
@@ -345,19 +240,6 @@ type reviewAuthorityEvaluation struct {
 	Result       reviewtransaction.GateResult
 	Reason       string
 	CompactState *reviewtransaction.CompactState
-	// Blocking distinguishes a discovered non-allow authority from an absent
-	// governing receipt, so stale verification can preserve its resolution path.
-	Blocking bool
-	// Absent reports that no review authority GOVERNS this change: the change
-	// supplied no review artifact, and discovery found either no terminal native
-	// receipt or only receipts whose terminal evaluation cannot govern the
-	// current change. That is the implicit demand the kill
-	// switch removes — issue #1877's disabled window delivers under ordinary
-	// repository policy and is recorded as unmanaged, never blocked on a
-	// review the switch refuses to run. An explicit change-bound artifact that
-	// failed validation keeps Absent false and stays a blocker whatever the
-	// kill switch says.
-	Absent bool
 	// Missing is the narrower "genuinely zero receipts exist anywhere"
 	// signal (corrective verify cycle 4, BLOCKER-1: rdd-post-verify-review-
 	// offer's "Decline Proceeds to Unmanaged Ordinary Archive" requirement).
@@ -473,48 +355,28 @@ func applyReviewGate(
 	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""))
 }
 
+// applyReviewGateEvaluation preserves discovered native review context without
+// letting it decide SDD archive readiness or routing. Delivery and archive stay
+// under ordinary repository policy once SDD requirements and verification pass.
 func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation) {
-	if evaluation.Result == reviewtransaction.GateAllow {
-		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
-		return
-	}
-	// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
-	// "Decline Proceeds to Unmanaged Ordinary Archive"): the offer is an
-	// invitation, never a gate. When no review was ever started for this
-	// candidate (evaluation.Missing), that is decline-by-absence-of-action,
-	// not a blocker -- status.ReviewGate stays nil (structural absence,
-	// mirroring the kill-switch-off shape), Dependencies.Archive is left at
-	// whatever resolveDependencies already computed (Ready, since this path
-	// only runs once Verify is AllDone), and no resolve-review demand is
-	// raised. A discovered-but-broken receipt (ambiguous, stale, invalid)
-	// is real review activity gone wrong, not a decline, and still blocks.
 	if evaluation.Missing {
 		return
 	}
-	if status.Dependencies.Verify != DependencyAllDone {
-		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
-		return
-	}
-	blockReviewGate(status, evaluation.Result, evaluation.Reason)
+	status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
 }
 
-// reviewGateFreshReviewContinuation is the runnable exit every archive stop
-// over unreviewed content names (issue #1877): the fresh full review of the
-// current state. It stays LAST in each reason so the operator's read and the
-// mechanical continuation extraction see the same command.
+// reviewGateFreshReviewContinuation describes an optional fresh review for
+// informational review context. It never changes archive routing or delivery.
 const reviewGateFreshReviewContinuation = "run the fresh full review of the current state with gentle-ai review start"
 
-// reviewGateEmptyReceiptReason refuses the one laundering shape a clean tree
-// permits: an approved receipt that froze no content cannot count as coverage
-// of delivered history, so the continuation it names carries the base-ref
-// selector whose commit value only the operator knows.
+// reviewGateEmptyReceiptReason records an informational receipt-scope
+// mismatch. It does not decide archive or delivery.
 const reviewGateEmptyReceiptReason = "the terminal review receipt froze an empty candidate and covers no delivered content; " +
 	reviewGateFreshReviewContinuation + " --base-ref <commit>"
 
-// reviewGateAmbiguousGovernanceReason is the one multi-receipt shape that
-// still blocks: several terminal receipts each exactly govern the identical
-// current state, so the archive cannot know which one to record. Binding one
-// to the change resolves it without opening any review.
+// reviewGateAmbiguousGovernanceReason identifies multiple matching receipts
+// as informational context. Binding one can clarify review metadata, but does
+// not change archive or delivery routing.
 const reviewGateAmbiguousGovernanceReason = "multiple terminal native review receipts govern the current repository state; " +
 	"bind the governing one to the change with gentle-ai review bind-sdd"
 
@@ -533,7 +395,6 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 			return reviewAuthorityEvaluation{
 				Result:  reviewtransaction.GateInvalidated,
 				Reason:  reason,
-				Absent:  absent,
 				Missing: absent,
 			}
 		}
@@ -550,9 +411,8 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 			blockers = append(blockers, evaluation)
 		}
 	}
-	// Exactly one receipt governing the current repository state governs the
-	// archive; stale terminal receipts left behind by earlier deliveries are
-	// history, not blockers, so they never smother a live governing receipt.
+	// Exactly one matching receipt provides unambiguous informational context;
+	// stale terminal receipts from earlier deliveries remain history.
 	if len(allows) == 1 {
 		return allows[0]
 	}
@@ -560,16 +420,12 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 		return reviewAuthorityEvaluation{
 			Result: reviewtransaction.GateInvalidated,
 			Reason: reviewGateAmbiguousGovernanceReason,
-			Absent: !explicit,
 		}
 	}
-	// Escalations and validation failures still block while review is enabled.
-	// While disabled, only an explicit artifact continues to govern the change.
+	// Escalations and validation failures remain visible as informational
+	// review context.
 	if len(blockers) > 0 {
-		selected := blockers[0]
-		selected.Absent = !explicit
-		selected.Blocking = true
-		return selected
+		return blockers[0]
 	}
 	selected := stale[0]
 	// An empty-candidate receipt means the operator already ran the plain
@@ -582,12 +438,8 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 			break
 		}
 	}
-	// A receipt whose scope verifiably moved on governs nothing. Unless the
-	// change explicitly bound it, that is absent governance: while the switch
-	// is off the change closes unmanaged under ordinary repository policy, and
-	// once re-enabled the stop names the fresh full review that subsumes the
-	// unmanaged history (issue #1877 — no retroactive reconciliation).
-	selected.Absent = !explicit
+	// A receipt whose scope verifiably moved remains informational context and
+	// never changes SDD archive routing.
 	return selected
 }
 
@@ -724,11 +576,4 @@ func readReviewArtifact(path, content string) ([]byte, bool) {
 		return nil, false
 	}
 	return []byte(content), true
-}
-
-func blockReviewGate(status *Status, result reviewtransaction.GateResult, reason string) {
-	status.ReviewGate = &ReviewGateState{Result: result, Reason: reason}
-	status.Dependencies.Archive = DependencyBlocked
-	status.NextRecommended = "resolve-review"
-	status.BlockedReasons = append(status.BlockedReasons, reason)
 }

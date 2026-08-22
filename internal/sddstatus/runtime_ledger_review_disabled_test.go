@@ -2,7 +2,6 @@ package sddstatus
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,9 +28,6 @@ import (
 func TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)
 	request := fixture.finishRequest("finish-while-review-disabled")
-	request.ExpectedBindingRevision = ""
-	request.SuccessorLineageID = ""
-	request.RemediatesEvidenceRevision = ""
 
 	store := fixture.store
 	store.ReviewDisabled = true
@@ -73,21 +69,19 @@ func TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled(t *test
 // an explicit request. An operator who deliberately passes a remediation
 // successor while reviews are off asked for receipt-driven development to act,
 // so it still validates that successor rather than trusting it.
-func TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled(t *testing.T) {
+func TestRuntimeFinishIgnoresReviewModeAndBindingMetadata(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)
-	request := fixture.finishRequest("finish-explicit-stale-successor-while-disabled")
-	request.ExpectedBindingRevision = runtimeTestHash('9')
-
 	store := fixture.store
 	store.ReviewDisabled = true
 	before := countRuntimeRecords(t, store.Dir)
 
-	_, err := store.Finish(context.Background(), request)
-	var conflict *BindingRevisionConflictError
-	if !errors.As(err, &conflict) || conflict.Current != fixture.predecessorBinding.Revision {
-		t.Fatalf("explicit stale successor while disabled = %T %#v", err, err)
+	status, err := store.Finish(context.Background(), fixture.finishRequest("finish-with-review-disabled"))
+	if err != nil || !status.Complete || status.ActiveAttempt != nil {
+		t.Fatalf("failed-evidence finish while review is disabled = %#v err=%v", status, err)
 	}
-	assertRuntimeRemediationUnchanged(t, fixture, before)
+	if status.Binding == nil || status.Binding.Revision != fixture.predecessorBinding.Revision || countRuntimeRecords(t, store.Dir) != before+1 {
+		t.Fatalf("settlement rewrote review metadata: status=%#v records=%d", status, countRuntimeRecords(t, store.Dir))
+	}
 }
 
 func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
@@ -180,12 +174,12 @@ func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reenabled.Dependencies.Verify != DependencyAllDone || reenabled.Dependencies.Archive != DependencyBlocked || reenabled.NextRecommended != "resolve-review" {
+	if reenabled.Dependencies.Verify != DependencyAllDone || reenabled.Dependencies.Archive != DependencyReady || reenabled.NextRecommended != "archive" {
 		t.Fatalf("re-enabled unmanaged correction routed verify=%q archive=%q next=%q", reenabled.Dependencies.Verify, reenabled.Dependencies.Archive, reenabled.NextRecommended)
 	}
 	if reenabled.ReviewGate == nil || !strings.Contains(reenabled.ReviewGate.Reason, "disabled/unmanaged correction") ||
-		!strings.Contains(reenabled.ReviewGate.Reason, reviewGateFreshReviewContinuation) {
-		t.Fatalf("re-enabled unmanaged correction omitted bounded-review authority: %#v", reenabled.ReviewGate)
+		strings.Contains(reenabled.ReviewGate.Reason, reviewGateFreshReviewContinuation) {
+		t.Fatalf("re-enabled unmanaged correction context = %#v, want informational ordinary-policy wording", reenabled.ReviewGate)
 	}
 	if reenabled.ReviewOffer == nil || !reenabled.ReviewOffer.Available || !strings.Contains(reenabled.ReviewOffer.Invocation, "review start") {
 		t.Fatalf("re-enabled unmanaged correction omitted the executable review offer: %#v", reenabled.ReviewOffer)

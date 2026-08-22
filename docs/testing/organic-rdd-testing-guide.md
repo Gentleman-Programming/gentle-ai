@@ -1,5 +1,8 @@
 # 🧪 How to test — Organic RDD (prerelease 2.2.0-rc.1)
 
+> [!IMPORTANT]
+> **Historical delivery semantics only.** Any `allow`, receipt, or gate example below records the superseded prerelease procedure; it does not authorize, block, or govern a current commit, push, PR, release, or archive. Current delivery follows ordinary repository policy, and review outcomes are informational.
+
 > [!WARNING]
 > **Historical and superseded guide.** This document preserves the candidate-specific validation procedure for `v2.2.0-rc.1` and PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). It is not current installation or validation guidance for stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0), prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), or unreleased `main`. Use the [Quickstart version policy](../quickstart.md#version-policy) for current installation channels and validation entry points.
 >

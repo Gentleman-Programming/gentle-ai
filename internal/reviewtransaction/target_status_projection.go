@@ -27,16 +27,10 @@ func loadTargetStatusAuthorityView(ctx context.Context, repo string, request Tar
 	if err != nil {
 		return targetStatusAuthorityView{}, fmt.Errorf("load compact target status authority: %w", err)
 	}
-	legacy, err := loadLegacyTargetStatusCandidates(ctx, repo, request.LineageID)
-	if err != nil {
-		return targetStatusAuthorityView{}, fmt.Errorf("load legacy target status authority: %w", err)
-	}
-	for lineage := range compact {
-		if _, mixed := legacy[lineage]; mixed {
-			return targetStatusAuthorityView{}, fmt.Errorf("lineage %q has mixed compact and legacy authority", lineage)
-		}
-	}
-	return targetStatusAuthorityView{compact: compact, legacy: legacy}, nil
+	// Ordinary STATUS is compact-only. Historical v1/v3 records remain
+	// inspectable through their explicit compatibility owners, but they never
+	// compete with, corrupt, or select an ordinary compact lifecycle.
+	return targetStatusAuthorityView{compact: compact, legacy: map[string]targetStatusCandidate{}}, nil
 }
 
 func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID string) (map[string]targetStatusCandidate, error) {
@@ -44,11 +38,18 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 	if err != nil {
 		return nil, err
 	}
+	staged, err := discoverCompactBurnStagedStoresForLineage(ctx, repo, lineageID)
+	if err != nil {
+		return nil, err
+	}
+	stores = append(stores, staged...)
 	storeByLineage := make(map[string]CompactStore, len(stores))
 	for _, store := range stores {
+		if _, duplicate := storeByLineage[store.lineageID]; duplicate {
+			return nil, fmt.Errorf("multiple compact authority locations for lineage %q", store.lineageID) // refusal:by-design world-action: duplicate compact authority roots are an integrity failure that maintainers must repair before any lifecycle command can select one
+		}
 		storeByLineage[store.lineageID] = store
 	}
-
 	records := make(map[string]CompactRecord, len(stores))
 	selected := []CompactStore{}
 	if lineageID == "" {
@@ -299,30 +300,6 @@ func compactTargetStatusRecordsEqual(left, right CompactRecord) bool {
 		left.State.InitialSnapshot.Identity == right.State.InitialSnapshot.Identity &&
 		left.State.CurrentSnapshot.Identity == right.State.CurrentSnapshot.Identity &&
 		compactStateEqual(left.State, right.State)
-}
-
-func loadLegacyTargetStatusCandidates(ctx context.Context, repo, lineageID string) (map[string]targetStatusCandidate, error) {
-	stores, err := DiscoverAuthoritativeStores(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	candidates := make(map[string]targetStatusCandidate, len(stores))
-	for _, store := range stores {
-		if lineageID != "" && store.lineageID != lineageID {
-			continue
-		}
-		chain, loadErr := store.LoadChain()
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		transaction := chain.Records[len(chain.Records)-1].Transaction
-		copy := chain
-		storeCopy := store
-		candidates[transaction.LineageID] = targetStatusCandidate{
-			version: AuthorityVersionLegacy, lineage: transaction.LineageID, legacy: &copy, legacyStore: &storeCopy,
-		}
-	}
-	return candidates, nil
 }
 
 type compactTerminalHistoryProjection uint8

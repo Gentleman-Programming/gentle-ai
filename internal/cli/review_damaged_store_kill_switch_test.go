@@ -152,23 +152,17 @@ func TestEnabledDeliveryOverADamagedEntryStillServesTheHealthyCandidate(t *testi
 			_, successor := mintDamagedStoreRecoveryPair(t, repo)
 			damage.damage(t, repo, successor)
 
-			// Unrelated new work, reviewed from scratch with the damaged entry
-			// still sitting in the same store.
+			// Unrelated new work must still report ordinary repository policy while
+			// the damaged entry remains isolated in the store.
 			if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("unrelated new behavior\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			finalizeFacadeReviewForRepo(t, repo)
-			runReviewCLIGit(t, repo, "add", "tracked.txt")
 
 			var output bytes.Buffer
 			if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err != nil {
-				t.Fatalf("an unrelated damaged entry denied a healthy reviewed candidate: %v\n%s", err, output.String())
+				t.Fatalf("an unrelated damaged entry blocked ordinary delivery: %v\n%s", err, output.String())
 			}
-			var result ReviewValidateResult
-			decodeStrictReviewJSON(t, output.Bytes(), &result)
-			if !result.Allowed || result.Result != reviewtransaction.GateAllow {
-				t.Fatalf("healthy reviewed candidate over a damaged store = %#v\n%s", result, output.String())
-			}
+			assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePreCommit)
 
 			// The damaged entry never becomes governable, and says so by name.
 			blocked := reviewtransaction.CompactAuthorityLineageBlocked(context.Background(), repo, successor)

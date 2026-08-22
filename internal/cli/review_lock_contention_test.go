@@ -139,69 +139,25 @@ func TestLockContentionAfterACommittedTransitionStillReportsUnknown(t *testing.T
 	}
 }
 
-// TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated is the gate
-// half of issue 1861. The delivery gate never mutates anything; losing a race
-// for the advisory lock is not damage, so it must not report `invalidated`
-// with explicit-maintainer-action. The reporter saw 19 of 20 concurrent
-// pre-commit gates report exactly that against a healthy authority.
-func TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated(t *testing.T) {
-	// Not parallel: opting in writes the user's global mode through t.Setenv,
-	// which Go forbids in a test that also calls t.Parallel.
-	reviewEnabledHome(t)
-
+// TestDeliveryGateReportsEnabledUnmanagedWithoutAuthority proves the shipped
+// delivery route reports ordinary repository policy without inspecting or
+// creating review authority.
+func TestDeliveryGateReportsEnabledUnmanagedWithoutAuthority(t *testing.T) {
+	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := approvedLowRiskFacadeReview(t, repo)
-
-	held := holdCompactAuthorityLock(t, repo, lineage)
-	var output bytes.Buffer
-	err := RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--gate", string(reviewtransaction.GatePostApply),
-	}, &output)
-	if err == nil {
-		_ = held.Release()
-		t.Fatalf("contended delivery gate reached a verdict: %s", output.String())
-	}
-	if bytes.Contains(output.Bytes(), []byte(`"invalidated"`)) {
-		_ = held.Release()
-		t.Fatalf("contended delivery gate reported damage: %s", output.String())
-	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Operation != ReviewIntegrationOperationValidate ||
-		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
-		failure.NextAction != "retry_with_bounded_backoff" {
-		_ = held.Release()
-		t.Fatalf("contended delivery gate failure = %#v, want a retryable non-damage classification", failure)
-	}
-	if failure.Code == "gate_invalidated" {
-		_ = held.Release()
-		t.Fatalf("contended delivery gate failure kept the invalidated code: %#v", failure)
-	}
-	if strings.Contains(err.Error(), "explicit maintainer action") {
-		_ = held.Release()
-		t.Fatalf("contended delivery gate demanded maintainer action: %v", err)
-	}
-
-	// Convergence, mirroring the reporter's 5/5: once contention ends, the
-	// identical sequential call reaches the real verdict with no repair, no
-	// recovery, and no human in the loop.
-	if err := held.Release(); err != nil {
+	if err := RunReviewMode([]string{"enable", "--scope", "global", "--cwd", repo}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 1; attempt <= 5; attempt++ {
-		var converged bytes.Buffer
-		if err := RunReview([]string{
-			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-			"--gate", string(reviewtransaction.GatePostApply),
-		}, &converged); err != nil {
-			t.Fatalf("sequential gate retry %d after contention: %v\n%s", attempt, err, converged.String())
-		}
-		var gate ReviewValidateResult
-		decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, converged.Bytes()).Result, &gate)
-		if !gate.Allowed || gate.Result != reviewtransaction.GateAllow {
-			t.Fatalf("sequential gate retry %d = %#v", attempt, gate)
-		}
+
+	before := snapshotShippedReviewStore(t, repo)
+	var shipped bytes.Buffer
+	if err := RunReview([]string{
+		"validate", "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply),
+	}, &shipped); err != nil {
+		t.Fatalf("shipped delivery gate failed: %v\n%s", err, shipped.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, shipped.Bytes(), reviewtransaction.GatePostApply)
+	assertShippedReviewStoreUnchanged(t, before, snapshotShippedReviewStore(t, repo))
 }
 
 // TestConcurrentFinalizeElectsExactlyOneWriter proves the fix does not weaken
@@ -221,6 +177,15 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 	}, &sequentialOutput); err != nil {
 		t.Fatalf("sequential FINALIZE: %v\n%s", err, sequentialOutput.String())
 	}
+	sequentialTerminal := assertApprovedBurnedCompactNegotiatedFinalize(t, sequentialOutput.Bytes())
+	if sequentialTerminal.LineageID != sequentialLineage {
+		t.Fatalf("sequential burned FINALIZE lineage = %q, want %q", sequentialTerminal.LineageID, sequentialLineage)
+	}
+	sequentialStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), sequentialRepo, sequentialLineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedCompactAuthorityBurned(t, sequentialStore, sequentialLineage)
 	wantTransitions := countTraceTransitions(t, sequentialTrace)
 	if wantTransitions == 0 {
 		t.Fatal("sequential FINALIZE recorded no native transition; the trace oracle is not measuring anything")
@@ -252,6 +217,10 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 	succeeded := 0
 	for index := 0; index < attempts; index++ {
 		if failures[index] == nil {
+			terminal := assertApprovedBurnedCompactNegotiatedFinalize(t, outputs[index].Bytes())
+			if terminal.LineageID != concurrentLineage {
+				t.Fatalf("concurrent FINALIZE winner %d lineage = %q, want %q", index, terminal.LineageID, concurrentLineage)
+			}
 			succeeded++
 			continue
 		}
@@ -273,36 +242,30 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 				t.Fatalf("concurrent FINALIZE pre-write loser %d = %#v, want a not-started retryable classification", index, failure)
 			}
 		case "operation_outcome_unknown":
-			// This is not a pre-write loser. It is allowed only when FINALIZE
-			// already recorded a native transition, so retrying could double-apply
-			// it and STATUS is the only safe continuation.
-			if failure.Phase != "native_committed" || failure.MutationOutcome != ReviewMutationUnknown ||
-				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
+			// A contender can arrive only after the winner burned the approved
+			// authority. It has no surviving lineage to classify, so the public
+			// contract must remain an explicit unknown-status route rather than a
+			// false replay success or a recreated authority.
+			if (failure.Phase != "native_committed" && failure.Phase != "native_running") ||
+				failure.MutationOutcome != ReviewMutationUnknown || failure.RetrySafe ||
+				failure.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
 				failure.NextAction != "review.status" || strings.TrimSpace(failure.Cause) == "" {
-				t.Fatalf("concurrent FINALIZE post-progress loser %d = %#v, want a diagnosed native-committed unknown classification", index, failure)
+				t.Fatalf("concurrent FINALIZE terminal-burn loser %d = %#v, want a diagnosed unknown-status classification", index, failure)
 			}
 		default:
 			t.Fatalf("concurrent FINALIZE loser %d = %#v (error: %v)", index, failure, failures[index])
 		}
 	}
-	if succeeded == 0 {
-		t.Fatal("no concurrent FINALIZE reached the terminal receipt")
+	if succeeded != 1 {
+		t.Fatalf("concurrent FINALIZE successes = %d, want exactly one terminal burn", succeeded)
 	}
-
-	// Convergence after contention ends, mirroring the reporter's 5/5. The
-	// terminal replay admits only --lineage, so the trace flag is dropped
-	// here; the trace assertion above already proved the commit count.
-	for attempt := 1; attempt <= 5; attempt++ {
-		var converged bytes.Buffer
-		if err := RunReview([]string{
-			"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", concurrentRepo,
-			"--lineage", concurrentLineage,
-		}, &converged); err != nil {
-			t.Fatalf("sequential FINALIZE retry %d after contention: %v\n%s", attempt, err, converged.String())
-		}
+	concurrentStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), concurrentRepo, concurrentLineage)
+	if err != nil {
+		t.Fatal(err)
 	}
+	assertApprovedCompactAuthorityBurned(t, concurrentStore, concurrentLineage)
 	if got := countTraceTransitions(t, concurrentTrace); got != wantTransitions {
-		t.Fatalf("sequential retries after contention committed %d native transitions, want exactly %d", got, wantTransitions)
+		t.Fatalf("terminal burn changed the concurrent transition count to %d, want exactly %d", got, wantTransitions)
 	}
 }
 

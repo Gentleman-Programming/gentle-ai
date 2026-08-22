@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -23,16 +24,18 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 	// Approved staged review of one tracked change.
 	writeReviewStartCandidate(t, repo, "feature.md", "# feature\n\nstaged reviewed prose.\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "feature.md")
-	var started bytes.Buffer
-	if err := RunReview([]string{"start", "--cwd", repo, "--projection", "staged"}, &started); err != nil {
-		t.Fatalf("staged review start: %v\n%s", err, started.String())
+	// This approved predecessor is historical compact authority. Seed it through
+	// the test-only legacy seam because current START is v3 and current FINALIZE
+	// burns terminal authority before STATUS can select recovery.
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--projection", "staged", "--lineage", "staged-rebase-predecessor",
+	})
+	if err != nil {
+		t.Fatalf("start staged compact recovery fixture: %v", err)
 	}
 	var startResult ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, started.Bytes(), &startResult)
-	var finalized bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo}, &finalized); err != nil {
-		t.Fatalf("staged review finalize: %v\n%s", err, finalized.String())
-	}
+	decodeStrictReviewJSON(t, startedBytes, &startResult)
+	finalizeHistoricalFacadeReviewForLineage(t, repo, startResult.LineageID)
 
 	// The exact candidate is committed, then rebased across a disjoint
 	// parent advance: patch, reviewed path set, and blobs stay identical
@@ -126,60 +129,69 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 	}
 }
 
-// TestNegotiatedStatusNeverAdvertisesFreshStartForByteIdenticalApprovedCandidate
-// is the second leg: STATUS for an explicit unused successor lineage over a
-// byte-identical approved candidate must not advertise fresh_target_ready
-// when START's own discovery resolves the approved predecessor and answers
-// blocked-scope-action. Whatever START decides, STATUS must describe.
-func TestNegotiatedStatusNeverAdvertisesFreshStartForByteIdenticalApprovedCandidate(t *testing.T) {
+// TestNegotiatedStatusOffersFreshStartForByteIdenticalHistoricalApprovedCandidate
+// proves that a retained historical approval cannot suppress an independent
+// atomic review requested under an unused exact lineage.
+func TestNegotiatedStatusOffersFreshStartForByteIdenticalHistoricalApprovedCandidate(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "feature.md", "# feature\n\nworkspace reviewed prose.\n", 0o644)
-	var started bytes.Buffer
-	if err := RunReview([]string{"start", "--cwd", repo}, &started); err != nil {
-		t.Fatalf("review start: %v\n%s", err, started.String())
+	historical := finalizeHistoricalFacadeReviewForRepo(t, repo, "historical-byte-identical")
+	stateBefore, err := os.ReadFile(historical.Store.StatePath())
+	if err != nil {
+		t.Fatal(err)
 	}
-	var startResult ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, started.Bytes(), &startResult)
-	if err := RunReview([]string{"finalize", "--cwd", repo}, &bytes.Buffer{}); err != nil {
+	receiptBefore, err := os.ReadFile(historical.Store.ReceiptPath())
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Explicit, unused successor lineage over the byte-identical candidate.
+	const successor = "explicit-unused-successor"
 	var statusOut bytes.Buffer
 	if err := RunReview([]string{
 		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
-		"--lineage", "explicit-unused-successor",
+		"--lineage", successor,
 	}, &statusOut); err != nil {
 		t.Fatalf("explicit-successor status: %v\n%s", err, statusOut.String())
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, statusOut.Bytes(), &status)
 	transition := status.NextTransition
-	if transition == nil {
-		t.Fatalf("status carried no next transition:\n%s", statusOut.String())
+	if transition == nil || transition.Kind != reviewNextTransitionExecute || transition.Execute == nil ||
+		transition.Execute.Operation != "review.start" || transition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("status transition = %#v, want an executable fresh START", transition)
 	}
-	if transition.Kind != reviewNextTransitionExecute || transition.Execute == nil ||
-		transition.Execute.Operation != "review.start" {
-		// STATUS already refuses to advertise a fresh start here: that is the
-		// converged behavior and there is nothing further to prove.
-		return
+	if transition.Execute.Binding.LineageID != successor || transition.Execute.Binding.TargetIdentity != status.TargetIdentity ||
+		startTransitionArgumentValue(t, status, "lineage") != successor {
+		t.Fatalf("fresh START binding = %#v, status target = %q", transition.Execute.Binding, status.TargetIdentity)
 	}
 
-	// STATUS advertised a START: run it verbatim. Convergence demands the
-	// advertised lineage exists afterwards exactly as promised.
 	arguments := []string{"start", "--cwd", repo}
 	for _, argument := range transition.Execute.Arguments {
+		if argument.Token == "" {
+			t.Fatalf("START argument %q carried no executable token", argument.Name)
+		}
 		arguments = append(arguments, argument.Token)
 	}
-	var rerun bytes.Buffer
-	runErr := RunReview(arguments, &rerun)
-	var result ReviewIntegrationStartResult
-	if runErr == nil {
-		decodeStrictReviewJSON(t, rerun.Bytes(), &result)
+	var started bytes.Buffer
+	if err := RunReview(arguments, &started); err != nil {
+		t.Fatalf("run fresh START verbatim: %v\n%s", err, started.String())
 	}
-	if runErr != nil || result.LineageID != "explicit-unused-successor" {
-		t.Fatalf("STATUS advertised %q/fresh start for lineage %q, but running it verbatim answered lineage=%q action=%q err=%v (#2645 rc.7 leg 2)",
-			transition.ReasonCode, "explicit-unused-successor", result.LineageID, result.Action, runErr)
+	var result ReviewIntegrationStartResult
+	decodeStrictReviewJSON(t, started.Bytes(), &result)
+	if result.Action != "created" || result.LineageID != successor ||
+		negotiatedStartTarget(result) != status.TargetIdentity {
+		t.Fatalf("fresh START = %#v, want created %q bound to %q", result, successor, status.TargetIdentity)
+	}
+	stateAfter, err := os.ReadFile(historical.Store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptAfter, err := os.ReadFile(historical.Store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) {
+		t.Fatal("fresh atomic START changed historical approved authority")
 	}
 }

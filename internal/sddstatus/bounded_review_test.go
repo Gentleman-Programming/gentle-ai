@@ -116,7 +116,7 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 			wantGate: reviewtransaction.GateAllow, wantArchive: DependencyReady, wantNext: "archive",
 		},
 		{
-			name: "pending receipt invalidates archive",
+			name: "pending receipt remains informational",
 			mutate: func(t *testing.T, changeRoot string, receipt reviewtransaction.Receipt, _ reviewtransaction.GateRequest) {
 				payload, err := json.Marshal(receipt)
 				if err != nil {
@@ -125,16 +125,16 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 				pending := strings.Replace(string(payload), `"terminal_state":"approved"`, `"terminal_state":"pending"`, 1)
 				write(t, filepath.Join(changeRoot, "reviews", "receipt.json"), pending)
 			},
-			wantGate: reviewtransaction.GateInvalidated, wantArchive: DependencyBlocked,
-			wantNext: "resolve-review", wantReason: "invalid or non-terminal",
+			wantGate: reviewtransaction.GateInvalidated, wantArchive: DependencyReady,
+			wantNext: "archive",
 		},
 		{
-			name: "unrelated candidate requires new lineage",
+			name: "unrelated candidate review remains informational",
 			mutate: func(t *testing.T, changeRoot string, _ reviewtransaction.Receipt, _ reviewtransaction.GateRequest) {
 				write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Work\n- [x] scope changed\n")
 			},
-			wantGate: reviewtransaction.GateScopeChanged, wantArchive: DependencyBlocked,
-			wantNext: "resolve-review", wantReason: "explicit new lineage",
+			wantGate: reviewtransaction.GateScopeChanged, wantArchive: DependencyReady,
+			wantNext: "archive",
 		},
 		{
 			name: "stale gate context cannot override native authority",
@@ -243,8 +243,8 @@ func TestNativeReceiptDiscoveryRejectsMultipleGoverningLineagesAsAmbiguous(t *te
 	if !strings.Contains(status.ReviewGate.Reason, "gentle-ai review bind-sdd") {
 		t.Fatalf("ambiguous governance names no runnable resolution: %q", status.ReviewGate.Reason)
 	}
-	if status.Dependencies.Archive != DependencyBlocked {
-		t.Fatalf("archive = %q over ambiguous governing receipts, want blocked", status.Dependencies.Archive)
+	if status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+		t.Fatalf("archive=%q next=%q over ambiguous governing receipts, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 	}
 }
 
@@ -500,14 +500,8 @@ func TestResolveEngramSkipsPreVerifyCompactBridgeRegardlessOfTransactionValidity
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	// Wave 4 S3: resolveEngramStatus no longer discovers or bridges compact
-	// authority pre-verify at all (applyPreVerifyCompactBridgeRouting and its
-	// discoverCompactPreVerifyAuthority call were removed with the pre-verify
-	// routing appliers). A malformed review/transaction artifact is no longer
-	// read for pre-verify gating purposes either way, so verify is ready
-	// regardless of the transaction payload's validity — there is no more
-	// "block on malformed" or "bridge on approved compact authority" branch
-	// to distinguish between.
+	// Review artifacts are not consulted before independent verification, so a
+	// malformed review transaction cannot alter apply-to-verify routing.
 	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
@@ -593,6 +587,28 @@ func TestResolveFinalVerifyWaitsForAllTasks(t *testing.T) {
 // existed, and the dispatcher no longer renders "Next Review Operation"
 // guidance for this case (that guidance is now reachable only from
 // resolve-review's binding-error paths, exercised elsewhere).
+func TestResolveRoutesLegacyMissingReviewEvidenceToIndependentVerify(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	report := legacyMissingReviewReport()
+	report = strings.Replace(report, "requirements: 0/2", "requirements: 0/1", 1)
+	report = strings.Replace(report, "scenarios: 0/3", "scenarios: 0/1", 1)
+	write(t, filepath.Join(changeRoot, "verify-report.md"), report)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+		t.Fatalf("status = %#v, want incomplete evidence to re-enter independent verify", status)
+	}
+	for _, reason := range status.BlockedReasons {
+		if strings.Contains(strings.ToLower(reason), "review") {
+			t.Fatalf("legacy missing-review evidence routed through review: %v", status.BlockedReasons)
+		}
+	}
+}
+
 func TestResolveMakesVerifyReadyWithNoPreVerifyReviewSupervision(t *testing.T) {
 	root := t.TempDir()
 	seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
@@ -609,301 +625,6 @@ func TestResolveMakesVerifyReadyWithNoPreVerifyReviewSupervision(t *testing.T) {
 	dispatcher := RenderDispatcherMarkdown(status)
 	if strings.Contains(dispatcher, "### Next Review Operation") {
 		t.Fatalf("dispatcher rendered pre-verify review-operation guidance with no pre-verify gate to guide toward:\n%s", dispatcher)
-	}
-}
-
-func TestDiscoverCompactPreVerifyAuthorityFailsClosedWithoutExactlyOneEligibleStore(t *testing.T) {
-	root := t.TempDir()
-	seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	runSDDStatusGit(t, root, "init", "-q")
-	runSDDStatusGit(t, root, "config", "user.email", "status@example.com")
-	runSDDStatusGit(t, root, "config", "user.name", "Status Test")
-	runSDDStatusGit(t, root, "add", ".")
-	runSDDStatusGit(t, root, "commit", "-qm", "base")
-
-	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
-	if bridge.Eligible || !strings.Contains(bridge.Reason, "no eligible") {
-		t.Fatalf("empty compact bridge = %#v", bridge)
-	}
-}
-
-func TestResolveBridgesExactlyOnePathBoundCompactAuthorityToVerifyOnly(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
-
-	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" || status.ReviewTransaction != nil {
-		t.Fatalf("compact bridge status = %#v", status)
-	}
-	if _, err := os.Stat(filepath.Join(changeRoot, "reviews", "transaction.json")); !os.IsNotExist(err) {
-		t.Fatalf("bridge synthesized local review mirror: %v", err)
-	}
-}
-
-func TestResolvePrefersExactApprovedCompactAuthorityOverStaleSamePathLineage(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	runSDDStatusGit(t, root, "init", "-q")
-	runSDDStatusGit(t, root, "config", "user.email", "status@example.com")
-	runSDDStatusGit(t, root, "config", "user.name", "Status Test")
-	runSDDStatusGit(t, root, "add", ".")
-	runSDDStatusGit(t, root, "commit", "-qm", "base")
-
-	builder := reviewtransaction.SnapshotBuilder{Repo: root}
-	staleSnapshot, err := builder.Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	staleRisk, staleLines, err := builder.ClassifySnapshotRisk(context.Background(), staleSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "compact-a-stale", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
-		Snapshot: staleSnapshot, PolicyHash: shaID("c"), RiskLevel: staleRisk, SelectedLenses: compactStatusLenses(staleRisk), OriginalChangedLines: &staleLines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	staleStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, stale.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := staleStore.Replace("", "review/start", stale); err != nil {
-		t.Fatal(err)
-	}
-
-	write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# newer exact candidate\n")
-	approvedSnapshot, err := builder.Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stale.CurrentSnapshot.CandidateTree == "" || stale.CurrentSnapshot.CandidateTree == approvedSnapshot.CandidateTree {
-		t.Fatalf("fixture candidate trees stale=%q approved=%q, want distinct non-empty trees", stale.CurrentSnapshot.CandidateTree, approvedSnapshot.CandidateTree)
-	}
-	approvedRisk, approvedLines, err := builder.ClassifySnapshotRisk(context.Background(), approvedSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	approved, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "compact-z-approved", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
-		Snapshot: approvedSnapshot, PolicyHash: shaID("c"), RiskLevel: approvedRisk, SelectedLenses: compactStatusLenses(approvedRisk), OriginalChangedLines: &approvedLines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	approvedStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, approved.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision, err := approvedStore.Replace("", "review/start", approved)
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := make([]reviewtransaction.LensResult, len(approved.SelectedLenses))
-	for index, lens := range approved.SelectedLenses {
-		results[index] = reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"review complete"}}
-	}
-	if err := approved.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{}}); err != nil {
-		t.Fatal(err)
-	}
-	revision, err = approvedStore.Replace(revision, "review/complete-review", approved)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := approved.CompleteVerification([]byte("verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := approvedStore.Replace(revision, "review/complete-verification", approved); err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := approved.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reviewtransaction.WriteCompactReceiptAtomic(approvedStore.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
-
-	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
-	approvedRecord, err := approvedStore.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bridge.Eligible || bridge.Relevant || bridge.Reason != "" || bridge.Revision != approvedRecord.Revision {
-		t.Fatalf("bridge = %#v, want the newer approved authority", bridge)
-	}
-	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" || len(status.BlockedReasons) != 0 {
-		t.Fatalf("status = %#v, want stale authority to leave verification ready", status)
-	}
-}
-
-func TestDiscoverCompactPreVerifyAuthorityFailsClosedWhenAuthorityDriftsDuringDiscovery(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := afterCompactPreVerifyAuthorityInitialRead
-	afterCompactPreVerifyAuthorityInitialRead = func() error {
-		payload, readErr := os.ReadFile(store.ReceiptPath())
-		if readErr != nil {
-			return readErr
-		}
-		if writeErr := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); writeErr != nil {
-			return writeErr
-		}
-		return nil
-	}
-	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
-
-	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
-	if !bridge.Relevant || bridge.Reason != "compact authority changed during discovery" {
-		t.Fatalf("bridge = %#v, want discovery drift denial", bridge)
-	}
-}
-
-func TestDiscoverCompactPreVerifyAuthorityReportsMutationHookFailure(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
-
-	original := afterCompactPreVerifyAuthorityInitialRead
-	afterCompactPreVerifyAuthorityInitialRead = func() error { return fmt.Errorf("forced mutation failure") }
-	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
-
-	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
-	if !bridge.Relevant || bridge.Reason != "compact authority mutation hook failed: forced mutation failure" {
-		t.Fatalf("bridge = %#v, want mutation hook failure", bridge)
-	}
-}
-
-const emptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-func TestAuthorityOnlyFailedReportRequiresStructuredFailClosedEvidence(t *testing.T) {
-	valid := authorityOnlyVerifyEnvelope(shaID("0"), "125", "125")
-	for _, tt := range []struct {
-		name   string
-		report string
-		want   bool
-	}{
-		{name: "valid authority-only preflight denial", report: valid, want: true},
-		{name: "zero exits are not preflight denial", report: authorityOnlyVerifyEnvelope(shaID("0"), "0", "0")},
-		{name: "arbitrary output hashes are not empty output", report: strings.Replace(valid, emptyOutputHash, shaID("2"), 1)},
-		{name: "markdown substrings are not evidence", report: boundedVerifyEnvelope(shaID("1"), "fail") + "\nauthority_only_failure: true\nmissing_review_authority: true\n"},
-		{name: "executed command failed", report: strings.Replace(valid, "test_exit_code: 125", "test_exit_code: 1", 1)},
-		{name: "substantive failure", report: strings.Replace(valid, "substantive_failure: false", "substantive_failure: true", 1)},
-		{name: "malformed blocker count", report: strings.Replace(valid, "blockers: 1", "blockers: unknown", 1)},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := authorityOnlyFailedReport(tt.report); got != tt.want {
-				t.Fatalf("authorityOnlyFailedReport() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-	if authorityChangedSinceReport(valid, shaID("0")) {
-		t.Fatal("unchanged authority revision must not permit recovery")
-	}
-}
-
-func TestResolveRecoversOnlyAuthorityMissingHistoricalVerification(t *testing.T) {
-	for _, tt := range []struct {
-		name      string
-		testExit  string
-		wantReady bool
-	}{
-		{name: "new authority permits retry", testExit: "125", wantReady: true},
-		{name: "command failure remains denied", testExit: "1"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-			write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n")
-			report := authorityOnlyVerifyEnvelope(shaID("0"), tt.testExit, "125")
-			write(t, filepath.Join(changeRoot, "verify-report.md"), report)
-			writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
-
-			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.wantReady {
-				if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-					t.Fatalf("recovery status = %#v", status)
-				}
-				if status.RemediationState != (RemediationState{}) || strings.Contains(strings.Join(status.BlockedReasons, "\n"), "remediation") {
-					t.Fatalf("recovery retained remediation blockers: %#v", status)
-				}
-				if got := readText(filepath.Join(changeRoot, "verify-report.md")); got != report {
-					t.Fatal("recovery rewrote historical verification evidence")
-				}
-			} else if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended == "verify" {
-				t.Fatalf("denied recovery status = %#v", status)
-			}
-		})
-	}
-}
-
-func TestResolveRecoversWithObservedStaleAndNewLiveCompactLineages(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n")
-	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-stale")
-	staleStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-stale")
-	if err != nil {
-		t.Fatal(err)
-	}
-	staleRecord, err := staleStore.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	report := authorityOnlyVerifyEnvelope(staleRecord.Revision, "125", "125")
-	write(t, filepath.Join(changeRoot, "verify-report.md"), report)
-
-	write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# stale intermediate scope\n")
-	writeApprovedCompactAuthorityForChangeWithTasks(t, root, changeRoot, "compact-live", "- [x] 1.1 Done\n# new approved scope\n")
-
-	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-		t.Fatalf("multi-lineage recovery status = %#v", status)
-	}
-	if got := readText(filepath.Join(changeRoot, "verify-report.md")); got != report {
-		t.Fatal("multi-lineage recovery rewrote historical verification evidence")
-	}
-}
-
-func TestObservedRevisionSkipsOnlyScopeChangedPredecessor(t *testing.T) {
-	for _, tt := range []struct {
-		name     string
-		observed string
-		revision string
-		result   reviewtransaction.GateResult
-		want     bool
-	}{
-		{name: "matching scope changed predecessor", observed: shaID("a"), revision: shaID("a"), result: reviewtransaction.GateScopeChanged, want: true},
-		{name: "matching invalidated predecessor", observed: shaID("a"), revision: shaID("a"), result: reviewtransaction.GateInvalidated},
-		{name: "matching escalated predecessor", observed: shaID("a"), revision: shaID("a"), result: reviewtransaction.GateEscalated},
-		{name: "matching allow authority", observed: shaID("a"), revision: shaID("a"), result: reviewtransaction.GateAllow},
-		{name: "different scope changed authority", observed: shaID("a"), revision: shaID("b"), result: reviewtransaction.GateScopeChanged},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := skipsObservedStalePredecessor(tt.observed, tt.revision, tt.result); got != tt.want {
-				t.Fatalf("skipsObservedStalePredecessor(%q, %q, %q) = %v, want %v", tt.observed, tt.revision, tt.result, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -928,19 +649,6 @@ func TestCompactAuthorityPathBindingRejectsForeignAndTraversalOpenSpecPaths(t *t
 				t.Fatalf("paths %v = bound=%v reason=%q, wantReason=%v", tt.paths, bound, reason, tt.wantReason)
 			}
 		})
-	}
-}
-
-func TestDiscoverCompactPreVerifyAuthorityIgnoresForeignChangeAuthority(t *testing.T) {
-	root := t.TempDir()
-	activeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	foreignRoot := seedReadyChange(t, root, "other", "- [x] 1.1 Done\n")
-	writeApprovedCompactAuthorityForChange(t, root, foreignRoot, "compact-other")
-	writeApprovedCompactAuthorityForChange(t, root, activeRoot, "compact-thin")
-
-	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
-	if !bridge.Eligible || bridge.Relevant || bridge.Reason != "" {
-		t.Fatalf("bridge with foreign authority = %#v, want one eligible active authority", bridge)
 	}
 }
 
@@ -997,15 +705,8 @@ func TestResolveIgnoresAmbiguousPathBoundCompactAuthoritiesPreVerify(t *testing.
 	if err := reviewtransaction.WriteCompactReceiptAtomic(second.ReceiptPath(), receipt); err != nil {
 		t.Fatal(err)
 	}
-	// Wave 4 S3: applyPreVerifyCompactBridgeRouting — the only reader of
-	// bridge.Relevant pre-verify — was removed with the pre-verify routing
-	// appliers. discoverCompactPreVerifyAuthority still runs and still
-	// classifies this as Relevant (proven directly by
-	// TestDiscoverCompactPreVerifyAuthorityFailsClosedWithoutExactlyOneEligibleStore
-	// below), but nothing blocks verify on it anymore: only bridge.Eligible
-	// still matters, for the distinct post-verify-failure recovery path
-	// (TestResolveRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority).
-	// Verify becomes ready regardless of an ambiguous path-bound authority.
+	// An ambiguous review context is informational. Independent verification
+	// remains ready before any optional post-verify review offer.
 	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 	if err != nil {
 		t.Fatal(err)
@@ -1052,7 +753,7 @@ func TestResolveIgnoresReceiptMismatchAndNonAllowCompactBridgePreVerify(t *testi
 	}
 }
 
-func TestResolveRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority(t *testing.T) {
+func TestResolveRoutesStaleVerifyEvidenceToIndependentVerify(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n#### Scenario: Rejected login\n")
@@ -1063,8 +764,8 @@ func TestResolveRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority(t
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
-		t.Fatalf("ReviewGate = %#v, want allow", status.ReviewGate)
+	if status.ReviewGate != nil {
+		t.Fatalf("ReviewGate = %#v, want no pre-verify review consultation", status.ReviewGate)
 	}
 	if len(status.BlockedReasons) != 0 {
 		t.Fatalf("BlockedReasons = %v, want empty", status.BlockedReasons)
@@ -1108,11 +809,11 @@ func TestResolveRoutesChangeLocalStalePassWithoutRemediation(t *testing.T) {
 			wantRemediation: false,
 		},
 		{
-			name:              "historical requirement PASS mismatch with discovered blocking authority resolves review",
+			name:              "historical requirement PASS mismatch with discovered review context restarts verification",
 			report:            strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1),
 			blockingAuthority: true,
-			wantNext:          "resolve-review",
-			wantVerify:        DependencyBlocked,
+			wantNext:          "verify",
+			wantVerify:        DependencyReady,
 			wantRemediation:   false,
 		},
 		{
@@ -1178,8 +879,8 @@ func TestResolveRoutesChangeLocalStalePassWithoutRemediation(t *testing.T) {
 			if status.NextRecommended != tt.wantNext || status.Dependencies.Verify != tt.wantVerify || status.RemediationState.Required != tt.wantRemediation {
 				t.Fatalf("status = next %q verify %q remediation %#v, want %q/%q/remediation=%v", status.NextRecommended, status.Dependencies.Verify, status.RemediationState, tt.wantNext, tt.wantVerify, tt.wantRemediation)
 			}
-			if tt.blockingAuthority && !tt.reviewDisabled && (status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateEscalated) {
-				t.Fatalf("ReviewGate = %#v, want escalated blocking authority", status.ReviewGate)
+			if status.Dependencies.Verify != DependencyAllDone && status.ReviewGate != nil {
+				t.Fatalf("ReviewGate = %#v, want no pre-verify review consultation", status.ReviewGate)
 			}
 			if tt.reviewDisabled && status.ReviewGate != nil {
 				t.Fatalf("disabled ReviewGate = %#v, want structural absence while the switch is off", status.ReviewGate)
@@ -1194,7 +895,7 @@ func TestResolveRoutesChangeLocalStalePassWithoutRemediation(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.T) {
+func TestResolveIgnoresForeignReviewContextBeforeVerify(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	foreignRoot := seedReadyChange(t, root, "other", "- [x] 1.1 Done\n")
@@ -1206,23 +907,11 @@ func TestResolveRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("verify=%q next=%q, want blocked/resolve-review", status.Dependencies.Verify, status.NextRecommended)
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" || status.ReviewGate != nil {
+		t.Fatalf("status = %#v, want independent verify without review consultation", status)
 	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `compact review authority is not bound to selected change "thin"`) {
-		t.Fatalf("BlockedReasons = %v, want foreign-authority rejection", status.BlockedReasons)
-	}
-
-	// next_recommended == "resolve-review" is a routing state, not a Phase, so
-	// nextRecommendedPhase() does not recognize it. Without an explicit
-	// continuation the dispatcher would render the blocked reason with no way
-	// out. Reuse the same review continuation already proven for
-	// next_recommended == "review" (TestResolveStartsBoundedReviewBeforeFinalVerification).
-	dispatcher := RenderDispatcherMarkdown(status)
-	for _, want := range []string{"### Next Review Operation", "gentle-ai review start", "gentle-ai review validate --gate post-apply"} {
-		if !strings.Contains(dispatcher, want) {
-			t.Fatalf("dispatcher missing %q for resolve-review:\n%s", want, dispatcher)
-		}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want no review-derived blocker", status.BlockedReasons)
 	}
 }
 
@@ -1257,8 +946,8 @@ func TestResolveEngramRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAutho
 	if !ok {
 		t.Fatal("resolveEngramStatus() did not retain the Engram change")
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
-		t.Fatalf("ReviewGate = %#v, want allow", status.ReviewGate)
+	if status.ReviewGate != nil {
+		t.Fatalf("ReviewGate = %#v, want no pre-verify review consultation", status.ReviewGate)
 	}
 	if len(status.BlockedReasons) != 0 {
 		t.Fatalf("BlockedReasons = %v, want empty", status.BlockedReasons)
@@ -1371,11 +1060,14 @@ func TestResolveEngramRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *te
 	if err != nil || !ok {
 		t.Fatalf("resolveEngramStatus() = ok %v, error %v", ok, err)
 	}
-	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("verify=%q next=%q, want blocked/resolve-review", status.Dependencies.Verify, status.NextRecommended)
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q next=%q, want ready/verify", status.Dependencies.Verify, status.NextRecommended)
 	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `compact review authority is not bound to selected change "thin"`) {
-		t.Fatalf("BlockedReasons = %v, want foreign-authority rejection", status.BlockedReasons)
+	if status.ReviewGate != nil {
+		t.Fatalf("ReviewGate = %#v, want no pre-verify review consultation", status.ReviewGate)
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want no review-derived blocker", status.BlockedReasons)
 	}
 }
 
@@ -1626,8 +1318,8 @@ func TestResolveRemediationIsBoundToBudgetAndFailedEvidenceRevision(t *testing.T
 	if err != nil {
 		t.Fatalf("Resolve(stale) error = %v", err)
 	}
-	if status.NextRecommended != "resolve-review" || status.RemediationState.Required {
-		t.Fatalf("stale next=%q remediation=%#v", status.NextRecommended, status.RemediationState)
+	if status.NextRecommended != "verify" || status.RemediationState.Required {
+		t.Fatalf("stale next=%q remediation=%#v, want independent verification retry", status.NextRecommended, status.RemediationState)
 	}
 	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "does not match failed evidence revision") {
 		t.Fatalf("BlockedReasons = %v", status.BlockedReasons)
@@ -1651,8 +1343,8 @@ func TestResolveMalformedFailedEvidenceKeepsMatchingRevisionBound(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.NextRecommended != "remediate" || !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision != revision {
-		t.Fatalf("next=%q remediation=%#v, want matching bounded remediation", status.NextRecommended, status.RemediationState)
+	if status.NextRecommended != "verify" || status.Dependencies.Verify != DependencyReady || status.RemediationState.Required {
+		t.Fatalf("next=%q verify=%q remediation=%#v, want malformed evidence to re-enter independent verification", status.NextRecommended, status.Dependencies.Verify, status.RemediationState)
 	}
 	if status.Dependencies.Archive != DependencyBlocked {
 		t.Fatalf("archive=%q, malformed report must not become archive-ready", status.Dependencies.Archive)
@@ -1997,31 +1689,6 @@ func boundedVerifyEnvelope(revision, verdict string) string {
 		"build_output_hash: " + shaID("3"),
 		"```",
 	}, "\n")
-}
-
-func authorityOnlyVerifyEnvelope(revision, testExit, buildExit string) string {
-	return strings.ReplaceAll(strings.Join([]string{
-		"```yaml",
-		"schema: gentle-ai.verify-result/v1",
-		"evidence_revision: " + shaID("1"),
-		"verdict: fail",
-		"blockers: 1",
-		"critical_findings: 1",
-		"requirements: 0/1",
-		"scenarios: 0/1",
-		"test_command: go test ./...",
-		"test_exit_code: " + testExit,
-		"test_output_hash: " + emptyOutputHash,
-		"build_command: go vet ./...",
-		"build_exit_code: " + buildExit,
-		"build_output_hash: " + emptyOutputHash,
-		"authority_only_failure: true",
-		"missing_review_authority: true",
-		"substantive_failure: false",
-		"command_failed: false",
-		"observed_authority_revision: " + revision,
-		"```",
-	}, "\n"), "\r\n", "\n")
 }
 
 func remediationTransaction(t *testing.T, revision string, ready bool) reviewtransaction.Transaction {

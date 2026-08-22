@@ -100,7 +100,6 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 		}
 		t.Logf("large-workspace lifecycle completed %d files: START=%s total=%s", headroomFiles, startElapsed, lifecycleElapsed)
 
-		harness.assertSingleReviewLineage(lineage)
 		harness.assertNoSDDArtifacts()
 	})
 }
@@ -153,11 +152,9 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 					}
 					return
 				}
-				if result.Result != string(reviewtransaction.GateScopeChanged) {
-					t.Fatalf("enabled published-delivery gate result = %q, want %q (not authority_corrupted)", result.Result, reviewtransaction.GateScopeChanged)
-				}
-				if result.Context.Denial == nil || result.Context.Denial.Code != "delivery-base-ambiguous" {
-					t.Fatalf("enabled published-delivery gate denial = %#v, want delivery-base-ambiguous", result.Context.Denial)
+				harness.assertInvalidatedUnmanagedGate(result)
+				if result.Context.Denial != nil {
+					t.Fatalf("enabled published-delivery gate retained deciding denial context: %#v", result.Context.Denial)
 				}
 			})
 		}
@@ -362,11 +359,14 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 			t.Fatalf("negotiated start with an unreadable policy file succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 		}
 		failure := decodeOrganicIntegrationFailure(t, stdout)
-		if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" || failure.MutationOutcome != "unknown" {
-			t.Fatalf("operation_outcome_unknown envelope changed byte-identical fields = %#v", failure)
+		if failure.Code != "invalid_request" || failure.Phase != "preflight" || failure.MutationOutcome != "not_started" {
+			t.Fatalf("policy preflight failure typing = %#v, want invalid_request/preflight/not_started", failure)
 		}
 		if !strings.Contains(failure.Cause, "read facade review policy") {
-			t.Fatalf("operation_outcome_unknown envelope did not carry the wrapped native cause: %#v", failure)
+			t.Fatalf("policy preflight failure did not carry the wrapped native cause: %#v", failure)
+		}
+		if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "defect-reports")); !os.IsNotExist(statErr) {
+			t.Fatalf("deterministic policy preflight failure created a defect report: %v", statErr)
 		}
 	})
 
@@ -427,11 +427,14 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 			t.Fatalf("negotiated start with a directory as the policy file succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 		}
 		failure := decodeOrganicIntegrationFailure(t, stdout)
-		if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" || failure.MutationOutcome != "unknown" {
-			t.Fatalf("operation_outcome_unknown envelope changed byte-identical fields = %#v", failure)
+		if failure.Code != "invalid_request" || failure.Phase != "preflight" || failure.MutationOutcome != "not_started" {
+			t.Fatalf("policy preflight failure typing = %#v, want invalid_request/preflight/not_started", failure)
 		}
 		if !strings.Contains(failure.Cause, "read facade review policy") {
-			t.Fatalf("operation_outcome_unknown envelope did not carry the wrapped native cause: %#v", failure)
+			t.Fatalf("policy preflight failure did not carry the wrapped native cause: %#v", failure)
+		}
+		if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "defect-reports")); !os.IsNotExist(statErr) {
+			t.Fatalf("deterministic policy preflight failure created a defect report: %v", statErr)
 		}
 	})
 }
@@ -867,20 +870,17 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 		harness.git("config", "branch.main.remote", "origin")
 		harness.git("config", "branch.main.merge", "refs/heads/main")
 
-		want := "commit an authorized empty root, then run gentle-ai review start --committed-only with --base-ref set to that commit's SHA"
-		result := harness.gateAllowFailure("pre-push", "--lineage", lineage)
-		if result.Allowed || !strings.Contains(result.Reason, want) {
-			t.Fatalf("pre-push from an empty-base receipt = %#v, want typed refusal naming %q verbatim (1641)", result, want)
-		}
+		// The completed empty-base transaction is burned before first
+		// publication. pre-push reports ordinary repository policy; it cannot
+		// turn the historical review into delivery authority.
+		result := harness.gate("pre-push", "--lineage", lineage)
+		harness.assertInvalidatedUnmanagedGate(result)
 
-		// pre-PR asks whether the receipt may open a pull request against an
-		// advertised boundary, not whether a commit moves, so publishing the
-		// delivery does not retire its refusal.
+		// Publishing the delivery also leaves pre-PR informational; a fresh
+		// transaction, rather than the burned empty-base one, governs later work.
 		harness.git("push", "--quiet", "origin", "HEAD:refs/heads/main")
-		result = harness.gateAllowFailure("pre-pr", "--lineage", lineage, "--base-ref", "origin/main")
-		if result.Allowed || !strings.Contains(result.Reason, want) {
-			t.Fatalf("pre-pr from an empty-base receipt = %#v, want typed refusal naming %q verbatim (1641)", result, want)
-		}
+		result = harness.gate("pre-pr", "--lineage", lineage, "--base-ref", "origin/main")
+		harness.assertInvalidatedUnmanagedGate(result)
 	})
 }
 
@@ -1050,21 +1050,20 @@ func TestOrganicReviewRecoveryGraph(t *testing.T) {
 			t.Fatalf("delivery commit is not an ordinary one-parent commit: %v", parents)
 		}
 
-		recovered := harness.gentle(
+		if _, _, err := harness.gentleAllowFailure(
 			"review", "recover", "--cwd", harness.repo.worktree,
 			"--predecessor-lineage", lineage, "--expected-predecessor-revision", finalized.StoreRevision,
 			"--successor-lineage", lineage+"-release", "--disposition", "scope_changed",
 			"--reason", "prepare complete release scope", "--actor", "maintainer", "--release-scope",
-		)
-		var result struct {
-			LineageID string `json:"lineage_id"`
+		); err == nil {
+			t.Fatal("release recovery reused authority that approved FINALIZE burned")
 		}
-		if err := json.Unmarshal(recovered, &result); err != nil {
-			t.Fatalf("decode review recover: %v\n%s", err, recovered)
-		}
-		if result.LineageID != lineage+"-release" {
-			t.Fatalf("release-scope successor lineage = %q, want %q", result.LineageID, lineage+"-release")
-		}
+
+		// A release follow-up is a fresh transaction after the squash delivery;
+		// it cannot derive authority from the burned predecessor.
+		harness.writeFiles(map[string]string{"release-follow-up.txt": "fresh release scope\n"})
+		fresh, _ := harness.startReview(lineage + "-fresh")
+		harness.approveReview(lineage+"-fresh", fresh)
 		harness.assertNoSDDArtifacts()
 	})
 
@@ -1095,39 +1094,24 @@ func TestOrganicReviewStoreRobustness(t *testing.T) {
 	t.Run("issue-1813", func(t *testing.T) {
 		harness := newOrganicHarness(t)
 
-		healthyA := "organic-store-robust-healthy-a"
-		harness.writeFiles(map[string]string{"segment-healthy-a.txt": "healthy candidate a\n"})
-		startedA, _ := harness.startReview(healthyA)
-		if approved := harness.approveReview(healthyA, startedA); approved.State != organicStateApproved {
-			t.Fatalf("healthy lineage a did not approve: %#v", approved)
-		}
-
+		// Approved transactions burn, so the diagnosable terminal state is an
+		// escalated lineage. It remains only long enough for store corruption
+		// handling; delivery never treats it as authority.
 		quarantined := "organic-store-robust-invalid"
-		harness.writeFiles(map[string]string{"segment-invalid.txt": "quarantined candidate\n"})
-		startedQ, _ := harness.startReview(quarantined)
-		if approved := harness.approveReview(quarantined, startedQ); approved.State != organicStateApproved {
-			t.Fatalf("quarantine-target lineage did not approve: %#v", approved)
-		}
+		escalateOrganicCandidate(t, harness, quarantined)
 
-		healthyB := "organic-store-robust-healthy-b"
-		harness.writeFiles(map[string]string{"segment-healthy-b.txt": "healthy candidate b\n"})
-		startedB, _ := harness.startReview(healthyB)
-		if approved := harness.approveReview(healthyB, startedB); approved.State != organicStateApproved {
-			t.Fatalf("healthy lineage b did not approve: %#v", approved)
-		}
-
-		// Corrupt the quarantine-target lineage's persisted state semantically,
-		// on disk, exactly like a real interrupted/tampered TERMINAL authority:
-		// mark it invalidated without the invalidation provenance
-		// CompactState.Validate() requires.
+		// Corrupt the quarantine-target's retained escalated state semantically,
+		// on disk, exactly like a real interrupted/tampered diagnostic authority:
+		// mark it invalidated without the provenance CompactState.Validate()
+		// requires.
 		statePath := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", quarantined, "review-state.json")
 		payload, err := os.ReadFile(statePath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		corrupted := strings.Replace(string(payload), `"state": "approved",`, `"state": "invalidated",`, 1)
+		corrupted := strings.Replace(string(payload), `"state": "escalated",`, `"state": "invalidated",`, 1)
 		if corrupted == string(payload) {
-			t.Fatalf("quarantine fixture did not contain the expected approved state marker")
+			t.Fatalf("quarantine fixture did not contain the expected escalated state marker")
 		}
 		if err := os.WriteFile(statePath, []byte(corrupted), 0o644); err != nil {
 			t.Fatal(err)
@@ -1166,27 +1150,12 @@ func TestOrganicReviewStoreRobustness(t *testing.T) {
 				t.Fatalf("quarantined lineage still enumerated as a healthy entry: %#v", entry)
 			}
 		}
-		foundHealthyA, foundHealthyB := false, false
-		for _, entry := range report.Entries {
-			if entry.LineageID == healthyA && entry.Status == "approved" {
-				foundHealthyA = true
-			}
-			if entry.LineageID == healthyB && entry.Status == "approved" {
-				foundHealthyB = true
-			}
-		}
-		if !foundHealthyA || !foundHealthyB {
-			t.Fatalf("healthy lineages missing or not approved in inventory: %#v", report.Entries)
-		}
-
-		// Every other healthy lineage stays fully operable: a fresh review
-		// start on unrelated content still works with the quarantined lineage
-		// present in the same store.
+		// Fresh work stays operable alongside the quarantined diagnostic
+		// lineage, but its own approval burns rather than accumulating another
+		// healthy authority record.
 		harness.writeFiles(map[string]string{"segment-healthy-c.txt": "healthy candidate c\n"})
 		startedC, _ := harness.startReview("organic-store-robust-healthy-c")
-		if approved := harness.approveReview("organic-store-robust-healthy-c", startedC); approved.State != organicStateApproved {
-			t.Fatalf("a fresh healthy lineage did not remain operable alongside the quarantined one: %#v", approved)
-		}
+		harness.approveReview("organic-store-robust-healthy-c", startedC)
 
 		// The quarantined lineage itself still fails closed when operated on
 		// directly by name: an explicit selector never silently reports it

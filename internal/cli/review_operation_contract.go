@@ -174,11 +174,16 @@ type ReviewIntegrationFailure struct {
 	RetrySafe              bool                            `json:"retry_safe"`
 	Replayability          reviewtransaction.Replayability `json:"replayability"`
 	LineageID              string                          `json:"lineage_id,omitempty"`
-	RequestDigest          string                          `json:"request_digest,omitempty"`
-	ProgressIdentity       string                          `json:"progress_identity,omitempty"`
-	RequiredInputs         []string                        `json:"required_inputs"`
-	NextAction             string                          `json:"next_action"`
-	CauseCategory          string                          `json:"cause_category,omitempty"`
+	// TargetIdentity binds a reconciliation-required FINALIZE failure to the
+	// frozen candidate whose retained lineage the caller must query with STATUS.
+	// It is optional for unrelated historical failure classes and required for
+	// receipt_publication_pending by Validate and the published schemas.
+	TargetIdentity   string   `json:"target_identity,omitempty"`
+	RequestDigest    string   `json:"request_digest,omitempty"`
+	ProgressIdentity string   `json:"progress_identity,omitempty"`
+	RequiredInputs   []string `json:"required_inputs"`
+	NextAction       string   `json:"next_action"`
+	CauseCategory    string   `json:"cause_category,omitempty"`
 	// Cause is additive: the scrubbed, bounded native cause for a typed failure
 	// branch that has a safe diagnostic to publish.
 	Cause   string                           `json:"cause,omitempty"`
@@ -643,11 +648,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Message = "Receipt publication did not complete after terminal authority was committed."
 		failure.MutationOutcome = ReviewMutationCommitted
 		failure.AuthorityApplicability = "current_target"
-		failure.Replayability = reviewtransaction.ReplayabilityExactReplaySafe
+		// A terminal receipt publication failure is a mutation ambiguity, not a
+		// replay proof. STATUS is read-only and re-derives the native
+		// reconciliation decision before the original FINALIZE request can be
+		// considered again.
+		failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
 		failure.LineageID = publication.LineageID
+		failure.TargetIdentity = publication.TargetIdentity
 		failure.RequestDigest = publication.RequestDigest
 		failure.RequiredInputs = []string{"lineage_id"}
-		failure.NextAction = "review.finalize"
+		failure.NextAction = "review.status"
 		// Publication errors wrap raw provider/subprocess bytes, which no
 		// scrubber can prove safe; this envelope already carries lineage,
 		// request digest and exact replayability, so it stays content-free
@@ -674,6 +684,26 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		// like the read-only catch-all rather than inheriting the universal
 		// cause default.
 		failure.Cause = ""
+		return failure
+	}
+	// Exact atomic START binding conflicts are detected before the guarded write.
+	// They must never be reported as an unknown mutation or sent through ambient
+	// recovery discovery: callers can correct the request without replaying one.
+	var atomicStartConflict *reviewtransaction.CompactAtomicStartConflictError
+	if errors.As(runErr, &atomicStartConflict) {
+		failure.Phase = "pre_native"
+		failure.Code = "atomic_start_conflict"
+		failure.Message = "The exact START binding conflicts with the active authority at this lineage; no authority was changed."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.RequiredInputs = []string{}
+		failure.NextAction = "correct_request"
+		if validReviewIntegrationLineage(atomicStartConflict.LineageID) {
+			failure.LineageID = atomicStartConflict.LineageID
+		}
+		failure.Cause = reviewIntegrationFailureCause(atomicStartConflict)
 		return failure
 	}
 	var startContext *reviewStartContextError
@@ -1420,11 +1450,20 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	if failure.LineageID != "" && !validReviewIntegrationLineage(failure.LineageID) ||
+		failure.TargetIdentity != "" && !validReviewCapabilitySHA256(failure.TargetIdentity) ||
 		failure.RequestDigest != "" && !validReviewCapabilitySHA256(failure.RequestDigest) ||
 		failure.RequestDigest != "" && failure.LineageID == "" ||
 		failure.ProgressIdentity != "" && (!validReviewCapabilitySHA256(failure.ProgressIdentity) || failure.RequestDigest == "" || failure.Operation != "review.repair") ||
 		failure.Operation == "review.repair" && failure.RequestDigest != "" && failure.ProgressIdentity == "" {
 		return errors.New("invalid negotiated review failure replay identity")
+	}
+	if failure.Code == "receipt_publication_pending" &&
+		(failure.Operation != ReviewIntegrationOperationFinalize || failure.Phase != "native_committed" ||
+			failure.MutationOutcome != ReviewMutationCommitted || failure.AuthorityApplicability != "current_target" ||
+			failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
+			failure.LineageID == "" || failure.TargetIdentity == "" || failure.RequestDigest == "" ||
+			!reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) || failure.NextAction != "review.status") {
+		return errors.New("receipt publication reconciliation must require target-bound status") // refusal:by-design world-action: only the native FINALIZE failure classifier can emit a target-bound STATUS reconciliation envelope
 	}
 	if failure.MutationOutcome == ReviewMutationUnknown {
 		exactRepairReplay := failure.Operation == "review.repair" && failure.RetrySafe &&

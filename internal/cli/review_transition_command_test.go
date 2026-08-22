@@ -477,12 +477,12 @@ func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "recover-command"}, &output); err != nil {
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", "recover-command"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	result := filepath.Join(t.TempDir(), "blocking.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
 		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",

@@ -100,11 +100,6 @@ func TestAbandonQuarantinesPartialReviewWithV2Binding(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage)); !os.IsNotExist(err) {
 		t.Fatalf("abandoned entry still present: %v", err)
 	}
-	if err := RunReview([]string{
-		"validate", "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply),
-	}, &bytes.Buffer{}); err == nil {
-		t.Fatal("post-apply gate allowed after a v2 abandonment")
-	}
 }
 
 func TestAbandonRefusesBindingWithChangedDiscardedWork(t *testing.T) {

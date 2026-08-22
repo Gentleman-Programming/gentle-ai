@@ -172,33 +172,27 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 		t.Fatalf("fixture does not share only CandidateTree: stale=%#v live=%#v", staleRecord.State.CurrentSnapshot, live)
 	}
 	assertFinalizeLiveTargetDenied(t, repo, staleRecord.State.LineageID, staleResults)
-	changed, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), live)
+	exactStarted, exact, resultArgs := startFinalizeLiveTarget(t, repo, "finalize-crowded-exact")
+	if exactStarted.LineageID != "finalize-crowded-exact" {
+		t.Fatalf("exact legacy fixture lineage = %q", exactStarted.LineageID)
+	}
+	exactRecord, err := exact.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	exactState, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "finalize-crowded-exact", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1, Snapshot: live,
-		PolicyHash: staleRecord.State.PolicyHash, RiskLevel: staleRecord.State.RiskLevel,
-		SelectedLenses: append([]string{}, staleRecord.State.SelectedLenses...), OriginalChangedLines: &changed,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	exact, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, exactState.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := exact.Replace("", "review/start", exactState); err != nil {
-		t.Fatal(err)
+	if exactRecord.State.CurrentSnapshot.Identity != live.Identity ||
+		exactRecord.State.CurrentSnapshot.BaseTree != live.BaseTree ||
+		exactRecord.State.CurrentSnapshot.CandidateTree != live.CandidateTree ||
+		!reflect.DeepEqual(exactRecord.State.CurrentSnapshot.Paths, live.Paths) {
+		t.Fatalf("exact legacy fixture snapshot = %#v, want %#v", exactRecord.State.CurrentSnapshot, live)
 	}
 	staleBytes := readReviewOperationFile(t, stale.StatePath())
-	resultArgs := facadeReviewerResultArgs(t, repo, ReviewFacadeStartResult{LineageID: exactState.LineageID, SelectedLenses: exactState.SelectedLenses})
 	args := []string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo}
 	args = append(args, resultArgs...)
 	if err := RunReview(args, &bytes.Buffer{}); err != nil {
 		t.Fatalf("crowded exact FINALIZE failed: %v", err)
 	}
-	exactRecord, err := exact.Load()
+	exactRecord, err = exact.Load()
 	if err != nil || exactRecord.State.State != reviewtransaction.StateValidating {
 		t.Fatalf("crowded exact authority = %#v, %v", exactRecord, err)
 	}
@@ -267,8 +261,15 @@ func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
 				t.Fatal(err)
 			}
 			record, err := store.Load()
-			if err != nil || record.State.State != reviewtransaction.StateValidating || record.State.CurrentSnapshot.Kind != reviewtransaction.TargetFixDiff {
-				t.Fatalf("retry successor = %#v, %v", record, err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			liveFixDiff := record.State.CurrentSnapshot
+			expectedFixDiff := fixture.predecessor.State.CurrentSnapshot
+			if record.State.State != reviewtransaction.StateValidating || liveFixDiff.Kind != reviewtransaction.TargetFixDiff ||
+				liveFixDiff.Identity != fixture.incident.TargetIdentity || liveFixDiff.BaseTree != expectedFixDiff.BaseTree ||
+				liveFixDiff.CandidateTree != expectedFixDiff.CandidateTree || !reflect.DeepEqual(liveFixDiff.Paths, expectedFixDiff.Paths) {
+				t.Fatalf("retry successor live fix-diff binding = %#v, want successor bound to %#v", record, expectedFixDiff)
 			}
 			evidence := filepath.Join(t.TempDir(), "evidence.txt")
 			if err := os.WriteFile(evidence, []byte("retry verification passed\n"), 0o600); err != nil {
@@ -285,10 +286,22 @@ func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
 				if err != nil {
 					t.Fatalf("exact retry FINALIZE: %v", err)
 				}
-				terminal, loadErr := store.Load()
-				if loadErr != nil || terminal.State.State != reviewtransaction.StateApproved {
-					t.Fatalf("exact retry terminal = %#v, %v", terminal, loadErr)
+				envelope := decodeReviewOperationEnvelope(t, output.Bytes())
+				var terminal ReviewIntegrationFinalizeResult
+				decodeStrictReviewJSON(t, envelope.Result, &terminal)
+				if terminal.State != reviewtransaction.StateApproved || terminal.Action != reviewApprovedCompactBurnedFinalizeAction || terminal.NextTransition != nil {
+					t.Fatalf("exact retry terminal = %#v, want approved burned terminal without routing", terminal)
 				}
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(envelope.Result, &fields); err != nil {
+					t.Fatal(err)
+				}
+				for _, forbidden := range []string{"receipt", "receipt_path", "next_transition", "forecast", "gate", "validate"} {
+					if _, present := fields[forbidden]; present {
+						t.Fatalf("exact retry terminal exposed %q: %s", forbidden, envelope.Result)
+					}
+				}
+				assertApprovedCompactAuthorityBurned(t, store, successor)
 				return
 			}
 			if err == nil {
@@ -307,54 +320,14 @@ func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
 
 func startFinalizeLiveTarget(t *testing.T, repo, lineage string, extra ...string) (ReviewFacadeStartResult, reviewtransaction.CompactStore, []string) {
 	t.Helper()
-	isBaseDiff := false
-	for _, item := range extra {
-		if item == "--base-ref" || item == "--workspace-overlay" ||
-			strings.HasPrefix(item, "--base-ref=") || strings.HasPrefix(item, "--workspace-overlay=") {
-			isBaseDiff = true
-			break
-		}
+	args := []string{"--cwd", repo, "--lineage", lineage}
+	args = append(args, extra...)
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, args)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var output bytes.Buffer
 	var started ReviewFacadeStartResult
-	if isBaseDiff {
-		// A base-diff/workspace-overlay candidate large enough to select a
-		// lens now refuses a direct start up front (issue #2447); this
-		// helper is SETUP for the finalize behavior under test, so it starts
-		// through the negotiated contract instead. boundNegotiatedStartArgs
-		// derives its own --committed-only from --base-ref, so drop any copy
-		// already present to avoid a duplicate flag.
-		filtered := make([]string, 0, len(extra))
-		for _, item := range extra {
-			if item == "--committed-only" || strings.HasPrefix(item, "--committed-only=") {
-				continue
-			}
-			filtered = append(filtered, item)
-		}
-		startArgs := boundNegotiatedStartArgs(t, append([]string{
-			"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
-		}, filtered...))
-		if err := RunReview(startArgs, &output); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		args := []string{"--cwd", repo, "--lineage", lineage}
-		args = append(args, extra...)
-		if err := RunReviewFacadeStart(args, &output); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if isBaseDiff {
-		// The negotiated envelope carries additional fields (schema, contract,
-		// repository_context, ...) that ReviewFacadeStartResult does not
-		// declare, so a strict decode here would fault on plumbing, not on
-		// anything this helper's callers actually assert.
-		if err := json.Unmarshal(output.Bytes(), &started); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		decodeStrictReviewJSON(t, output.Bytes(), &started)
-	}
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -410,12 +383,12 @@ func TestNegotiatedReviewFinalizeRejectsReviewerPreflightWithoutAuthorityMutatio
 				t.Fatal(err)
 			}
 			lineage := "review-preflight-" + reviewTestSlug(tt.name)
-			var startedOutput bytes.Buffer
-			if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &startedOutput); err != nil {
+			startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage})
+			if err != nil {
 				t.Fatal(err)
 			}
 			var started ReviewFacadeStartResult
-			decodeStrictReviewJSON(t, startedOutput.Bytes(), &started)
+			decodeStrictReviewJSON(t, startedBytes, &started)
 			if !reflect.DeepEqual(started.SelectedLenses, []string{reviewtransaction.LensReliability}) {
 				t.Fatalf("selected lenses = %v, want reliability", started.SelectedLenses)
 			}
@@ -468,12 +441,12 @@ func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(
 		t.Fatal(err)
 	}
 	lineage := "review-preflight-retry"
-	var startedOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &startedOutput); err != nil {
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startedOutput.Bytes(), &started)
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	if !reflect.DeepEqual(started.SelectedLenses, []string{reviewtransaction.LensReliability}) {
 		t.Fatalf("selected lenses = %v, want reliability", started.SelectedLenses)
 	}
@@ -546,12 +519,12 @@ func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var startedOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-finalize-ambiguous-a"}, &startedOutput); err != nil {
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", "review-finalize-ambiguous-a"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startedOutput.Bytes(), &started)
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	first, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -560,21 +533,27 @@ func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := firstRecord.State.OriginalChangedLines
-	clone, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "review-finalize-ambiguous-b", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: firstRecord.State.Generation,
-		Snapshot: firstRecord.State.InitialSnapshot, PolicyHash: firstRecord.State.PolicyHash, RiskLevel: firstRecord.State.RiskLevel,
-		SelectedLenses: append([]string{}, firstRecord.State.SelectedLenses...), OriginalChangedLines: &lines,
+	secondBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", "review-finalize-ambiguous-b", "--allow-duplicate-authority",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, clone.LineageID)
+	var secondStarted ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, secondBytes, &secondStarted)
+	if secondStarted.LineageID != "review-finalize-ambiguous-b" {
+		t.Fatalf("second ambiguous legacy fixture lineage = %q", secondStarted.LineageID)
+	}
+	second, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, secondStarted.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := second.Replace("", "review/start", clone); err != nil {
+	secondRecord, err := second.Load()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if secondRecord.State.InitialSnapshot.Identity != firstRecord.State.InitialSnapshot.Identity {
+		t.Fatalf("ambiguous legacy fixture snapshots differ: first=%q second=%q", firstRecord.State.InitialSnapshot.Identity, secondRecord.State.InitialSnapshot.Identity)
 	}
 	before := map[string][]byte{}
 	for _, store := range []reviewtransaction.CompactStore{first, second} {

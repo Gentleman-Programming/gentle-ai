@@ -230,6 +230,10 @@ func TestNegotiatedReviewStartPreservesPrePolicyLargeDocumentationAuthority(t *t
 		!reflect.DeepEqual(aligned.Reasons, []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonLargeChange}}) {
 		t.Fatalf("pre-policy aligned assessment = %#v", aligned)
 	}
+	replayed, err := reviewStartAssessmentForFrozenAuthority(ReviewFacadeStartResult{Action: "replayed", RiskLevel: reviewtransaction.RiskMedium, SelectedLenses: []string{reviewtransaction.LensReliability}, ChangedLines: 1}, reviewtransaction.RiskAssessment{Level: reviewtransaction.RiskHigh, ChangedLines: 1, Reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonShellSource, Signal: reviewtransaction.SignalShellProcess, Path: "scripts/replayed.sh"}}})
+	if err != nil || replayed.Level != reviewtransaction.RiskMedium || !reflect.DeepEqual(replayed.Reasons, []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonExecutableChange, Path: "scripts/replayed.sh"}}) {
+		t.Fatalf("replayed aligned assessment = %#v, error = %v", replayed, err)
+	}
 }
 
 func TestNegotiatedReviewStartAndStatusExposeWorkspaceOverlay(t *testing.T) {
@@ -709,13 +713,8 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 		gotFields = append(gotFields, field)
 	}
 	sortStrings(gotFields)
-	// "hint" is present here (see TestReviewFacadeStartLensesRequiredHintsNegotiatedContract
-	// in review_start_evidence_test.go) because this fixture's tracked.txt
-	// change requires lenses: the unnegotiated response cannot itself carry
-	// the frozen tree/changed_path_manifest/artifact_subjects those
-	// lenses need, so it names the exact negotiated rerun that returns them.
 	wantFields := []string{
-		"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required",
+		"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required",
 		"lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity",
 	}
 	if !reflect.DeepEqual(gotFields, wantFields) {
@@ -730,6 +729,9 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	if legacy.Operation != "review/start" {
 		t.Fatalf("legacy operation = %q", legacy.Operation)
 	}
+	if legacy.Action != "created" || legacy.LineageID != lineage || legacy.State != reviewtransaction.StateReviewing {
+		t.Fatalf("plain compact START identity = %#v", legacy)
+	}
 	if legacy.CorrectionBudget != 1 || bytes.Contains(legacyOutput.Bytes(), []byte("correction_budget_policy")) {
 		t.Fatalf("legacy START budget projection = %#v\n%s", legacy, legacyOutput.String())
 	}
@@ -741,34 +743,194 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 		t.Fatal(err)
 	}
 	negotiated := decodeNegotiatedReviewStart(t, negotiatedOutput.Bytes())
-	if negotiated.Operation != "review.start" || negotiated.Contract != ReviewIntegrationContractV1 {
-		t.Fatalf("negotiated identity = %#v", negotiated)
+	if negotiated.Operation != "review.start" || negotiated.Contract != ReviewIntegrationContractV1 ||
+		negotiated.Action != "created" || negotiated.LineageID != lineage || negotiated.State != reviewtransaction.StateReviewing {
+		t.Fatalf("negotiated compact START identity = %#v", negotiated)
 	}
 
-	legacyStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), legacyRepo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	negotiatedStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), negotiatedRepo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyAuthority, err := os.ReadFile(legacyStore.StatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	negotiatedAuthority, err := os.ReadFile(negotiatedStore.StatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(legacyAuthority, negotiatedAuthority) {
-		t.Fatalf("contract negotiation changed compact authority bytes:\nlegacy=%s\nnegotiated=%s", legacyAuthority, negotiatedAuthority)
-	}
-	for _, path := range []string{legacyStore.ReceiptPath(), negotiatedStore.ReceiptPath()} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("START unexpectedly materialized receipt %q: %v", path, err)
+	for _, repo := range []string{legacyRepo, negotiatedRepo} {
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Load(); err != nil {
+			t.Fatalf("load compact START authority: %v", err)
+		}
+		if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
+			t.Fatalf("START unexpectedly materialized receipt %q: %v", store.ReceiptPath(), err)
 		}
 	}
+}
+
+func TestReviewStartContractLeavesScopeDriftAuthoritiesIndependent(t *testing.T) {
+	tests := []struct {
+		name       string
+		negotiated bool
+	}{
+		{name: "direct facade"},
+		{name: "negotiated contract", negotiated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			const staleLineage = "scope-drift-stale"
+			const freshLineage = "scope-drift-fresh"
+			writeReviewStartCandidate(t, repo, "tracked.txt", "reviewing candidate\n", 0o644)
+
+			start := func(lineage string) []byte {
+				t.Helper()
+				args := []string{"start", "--cwd", repo, "--lineage", lineage}
+				if tt.negotiated {
+					args = boundNegotiatedStartArgs(t, append([]string{"start", "--contract", ReviewIntegrationContractV2}, args[1:]...))
+				}
+				var output bytes.Buffer
+				if err := RunReview(args, &output); err != nil {
+					t.Fatal(err)
+				}
+				return output.Bytes()
+			}
+
+			staleOutput := start(staleLineage)
+			writeReviewStartCandidate(t, repo, "added.txt", "current candidate scope\n", 0o644)
+			freshOutput := start(freshLineage)
+			assertReviewStartNoBurnProjection(t, freshOutput, staleOutput, staleLineage, freshLineage)
+
+			staleStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, staleLineage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale, err := staleStore.Load()
+			if err != nil || stale.State.State != reviewtransaction.StateReviewing {
+				t.Fatalf("stale authority = %#v, %v", stale, err)
+			}
+			freshStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, freshLineage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh, err := freshStore.Load()
+			if err != nil || fresh.State.State != reviewtransaction.StateReviewing {
+				t.Fatalf("fresh authority = %#v, %v", fresh, err)
+			}
+			if _, err := os.Stat(freshStore.ReceiptPath()); !os.IsNotExist(err) {
+				t.Fatalf("scope-drift START emitted a receipt: %v", err)
+			}
+		})
+	}
+}
+
+func TestReviewStartContractReplaysOnlyItsExactLineage(t *testing.T) {
+	tests := []struct {
+		name       string
+		negotiated bool
+	}{
+		{name: "direct facade"},
+		{name: "negotiated contract", negotiated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			const reviewingLineage = "scope-drift-resume"
+			writeReviewStartCandidate(t, repo, "tracked.txt", "same candidate\n", 0o644)
+
+			start := func(lineage string) []byte {
+				t.Helper()
+				args := []string{"start", "--cwd", repo, "--lineage", lineage}
+				if tt.negotiated {
+					args = boundNegotiatedStartArgs(t, append([]string{"start", "--contract", ReviewIntegrationContractV2}, args[1:]...))
+				}
+				var output bytes.Buffer
+				if err := RunReview(args, &output); err != nil {
+					t.Fatal(err)
+				}
+				return output.Bytes()
+			}
+
+			_ = start(reviewingLineage)
+			resumed := reviewStartOutputFields(t, start(reviewingLineage))
+			for _, field := range []string{"burned_stale_lineage", "hint"} {
+				if _, present := resumed[field]; present {
+					t.Fatalf("exact replay exposed retired %q: %s", field, resumed[field])
+				}
+			}
+			if action := reviewStartOutputString(t, resumed, "action"); action != "replayed" {
+				t.Fatalf("exact replay action = %q", action)
+			}
+			if lineage := reviewStartOutputString(t, resumed, "lineage_id"); lineage != reviewingLineage {
+				t.Fatalf("exact replay lineage = %q", lineage)
+			}
+		})
+	}
+}
+
+func assertReviewStartNoBurnProjection(t *testing.T, freshOutput, staleOutput []byte, staleLineage, freshLineage string) {
+	t.Helper()
+	fresh := reviewStartOutputFields(t, freshOutput)
+	for _, retired := range []string{"burned_stale_lineage", "hint"} {
+		if _, present := fresh[retired]; present {
+			t.Fatalf("scope-drift START exposed retired %q: %s", retired, freshOutput)
+		}
+	}
+	if lineage := reviewStartOutputString(t, fresh, "lineage_id"); lineage != freshLineage || lineage == staleLineage {
+		t.Fatalf("fresh START lineage = %q, stale lineage = %q", lineage, staleLineage)
+	}
+	if action := reviewStartOutputString(t, fresh, "action"); action != "created" {
+		t.Fatalf("scope-drift START action = %q", action)
+	}
+	if state := reviewStartOutputString(t, fresh, "state"); state != string(reviewtransaction.StateReviewing) {
+		t.Fatalf("scope-drift START state = %q", state)
+	}
+	if freshTarget, staleTarget := reviewStartOutputTargetIdentity(t, fresh), reviewStartOutputTargetIdentity(t, reviewStartOutputFields(t, staleOutput)); freshTarget == "" || freshTarget == staleTarget {
+		t.Fatalf("scope-drift START target identity = %q, stale target identity = %q", freshTarget, staleTarget)
+	}
+	for _, forbidden := range []string{"receipt_path", "review_gate"} {
+		if _, present := fresh[forbidden]; present {
+			t.Fatalf("scope-drift START exposed %q: %s", forbidden, freshOutput)
+		}
+	}
+}
+
+func reviewStartOutputFields(t *testing.T, output []byte) map[string]json.RawMessage {
+	t.Helper()
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(output, &fields); err != nil {
+		t.Fatal(err)
+	}
+	return fields
+}
+
+func reviewStartOutputString(t *testing.T, fields map[string]json.RawMessage, name string) string {
+	t.Helper()
+	value, present := fields[name]
+	if !present {
+		t.Fatalf("START omitted %q", name)
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	return decoded
+}
+
+func reviewStartOutputTargetIdentity(t *testing.T, fields map[string]json.RawMessage) string {
+	t.Helper()
+	if target, present := fields["target_identity"]; present {
+		var decoded string
+		if err := json.Unmarshal(target, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+	contextPayload, present := fields["repository_context"]
+	if !present {
+		t.Fatal("START omitted target identity and repository context")
+	}
+	var contextReference ReviewRepositoryContextReference
+	if err := json.Unmarshal(contextPayload, &contextReference); err != nil {
+		t.Fatal(err)
+	}
+	return contextReference.TargetIdentity
 }
 
 func TestNegotiatedReviewStartRejectsInvalidContractsBeforeAuthorityMutation(t *testing.T) {
@@ -805,24 +967,15 @@ func TestExplicitReviewStartRetriesAcrossSharedCommonDirWithoutReconstruction(t 
 	linked := filepath.Join(t.TempDir(), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")
 	for _, root := range []string{repo, linked} {
-		if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("same candidate\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeReviewStartCandidate(t, root, "tracked.txt", "same candidate\n", 0o644)
 	}
-	lineage := "review-common-dir-retry"
-	start := func(root string) ([]byte, ReviewIntegrationStartResult) {
-		t.Helper()
-		var output bytes.Buffer
-		if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", root, "--lineage", lineage}), &output); err != nil {
-			t.Fatalf("START in %s: %v\n%s", root, err, output.String())
-		}
-		return append([]byte(nil), output.Bytes()...), decodeNegotiatedReviewStart(t, output.Bytes())
+
+	const lineage = "review-common-dir-conflict"
+	created := runNegotiatedReviewStart(t, repo, lineage)
+	if created.Action != "created" || created.LineageID != lineage {
+		t.Fatalf("initial explicit START = %#v", created)
 	}
-	_, created := start(repo)
-	if created.Action != string(reviewtransaction.CompactStartCreated) || created.LineageID != lineage {
-		t.Fatalf("initial START = %#v", created)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -830,29 +983,71 @@ func TestExplicitReviewStartRetriesAcrossSharedCommonDirWithoutReconstruction(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	commonDir := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
-	broken := filepath.Join(commonDir, "gentle-ai", "review-transactions", "v2", "unrelated-broken")
-	if err := os.MkdirAll(broken, 0o755); err != nil {
+	broken := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "unrelated-broken", "review-state.json")
+	if err := os.MkdirAll(filepath.Dir(broken), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(broken, "review-state.json"), []byte("{\n"), 0o644); err != nil {
+	if err := os.WriteFile(broken, []byte("{\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	firstRetry, resumed := start(linked)
-	secondRetry, resumedAgain := start(linked)
-	if resumed.Action != string(reviewtransaction.CompactStartResumed) || resumedAgain.Action != resumed.Action || !bytes.Equal(firstRetry, secondRetry) {
-		t.Fatalf("explicit START retries = %#v, %#v\n%s\n%s", resumed, resumedAgain, firstRetry, secondRetry)
-	}
-	if err := os.WriteFile(filepath.Join(linked, "tracked.txt"), []byte("different candidate\n"), 0o644); err != nil {
+	beforeBroken, err := os.ReadFile(broken)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, blocked := start(linked)
-	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || blocked.LineageID != lineage {
-		t.Fatalf("mismatched explicit START = %#v", blocked)
+
+	var conflictOutput bytes.Buffer
+	err = RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", linked, "--lineage", lineage,
+	}), &conflictOutput)
+	if err == nil {
+		t.Fatalf("cross-worktree explicit lineage unexpectedly started:\n%s", conflictOutput.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, conflictOutput.Bytes())
+	failureSchema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
+	validatePublishedReviewSchema(t, failureSchema, conflictOutput.Bytes())
+	if failure.Code != "atomic_start_conflict" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "current_target" ||
+		!failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
+		failure.NextAction != "correct_request" || failure.LineageID != lineage ||
+		!strings.Contains(failure.Cause, "worktree_identity") {
+		t.Fatalf("cross-worktree explicit START conflict = %#v", failure)
 	}
 	after, err := os.ReadFile(store.StatePath())
 	if err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("START retry mutated selected authority: %v", err)
+		t.Fatalf("cross-worktree conflict mutated selected authority: %v", err)
+	}
+	afterBroken, err := os.ReadFile(broken)
+	if err != nil || !bytes.Equal(beforeBroken, afterBroken) {
+		t.Fatalf("cross-worktree START reconstructed or mutated unrelated authority: %v", err)
+	}
+
+	firstDerived := atomicStartV2(t, repo, "")
+	secondDerived := atomicStartV2(t, linked, "")
+	if firstDerived.Action != "created" || secondDerived.Action != "created" ||
+		firstDerived.LineageID == secondDerived.LineageID || firstDerived.LineageID == lineage || secondDerived.LineageID == lineage ||
+		firstDerived.TargetIdentity != secondDerived.TargetIdentity {
+		t.Fatalf("derived linked-worktree STARTs = %#v, %#v", firstDerived, secondDerived)
+	}
+	firstRecord, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, firstDerived.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAuthority, err := firstRecord.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRecord, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), linked, secondDerived.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondAuthority, err := secondRecord.Load()
+	if err != nil || firstAuthority.State.InitialAtomicStart == nil || secondAuthority.State.InitialAtomicStart == nil ||
+		firstAuthority.State.InitialAtomicStart.LineageID != firstDerived.LineageID ||
+		secondAuthority.State.InitialAtomicStart.LineageID != secondDerived.LineageID ||
+		firstAuthority.State.InitialAtomicStart.TargetIdentity != secondAuthority.State.InitialAtomicStart.TargetIdentity ||
+		!reflect.DeepEqual(firstAuthority.State.InitialAtomicStart.Selector, secondAuthority.State.InitialAtomicStart.Selector) ||
+		firstAuthority.State.InitialAtomicStart.WorktreeIdentity == secondAuthority.State.InitialAtomicStart.WorktreeIdentity {
+		t.Fatalf("derived compact worktree bindings = %#v, %#v, %v", firstAuthority, secondAuthority, err)
 	}
 }
 

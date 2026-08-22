@@ -47,12 +47,20 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 		t.Fatalf("unnegotiated START bytes changed:\ngot=%s\nwant=%s", legacyOutput.String(), exactLegacy.String())
 	}
 
-	resumed := runNegotiatedReviewStart(t, repo, lineage)
-	if resumed.Action != string(reviewtransaction.CompactStartResumed) {
-		t.Fatalf("negotiated replay action = %q, want resumed", resumed.Action)
+	replayed := runNegotiatedReviewStart(t, repo, lineage)
+	if replayed.Action != "replayed" {
+		t.Fatalf("negotiated replay action = %q, want replayed", replayed.Action)
 	}
+	resumed := replayed
 	assertNegotiatedStartFrozenContext(t, repo, resumed)
-	frozenBase, frozenCandidate := resumed.BaseTree, resumed.CandidateTree
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	frozenManifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), (*resumed.ChangedPathManifest)...)
 	encoded, err := json.Marshal(resumed)
 	if err != nil {
@@ -83,23 +91,30 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 	if err := os.WriteFile(filepath.Join(repo, ".git", "info", "attributes"), []byte("*.txt binary\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var blockedOutput bytes.Buffer
+	var conflictOutput bytes.Buffer
 	err = RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
-	}), &blockedOutput)
+	}), &conflictOutput)
 	if err == nil {
-		t.Fatalf("changed-candidate negotiated START unexpectedly succeeded:\n%s", blockedOutput.String())
+		t.Fatalf("START selected a changed workspace authority:\n%s", conflictOutput.String())
 	}
-	failure := decodeReviewIntegrationFailure(t, blockedOutput.Bytes())
-	if failure.Code != reviewIntegrationInvalidRequestCode || failure.NextAction != "review.status" {
-		t.Fatalf("changed-candidate START refusal = %#v", failure)
+	conflict := decodeReviewIntegrationFailure(t, conflictOutput.Bytes())
+	if conflict.Code != "atomic_start_conflict" || conflict.Phase != "pre_native" ||
+		conflict.MutationOutcome != ReviewMutationNotStarted || conflict.AuthorityApplicability != "current_target" ||
+		!conflict.RetrySafe || conflict.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
+		conflict.NextAction != "correct_request" || conflict.LineageID != lineage {
+		t.Fatalf("changed-workspace START conflict = %#v", conflict)
 	}
 	for _, forbidden := range []string{
-		"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects", frozenBase, frozenCandidate,
+		"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects", "repository_context", resumed.BaseTree, resumed.CandidateTree,
 	} {
-		if bytes.Contains(blockedOutput.Bytes(), []byte(forbidden)) {
-			t.Fatalf("changed-candidate START leaked frozen authority context %q:\n%s", forbidden, blockedOutput.String())
+		if bytes.Contains(conflictOutput.Bytes(), []byte(forbidden)) {
+			t.Fatalf("changed-workspace START leaked frozen authority context %q:\n%s", forbidden, conflictOutput.String())
 		}
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("changed-workspace START conflict changed frozen authority: %v", err)
 	}
 }
 
@@ -110,26 +125,41 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 		lineage := "review-start-context-reuse"
 		created := runNegotiatedReviewStart(t, repo, lineage)
-		if created.Action != string(reviewtransaction.CompactStartCreated) {
+		if created.Action != "created" {
 			t.Fatalf("created action = %q", created.Action)
 		}
 		assertNegotiatedStartFrozenContext(t, repo, created)
 		completeNegotiatedStartReview(t, repo, created, true)
 
-		reused := runNegotiatedReviewStart(t, repo, lineage)
-		if reused.Action != string(reviewtransaction.CompactStartReuseReceipt) || reused.BaseTree != created.BaseTree || reused.CandidateTree != created.CandidateTree ||
-			!reflect.DeepEqual(*reused.ChangedPathManifest, *created.ChangedPathManifest) {
-			t.Fatalf("receipt replay START = %#v", reused)
+		recreated := runNegotiatedReviewStart(t, repo, lineage)
+		if recreated.Action != "created" || recreated.BaseTree != created.BaseTree || recreated.CandidateTree != created.CandidateTree ||
+			!reflect.DeepEqual(*recreated.ChangedPathManifest, *created.ChangedPathManifest) {
+			t.Fatalf("START after approved authority burn = %#v", recreated)
+		}
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(store.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("START after approved authority burn reused a receipt: %v", err)
 		}
 	})
 
-	t.Run("recovery selection fails closed for a changed candidate", func(t *testing.T) {
+	t.Run("recovery START conflict stays context-free for a changed candidate", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate before escalation\n", 0o644)
 		lineage := "review-start-context-recovery"
 		created := runNegotiatedReviewStart(t, repo, lineage)
 		completeNegotiatedStartReview(t, repo, created, false)
 
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
 		writeReviewStartCandidate(t, repo, "tracked.txt", "replacement target after escalation\n", 0o644)
 		var statusOutput bytes.Buffer
 		if err := RunReview([]string{
@@ -142,38 +172,43 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		if status.Action != reviewtransaction.TargetStatusActionRecover || status.Authority == nil || status.Authority.LineageID != lineage ||
 			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
 			status.NextTransition.ReasonCode != "recovery_authorization_required" {
-			t.Fatalf("STATUS did not route the changed candidate to recovery collection:\n%s", statusOutput.String())
+			t.Fatalf("STATUS did not return the authoritative recovery route:\n%s", statusOutput.String())
 		}
 		if status.NextTransition.Execute != nil && status.NextTransition.Execute.Operation == "review.start" {
 			t.Fatalf("STATUS incorrectly routed the changed candidate to review.start:\n%s", statusOutput.String())
 		}
-
-		var startOutput bytes.Buffer
-		err := RunReview(boundNegotiatedStartArgs(t, []string{
+		var output bytes.Buffer
+		err = RunReview(boundNegotiatedStartArgs(t, []string{
 			"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
-		}), &startOutput)
+		}), &output)
 		if err == nil {
-			t.Fatalf("negotiated START for the changed candidate unexpectedly succeeded:\n%s", startOutput.String())
+			t.Fatalf("START selected recovery authority:\n%s", output.String())
 		}
-		failure := decodeReviewIntegrationFailure(t, startOutput.Bytes())
-		if failure.Code != reviewIntegrationInvalidRequestCode || failure.Phase != "preflight" ||
-			failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" ||
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		failureSchema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
+		validatePublishedReviewSchema(t, failureSchema, output.Bytes())
+		if failure.Code != "atomic_start_conflict" || failure.Phase != "pre_native" ||
+			failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "current_target" ||
 			!failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
-			failure.NextAction != "review.status" || failure.LineageID != lineage {
-			t.Fatalf("changed-candidate START refusal = %#v", failure)
+			failure.NextAction != "correct_request" || failure.LineageID != lineage {
+			t.Fatalf("recovery START conflict = %#v", failure)
 		}
 		for _, forbidden := range []string{
-			"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects",
+			"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects", "repository_context",
 			created.BaseTree, created.CandidateTree,
 		} {
-			if bytes.Contains(startOutput.Bytes(), []byte(forbidden)) {
-				t.Fatalf("changed-candidate START leaked frozen authority context %q:\n%s", forbidden, startOutput.String())
+			if bytes.Contains(output.Bytes(), []byte(forbidden)) {
+				t.Fatalf("recovery START leaked frozen authority context %q:\n%s", forbidden, output.String())
 			}
 		}
 		for _, subject := range created.ArtifactSubjects {
-			if bytes.Contains(startOutput.Bytes(), []byte(subject.SubjectHash)) {
-				t.Fatalf("changed-candidate START leaked artifact subject %q:\n%s", subject.SubjectHash, startOutput.String())
+			if bytes.Contains(output.Bytes(), []byte(subject.SubjectHash)) {
+				t.Fatalf("recovery START leaked artifact subject %q:\n%s", subject.SubjectHash, output.String())
 			}
+		}
+		after, err := os.ReadFile(store.StatePath())
+		if err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("recovery START conflict changed exact authority: %v", err)
 		}
 	})
 }
@@ -197,7 +232,7 @@ func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *te
 		t.Fatalf("START with a repository path inventory larger than 4 MiB: %v", err)
 	}
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || started.ChangedPathManifest == nil ||
+	if started.Action != "created" || started.ChangedPathManifest == nil ||
 		len(*started.ChangedPathManifest) != 1 || (*started.ChangedPathManifest)[0].Path != "main.go" {
 		t.Fatalf("large-repository START = %#v", started)
 	}
@@ -329,11 +364,11 @@ func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t
 	t.Run("existing authority remains selected and unchanged", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
-		lineage := "review-start-context-existing"
-		if err := RunReview([]string{"start", "--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+		existingLineage := "review-start-context-existing"
+		if err := RunReview([]string{"start", "--cwd", repo, "--lineage", existingLineage}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
-		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, existingLineage)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -344,19 +379,27 @@ func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t
 		restore := forceReviewStartContextFailure(errors.New("forced existing-authority context failure"))
 		t.Cleanup(restore)
 
+		const attemptedLineage = "review-start-context-attempt"
 		var output bytes.Buffer
-		if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage}), &output); err == nil {
+		if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", attemptedLineage}), &output); err == nil {
 			t.Fatal("negotiated START unexpectedly succeeded")
 		}
 		failure := decodeReviewIntegrationFailure(t, output.Bytes())
-		if failure.Phase != "native_committed" || failure.MutationOutcome != ReviewMutationUnknown || failure.RetrySafe ||
-			failure.AuthorityApplicability != "current_target" || failure.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
-			failure.NextAction != "review.status" || !reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) || failure.LineageID != lineage {
+		if failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
+			failure.AuthorityApplicability != "not_evaluated" || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+			failure.NextAction != "stop" || len(failure.RequiredInputs) != 0 || failure.LineageID != attemptedLineage {
 			t.Fatalf("existing-authority context failure = %#v", failure)
 		}
 		after, err := os.ReadFile(store.StatePath())
 		if err != nil || !bytes.Equal(after, before) {
-			t.Fatalf("existing authority changed after context failure: %v", err)
+			t.Fatalf("unrelated existing authority changed after context failure: %v", err)
+		}
+		attemptedStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, attemptedLineage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := attemptedStore.Load(); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("context failure selected or created attempted authority: %v", err)
 		}
 	})
 }

@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // TestReviewFinalizeProviderRuntimeSurvivesContextLevelObservation drives the
@@ -23,8 +23,41 @@ import (
 // refuter request requires the current compact authority revision".
 func TestReviewFinalizeProviderRuntimeSurvivesContextLevelObservation(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", "provider-runtime-context-level"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bindingStatus bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode),
+		"--next-transition", "--cwd", repo, "--lineage", record.State.LineageID,
+	}, &bindingStatus); err != nil {
+		t.Fatalf("negotiated status for provider capture failed: %v\n%s", err, bindingStatus.String())
+	}
+	var binding ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, bindingStatus.Bytes(), &binding)
+	if binding.RepositoryContext == nil {
+		t.Fatalf("negotiated status omitted provider repository context: %s", bindingStatus.String())
+	}
+	record, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.RepositoryContext.Revision != record.Revision {
+		t.Fatalf("provider repository context revision = %q, compact authority = %q", binding.RepositoryContext.Revision, record.Revision)
+	}
 	previous := reviewProviderAdapterFor
 	t.Cleanup(func() { reviewProviderAdapterFor = previous })
 	reviewProviderAdapterFor = func(_ reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
@@ -36,9 +69,9 @@ func TestReviewFinalizeProviderRuntimeSurvivesContextLevelObservation(t *testing
 		}), nil
 	}
 	if err := RunReviewCaptureResult([]string{
-		"--repository-context", handle,
+		"--repository-context", binding.RepositoryContext.Handle,
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--lens", record.State.SelectedLenses[0], "--order", "0", "--expected-revision", record.Revision,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--expected-revision", binding.RepositoryContext.Revision,
 		"--agent", string(model.AgentClaudeCode),
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -50,7 +83,7 @@ func TestReviewFinalizeProviderRuntimeSurvivesContextLevelObservation(t *testing
 	var status bytes.Buffer
 	if err := RunReview([]string{
 		"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode),
-		"--next-transition", "--cwd", repo,
+		"--next-transition", "--cwd", repo, "--lineage", record.State.LineageID,
 	}, &status); err != nil {
 		t.Fatalf("negotiated status failed: %v\n%s", err, status.String())
 	}

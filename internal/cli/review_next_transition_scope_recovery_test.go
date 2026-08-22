@@ -29,16 +29,13 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	attempt := filepath.Join(repo, "docs", "attempt.md")
 	writeCLIAttemptFile(t, attempt, "# attempt\n\nplain prose.\n")
 	runReviewCLIGit(t, repo, "add", ".")
-	var started bytes.Buffer
-	if err := RunReview([]string{"start", "--cwd", repo}, &started); err != nil {
-		t.Fatalf("review start: %v\n%s", err, started.String())
-	}
-	var startResult ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, started.Bytes(), &startResult)
-	var finalized bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo}, &finalized); err != nil {
-		t.Fatalf("review finalize: %v\n%s", err, finalized.String())
-	}
+	// This approved predecessor predates v3 approval burns. Seed its compact
+	// authority and receipt directly so STATUS can exercise the historical
+	// recovery algebra without current FINALIZE persistence.
+	historical := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, "scope-loop-root", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	startResult := ReviewFacadeStartResult{LineageID: historical.Record.State.LineageID}
 
 	// The operator stages a revision of the exact reviewed path set: the
 	// frozen delivery scope is unchanged while the candidate tree moved.
@@ -48,6 +45,7 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	var statusOut bytes.Buffer
 	if err := RunReview([]string{
 		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+		"--lineage", startResult.LineageID,
 	}, &statusOut); err != nil {
 		t.Fatalf("review status: %v\n%s", err, statusOut.String())
 	}
@@ -112,6 +110,7 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	statusOut.Reset()
 	if err := RunReview([]string{
 		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+		"--lineage", startResult.LineageID,
 		"--recovery-successor-lineage", "scope-loop-successor",
 		"--recovery-reason", "scope changed after approval",
 		"--recovery-actor", "maintainer", "--recovery-authorization", authorization,
@@ -153,15 +152,13 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 	attempt := filepath.Join(repo, "docs", "attempt.md")
 	writeCLIAttemptFile(t, attempt, "# approved feature\n")
 	runReviewCLIGit(t, repo, "add", "--", "docs/attempt.md")
-	var startedOut bytes.Buffer
-	if err := RunReview([]string{"start", "--cwd", repo}, &startedOut); err != nil {
-		t.Fatalf("review start: %v\n%s", err, startedOut.String())
-	}
-	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startedOut.Bytes(), &started)
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("review finalize: %v", err)
-	}
+	// The rebased feature starts from a historical compact approval. Its receipt
+	// is seeded directly through reviewtransaction rather than current FINALIZE,
+	// which burns the predecessor this recovery scenario must retain.
+	historical := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, "approved-rebase-root", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	started := ReviewFacadeStartResult{LineageID: historical.Record.State.LineageID}
 	runReviewCLIGit(t, repo, "commit", "-m", "approved feature")
 
 	runReviewCLIGit(t, repo, "branch", "advanced-base", originalBase)
@@ -257,12 +254,12 @@ func TestNegotiatedStatusCollectsEscalatedChangedScopeRecovery(t *testing.T) {
 	attempt := filepath.Join(repo, "internal", "auth", "session.go")
 	writeCLIAttemptFile(t, attempt, "package auth\n\nfunc CheckToken(token string) bool { return token != \"\" }\n")
 	runReviewCLIGit(t, repo, "add", ".")
-	var startedOut bytes.Buffer
-	if err := RunReview([]string{"start", "--cwd", repo}, &startedOut); err != nil {
-		t.Fatalf("review start: %v\n%s", err, startedOut.String())
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", "scope-recovery-escalated"})
+	if err != nil {
+		t.Fatalf("start compact recovery fixture: %v", err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startedOut.Bytes(), &started)
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	resultPaths := make([]string, len(started.SelectedLenses))
 	for index, lens := range started.SelectedLenses {
 		resultPaths[index] = filepath.Join(t.TempDir(), lens+".json")

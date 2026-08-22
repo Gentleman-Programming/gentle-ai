@@ -76,6 +76,7 @@ func relocateCompactRecordWithIdentities(t *testing.T, repo, fromLineage, toLine
 		t.Fatal(err)
 	}
 	record.State.LineageID = toLineage
+	record.State.InitialAtomicStart = nil
 	record.State.InitialSnapshot.Identity = mint(record.State.InitialSnapshot)
 	record.State.CurrentSnapshot.Identity = mint(record.State.CurrentSnapshot)
 	revision, err := reviewtransaction.CompactRevisionForState(record.State)
@@ -134,33 +135,49 @@ func TestStatusOffersFreshStartForPriorSchemaLineageAndStartSucceeds(t *testing.
 		status.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("prior-schema lineage transition = %#v, want the fresh review.start execute", status.NextTransition)
 	}
+	assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection", "lineage"})
 
-	// An explicit lineage argument appears only when the derived name is
-	// occupied; the fixture freed the derived name, so the transition may
-	// legitimately omit it and let START derive the fresh lineage itself.
-	freshLineage := ""
-	for _, argument := range status.NextTransition.Execute.Arguments {
-		if argument.Name == "lineage" {
-			freshLineage = argument.Value
-		}
-	}
+	// A retired prior-schema selector is history, never the current START
+	// token. STATUS must derive the fresh compact authority from the current
+	// worktree-bound candidate instead of overwriting the historical record.
+	freshLineage := startTransitionArgumentValue(t, status, "lineage")
 	if freshLineage == "prior-schema-history" {
-		t.Fatalf("fresh start transition renamed the prior-schema lineage itself: %#v", status.NextTransition.Execute.Arguments)
+		t.Fatalf("fresh start transition lineage = %q, must differ from the prior-schema selector", freshLineage)
 	}
-	startArgs := []string{"--cwd", repo}
-	if freshLineage != "" {
-		startArgs = append(startArgs, "--lineage", freshLineage)
+	derived, err := reviewAtomicStartLineage(t.Context(), repo, status.TargetIdentity)
+	if err != nil {
+		t.Fatalf("derive fresh atomic START lineage: %v", err)
 	}
-	var startOutput bytes.Buffer
-	if err := RunReviewFacadeStart(startArgs, &startOutput); err != nil {
-		t.Fatalf("fresh start alongside prior-schema history: %v\n%s", err, startOutput.String())
+	if freshLineage != derived {
+		t.Fatalf("fresh start transition lineage = %q, want current worktree-derived %q", freshLineage, derived)
 	}
-	var restarted ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startOutput.Bytes(), &restarted)
-	if restarted.LineageID == "" || restarted.LineageID == "prior-schema-history" {
-		t.Fatalf("fresh start lineage = %q", restarted.LineageID)
+
+	var repeatedOutput bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", "prior-schema-history"}, &repeatedOutput); err != nil {
+		t.Fatalf("repeat status naming a prior-schema lineage: %v\n%s", err, repeatedOutput.String())
 	}
-	if freshLineage != "" && restarted.LineageID != freshLineage {
+	var repeated ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, repeatedOutput.Bytes(), &repeated)
+	if got := startTransitionArgumentValue(t, repeated, "lineage"); got != freshLineage {
+		t.Fatalf("repeated prior-schema STATUS lineage = %q, want stable %q", got, freshLineage)
+	}
+
+	var selectorlessOutput bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo}, &selectorlessOutput); err != nil {
+		t.Fatalf("selectorless status beside prior-schema history: %v\n%s", err, selectorlessOutput.String())
+	}
+	var selectorless ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, selectorlessOutput.Bytes(), &selectorless)
+	if got := startTransitionArgumentValue(t, selectorless, "lineage"); got != freshLineage {
+		t.Fatalf("selectorless fresh START lineage = %q, want explicit prior-schema STATUS lineage %q", got, freshLineage)
+	}
+
+	// Execute every START token STATUS emitted, not a reduced hand-built command.
+	restarted := executeStartTransition(t, repo, status)
+	if restarted.LineageID == "" {
+		t.Fatal("fresh START returned no lineage")
+	}
+	if restarted.LineageID != freshLineage {
 		t.Fatalf("fresh start created lineage %q, want the rendered %q", restarted.LineageID, freshLineage)
 	}
 	after, err := os.ReadFile(store.StatePath())
@@ -175,7 +192,21 @@ func TestStatusOffersFreshStartForPriorSchemaLineageAndStartSucceeds(t *testing.
 		t.Fatal(err)
 	}
 	if _, err := freshStore.Load(); err != nil {
-		t.Fatalf("fresh lineage alongside prior-schema history does not load: %v", err)
+		t.Fatalf("fresh atomic lineage alongside prior-schema history does not load: %v", err)
+	}
+
+	var activeOutput bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", freshLineage}, &activeOutput); err != nil {
+		t.Fatalf("status naming the fresh compact authority: %v\n%s", err, activeOutput.String())
+	}
+	var active ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, activeOutput.Bytes(), &active)
+	if active.Applicability != reviewtransaction.TargetApplicabilityCurrent || active.Action == reviewtransaction.TargetStatusActionStart || active.NextTransition == nil {
+		t.Fatalf("exact fresh compact authority lost its normal route: %#v", active)
+	}
+	if active.NextTransition.Kind != reviewNextTransitionCollect &&
+		(active.NextTransition.Kind != reviewNextTransitionExecute || active.NextTransition.Execute == nil || active.NextTransition.Execute.Operation != "review.finalize") {
+		t.Fatalf("exact fresh compact authority transition = %#v, want collect or finalize", active.NextTransition)
 	}
 }
 

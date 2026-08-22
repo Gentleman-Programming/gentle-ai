@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // TestCorrectionPhaseRepositoryContextStaysExecutable extends the
@@ -28,8 +31,15 @@ import (
 // red naming the exact hop.
 func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 	reviewEnabledHome(t)
+	sessionRoot := initReviewCLIRepo(t)
 	repo := initReviewCLIRepo(t)
-	// Reporter's shape: two newly added source files, staged projection.
+	nestedB := filepath.Join(repo, "nested", "requested")
+	if err := os.MkdirAll(nestedB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sessionRoot)
+	// Reporter's shape: two newly added source files, staged projection in B
+	// while the host process remains in unrelated repository A.
 	for name, content := range map[string]string{
 		"alpha.go": "package candidate\n\nfunc Alpha() int { return 1 }\n",
 		"beta.go":  "package candidate\n\nfunc Beta() int { return 2 }\n",
@@ -40,17 +50,23 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 	}
 	runReviewCLIGit(t, repo, "add", "alpha.go", "beta.go")
 
+	startSnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionStaged, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var startOut bytes.Buffer
-	if err := RunReview(boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
-		"--lineage", "probe-2541", "--projection", "staged",
-	}), &startOut); err != nil {
+	if err := RunReview([]string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", nestedB,
+		"--lineage", "probe-2541", "--projection", "staged", "--target", startSnapshot.Identity,
+	}, &startOut); err != nil {
 		t.Fatalf("start: %v\n%s", err, startOut.String())
 	}
 	started := decodeNegotiatedReviewStart(t, startOut.Bytes())
 	t.Logf("started: risk=%s lenses=%v", started.RiskLevel, started.SelectedLenses)
 
-	finalizeArgs := []string{"--cwd", repo, "--lineage", started.LineageID}
+	finalizeArgs := []string{"--cwd", nestedB, "--lineage", started.LineageID}
 	for index, lens := range started.SelectedLenses {
 		resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
 		findings := []facadeFinding{}
@@ -70,13 +86,13 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 		t.Fatalf("finalize results: %v", err)
 	}
 	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2",
+		"--cwd", nestedB, "--lineage", started.LineageID, "--correction-lines", "2",
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("forecast: %v", err)
 	}
 
 	// Reporter's order: read the correction plan from STATUS FIRST, then edit.
-	kind0, reason0, _, _ := reviewNegotiatedTransition(t, repo, "--lineage", started.LineageID, "--projection", "staged")
+	kind0, reason0, _, _ := reviewNegotiatedTransition(t, nestedB, "--lineage", started.LineageID, "--projection", "staged")
 	t.Logf("post-forecast: kind=%s reason=%s", kind0, reason0)
 
 	// The bounded correction: change one staged file and restage it, so the
@@ -89,7 +105,7 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 	// Follow the negotiated route exactly as a consumer does, up to eight hops,
 	// satisfying the repository-verification collect the way the facade defines.
 	for hop := 1; hop <= 8; hop++ {
-		statusArgs := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		statusArgs := []string{"status", "--cwd", nestedB, "--contract", ReviewIntegrationContractV2,
 			"--agent", "claude-code", "--next-transition", "--lineage", started.LineageID, "--projection", "staged"}
 		var raw bytes.Buffer
 		if err := RunReview(statusArgs, &raw); err != nil {
@@ -97,6 +113,24 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 		}
 		var parsed ReviewTargetStatusResult
 		decodeStrictReviewJSON(t, raw.Bytes(), &parsed)
+		if parsed.RepositoryContext == nil || parsed.ValidationRequest == nil ||
+			parsed.RepositoryContext.TargetIdentity != parsed.ValidationRequest.CorrectionTargetIdentity {
+			t.Fatalf("hop %d: correction STATUS context target = %#v, request = %#v", hop, parsed.RepositoryContext, parsed.ValidationRequest)
+		}
+		preCorrection := parsed
+		preCorrectionContext := *parsed.RepositoryContext
+		preCorrectionContext.TargetIdentity = reviewAuthorityTargetIdentity(parsed)
+		preCorrection.RepositoryContext = &preCorrectionContext
+		if err := preCorrection.Validate(); err == nil {
+			t.Fatalf("hop %d: STATUS accepted pre-correction repository context target", hop)
+		}
+		unrelated := parsed
+		unrelatedContext := *parsed.RepositoryContext
+		unrelatedContext.TargetIdentity = "sha256:" + strings.Repeat("f", 64)
+		unrelated.RepositoryContext = &unrelatedContext
+		if err := unrelated.Validate(); err == nil {
+			t.Fatalf("hop %d: STATUS accepted unrelated repository context target", hop)
+		}
 		transition := parsed.NextTransition
 		if transition == nil {
 			t.Fatalf("hop %d: no transition", hop)
@@ -105,17 +139,27 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 		t.Logf("hop %d: kind=%s reason=%s", hop, kind, reason)
 
 		if kind == "collect" && reason == "correction_repository_verification_required" {
-			target := transitionArgumentValue(t, transition, "target")
-			revision := transitionArgumentValue(t, transition, "expected-revision")
+			if len(transition.Collect.Inputs) != 1 {
+				t.Fatalf("correction repository verification input = %#v", transition.Collect)
+			}
+			input := transition.Collect.Inputs[0]
+			inputTokens := make([]string, 0, len(input.Arguments))
+			for _, argument := range input.Arguments {
+				token := argument.Token
+				if token == "" {
+					token = "--" + argument.Name + "=" + argument.Value
+				}
+				inputTokens = append(inputTokens, token)
+			}
 			passed := filepath.Join(t.TempDir(), "passed.txt")
 			if err := os.WriteFile(passed, []byte("full repository verification passed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-				"--target", target, "--expected-revision", revision,
-				"--outcome", "passed", "--input", passed}, &bytes.Buffer{}); err != nil {
-				t.Fatalf("capture passed evidence: %v", err)
+			captureArgs := append(inputTokens, "--outcome", "passed", "--input", passed)
+			if err := RunReviewCaptureEvidence(captureArgs, &bytes.Buffer{}); err != nil {
+				t.Fatalf("execute exact B capture descriptor from A: %v", err)
 			}
+			target := transitionArgumentValue(t, transition, "target")
 			t.Logf("        published passed evidence for %s", target[:24])
 			continue
 		}

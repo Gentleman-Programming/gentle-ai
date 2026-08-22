@@ -52,8 +52,22 @@ func (b *battery) runEnv(dir string, env []string, args ...string) (string, stri
 	// processes holding them open cannot block past the context cancel.
 	command.WaitDelay = 30 * time.Second
 	command.Dir = dir
-	if len(env) > 0 {
-		command.Env = mergeEnvironment(env)
+	overrides := append([]string(nil), env...)
+	if b.sandboxHome != "" {
+		supplied := make(map[string]bool, len(overrides))
+		for _, entry := range overrides {
+			if name, _, found := strings.Cut(entry, "="); found {
+				supplied[name] = true
+			}
+		}
+		for _, name := range []string{"HOME", "USERPROFILE"} {
+			if !supplied[name] {
+				overrides = append(overrides, name+"="+b.sandboxHome)
+			}
+		}
+	}
+	if len(overrides) > 0 {
+		command.Env = mergeEnvironment(overrides)
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -83,10 +97,13 @@ func (b *battery) runJSONEnv(source, dir string, env []string, args ...string) (
 	return doc, stderr, code
 }
 
-// statusEnv queries the negotiated next transition with lane environment.
+// statusEnv mirrors status with the lane's isolated environment.
 func (b *battery) statusEnv(repo, agent string, env []string) (map[string]any, string, int) {
-	return b.runJSONEnv("status", repo, env,
-		"review", "status", "--cwd", repo, "--contract", reviewContract, "--agent", agent, "--next-transition")
+	doc, stderr, code := b.runJSONEnv("status", repo, env, b.statusArgs(repo, agent)...)
+	if err := b.admitStatusScope(repo, doc); err != nil {
+		return nil, err.Error(), 1
+	}
+	return doc, stderr, code
 }
 
 // runCommandLineEnv mirrors runCommandLine over runEnv.
@@ -152,6 +169,10 @@ func (b *battery) hostNegotiatedMediumStart(lane, repo, agent string, env []stri
 			code, getString(startDoc, "state"), getString(startDoc, "risk_level"), firstLine(stderr)))
 		return false
 	}
+	if err := b.rememberStarted(repo, getString(statusDoc, "target_identity"), startDoc); err != nil {
+		b.fail(lane, "consent granted round-trip", err.Error())
+		return false
+	}
 	b.pass(lane, "consent granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage")
 	return true
 }
@@ -203,11 +224,11 @@ func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[str
 	return true
 }
 
-// hostFollowToReceipt follows negotiated transitions to the terminal receipt.
+// hostFollowToReceipt follows negotiated transitions to the terminal burn.
 // A correction_required terminal is a legitimate real-model outcome and is
 // reported as such, mirroring the claude --with-model lane.
 func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
-	const check = "lifecycle to approved receipt"
+	const check = "lifecycle burned"
 	evidencePath := filepath.Join(b.workRoot, lane+"-evidence.txt")
 	evidence := fmt.Sprintf("crosslane battery %s: node --check passed on the frozen candidate\n", timestamp())
 	if err := os.WriteFile(evidencePath, []byte(evidence), 0o644); err != nil {
@@ -227,7 +248,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 			}
 			switch operationState(doc) {
 			case "approved":
-				b.pass(lane, check, "real-host reviewed lineage reached the approved receipt")
+				b.burnApproved(lane, check, repo, agent, env, doc)
 				return
 			case "correction_required":
 				// A real model finding against scratch code is a legitimate
@@ -284,7 +305,7 @@ func (b *battery) noteHostCost(lane, note string) {
 func (b *battery) runHostLanes() {
 	if !b.withHost {
 		b.skip(hostCodexLane, "real codex host tier", "pass --with-host to spawn real host applications (dev subscription)")
-		b.skip(hostPiLane, "real pi host tier", "pass --with-host to spawn real host applications (dev subscription)")
+		b.skip(hostPiLane, "typed SKIP: separate gentle-pi dev-binary evidence contract", "default battery does not fake/copy the relay; --with-host is independent live-host proof")
 		b.skip(hostOpenCodeLane, "real opencode host tier", "pass --with-host to spawn real host applications (dev subscription)")
 		return
 	}

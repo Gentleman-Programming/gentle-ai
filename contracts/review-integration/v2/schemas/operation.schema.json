@@ -12,7 +12,7 @@
     "result": {
       "oneOf": [
         {"$ref": "#/$defs/finalize"},
-        {"$ref": "../../v1/schemas/operation.schema.json#/$defs/validate"},
+        {"$ref": "gate-result.schema.json"},
         {"$ref": "../../v1/schemas/operation.schema.json#/$defs/bind_sdd"},
         {"$ref": "../../v1/schemas/operation.schema.json#/$defs/retry_final_verification"}
       ]

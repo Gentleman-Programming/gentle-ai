@@ -81,6 +81,7 @@ func init() {
 		Name:     damagedStoreAxis,
 		Title:    "Journeys that start from a compact-v2 review store already damaged on disk",
 		BlackBox: false,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Fixtures author `review-state.json` directly. The core corpus reaches every state it measures through the CLI; these states cannot be reached that way, because the product validates the recovery edge at write time and refuses to create them.",
 			"Because they are coupled to a persisted format rather than to a CLI, these journeys are NOT portable across builds the way the core is. Against a build whose store format has moved they report `failed` or `unsupported`; they will not report a clean number for a state they no longer built.",

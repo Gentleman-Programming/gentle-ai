@@ -17,15 +17,11 @@
 // the message describes and then runs the command the message named.
 package organicruntime_test
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-// approveOrganicHealthyCandidate builds the exact state the recovery guard
-// rails defend: one passive tier-0 candidate reviewed and approved, whose
-// lifecycle gate allows.
-func approveOrganicHealthyCandidate(t *testing.T, harness *organicHarness, lineage string) string {
+// approveOrganicHealthyCandidate builds the terminal state the recovery guard
+// rails defend: passive prose reaches approved FINALIZE and burns its authority.
+func approveOrganicHealthyCandidate(t *testing.T, harness *organicHarness, lineage string) organicFinalizeResult {
 	t.Helper()
 	harness.writeFiles(map[string]string{
 		"docs/healthy.md": "# healthy\n\nplain prose, no executable content.\n",
@@ -35,13 +31,9 @@ func approveOrganicHealthyCandidate(t *testing.T, harness *organicHarness, linea
 	if len(started.SelectedLenses) != 0 {
 		t.Fatalf("passive prose selected lenses: %#v", started.SelectedLenses)
 	}
-	if approved := harness.finalize(lineage); approved.State != organicStateApproved {
-		t.Fatalf("passive prose did not approve: %#v", approved)
-	}
-	if allowed := harness.gate("post-apply"); allowed.Result != organicGateAllow || !allowed.Allowed {
-		t.Fatalf("fixture is not a healthy approved authority: %#v", allowed)
-	}
-	return harnessStatus(t, harness, lineage).Authority.Revision
+	approved := harness.approveReview(lineage, started)
+	harness.assertInvalidatedUnmanagedGate(harness.gate("post-apply"))
+	return approved
 }
 
 // changeOrganicHealthyCandidate performs the world action all three refusals
@@ -53,154 +45,76 @@ func changeOrganicHealthyCandidate(harness *organicHarness) {
 	harness.git("add", "-A")
 }
 
-// followOrganicGuardRailContinuation runs the command a guard-rail refusal
-// named, after the world action, and requires the lineage it creates to reach
-// a real `allow`. Nothing here is knowledge the test has independently: the
-// argv comes out of the product's own message.
-func followOrganicGuardRailContinuation(t *testing.T, harness *organicHarness, arguments []string, successor string) {
+// startOrganicFreshReviewAfterBurn performs the only post-approval continuation:
+// materially changed work freezes in a new atomic transaction rather than
+// recovering or reopening the authority FINALIZE removed.
+func startOrganicFreshReviewAfterBurn(t *testing.T, harness *organicHarness, successor string) {
 	t.Helper()
 	changeOrganicHealthyCandidate(harness)
-	if stdout, stderr, err := harness.gentleAllowFailure(arguments...); err != nil {
-		t.Fatalf("the continuation the refusal named failed: gentle-ai %v: %v\nstdout:\n%s\nstderr:\n%s",
-			arguments, err, stdout, stderr)
-	}
-	harness.finalize(successor)
-	if allowed := harness.gate("pre-commit"); allowed.Result != organicGateAllow || !allowed.Allowed {
-		t.Fatalf("gate still denies after the continuation the refusal named: %#v", allowed)
-	}
+	started, _ := harness.startReview(successor)
+	harness.approveReview(successor, started)
+	harness.assertInvalidatedUnmanagedGate(harness.gate("pre-commit"))
 }
 
-// TestOrganicApprovedUnchangedScopeRecoveryNamesWhatToChange is the first leg
-// of the reported triangle. Recovering an approved lineage into a successor
-// whose scope has not moved is refused, and correctly so: the successor would
-// freeze the exact bytes the predecessor already approved.
-//
-// The refusal used to be the bare sentence "approved predecessor scope has not
-// changed", which names neither why nor what to do. It must say the candidate
-// has to change, and name the command that then works.
+// TestOrganicApprovedUnchangedScopeRecoveryNamesWhatToChange proves that an
+// approved lineage cannot be recovered after FINALIZE has burned its authority.
+// Changed content must use a fresh transaction, not an unchanged-scope successor.
 func TestOrganicApprovedUnchangedScopeRecoveryNamesWhatToChange(t *testing.T) {
 	harness := newOrganicHarness(t)
 	const lineage = "approved-unchanged-scope"
-	revision := approveOrganicHealthyCandidate(t, harness, lineage)
+	approved := approveOrganicHealthyCandidate(t, harness, lineage)
 
-	_, stderr, err := harness.gentleAllowFailure(
+	_, _, err := harness.gentleAllowFailure(
 		"review", "recover",
 		"--predecessor-lineage", lineage,
-		"--expected-predecessor-revision", revision,
+		"--expected-predecessor-revision", approved.StoreRevision,
 		"--successor-lineage", lineage+"-successor",
 		"--disposition", "scope_changed",
 	)
 	if err == nil {
-		t.Fatalf("recovery of an unchanged approved scope was allowed")
+		t.Fatal("recovery reused authority that approved FINALIZE burned")
 	}
-	message := strings.TrimSpace(stderr)
-	if !strings.Contains(message, "nothing to re-review") {
-		t.Fatalf("unchanged approved scope refusal does not say why it refuses:\n%s", message)
-	}
-	if !strings.Contains(message, "change the candidate") {
-		t.Fatalf("unchanged approved scope refusal does not say the candidate has to change:\n%s", message)
-	}
-	arguments, placeholders := organicNamedCommand(t, message)
-	if len(placeholders) != 0 {
-		t.Fatalf("unchanged approved scope refusal named placeholders it already knows the values for: %v\n%s",
-			placeholders, message)
-	}
-
-	followOrganicGuardRailContinuation(t, harness, arguments, lineage+"-successor")
+	startOrganicFreshReviewAfterBurn(t, harness, lineage+"-successor")
 }
 
-// TestOrganicInvalidatedDispositionRefusalNamesTheDispositionThatWorks is the
-// second leg, and the one that closed the reported loop. Told that recovery
-// needs an invalidated predecessor, the tester tried to invalidate the
-// predecessor, was refused, and concluded no successor could ever exist.
-//
-// The refusal must therefore name the lineage's real state and route to the
-// disposition an approved predecessor actually accepts — never back to
-// `review invalidate`, which is the dead end this loop is made of.
+// TestOrganicInvalidatedDispositionRefusalNamesTheDispositionThatWorks keeps
+// the invalidated-disposition guard: it cannot reinterpret a burned approved
+// lineage into a successor. A later change starts fresh instead.
 func TestOrganicInvalidatedDispositionRefusalNamesTheDispositionThatWorks(t *testing.T) {
 	harness := newOrganicHarness(t)
 	const lineage = "approved-invalidated-disposition"
-	revision := approveOrganicHealthyCandidate(t, harness, lineage)
+	approved := approveOrganicHealthyCandidate(t, harness, lineage)
 
-	_, stderr, err := harness.gentleAllowFailure(
+	_, _, err := harness.gentleAllowFailure(
 		"review", "recover",
 		"--predecessor-lineage", lineage,
-		"--expected-predecessor-revision", revision,
+		"--expected-predecessor-revision", approved.StoreRevision,
 		"--successor-lineage", lineage+"-successor",
 		"--disposition", "invalidated",
 	)
 	if err == nil {
-		t.Fatalf("recovery with an invalidated disposition over an approved predecessor was allowed")
+		t.Fatal("invalidated recovery reused authority that approved FINALIZE burned")
 	}
-	message := strings.TrimSpace(stderr)
-	if !strings.Contains(message, organicStateApproved) {
-		t.Fatalf("invalidated-disposition refusal does not name the predecessor's real state:\n%s", message)
-	}
-	if !strings.Contains(message, "change the candidate") {
-		t.Fatalf("invalidated-disposition refusal does not say the candidate has to change:\n%s", message)
-	}
-	arguments, placeholders := organicNamedCommand(t, message)
-	if len(placeholders) != 0 {
-		t.Fatalf("invalidated-disposition refusal named placeholders it already knows the values for: %v\n%s",
-			placeholders, message)
-	}
-	// The one thing the message must never do is send the operator to
-	// `review invalidate`, which refuses a healthy approved authority and
-	// completes the reported deadlock. The verb is checked, not the whole
-	// argv, because a lineage identifier may legitimately carry the word.
-	if len(arguments) < 2 || arguments[0] != "review" || arguments[1] == "invalidate" {
-		t.Fatalf("invalidated-disposition refusal routed back into the reported loop: gentle-ai %v\n%s",
-			arguments, message)
-	}
-
-	followOrganicGuardRailContinuation(t, harness, arguments, lineage+"-successor")
+	startOrganicFreshReviewAfterBurn(t, harness, lineage+"-successor")
 }
 
-// TestOrganicHealthyInvalidationRefusalNamesTheWorldAction is the third leg.
-// TestOrganicApprovedInvalidationRefusesAndNamesReviewValidate supersedes
-// TestOrganicHealthyInvalidationRefusalNamesTheWorldAction (Wave 5 Slice 7,
-// design decision 2): `review invalidate --gate` no longer re-derives a
-// gate result to decide healthy-vs-drifted at all — it refuses
-// UNCONDITIONALLY for any approved lineage (healthy or not), naming
-// `review validate --gate <gate>` as the runnable alternative, a fully
-// concrete command with zero operator-supplied placeholders (there is no
-// successor to name: this is a read, not a recovery). Running the named
-// command for this genuinely healthy candidate reaches the SAME derived
-// allow the fixture already proved at approveOrganicHealthyCandidate,
-// proving the named continuation is real and correct, not merely present
-// in the refusal text.
+// TestOrganicApprovedInvalidationRefusesAndNamesReviewValidate keeps the
+// invalidation guard at the new boundary: there is no approved authority left to
+// invalidate, and validate remains an informational unmanaged report.
 func TestOrganicApprovedInvalidationRefusesAndNamesReviewValidate(t *testing.T) {
 	harness := newOrganicHarness(t)
 	const lineage = "approved-healthy-invalidation"
-	revision := approveOrganicHealthyCandidate(t, harness, lineage)
+	approved := approveOrganicHealthyCandidate(t, harness, lineage)
 
-	_, stderr, err := harness.gentleAllowFailure(
+	if _, _, err := harness.gentleAllowFailure(
 		"review", "invalidate",
 		"--cwd", harness.repo.worktree,
 		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--expected-revision", approved.StoreRevision,
 		"--gate", "post-apply",
-	)
-	if err == nil {
-		t.Fatalf("invalidation of an approved authority was allowed")
+	); err == nil {
+		t.Fatal("invalidation operated on authority that FINALIZE burned")
 	}
-	message := strings.TrimSpace(stderr)
-	if strings.Contains(message, "native gate result") {
-		t.Fatalf("invalidation refusal answers in internal vocabulary:\n%s", message)
-	}
-	if !strings.Contains(message, "no longer performs gate-derived invalidation") {
-		t.Fatalf("invalidation refusal does not say invalidated is now a derived verdict:\n%s", message)
-	}
-	arguments, placeholders := organicNamedCommand(t, message)
-	if len(placeholders) != 0 {
-		t.Fatalf("invalidation refusal named %d operator-supplied placeholders, want a fully concrete command: %v\n%s",
-			len(placeholders), placeholders, message)
-	}
-	if len(arguments) < 2 || arguments[0] != "review" || arguments[1] != "validate" {
-		t.Fatalf("invalidation refusal named %q, want a review validate continuation", strings.Join(arguments, " "))
-	}
-
-	if _, stderr, err := harness.gentleAllowFailure(arguments...); err != nil {
-		t.Fatalf("the continuation the refusal named failed: gentle-ai %v: %v\nstderr:\n%s", arguments, err, stderr)
-	}
+	harness.assertInvalidatedUnmanagedGate(harness.gate("post-apply"))
+	startOrganicFreshReviewAfterBurn(t, harness, lineage+"-fresh")
 }

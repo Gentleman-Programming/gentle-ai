@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -54,7 +53,9 @@ func contendedReceiptWriter(t *testing.T, lockPath string, release time.Duration
 func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := startLowRiskFacadeReview(t, repo)
+	// Receipt publication pending/replay is compact-v2 behavior. Construct the
+	// historical compact authority directly; negotiated START now creates v3.
+	lineage := startFacadeReview(t, repo).LineageID
 	contendedReceiptWriter(t, compactAuthorityLockPath(t, repo, lineage), 150*time.Millisecond)
 
 	var output bytes.Buffer
@@ -63,27 +64,34 @@ func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.
 	}, &output); err != nil {
 		t.Fatalf("FINALIZE did not converge past a briefly-held authority lock at receipt publication: %v\n%s", err, output.String())
 	}
+	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, output.Bytes())
+	if finalized.LineageID != lineage {
+		t.Fatalf("converged FINALIZE lineage = %q, want %q", finalized.LineageID, lineage)
+	}
+	if bytes.Contains(output.Bytes(), []byte("review.status")) || bytes.Contains(output.Bytes(), []byte("next_transition")) {
+		t.Fatalf("clean FINALIZE added a terminal STATUS ceremony: %s", output.String())
+	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
-		t.Fatalf("converged FINALIZE left no terminal receipt: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
-// TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay is the guard on
-// the convergence above: `receipt_publication_pending` exists for the genuine
-// window where terminal authority is committed and the receipt is still
+// TestFinalizeReceiptPublicationExhaustionRequiresStatusBeforeReplay is the
+// guard on the convergence above: `receipt_publication_pending` exists for the
+// genuine window where terminal authority is committed and the receipt is still
 // unpublished — a crashed competitor, a disk fault, or contention that
-// outlives the bounded wait. That case must keep its honest shape: committed,
-// exactly replayable via the lineage-only FINALIZE it names, and convergent
-// once the obstruction clears. Do not relax this test to make publication
-// failures disappear.
-func TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay(t *testing.T) {
+// outlives the bounded wait. That ambiguity must first route through the exact
+// lineage-bound read-only STATUS, which re-derives whether native reconciliation
+// may ask for the original FINALIZE request again. Do not relax this test to
+// make publication failures disappear.
+func TestFinalizeReceiptPublicationExhaustionRequiresStatusBeforeReplay(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := startLowRiskFacadeReview(t, repo)
+	// Receipt publication pending/replay is compact-v2 behavior. Construct the
+	// historical compact authority directly; negotiated START now creates v3.
+	lineage := startFacadeReview(t, repo).LineageID
 	lockPath := compactAuthorityLockPath(t, repo, lineage)
 	// The lock is taken only at the receipt writer and held past any bounded
 	// wait, so the operation provably reaches the publication step and the
@@ -120,31 +128,40 @@ func TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay(t *testing.T) {
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
 	if failure.Code != "receipt_publication_pending" || failure.Phase != "native_committed" ||
-		failure.MutationOutcome != ReviewMutationCommitted ||
-		failure.Replayability != reviewtransaction.ReplayabilityExactReplaySafe ||
-		failure.NextAction != ReviewIntegrationOperationFinalize ||
-		failure.LineageID != lineage || !strings.HasPrefix(failure.RequestDigest, "sha256:") {
-		t.Fatalf("exhausted publication failure = %#v, want the committed exactly-replayable pending shape", failure)
+		failure.MutationOutcome != ReviewMutationCommitted || failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
+		failure.NextAction != "review.status" || failure.LineageID != lineage ||
+		!strings.HasPrefix(failure.TargetIdentity, "sha256:") || !strings.HasPrefix(failure.RequestDigest, "sha256:") {
+		t.Fatalf("exhausted publication failure = %#v, want the committed status-required pending shape", failure)
 	}
-	// `retry_safe` and `replayability` are independent axes of the published
-	// contract: retrying the request as issued is not the route out (a
-	// terminal replay admits only --lineage), while the declared exact replay
-	// is. The envelope keeps saying exactly that.
-	if failure.RetrySafe {
-		t.Fatalf("exhausted publication failure claims the request as issued is retryable: %#v", failure)
+
+	var statusOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage, "--next-transition",
+	}, &statusOutput); err != nil {
+		t.Fatalf("exact lineage-bound STATUS after publication ambiguity: %v\n%s", err, statusOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.TargetIdentity != failure.TargetIdentity || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "original_finalize_request_required" {
+		t.Fatalf("publication ambiguity STATUS = %#v, want native original-request replay only after target-bound STATUS", status)
 	}
 
 	var converged bytes.Buffer
 	if err := RunReview([]string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
 	}, &converged); err != nil {
-		t.Fatalf("exact lineage-only replay after the obstruction cleared: %v\n%s", err, converged.String())
+		t.Fatalf("exact lineage-only replay after native STATUS reconciliation: %v\n%s", err, converged.String())
+	}
+	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, converged.Bytes())
+	if finalized.LineageID != lineage {
+		t.Fatalf("replay after obstruction lineage = %q, want %q", finalized.LineageID, lineage)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
-		t.Fatalf("replay after obstruction left no terminal receipt: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }

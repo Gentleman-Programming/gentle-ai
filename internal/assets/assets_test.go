@@ -113,6 +113,21 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	}
 }
 
+func TestAllShippedOrchestratorsKeepDeliveryUnmanaged(t *testing.T) {
+	const ordinaryDelivery = "Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content."
+	const receiptValidation = "Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization"
+
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		content := MustRead(path)
+		if !strings.Contains(content, ordinaryDelivery) {
+			t.Fatalf("%s does not leave delivery to ordinary repository policy", path)
+		}
+		if strings.Contains(content, receiptValidation) {
+			t.Fatalf("%s retains receipt-gated delivery guidance", path)
+		}
+	}
+}
+
 func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	contents := map[string]string{
 		"claude/sdd-orchestrator.md":   MustRead("claude/sdd-orchestrator.md"),
@@ -371,12 +386,25 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	}
 }
 
-func TestSDDVerifyAuthorityPreflightDenialEnvelopeContract(t *testing.T) {
-	const denialFields = `authority_only_failure: true
-missing_review_authority: true
-substantive_failure: false
-command_failed: false
-observed_authority_revision: sha256:{observed-authority-revision}`
+func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
+	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
+	for _, want := range []string{
+		"`verify` is `ready` only when every implementation task is complete and required planning/apply evidence is available.",
+		"Review presence, absence, or non-allow state is informational: it never routes status to `review`, suppresses test/build execution, or blocks verification.",
+		"`archive` is `ready` only when tasks are complete and strict SDD verification passes.",
+	} {
+		if !strings.Contains(statusContract, want) {
+			t.Fatalf("sdd-status-contract missing independent SDD verification rule %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"persisted bounded transaction reaches `ready_final_verification`",
+		"Missing or active review state routes to `review`",
+	} {
+		if strings.Contains(statusContract, forbidden) {
+			t.Fatalf("sdd-status-contract retains pre-verify review dependency %q", forbidden)
+		}
+	}
 
 	for _, path := range []string{
 		"skills/sdd-verify/SKILL.md",
@@ -384,14 +412,40 @@ observed_authority_revision: sha256:{observed-authority-revision}`
 	} {
 		content := MustRead(path)
 		for _, want := range []string{
-			denialFields,
-			"test_exit_code: 125",
-			"build_exit_code: 125",
-			"must not be executed",
+			"Review state is informational and never a verification prerequisite.",
+			"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
+			"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
 		} {
 			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing authority-preflight denial contract %q", path, want)
+				t.Fatalf("%s missing independent verification rule %q", path, want)
 			}
+		}
+		for _, forbidden := range []string{"missing_review_authority", "authority_only_failure"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s retains missing-review preflight denial %q", path, forbidden)
+			}
+		}
+	}
+
+	verifySkill := MustRead("skills/sdd-verify/SKILL.md")
+	for _, want := range []string{
+		"Review state is informational and never a verification prerequisite.",
+		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
+		"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
+	} {
+		if got := strings.Count(verifySkill, want); got != 2 {
+			t.Fatalf("sdd-verify must state independent verification in both model sections: %q occurs %d times", want, got)
+		}
+	}
+
+	archiveSkill := MustRead("skills/sdd-archive/SKILL.md")
+	for _, want := range []string{
+		"CRITICAL issues in `verify-report` still block archive with no prompt override",
+		"review context remains informational",
+		"The Task Completion Gate and strict verification decide whether archive can proceed",
+	} {
+		if !strings.Contains(archiveSkill, want) {
+			t.Fatalf("sdd-archive missing independent archive prerequisite %q", want)
 		}
 	}
 }
@@ -1729,7 +1783,7 @@ func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
 		"verify: [<instruction strings>]",
 		"remediate: [<instruction strings>]",
 		"archive: [<instruction strings>]",
-		"nextRecommended: propose | spec | design | tasks | apply | review | verify | remediate | archive | sdd-new | select-change | resolve-blockers | resolve-review",
+		"nextRecommended: propose | spec | design | tasks | apply | verify | remediate | archive | sdd-new | select-change | resolve-blockers",
 		"blockedReasons: []",
 		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
 	} {
@@ -2171,7 +2225,7 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"state of the change AT CLOSE",
 		"`apply-progress` and `verify-report` are intermediate snapshots",
 		"at the time it was written",
-		"**Native review authority**",
+		"**Native review context**",
 		"**The persisted tasks artifact**",
 		"**Explicit final-state facts in the orchestrator's launch prompt**",
 		"outranks intermediate snapshots",
@@ -2181,7 +2235,7 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"Never resolve it silently",
 		"at verification time",
 		"record the failure as undiagnosed",
-		"It does not weaken gates",
+		"review context remains informational",
 		"requires re-running `sdd-verify`",
 	} {
 		if !strings.Contains(skill, required) {

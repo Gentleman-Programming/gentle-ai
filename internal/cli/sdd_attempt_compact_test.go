@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -52,9 +53,8 @@ func TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory(t *testing.T) {
 
 		settled, settlePayload := runCompactSDDAttempt(t, []string{
 			"settle", "--cwd", repo, "--change", change, "--token", acquired.Token,
-			"--request-id", fmt.Sprintf("compact-settle-%d", attempt), "--outcome", "failed",
-			"--evidence-revision", cliAttemptHash(byte('a' + attempt%6)),
-			"--diagnosis", "bounded execution produced retryable evidence", "--harness-disposition", "reused",
+			"--request-id", fmt.Sprintf("compact-settle-%d", attempt), "--outcome", "interrupted",
+			"--diagnosis", "bounded execution was interrupted", "--harness-disposition", "reused",
 			"--cleanup-evidence", "process group exited", "--process-evidence", "no descendants remained",
 		})
 		if settled != (compactAttemptOutput{State: "proceed"}) {
@@ -373,6 +373,73 @@ func TestRunSDDAttemptAcquireForeignTokenStaysBlockedWithNamedExit(t *testing.T)
 	assertCompactPayloadKeys(t, blockedPayload, "state", "reason", "token", "exit", "detail")
 }
 
+// TestRunSDDAttemptSettleSurvivesOffToOnReviewModeTransition proves the CLI
+// keeps attempt authority inside the SDD ledger. It deliberately acquires the
+// correction token while receipt-driven development is off, then turns it on
+// before settling the exact token: if settle consults current review mode or a
+// review successor, it wedges a valid SDD evidence correction.
+func TestRunSDDAttemptSettleSurvivesOffToOnReviewModeTransition(t *testing.T) {
+	reviewModeHome(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	repo := initReviewCLIRepo(t)
+	const change = "mode-transition-settle"
+
+	var modeOutput bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+		t.Fatalf("read initial receipt-driven-development mode: %v", err)
+	}
+	if mode := decodeReviewModeResult(t, modeOutput.Bytes()).Status.Effective; string(mode) != "off" {
+		t.Fatalf("initial receipt-driven-development mode = %q, want off", mode)
+	}
+	failedEvidence := cliAttemptHash('a')
+	failedAttempt, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "failed-acquire", 1))
+	failed, _ := runCompactSDDAttempt(t, compactSettleArgsWithEvidence(repo, change, failedAttempt.Token, "failed-settle", "failed", failedEvidence))
+	if failed.State != "blocked" || failed.Reason != "maintainer_decision" {
+		t.Fatalf("failed verification did not exhaust its bounded objective: %#v", failed)
+	}
+	failedStatus := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	if !failedStatus.DecisionRequired {
+		t.Fatalf("failed verification status = %#v, want maintainer decision", failedStatus)
+	}
+	if err := RunSDDAttempt([]string{
+		"reset", "--cwd", repo, "--change", change, "--expected-revision", failedStatus.Revision,
+		"--request-id", "failed-reset", "--reason", "remediate exact failed evidence", "--actor", "maintainer",
+	}, io.Discard); err != nil {
+		t.Fatalf("reset failed verification objective: %v", err)
+	}
+
+	correction, _ := runCompactSDDAttempt(t, append(compactAcquireArgs(repo, change, "correction-acquire", 1),
+		"--remediates-evidence-revision", failedEvidence,
+	))
+	if correction.State != "proceed" || correction.Token == "" {
+		t.Fatalf("correction acquire while review is off = %#v", correction)
+	}
+	modeOutput.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global", "--json"}, &modeOutput); err != nil {
+		t.Fatalf("enable receipt-driven development: %v", err)
+	}
+	if mode := decodeReviewModeResult(t, modeOutput.Bytes()).Status.Effective; string(mode) != "on" {
+		t.Fatalf("enabled receipt-driven-development mode = %q, want on", mode)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("corrected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	settled, _ := runCompactSDDAttempt(t, append(compactSettleArgsWithEvidence(repo, change, correction.Token, "correction-settle", "passed", cliAttemptHash('b')),
+		"--remediates-evidence-revision", failedEvidence,
+	))
+	if settled != (compactAttemptOutput{State: "complete"}) {
+		t.Fatalf("correction settle after off-to-on review transition = %#v", settled)
+	}
+	status := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	if status.ActiveAttempt != nil || !status.Complete || len(status.Attempts) != 2 ||
+		status.Attempts[1].RemediatesEvidenceRevision != failedEvidence {
+		t.Fatalf("settled SDD evidence chain = %#v", status)
+	}
+}
+
 func compactAcquireArgs(repo, change, requestID string, maxAttempts int) []string {
 	return []string{
 		"acquire", "--cwd", repo, "--change", change, "--request-id", requestID,
@@ -382,9 +449,13 @@ func compactAcquireArgs(repo, change, requestID string, maxAttempts int) []strin
 }
 
 func compactSettleArgs(repo, change, token, requestID, outcome string) []string {
+	return compactSettleArgsWithEvidence(repo, change, token, requestID, outcome, cliAttemptHash('e'))
+}
+
+func compactSettleArgsWithEvidence(repo, change, token, requestID, outcome, evidenceRevision string) []string {
 	return []string{
 		"settle", "--cwd", repo, "--change", change, "--token", token, "--request-id", requestID,
-		"--outcome", outcome, "--evidence-revision", cliAttemptHash('e'),
+		"--outcome", outcome, "--evidence-revision", evidenceRevision,
 		"--diagnosis", "compact attempt produced conclusive evidence", "--harness-disposition", "reused",
 		"--cleanup-evidence", "process group exited", "--process-evidence", "no descendants remained",
 	}

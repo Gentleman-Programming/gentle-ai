@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -79,6 +80,10 @@ func TestDisabledReviewRefusesFinalizeThroughTheRouter(t *testing.T) {
 // back on. Refusing must never discard work or auto-flip the switch.
 func TestDisabledReviewFreezesAuthorityInsteadOfDestroyingIt(t *testing.T) {
 	repo, started := disabledReviewRepo(t, "review-disabled-frozen")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var refused bytes.Buffer
 	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &refused); !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
@@ -109,9 +114,11 @@ func TestDisabledReviewFreezesAuthorityInsteadOfDestroyingIt(t *testing.T) {
 	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &resumed); err != nil {
 		t.Fatalf("re-enabling did not release the frozen lineage: %v\n%s", err, resumed.String())
 	}
-	if _, statErr := os.Stat(reviewReceiptPath(repo, started.LineageID)); statErr != nil {
-		t.Fatalf("re-enabled finalize published no receipt: %v", statErr)
+	finalized := assertApprovedBurnedCompactFacadeFinalize(t, resumed.Bytes())
+	if finalized.LineageID != started.LineageID {
+		t.Fatalf("re-enabled finalize lineage = %q, want %q", finalized.LineageID, started.LineageID)
 	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 // TestDisabledReviewRefusesEveryAuthorityProgressingVerb sweeps the whole verb
@@ -248,14 +255,11 @@ func TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable(t *testing.T)
 	}
 }
 
-// TestDisabledReviewReplaysTerminalAuthorityWhileDisabled is the boundary of
-// the refusal, and it is a read, not a loophole. FINALIZE against an
-// already-terminal lineage re-emits the frozen receipt byte for byte and
-// advances nothing, which is exactly the "exact replay" RDDOperationRead is
-// documented to cover. Freezing authority read-only has to keep it readable;
-// refusing here would make an approval the operator already earned
-// unreachable, and would break replay-based recovery for anyone who switched
-// reviews off afterwards.
+// TestDisabledReviewReplaysTerminalAuthorityWhileDisabled establishes the
+// terminal boundary of a frozen lineage. Before approval, disabled mode keeps
+// the authority frozen and resumes it after re-enable. Approval then burns that
+// authority, so disabling again exposes ordinary delivery rather than a
+// terminal receipt that FINALIZE could replay.
 func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -267,21 +271,44 @@ func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
 	}
 	runReviewCLIGit(t, repo, "add", "docs/terminal.md")
 	const lineage = "review-disabled-terminal-replay"
-	startFacadeReviewResult(t, repo, lineage)
-
-	var approved bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", lineage}, &approved); err != nil {
-		t.Fatalf("finalize while enabled: %v\n%s", err, approved.String())
+	started := startFacadeReviewResult(t, repo, lineage)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	disableReviewForClone(t, repo)
+	var frozen bytes.Buffer
+	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &frozen); !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
+		t.Fatalf("finalize did not freeze before approval: %v\n%s", err, frozen.String())
+	}
+
+	enableReviewForClone(t, repo)
+	var approved bytes.Buffer
+	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &approved); err != nil {
+		t.Fatalf("finalize after re-enable: %v\n%s", err, approved.String())
+	}
+	assertApprovedBurnedCompactFacadeFinalize(t, approved.Bytes())
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+
+	disableReviewForClone(t, repo)
+	var gateOutput bytes.Buffer
+	if err := RunReview([]string{"validate", "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &gateOutput); err != nil {
+		t.Fatalf("burned authority blocked ordinary disabled delivery: %v\n%s", err, gateOutput.String())
+	}
+	var gate ReviewValidateResult
+	decodeStrictReviewJSON(t, gateOutput.Bytes(), &gate)
+	if gate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged || gate.Allowed || gate.Result == reviewtransaction.GateAllow {
+		t.Fatalf("burned authority disabled delivery = %#v, want ordinary unmanaged policy", gate)
+	}
 
 	var replayed bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", lineage}, &replayed); err != nil {
-		t.Fatalf("exact replay of terminal authority refused while disabled: %v\n%s", err, replayed.String())
+	err = RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &replayed)
+	if err == nil {
+		t.Fatalf("burned authority was replayed while disabled:\n%s", replayed.String())
 	}
-	if replayed.String() != approved.String() {
-		t.Fatalf("terminal replay changed bytes while disabled:\nfirst:\n%s\nreplay:\n%s", approved.String(), replayed.String())
+	if errors.Is(err, reviewtransaction.ErrRDDDisabled) {
+		t.Fatalf("burned authority was reported as frozen rather than absent: %v\n%s", err, replayed.String())
 	}
 }
 

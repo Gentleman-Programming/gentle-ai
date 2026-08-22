@@ -312,7 +312,7 @@ func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
 	}
-	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Authority-only fail extension", "maximum report size: 1048576 bytes (1 MiB)"} {
+	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Independent test and build execution evidence is required", "maximum report size: 1048576 bytes (1 MiB)"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("sdd-verify-validate help missing %q:\n%s", want, output.String())
 		}
@@ -418,7 +418,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
-		{command: "review-validate", want: "review-validate requires --cwd and --receipt"},
+		{command: "review-validate", want: "review-validate requires --cwd"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			var output bytes.Buffer

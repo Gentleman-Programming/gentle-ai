@@ -173,7 +173,14 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 	repo := initReviewCLIRepo(t)
 	const candidatePath = "internal/candidate.go"
 	writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
-	started := runNegotiatedReviewStart(t, repo, "restricted-temp-correction-continuation")
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", "restricted-temp-correction-continuation",
+	})
+	if err != nil {
+		t.Fatalf("start compact correction fixture: %v", err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	if len(started.SelectedLenses) == 0 {
 		t.Fatalf("review start selected no lenses: %#v", started)
 	}
@@ -261,7 +268,8 @@ func TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure(t *testing.T)
 	unavailableProcessTemp(t)
 
 	var output bytes.Buffer
-	if err := RunReview(negotiatedStatusArgs(repo, ReviewIntegrationContractV2), &output); err == nil {
+	if err := RunReview(negotiatedStatusArgs(repo, ReviewIntegrationContractV2,
+		"--lineage", started.LineageID), &output); err == nil {
 		t.Fatalf("negotiated status converted unreadable authority into semantic output: %s", output.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())

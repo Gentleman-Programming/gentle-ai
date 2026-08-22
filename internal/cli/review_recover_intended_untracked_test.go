@@ -31,7 +31,7 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage,
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage,
 		"--untracked-scope=select", "--expected-untracked-inventory=" + digest,
 		"--intended-untracked", "notes-a.txt", "--intended-untracked", "notes-b.txt"}, io.Discard); err != nil {
 		t.Fatal(err)

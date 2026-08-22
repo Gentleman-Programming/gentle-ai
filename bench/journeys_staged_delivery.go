@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 )
 
-const stagedDeliveryLineage = "approved-workspace-staged-delivery"
+const stagedDeliveryLineage = "staged-validation-terminal-burn"
 
 var stagedDeliveryPaths = []string{"docs/alpha.md", "docs/bravo.md"}
 
@@ -108,26 +108,28 @@ func validateExactStagedDeliveryCandidate(r *journeyRun) error {
 
 func stagedDeliveryJourneys() []Journey {
 	return []Journey{{
-		ID:     "j89-approved-workspace-receipt-requires-exact-staged-delivery",
+		ID:     "j89-staged-validation-is-informational-and-unmanaged",
 		Review: reviewOptedIn,
-		Title:  "Approved workspace receipt: only its exact staged delivery candidate can validate at pre-commit",
-		Source: "issue #2758: STATUS must not offer workspace approval for an empty, partial, or different staged index",
+		Title:  "#3417: staged validation is informational and unmanaged after the terminal burn",
+		Source: "#3417 replaces staged receipt reuse with a terminal burn; no staged validation authorizes delivery",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "fixture: add a second tracked delivery path", Fixture: prepareWorkspaceDeliveryBaseline},
 			{Name: "fixture: two-path workspace candidate staged", Fixture: stageWorkspaceDeliveryCandidate},
-			{Name: "review the workspace candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},
-			{Name: "approve the workspace receipt", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", stagedDeliveryLineage)},
-			{Name: "record approved authority before index changes", Requires: statusCapability, Composite: recordApprovedWorkspaceDeliveryAuthority},
-			{Name: "fixture: empty index retains the reviewed workspace", Fixture: unstageWorkspaceDeliveryCandidate},
-			{Name: "empty index stops before validation without authority mutation", Requires: statusCapability, Composite: requireStagedDeliveryCandidateStop},
-			{Name: "fixture: only one reviewed path staged", Fixture: stageWorkspaceDeliverySubset},
-			{Name: "partial index stops before validation without authority mutation", Requires: statusCapability, Composite: requireStagedDeliveryCandidateStop},
-			{Name: "fixture: different index retains the reviewed workspace", Fixture: stageDifferentWorkspaceDeliveryCandidate},
-			{Name: "different index stops before validation without authority mutation", Requires: statusCapability, Composite: requireStagedDeliveryCandidateStop},
-			{Name: "fixture: restore every reviewed path to the exact index tree", Fixture: restoreExactWorkspaceDeliveryCandidate},
-			{Name: "exact staged STATUS returns and executes pre-commit validation", Requires: statusCapability, Composite: validateExactStagedDeliveryCandidate},
+			{Name: "review the staged workspace candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},
+			{Name: "terminal finalization burns the staged transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", stagedDeliveryLineage), After: requireBurnedApproval(stagedDeliveryLineage)},
+			{Name: "fixture: empty index after the terminal burn", Fixture: unstageWorkspaceDeliveryCandidate},
+			{Name: "empty index pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+				return requireUnmanagedShippedGate(observation, "pre-commit")
+			}},
+			{Name: "fixture: only one formerly reviewed path staged", Fixture: stageWorkspaceDeliverySubset},
+			{Name: "partial index pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+				return requireUnmanagedShippedGate(observation, "pre-commit")
+			}},
+			{Name: "fixture: a different two-path index", Fixture: stageDifferentWorkspaceDeliveryCandidate},
+			{Name: "different index pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+				return requireUnmanagedShippedGate(observation, "pre-commit")
+			}},
 		},
 	}}
 }

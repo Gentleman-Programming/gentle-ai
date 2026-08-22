@@ -185,27 +185,19 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 	}
 }
 
-// TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock is task
-// 4.8's integration proof, realized as a same-fixture double-eval (the
-// only valid shape for a byte-equivalence claim: evaluated twice, only the
-// kill-switch toggle changed — internal/cli/review_new_lineage_switch_off_
-// golden_test.go and the pre-existing archive-gate byte-equivalence tests
-// use the same discipline). A decline — the switch on, the offer present,
-// nothing ever acted on — must never block archive on review grounds, the
-// same operational property the switch-off case provides. This asserts at
-// the PROJECTION level (ProjectStatusV1, the exact bytes a caller like
-// RunSDDStatus emits), the verify cycle's own key learning: asserting on
-// json.Marshal(Status) directly is how CRITICAL-2 (ReviewOffer/ReVerify
-// unreachable at the wire) survived a fully green suite.
+// TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel is task 4.8's
+// integration proof at the ProjectStatusV1 boundary—the exact bytes a caller
+// such as RunSDDStatus emits. It proves the narrow delivery invariant that an
+// ignored offer and a review-disabled status each leave archive unblocked; it
+// does not claim their projections are byte-equivalent. The representations
+// differ structurally because review-disabled omits ReviewOffer and ReviewGate.
 //
-// Corrective verify cycle note: this test previously asserted the declined
-// and switch-off projections were byte-identical outside the offer block.
-// That assumption no longer holds and is not restored here: CRITICAL-1's
-// fix makes switch-off a genuine structural absence (ReviewGate nil), while
-// the declined fixture below still carries an approving legacy receipt that
-// legitimately governs while the switch is ON (ReviewGate present, Allow) —
-// two different, both-correct dispositions that happen to agree on the one
-// property that matters for delivery: neither blocks archive.
+// Unconditional atomic-v3 START is covered separately by
+// TestReviewStartAlwaysCreatesV3Authority and
+// TestReviewStartCreatesNoLegacySiblings; atomic worktree isolation and exact
+// no-mutation replay are covered by
+// TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly. This scope
+// prevents an SDD status assertion from standing in for authority evidence.
 func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
 	// The comparison is switch-on versus switch-off, so the "on" half has to
 	// be a user who opted in; the "off" half stays an explicit

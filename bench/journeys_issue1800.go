@@ -18,21 +18,23 @@ func issue1800Journeys() []Journey {
 	return []Journey{{
 		ID:     "j91-audited-abandon-preplan-over-budget-correction",
 		Review: reviewOptedIn,
-		Title:  "Already-edited pre-plan correction abandons audibly and requires a fresh review",
-		Source: "issue #1800 D1800: exact audited abandon is the supported pre-forecast exit",
+		Title:  "#3417: an exact active-lineage pre-plan correction abandons audibly and requires a fresh review",
+		Source: "issue #1800 D1800 under #3417: exact audited abandon is the supported pre-forecast exit for an active lineage",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "fixture: stage candidate", Fixture: stageWaveCandidate},
-			{Name: "start product-created compact review", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", issue1800Lineage)},
-			{Name: "capture candidate finding", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+			{Name: "start product-created compact review with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", issue1800Lineage)},
+			{Name: "capture candidate finding and the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+				return captureExactSelectedReviewerSlots(r, issue1800Lineage, true)
+			}},
 			{Name: "finalize into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", issue1800Lineage, "--captured-results=true"), After: requireReviewState("correction_required", issue1800Lineage)},
 			{Name: "freeze the pre-plan authority", Requires: statusCapability, Composite: prepareIssue1800Authority},
 			{Name: "fixture: edit the frozen path to budget plus one", Fixture: applyIssue1800PrePlanEdit},
 			{Name: "STATUS remains correction-plan-required", Requires: statusCapability, Composite: proveIssue1800PrePlanStatus},
 			{Name: "forged and stale bindings refuse without mutation", Requires: abandonCapability, Composite: rejectIssue1800AbandonDecoys},
 			{Name: "exact native abandon preserves audited provenance", Requires: abandonCapability, Composite: abandonIssue1800Authority},
-			{Name: "fresh review is required before delivery", Requires: validateCapability, Composite: proveIssue1800FreshReviewRequired},
+			{Name: "fresh selectorless review is required while delivery returns unmanaged ordinary policy", Requires: validateCapability, Composite: proveIssue1800FreshReviewRequired},
 		},
 	}}
 }
@@ -235,8 +237,11 @@ func proveIssue1800FreshReviewRequired(r *journeyRun) error {
 	status, err := readCorrectionStatusForContract(r, "", reviewContractV2)
 	gate := r.run([]string{"review", "validate", "--cwd", r.sandbox.Repo, "--gate", "post-apply"}, false)
 	if err != nil || status.Receipt.Status != "not_applicable" || status.Authority != nil || status.NextTransition == nil ||
-		status.NextTransition.Kind != "execute" || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" || gate.ExitCode == 0 {
-		return fmt.Errorf("post-abandon status=%+v gate=%d", status, gate.ExitCode)
+		status.NextTransition.Kind != "execute" || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("post-abandon fresh selectorless status=%+v", status)
+	}
+	if err := requireUnmanagedShippedGate(gate, "post-apply"); err != nil {
+		return fmt.Errorf("post-abandon ordinary delivery: %w", err)
 	}
 	return nil
 }

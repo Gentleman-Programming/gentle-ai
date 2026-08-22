@@ -38,6 +38,14 @@ type capturedEnvelope struct {
 	Body   []byte
 }
 
+// lineageScope is the Go-issued authority binding a lane received at START.
+// The lineage is immutable; revision and target advance only from native STATUS.
+type lineageScope struct {
+	Lineage  string
+	Revision string
+	Target   string
+}
+
 type battery struct {
 	binary    string
 	repoRoot  string
@@ -58,6 +66,7 @@ type battery struct {
 	checks     []check
 	hostCosts  []string
 	piRelayDir string
+	lineages   map[string]lineageScope
 }
 
 func (b *battery) pass(lane, name, note string) {
@@ -121,11 +130,62 @@ func (b *battery) runJSON(source, dir string, args ...string) (map[string]any, s
 	return doc, stderr, code
 }
 
-// status queries the negotiated next transition for one repository.
+// status queries a native transition. Once START has bound a repository, every
+// continuation carries that exact lineage and its authority is checked here.
 func (b *battery) status(repo, agent string, extra ...string) (map[string]any, string, int) {
+	args := b.statusArgs(repo, agent, extra...)
+	doc, stderr, code := b.runJSON("status", repo, args...)
+	if err := b.admitStatusScope(repo, doc); err != nil {
+		return nil, err.Error(), 1
+	}
+	return doc, stderr, code
+}
+
+func (b *battery) statusArgs(repo, agent string, extra ...string) []string {
 	args := []string{"review", "status", "--cwd", repo, "--contract", reviewContract, "--agent", agent, "--next-transition"}
 	args = append(args, extra...)
-	return b.runJSON("status", repo, args...)
+	if scope, found := b.lineages[repo]; found {
+		args = append(args, "--lineage", scope.Lineage)
+	}
+	return args
+}
+
+func (b *battery) rememberStarted(repo, target string, start map[string]any) error {
+	context := getMap(start, "repository_context")
+	scope := lineageScope{Lineage: operationLineage(start), Revision: getString(context, "revision"), Target: getString(context, "target_identity")}
+	if scope.Lineage == "" || scope.Revision == "" || scope.Target == "" || scope.Target != target {
+		return fmt.Errorf("START omitted the exact authority lineage/revision/target")
+	}
+	b.lineages[repo] = scope
+	return nil
+}
+
+func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
+	scope, active := b.lineages[repo]
+	if !active || doc == nil {
+		return nil
+	}
+	authority := getMap(doc, "authority")
+	target := getString(doc, "authority_target_identity")
+	if target == "" {
+		target = getString(doc, "target_identity")
+	}
+	if authority == nil || getString(authority, "lineage_id") != scope.Lineage || getString(authority, "revision") == "" || target == "" {
+		return fmt.Errorf("STATUS no longer matches the started authority lineage/revision/target")
+	}
+	scope.Revision, scope.Target = getString(authority, "revision"), target
+	b.lineages[repo] = scope
+	if input := collectInput(doc); input != nil {
+		args := argumentValues(input)
+		expectedTarget := scope.Target
+		if correctionTarget := getString(doc, "validation_request", "correction_target_identity"); correctionTarget != "" {
+			expectedTarget = correctionTarget
+		}
+		if args["lineage"] != scope.Lineage || args["expected-revision"] != scope.Revision || args["target"] != expectedTarget {
+			return fmt.Errorf("collect slot does not match the started authority lineage/revision/target")
+		}
+	}
+	return nil
 }
 
 // runCommandLine splits a provider-rendered command string and executes it
@@ -294,4 +354,82 @@ func operationLineage(doc map[string]any) string {
 		return lineage
 	}
 	return getString(doc, "lineage_id")
+}
+
+// finishApproved follows only native transitions through final evidence and burn.
+func (b *battery) finishApproved(lane, name, repo, agent string, env []string) bool {
+	evidencePath := filepath.Join(b.workRoot, lane+"-final-evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("crosslane final verification passed\n"), 0o644); err != nil {
+		b.fail(lane, name, err.Error())
+		return false
+	}
+	for step := 0; step < 5; step++ {
+		status, statusStderr, _ := b.statusEnv(repo, agent, env)
+		switch getString(status, "next_transition", "kind") {
+		case "execute":
+			result, stderr, code := b.runCommandLineEnv("operation", repo, env, getString(status, "next_transition", "execute", "command"))
+			if code != 0 {
+				b.fail(lane, name, fmt.Sprintf("%s exit=%d %s", getString(status, "next_transition", "execute", "operation"), code, firstLine(stderr)))
+				return false
+			}
+			if operationState(result) == "approved" {
+				return b.burnApproved(lane, name, repo, agent, env, result)
+			}
+		case "collect":
+			input := collectInput(status)
+			if input == nil || input["capture_operation"] != "review.capture-evidence" {
+				b.fail(lane, name, "unexpected collect input")
+				return false
+			}
+			tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
+			doc, stderr, code := b.runJSONEnv("verification-evidence", repo, env,
+				append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)...)
+			if code != 0 || getString(doc, "outcome") != "passed" {
+				b.fail(lane, name, fmt.Sprintf("evidence capture exit=%d %s", code, firstLine(stderr)))
+				return false
+			}
+		default:
+			b.fail(lane, name, fmt.Sprintf("unexpected transition %s/%s %s", getString(status, "next_transition", "kind"), getString(status, "next_transition", "reason_code"), firstLine(statusStderr)))
+			return false
+		}
+	}
+	b.fail(lane, name, "did not reach the terminal burn within the step budget")
+	return false
+}
+
+func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finalized map[string]any) bool {
+	scope, found := b.lineages[repo]
+	result := getMap(finalized, "result")
+	if result == nil {
+		result = finalized
+	}
+	if !found || operationState(finalized) != "approved" || getString(result, "lineage_id") != scope.Lineage || !strings.Contains(getString(result, "action"), "burned") {
+		b.fail(lane, name, "terminal finalize did not report approved+burn for the exact lineage")
+		return false
+	}
+	for _, field := range []string{"receipt", "receipt_path", "authority", "next_transition"} {
+		if _, present := result[field]; present {
+			b.fail(lane, name, "burned terminal retained "+field)
+			return false
+		}
+	}
+	delete(b.lineages, repo)
+	for _, gate := range []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"} {
+		doc, stderr, code := b.runJSONEnv("gate", repo, env,
+			"review", "validate", "--cwd", repo, "--contract", reviewContract, "--gate", gate)
+		gateResult := getMap(doc, "result")
+		if code != 0 || getString(gateResult, "result") != "invalidated" || getString(gateResult, "delivery") != "unmanaged" ||
+			getString(gateResult, "action") != "repository-policy" {
+			b.fail(lane, name, fmt.Sprintf("%s exit=%d result=%q delivery=%q action=%q %s", gate, code,
+				getString(gateResult, "result"), getString(gateResult, "delivery"), getString(gateResult, "action"), firstLine(stderr)))
+			return false
+		}
+		allowed, _ := gateResult["allowed"].(bool)
+		if allowed || len(getMap(gateResult, "context")) != 1 || getString(gateResult, "context", "gate") != gate {
+			b.fail(lane, name, gate+" did not return the strict unmanaged gate shape")
+			return false
+		}
+	}
+	b.pass(lane, name, "approved authority burned; five delivery gates are invalidated/unmanaged repository policy")
+	return true
 }

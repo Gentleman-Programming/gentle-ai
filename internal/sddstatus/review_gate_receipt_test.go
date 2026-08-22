@@ -213,12 +213,11 @@ func TestResolveAllowsApprovedFreshOpenSpecInfrastructureForActiveChange(t *test
 	}
 }
 
-// TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta proves
-// the one archive-status exception: final independent verification replaces
-// the canonical passing report after review, and its native settlement binds
-// those exact bytes and the resulting candidate tree. Generic review gates
-// remain unchanged; this test exercises only the bound SDD archive projection.
-func TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta(t *testing.T) {
+// TestBoundReviewArchiveStatusKeepsPostReviewVerifyReportInformational proves
+// that a post-review verification report and its settlement remain review
+// context only. SDD archive readiness stays governed by its completed tasks and
+// passing verification rather than the review gate's scope-changed observation.
+func TestBoundReviewArchiveStatusKeepsPostReviewVerifyReportInformational(t *testing.T) {
 	const change = "post-review-verify-report"
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, change, "- [x] 1.1 Done\n")
@@ -252,8 +251,9 @@ func TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if beforeSettlement.Dependencies.Archive != DependencyBlocked || beforeSettlement.NextRecommended != "resolve-review" {
-		t.Fatalf("unattested post-review report status = %#v, want scope-changed archive block", beforeSettlement)
+	if beforeSettlement.ReviewGate == nil || beforeSettlement.ReviewGate.Result != reviewtransaction.GateScopeChanged ||
+		beforeSettlement.Dependencies.Archive != DependencyReady || beforeSettlement.NextRecommended != "archive" {
+		t.Fatalf("unattested post-review report status = %#v, want informational scope-changed ready/archive", beforeSettlement)
 	}
 
 	store := mustRuntimeStore(t, root, change)
@@ -280,87 +280,13 @@ func TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settled.ReviewGate == nil || settled.ReviewGate.Result != reviewtransaction.GateAllow ||
-		settled.ReviewGate.Reason != "bound receipt differs only by the native-settlement-attested canonical passing verify report" ||
+	if settled.ReviewGate == nil || settled.ReviewGate.Result != reviewtransaction.GateScopeChanged ||
 		settled.Dependencies.Archive != DependencyReady || settled.NextRecommended != "archive" {
-		t.Fatalf("attested post-review report status = %#v, want report-delta allow and archive-ready", settled)
+		t.Fatalf("attested post-review report status = %#v, want informational scope-changed archive-ready", settled)
 	}
 	if result, _, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), root, *ref); err != nil || result != reviewtransaction.GateScopeChanged {
 		t.Fatalf("generic bound receipt validation after settlement = %q, %v, want unchanged scope-changed", result, err)
 	}
-	runtime, err = store.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tt := range []struct {
-		name   string
-		mutate func(*RuntimeStatus)
-		counts SpecCounts
-	}{
-		{name: "missing attestation", mutate: func(status *RuntimeStatus) { status.Attempts[len(status.Attempts)-1].AttestedVerifyReportDigest = "" }, counts: SpecCounts{Requirements: 1, Scenarios: 1}},
-		{name: "digest mismatch", mutate: func(status *RuntimeStatus) {
-			status.Attempts[len(status.Attempts)-1].AttestedVerifyReportDigest = shaID("c")
-		}, counts: SpecCounts{Requirements: 1, Scenarios: 1}},
-		{name: "arbitrary work unit cannot own attestation", mutate: func(status *RuntimeStatus) {
-			status.Attempts[len(status.Attempts)-1].WorkUnit = "post-correction-final-verification"
-		}, counts: SpecCounts{Requirements: 1, Scenarios: 1}},
-		{name: "report admission mismatch", mutate: func(*RuntimeStatus) {}, counts: SpecCounts{Requirements: 2, Scenarios: 1}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			forged := runtime
-			forged.Attempts = append([]RuntimeAttempt(nil), runtime.Attempts...)
-			tt.mutate(&forged)
-			if classifyPostReviewVerifyReportAttestation(context.Background(), root, root, change, *ref, &forged, tt.counts) == postReviewVerifyReportBound {
-				t.Fatal("invalid post-review verify-report attestation allowed archive")
-			}
-		})
-	}
-
-	// R4: a status poll (drifted, bound, or digest-less legacy) never writes a
-	// Git object. The legacy case drifts the worktree report so any snapshot
-	// build reached past the byte gate would hash the novel bytes into the ODB.
-	legacy := runtime
-	legacy.Attempts = append([]RuntimeAttempt(nil), runtime.Attempts...)
-	legacy.Attempts[len(legacy.Attempts)-1].AttestedVerifyReportDigest = ""
-	for _, tc := range []struct {
-		report string
-		status *RuntimeStatus
-		want   postReviewVerifyReportAttestation
-	}{
-		{finalReport + "\n# drifted in the worktree only\n", &runtime, postReviewVerifyReportUnproven},
-		{finalReport, &runtime, postReviewVerifyReportBound},
-		{finalReport + "\n# drifted in the worktree only\n", &legacy, postReviewVerifyReportRequired},
-	} {
-		write(t, verifyPath, tc.report)
-		before := countLooseGitObjects(t, root)
-		if got := classifyPostReviewVerifyReportAttestation(context.Background(), root, root, change, *ref, tc.status, SpecCounts{Requirements: 1, Scenarios: 1}); got != tc.want {
-			t.Fatalf("status classification = %v, want %v", got, tc.want)
-		}
-		if after := countLooseGitObjects(t, root); after != before {
-			t.Fatalf("status classification wrote %d Git object(s)", after-before)
-		}
-	}
-
-	// A digest-less settlement whose receipt-to-current delta also touches a
-	// non-report path has nothing a verify-attestation work unit could repair:
-	// it must keep the pre-existing scope-changed routing, never Required, and
-	// proving that delta must still write no Git objects.
-	tasksPath := filepath.Join(changeRoot, "tasks.md")
-	originalTasks, err := os.ReadFile(tasksPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, verifyPath, finalReport+"\n# drifted in the worktree only\n")
-	write(t, tasksPath, string(originalTasks)+"- [ ] drifted unrelated edit\n")
-	before := countLooseGitObjects(t, root)
-	if got := classifyPostReviewVerifyReportAttestation(context.Background(), root, root, change, *ref, &legacy, SpecCounts{Requirements: 1, Scenarios: 1}); got != postReviewVerifyReportUnproven {
-		t.Fatalf("legacy non-report delta classification = %v, want unproven", got)
-	}
-	if after := countLooseGitObjects(t, root); after != before {
-		t.Fatalf("legacy non-report delta classification wrote %d Git object(s)", after-before)
-	}
-	write(t, tasksPath, string(originalTasks))
-
 	write(t, verifyPath, finalReport+"\n# Mutated after settlement\n")
 	runSDDStatusGit(t, root, "add", "openspec")
 	assertPostReviewVerifyReportScopeChanged(t, root, change, *ref)
@@ -382,20 +308,6 @@ func TestBoundReviewArchiveGateAllowsAttestedPostReviewVerifyReportDelta(t *test
 	assertPostReviewVerifyReportScopeChanged(t, root, change, *ref)
 }
 
-func countLooseGitObjects(t *testing.T, repo string) int {
-	t.Helper()
-	count := 0
-	if err := filepath.WalkDir(filepath.Join(repo, ".git", "objects"), func(_ string, entry os.DirEntry, err error) error {
-		if err == nil && !entry.IsDir() {
-			count++
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return count
-}
-
 func assertPostReviewVerifyReportScopeChanged(t *testing.T, root, change string, ref reviewtransaction.SDDReceiptRef) {
 	t.Helper()
 	if result, _, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), root, ref); err != nil || result != reviewtransaction.GateScopeChanged {
@@ -405,12 +317,13 @@ func assertPostReviewVerifyReportScopeChanged(t *testing.T, root, change string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("changed post-review status = %#v, want scope-changed archive block", status)
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged ||
+		status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+		t.Fatalf("changed post-review status = %#v, want informational scope-changed ready/archive", status)
 	}
 }
 
-func TestLegacyPostReviewVerifyReportWithArbitraryWorkUnitRequiresCurrentAttestation(t *testing.T) {
+func TestLegacyPostReviewVerifyReportWithArbitraryWorkUnitIsInformational(t *testing.T) {
 	const change = "legacy-post-review-verify-report"
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, change, "- [x] 1.1 Done\n")
@@ -470,48 +383,20 @@ func TestLegacyPostReviewVerifyReportWithArbitraryWorkUnitRequiresCurrentAttesta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacyStatus.ReviewGate != nil || legacyStatus.Dependencies.Verify != DependencyReady ||
-		legacyStatus.Dependencies.Archive != DependencyBlocked || legacyStatus.NextRecommended != "verify" {
-		t.Fatalf("legacy post-review status = %#v, want attestation-required verify routing without allow", legacyStatus)
-	}
-	if legacyStatus.PhaseInstructions == nil || !strings.Contains(strings.Join(legacyStatus.PhaseInstructions.Verify, "\n"), "verification attestation required") ||
-		!strings.Contains(strings.Join(legacyStatus.PhaseInstructions.Verify, "\n"), "--work-unit \"verify-attestation\"") {
-		t.Fatalf("legacy verification instructions = %#v, want distinct attestation continuation", legacyStatus.PhaseInstructions)
+	if legacyStatus.ReviewGate == nil || legacyStatus.ReviewGate.Result != reviewtransaction.GateScopeChanged ||
+		legacyStatus.Dependencies.Verify != DependencyAllDone || legacyStatus.Dependencies.Archive != DependencyReady || legacyStatus.NextRecommended != "archive" {
+		t.Fatalf("legacy post-review status = %#v, want informational receipt state with ordinary archive routing", legacyStatus)
 	}
 	if result, _, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), root, *ref); err != nil || result != reviewtransaction.GateScopeChanged {
 		t.Fatalf("generic legacy receipt validation = %q, %v, want unchanged scope-changed", result, err)
 	}
 
-	acquired, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
-		RequestID: "acquire-current-attestation", WorkUnit: "verify-attestation", EvidenceGoal: "attest final verification report",
-		MaxAttempts: 1, MaxChangedLines: 20,
-	}})
-	if err != nil || acquired.State != CompactStateProceed || acquired.Token == "" {
-		t.Fatalf("current attestation acquire = %#v, %v", acquired, err)
-	}
-	settled, err := store.Settle(context.Background(), CompactSettleRequest{
-		Token: acquired.Token, RequestID: "settle-current-attestation", Outcome: AttemptPassed, EvidenceRevision: shaID("b"),
-		Diagnosis: "current verification attested the report", HarnessDisposition: HarnessReused,
-		CleanupEvidence: "no cleanup required", ProcessEvidence: "focused verification passed",
-	})
-	if err != nil || settled.State != CompactStateComplete {
-		t.Fatalf("current attestation settle = %#v, %v", settled, err)
-	}
-
-	ready, err := Resolve(ResolveOptions{CWD: root, ChangeName: change})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ready.ReviewGate == nil || ready.ReviewGate.Result != reviewtransaction.GateAllow ||
-		ready.Dependencies.Archive != DependencyReady || ready.NextRecommended != "archive" {
-		t.Fatalf("current-attested legacy status = %#v, want archive-ready allow", ready)
-	}
 }
 
 // TestFinalVerifySettlementDegradesUnattestableReportToEmptyAttestation proves
 // attestation derivation never aborts settlement of a passing verify attempt:
 // an unattestable report (here a non-passing verdict) settles with an empty
-// attestation and the archive projection stays fail-closed downstream.
+// traceability attestation while strict SDD verification keeps its own verdict.
 func TestFinalVerifySettlementDegradesUnattestableReportToEmptyAttestation(t *testing.T) {
 	const change = "strict-final-verify-report"
 	root := t.TempDir()
@@ -597,53 +482,5 @@ func TestFinalVerifySettlementAttestsReportAnchoredAtWorkspace(t *testing.T) {
 	last := status.Attempts[len(status.Attempts)-1]
 	if last.Outcome != AttemptPassed || last.AttestedVerifyReportDigest != verifyReportDigest([]byte(report)) {
 		t.Fatalf("workspace-anchored settlement attempt = %#v, want passed with the exact report digest", last)
-	}
-}
-
-// TestBoundArchiveGateAttestsPostReviewReportWithWorkspaceBelowRepository
-// mirrors TestFinalVerifySettlementAttestsReportAnchoredAtWorkspace on the
-// status side: a workspace below its repository root still resolves the delta.
-func TestBoundArchiveGateAttestsPostReviewReportWithWorkspaceBelowRepository(t *testing.T) {
-	const change = "workspace-anchored-post-review-report"
-	root := t.TempDir()
-	workspace := filepath.Join(root, "service")
-	changeRoot := seedReadyChange(t, workspace, change, "- [x] 1.1 Done\n")
-	verifyPath := filepath.Join(changeRoot, "verify-report.md")
-	write(t, verifyPath, boundedVerifyEnvelope(shaID("a"), "pass"))
-	writeApprovedCompactAuthorityForChangeWithCandidate(t, root, changeRoot, "approved-workspace-post-review", "- [x] 1.1 Approved\n", nil)
-	if _, err := BindApprovedReview(context.Background(), workspace, change, "approved-workspace-post-review", ""); err != nil {
-		t.Fatal(err)
-	}
-	write(t, verifyPath, boundedVerifyEnvelope(shaID("b"), "pass"))
-	runSDDStatusGit(t, root, "add", "-A")
-	store := mustRuntimeStore(t, workspace, change)
-	if store.Repo == store.Workspace {
-		t.Fatalf("fixture must place the workspace below the repository root: repo=%q workspace=%q", store.Repo, store.Workspace)
-	}
-	runtime, err := store.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
-	started, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: runtime.Revision, RequestID: "begin-workspace-post-review", WorkUnit: "verify",
-		EvidenceGoal: "run final independent verification", MaxAttempts: 1, MaxChangedLines: 20,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Finish(context.Background(), FinishAttemptRequest{
-		ExpectedRevision: started.Revision, RequestID: "settle-workspace-post-review", Outcome: AttemptPassed,
-		EvidenceRevision: shaID("b"), Diagnosis: "final verification passed", HarnessDisposition: HarnessReused,
-		CleanupEvidence: "no cleanup required", ProcessEvidence: "focused verification passed",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	settled, err := Resolve(ResolveOptions{CWD: workspace, ChangeName: change})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settled.ReviewGate == nil || settled.ReviewGate.Result != reviewtransaction.GateAllow ||
-		settled.Dependencies.Archive != DependencyReady || settled.NextRecommended != "archive" {
-		t.Fatalf("workspace-below-repository attested status = %#v, want allow and archive-ready", settled)
 	}
 }

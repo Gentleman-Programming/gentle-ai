@@ -2,7 +2,6 @@ package reviewtransaction
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -178,27 +177,23 @@ func TestCompactCorrectionRefusesUnrelatedTestPath(t *testing.T) {
 	}
 }
 
-// TestCompactCorrectionAddedPathStillBindsLineBudget proves the frozen line
-// budget keeps binding an admitted path-adding correction: the added file's
-// lines are correction lines like any other.
+// TestCompactCorrectionAddedPathStillBindsLineBudget proves an admitted
+// path-adding correction must fit the frozen line budget before it mutates the
+// authority; the added file's lines are correction lines like any other.
 func TestCompactCorrectionAddedPathStillBindsLineBudget(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	state := coverageCorrectionFixture(t, repo, "coverage-budget", 1)
-	budget := state.CorrectionBudget
+	budget, before := state.CorrectionBudget, state
 	writeSnapshotFile(t, repo, "internal/widget/widget_windows_test.go", "package widget\n\nimport \"testing\"\n")
 	fix := buildCoverageFix(t, repo, state, "internal/widget/widget_windows_test.go")
-	if err := state.CompleteCorrection(fix, budget+1, passingCoverageValidation(state, fix)); err != nil {
-		t.Fatalf("CompleteCorrection(over budget): %v", err)
+	err := state.CompleteCorrection(fix, budget+1, passingCoverageValidation(state, fix))
+	if err == nil || !strings.Contains(err.Error(), "exceeding the frozen budget") {
+		t.Fatalf("CompleteCorrection(over budget) = %v, want frozen-budget refusal", err)
 	}
-	if state.State != StateEscalated {
-		t.Fatalf("state after an over-budget path-adding correction = %q, want escalated", state.State)
-	}
-	if !state.CorrectionAttemptConsumed() {
-		t.Fatal("an over-budget path-adding correction must still consume the one correction attempt")
-	}
-	if err := state.BeginCorrection(1); !errors.Is(err, ErrCompactCorrectionConsumed) {
-		t.Fatalf("second correction = %v, want ErrCompactCorrectionConsumed", err)
+	if state.State != before.State || len(state.CorrectionAttempts) != len(before.CorrectionAttempts) ||
+		!equalStrings(state.CorrectionScopePaths(), before.CorrectionScopePaths()) {
+		t.Fatalf("over-budget path addition mutated authority: %#v", state)
 	}
 }
 
@@ -404,11 +399,9 @@ func TestCompactCorrectionRefusesCompiledSourceInATestDirectory(t *testing.T) {
 	}
 }
 
-// TestCompactCorrectionEscalationRollsBackTheWidenedScope is the reproduction
-// of R4-escalated-scope-not-rolled-back. A correction that escalates did not
-// complete, so the companion path it tried to add never earned a place in the
-// scope an approved candidate may deliver. The attempt itself stays on record,
-// and the single-correction rule still binds.
+// TestCompactCorrectionEscalationRollsBackTheWidenedScope proves a failed
+// targeted check records an escalation without widening delivery scope, while
+// an over-budget actual is refused before either attempt or scope can mutate.
 func TestCompactCorrectionEscalationRollsBackTheWidenedScope(t *testing.T) {
 	requireSnapshotGit(t)
 	for _, tt := range []struct {
@@ -432,7 +425,18 @@ func TestCompactCorrectionEscalationRollsBackTheWidenedScope(t *testing.T) {
 			if !tt.passing {
 				validation.CorrectionRegression.Passed = false
 			}
-			if err := state.CompleteCorrection(fix, actual, validation); err != nil {
+			beforeState, beforeAttempts, beforeScope := state.State, len(state.CorrectionAttempts), state.CorrectionScopePaths()
+			err := state.CompleteCorrection(fix, actual, validation)
+			if tt.overrun > 0 {
+				if err == nil || !strings.Contains(err.Error(), "exceeding the frozen budget") {
+					t.Fatalf("CompleteCorrection(over budget) = %v, want frozen-budget refusal", err)
+				}
+				if state.State != beforeState || len(state.CorrectionAttempts) != beforeAttempts || !equalStrings(state.CorrectionScopePaths(), beforeScope) {
+					t.Fatalf("over-budget correction mutated authority: %#v", state)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("CompleteCorrection: %v", err)
 			}
 			if state.State != StateEscalated {

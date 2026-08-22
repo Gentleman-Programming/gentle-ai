@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const advisoryLane = "advisory"
@@ -64,6 +63,10 @@ func (b *battery) runAdvisoryLane() {
 		b.fail(advisoryLane, "consent granted round-trip", fmt.Sprintf("exit=%d state=%q %s", code, getString(startDoc, "state"), firstLine(stderr)))
 		return
 	}
+	if err := b.rememberStarted(repo, target, startDoc); err != nil {
+		b.fail(advisoryLane, "consent granted round-trip", err.Error())
+		return
+	}
 
 	// Reviewer result: non-blocking only. No evidence_class and no
 	// causal_disposition, because a non-severe finding never enters causal
@@ -112,82 +115,21 @@ func (b *battery) runAdvisoryLane() {
 		return
 	}
 
-	lineage := args["lineage"]
-	finalize := b.driveAdvisoryToApproval(repo, lineage)
-	if finalize == nil {
+	// Native admission must retain these non-blocking findings without opening a
+	// correction, refuter, or validator route; the final evidence then burns.
+	statusDoc, stderr, _ = b.status(repo, "claude-code")
+	if getString(statusDoc, "next_transition", "execute", "operation") != "review.finalize" {
+		b.fail(advisoryLane, "WARNING + SUGGESTION admitted", fmt.Sprintf("next route = %s/%s %s",
+			getString(statusDoc, "next_transition", "kind"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
 		return
 	}
-
-	// The claim under test: the approved payload names the disposition instead
-	// of leaving the consumer to infer it from the severity string.
-	advisory := advisoryBlock(finalize)
-	if advisory == nil {
-		b.fail(advisoryLane, "approval declares non-blocking findings",
-			"approved payload carries no advisory_findings block: a consumer can only infer disposition from the severity string")
-		return
-	}
-	statement := strings.ToLower(getString(advisory, "statement"))
-	for _, phrase := range []string{"approved", "non-blocking", "no correction"} {
-		if !strings.Contains(statement, phrase) {
-			b.fail(advisoryLane, "approval declares non-blocking findings",
-				fmt.Sprintf("advisory statement does not state %q: %q", phrase, getString(advisory, "statement")))
-			return
-		}
-	}
-	severities := map[string]string{}
-	for _, raw := range getSlice(advisory, "findings") {
-		finding, _ := raw.(map[string]any)
-		if finding == nil {
-			continue
-		}
-		severity, _ := finding["severity"].(string)
-		disposition, _ := finding["disposition"].(string)
-		severities[severity] = disposition
-	}
-	for _, severity := range []string{"WARNING", "SUGGESTION"} {
-		if severities[severity] != "informational" {
-			b.fail(advisoryLane, "approval declares non-blocking findings",
-				fmt.Sprintf("%s finding disposition = %q, want informational: %v", severity, severities[severity], severities))
-			return
-		}
-	}
-	b.pass(advisoryLane, "approval declares non-blocking findings",
-		"approved receipt with WARNING + SUGGESTION declares both informational and states the approval stands")
-
-	// The negative half: nothing about a non-blocking finding may route back
-	// into review. Not in the terminal payload, and not in the transition a
-	// consumer queries next.
-	if finalize["validation_request"] != nil || getMap(finalize, "result", "validation_request") != nil {
-		b.fail(advisoryLane, "approval offers no correction route", "approved payload carries a validation request")
-		return
-	}
-	if err := runGit(repo, "add", "-A"); err != nil {
-		b.fail(advisoryLane, "approval offers no correction route", err.Error())
-		return
-	}
-	statusDoc, stderr, _ = b.status(repo, "claude-code", "--lineage", lineage, "--projection", "staged", "--gate", "pre-commit")
-	transition := getMap(statusDoc, "next_transition")
-	reason := getString(statusDoc, "next_transition", "reason_code")
-	operation := getString(statusDoc, "next_transition", "execute", "operation")
-	if transition == nil || transition["correction_request"] != nil || strings.Contains(reason, "correction") {
-		b.fail(advisoryLane, "approval offers no correction route",
-			fmt.Sprintf("transition after advisory approval routes to correction: reason=%q %s", reason, firstLine(stderr)))
-		return
-	}
-	if operation != "review.validate" {
-		b.fail(advisoryLane, "approval offers no correction route",
-			fmt.Sprintf("transition after advisory approval = %q/%q, want the review.validate delivery gate %s", reason, operation, firstLine(stderr)))
-		return
-	}
-	b.pass(advisoryLane, "approval offers no correction route",
-		"no validation request, no correction transition; the only route forward is the review.validate delivery gate")
+	b.pass(advisoryLane, "WARNING + SUGGESTION admitted", "both non-blocking findings completed admission; no correction or validator route opened")
+	b.driveAdvisoryToApproval(repo)
 }
 
 // driveAdvisoryToApproval follows the native transitions from a captured
-// non-blocking reviewer result to the terminal approved payload, then replays
-// the terminal finalize under the negotiated contract so the schema lane sees
-// the published operation envelope carrying the new block.
-func (b *battery) driveAdvisoryToApproval(repo, lineage string) map[string]any {
+// non-blocking reviewer result through final evidence to the terminal burn.
+func (b *battery) driveAdvisoryToApproval(repo string) map[string]any {
 	evidencePath := filepath.Join(b.workRoot, "advisory-evidence.txt")
 	evidence := fmt.Sprintf("crosslane battery %s: node --check src/mul.js passed on the frozen candidate\n", timestamp())
 	if err := os.WriteFile(evidencePath, []byte(evidence), 0o644); err != nil {
@@ -206,19 +148,8 @@ func (b *battery) driveAdvisoryToApproval(repo, lineage string) map[string]any {
 			}
 			switch operationState(doc) {
 			case "approved":
-				// Replay the terminal finalize under the negotiated contract:
-				// same approved bytes, published envelope, so the schema lane
-				// validates advisory_findings against contracts/.
-				negotiated, replayStderr, replayCode := b.runJSON("operation", repo,
-					"review", "finalize", "--cwd", repo, "--lineage", lineage, "--contract", reviewContract)
-				if replayCode != 0 || operationState(negotiated) != "approved" {
-					b.fail(advisoryLane, "lifecycle to approved receipt",
-						fmt.Sprintf("negotiated terminal replay exit=%d %s", replayCode, firstLine(replayStderr)))
-					return nil
-				}
-				b.pass(advisoryLane, "lifecycle to approved receipt",
-					"medium candidate with WARNING + SUGGESTION reached an approved receipt without a correction")
-				return negotiated
+				b.burnApproved(advisoryLane, "final evidence and burned", repo, "claude-code", nil, doc)
+				return doc
 			case "correction_required", "escalated":
 				b.fail(advisoryLane, "lifecycle to approved receipt",
 					fmt.Sprintf("non-blocking findings changed the outcome to %q; only candidate-caused severe findings may block", operationState(doc)))
@@ -247,14 +178,4 @@ func (b *battery) driveAdvisoryToApproval(repo, lineage string) map[string]any {
 	}
 	b.fail(advisoryLane, "lifecycle to approved receipt", "did not reach a terminal state within the step budget")
 	return nil
-}
-
-// advisoryBlock reads advisory_findings from either the negotiated operation
-// envelope (result.advisory_findings) or the legacy bare finalize result,
-// mirroring operationState's own tolerance of both surfaces.
-func advisoryBlock(doc map[string]any) map[string]any {
-	if block := getMap(doc, "result", "advisory_findings"); block != nil {
-		return block
-	}
-	return getMap(doc, "advisory_findings")
 }

@@ -74,17 +74,10 @@ func TestArchiveGateOffersButDoesNotBlockWhileReviewIsEnabled(t *testing.T) {
 	}
 }
 
-// TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch holds the zero
-// value against a fixture where enabled and disabled still visibly differ
-// after BLOCKER-1 (a scope-changed EXPLICIT receipt -- real review activity
-// gone wrong, not a decline, so it still blocks while enabled and only stops
-// blocking when the switch is truly off). Any call site that forgets to
-// resolve the switch keeps today's (enabled) behaviour, so a missed seam
-// fails safe instead of silently dropping review obligations. Superseded:
-// this test previously reused the "no review ever started" fixture, which
-// BLOCKER-1 makes a decline on both sides of the switch and so can no longer
-// distinguish "enforces" from "forgot to resolve".
-func TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch(t *testing.T) {
+// TestArchiveGateIsInformationalForCallersUsingTheDefaultReviewMode proves
+// that a caller which leaves review mode enabled receives visible review
+// context without changing SDD archive routing.
+func TestArchiveGateIsInformationalForCallersUsingTheDefaultReviewMode(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedBoundedReadyChange(t, root)
 	writeApprovedReviewArtifacts(t, changeRoot)
@@ -99,8 +92,8 @@ func TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged ||
-		status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("zero-value gate=%#v archive=%q next=%q, want the enforcing shape",
+		status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+		t.Fatalf("zero-value gate=%#v archive=%q next=%q, want informational ready/archive shape",
 			status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
 	}
 }
@@ -255,13 +248,13 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 				return reviewtransaction.NativeGateEvaluation{Result: tt.result}
 			}
 
-			assertBlocked := func(label string, status Status) {
+			assertInformational := func(label string, status Status) {
 				t.Helper()
 				if status.ReviewGate == nil || status.ReviewGate.Result != tt.result || status.ReviewGate.Delivery != "" {
-					t.Fatalf("%s gate = %#v, want %q without delivery", label, status.ReviewGate, tt.result)
+					t.Fatalf("%s gate = %#v, want visible %q context without delivery", label, status.ReviewGate, tt.result)
 				}
-				if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
-					t.Fatalf("%s archive=%q next=%q, want blocked/resolve-review", label, status.Dependencies.Archive, status.NextRecommended)
+				if status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+					t.Fatalf("%s archive=%q next=%q, want ready/archive", label, status.Dependencies.Archive, status.NextRecommended)
 				}
 			}
 
@@ -269,7 +262,7 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertBlocked("enabled discovered", enabled)
+			assertInformational("enabled discovered", enabled)
 
 			// Corrective verify cycle CRITICAL-1: while disabled, applyReviewGate
 			// never runs at all, so the discovered blocker is structurally
@@ -290,7 +283,7 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertBlocked("re-enabled discovered", reenabled)
+			assertInformational("re-enabled discovered", reenabled)
 
 			// The ratified "zero review code" requirement carries no carve-out
 			// for an explicit receipt either: even with it restored on disk,
@@ -356,6 +349,39 @@ func TestDisabledArchiveGateNeverConsultsAnApprovedReceiptEither(t *testing.T) {
 // TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons keeps the scope
 // honest. Blocking archive because the tasks are unfinished has nothing to do
 // with receipt-driven development, so the kill switch must not touch it.
+func TestReviewGateEvaluationRemainsInformationalForArchiveRouting(t *testing.T) {
+	tests := []struct {
+		name   string
+		result reviewtransaction.GateResult
+	}{
+		{name: "discovered review failure", result: reviewtransaction.GateEscalated},
+		{name: "unknown review authority", result: reviewtransaction.GateInvalidated},
+		{name: "pending review scope", result: reviewtransaction.GateScopeChanged},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := Status{
+				Dependencies:    Dependencies{Verify: DependencyAllDone, Archive: DependencyReady},
+				TaskProgress:    TaskProgress{AllComplete: true},
+				NextRecommended: string(PhaseArchive),
+			}
+
+			applyReviewGateEvaluation(&status, reviewAuthorityEvaluation{Result: tt.result, Reason: "review context only"})
+
+			if status.ReviewGate == nil || status.ReviewGate.Result != tt.result {
+				t.Fatalf("ReviewGate = %#v, want visible %q context", status.ReviewGate, tt.result)
+			}
+			if status.Dependencies.Archive != DependencyReady || status.NextRecommended != string(PhaseArchive) {
+				t.Fatalf("review result routed archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
+			}
+			if len(status.BlockedReasons) != 0 {
+				t.Fatalf("review result created blockers: %v", status.BlockedReasons)
+			}
+		})
+	}
+}
+
 func TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons(t *testing.T) {
 	root := t.TempDir()
 	seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n- [ ] 1.2 Unfinished\n")

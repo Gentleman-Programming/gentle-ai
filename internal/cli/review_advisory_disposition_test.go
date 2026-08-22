@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +40,7 @@ func approveTrackedGoChangeWithAdvisoryFindings(t *testing.T, repo, lineage stri
 	}
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
 		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1, Snapshot: snapshot,
-		PolicyHash: "sha256:" + hexDigest("advisory-policy"), RiskLevel: risk,
+		PolicyHash: fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("advisory-policy"))), RiskLevel: risk,
 		SelectedLenses: []string{reviewtransaction.LensReliability}, OriginalChangedLines: &lines,
 	})
 	if err != nil {
@@ -99,6 +101,7 @@ func approveTrackedGoChangeWithAdvisoryFindings(t *testing.T, repo, lineage stri
 // review on an already-approved candidate. The approved payload must say the
 // disposition out loud instead.
 func TestApprovedFinalizeDeclaresAdvisoryFindings(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	state := approveTrackedGoChangeWithAdvisoryFindings(t, repo, "advisory-legacy")
 
@@ -148,6 +151,7 @@ func TestApprovedFinalizeDeclaresAdvisoryFindings(t *testing.T) {
 // other host reading the published operation envelope), not only the legacy
 // bare result.
 func TestApprovedFinalizeAdvisoryFindingsSurfaceOnNegotiatedContract(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	state := approveTrackedGoChangeWithAdvisoryFindings(t, repo, "advisory-negotiated")
 
@@ -170,8 +174,17 @@ func TestApprovedFinalizeAdvisoryFindingsSurfaceOnNegotiatedContract(t *testing.
 	if err := json.Unmarshal(envelope.Result, &result); err != nil {
 		t.Fatalf("decode negotiated finalize result %q: %v", string(envelope.Result), err)
 	}
-	if result.State != reviewtransaction.StateApproved || result.AdvisoryFindings == nil {
-		t.Fatalf("negotiated approved payload carries no advisory_findings block: %s", stdout.String())
+	if result.State != reviewtransaction.StateApproved || result.Action != reviewApprovedCompactBurnedFinalizeAction || result.AdvisoryFindings == nil {
+		t.Fatalf("negotiated approved burned payload carries no advisory_findings block or terminal action: %s", stdout.String())
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Result, &fields); err != nil {
+		t.Fatalf("decode negotiated finalize fields %q: %v", string(envelope.Result), err)
+	}
+	for _, forbidden := range []string{"receipt_path", "next_transition", "forecast"} {
+		if _, found := fields[forbidden]; found {
+			t.Fatalf("approved burned payload must omit %q: %s", forbidden, envelope.Result)
+		}
 	}
 	if len(result.AdvisoryFindings.Findings) != 2 {
 		t.Fatalf("negotiated advisory findings = %#v, want both frozen non-blocking findings", result.AdvisoryFindings.Findings)
@@ -182,14 +195,11 @@ func TestApprovedFinalizeAdvisoryFindingsSurfaceOnNegotiatedContract(t *testing.
 		}
 	}
 
-	// The negative half of the contract: nothing about an advisory finding may
-	// offer a way back into review. No correction request, no validation
-	// request, and the routed next transition is the delivery gate.
-	if result.ValidationRequest != nil {
-		t.Fatalf("approved advisory payload offers a validation request: %#v", result.ValidationRequest)
-	}
-	if result.NextTransition != nil && result.NextTransition.CorrectionRequest != nil {
-		t.Fatalf("approved advisory payload offers a correction request: %#v", result.NextTransition.CorrectionRequest)
+	// The negative half of the contract: an advisory finding cannot reopen review
+	// or leave a receipt-backed delivery route behind. The approved response is
+	// terminal; its authority is already burned.
+	if result.ValidationRequest != nil || result.NextTransition != nil {
+		t.Fatalf("approved burned advisory payload offers a follow-up route: validation=%#v transition=%#v", result.ValidationRequest, result.NextTransition)
 	}
 
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -201,6 +211,11 @@ func TestApprovedFinalizeAdvisoryFindingsSurfaceOnNegotiatedContract(t *testing.
 		t.Fatalf("negotiated status after advisory approval: %v", err)
 	}
 	var status struct {
+		Action  string `json:"action"`
+		Receipt struct {
+			Status    string `json:"status"`
+			LineageID string `json:"lineage_id"`
+		} `json:"receipt"`
 		NextTransition *ReviewNextTransition `json:"next_transition"`
 	}
 	if err := json.Unmarshal(statusOut.Bytes(), &status); err != nil {
@@ -209,11 +224,14 @@ func TestApprovedFinalizeAdvisoryFindingsSurfaceOnNegotiatedContract(t *testing.
 	if status.NextTransition == nil {
 		t.Fatalf("status after advisory approval returned no next transition: %s", statusOut.String())
 	}
+	if status.Action != "start" || status.Receipt.Status != "not_applicable" || status.Receipt.LineageID != "" {
+		t.Fatalf("status after burned advisory approval retained receipt authority: %#v", status)
+	}
 	if status.NextTransition.CorrectionRequest != nil || strings.Contains(status.NextTransition.ReasonCode, "correction") {
 		t.Fatalf("advisory approval routed back into correction: %#v", status.NextTransition)
 	}
-	if status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.validate" {
-		t.Fatalf("advisory approval next transition = %#v, want the review.validate delivery gate", status.NextTransition)
+	if status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("advisory approval next transition = %#v, want ordinary fresh review.start", status.NextTransition)
 	}
 }
 
@@ -221,6 +239,7 @@ func TestApprovedFinalizeAdvisoryFindingsSurfaceOnNegotiatedContract(t *testing.
 // additive: a clean approval's bytes are unchanged, so byte-pinned consumers
 // see nothing new until a review actually produces a non-blocking finding.
 func TestApprovedFinalizeWithoutFindingsOmitsAdvisoryBlock(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	state := approveTrackedGoChangeWithNoFindings(t, repo, "advisory-clean")
 
@@ -256,7 +275,7 @@ func approveTrackedGoChangeWithNoFindings(t *testing.T, repo, lineage string) re
 	}
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
 		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1, Snapshot: snapshot,
-		PolicyHash: "sha256:" + hexDigest("advisory-policy"), RiskLevel: risk,
+		PolicyHash: fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("advisory-policy"))), RiskLevel: risk,
 		SelectedLenses: []string{reviewtransaction.LensReliability}, OriginalChangedLines: &lines,
 	})
 	if err != nil {

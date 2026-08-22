@@ -222,7 +222,10 @@
           "type": "object"
         },
         "delivery": {
-          "const": "disabled/unmanaged"
+          "enum": [
+            "disabled/unmanaged",
+            "unmanaged"
+          ]
         }
       }
     },

@@ -51,8 +51,7 @@ func TestRuntimeSelfRemediationFinishBindsCorrectedApprovedAuthority(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Operation != runtimeOperationFinishRemediation || record.Finish == nil || record.Binding == nil ||
-		record.Binding.ExpectedRevision != fixture.binding.Revision || record.Binding.Current.Lineage != fixture.lineage {
+	if record.Operation != runtimeOperationFinish || record.Finish == nil || record.Binding != nil {
 		t.Fatalf("self-remediation record = %#v", record)
 	}
 
@@ -131,14 +130,14 @@ func TestRuntimeSelfRemediationTriangleGuardRailsHold(t *testing.T) {
 	})
 }
 
-func TestRuntimeSelfRemediationFinishRejectsUnprovenSelfSuccessors(t *testing.T) {
+func TestRuntimeFailedEvidenceRemediationRejectsUnprovenCorrections(t *testing.T) {
 	t.Run("corrected evidence must differ from the failed evidence", func(t *testing.T) {
 		fixture := newRuntimeSelfRemediationFixture(t)
 		request := fixture.finishRequest("finish-self-identical-evidence")
 		request.EvidenceRevision = fixture.failedEvidence
 		before := countRuntimeRecords(t, fixture.store.Dir)
 		_, err := fixture.store.Finish(context.Background(), request)
-		if err == nil || !strings.Contains(err.Error(), "distinct corrected evidence") {
+		if err == nil || !strings.Contains(err.Error(), "fresh corrected evidence") {
 			t.Fatalf("identical evidence self-remediation error = %v", err)
 		}
 		assertRuntimeSelfRemediationUnchanged(t, fixture, before)
@@ -154,22 +153,12 @@ func TestRuntimeSelfRemediationFinishRejectsUnprovenSelfSuccessors(t *testing.T)
 			t.Fatal(err)
 		}
 		before := countRuntimeRecords(t, fixture.store.Dir)
-		_, err = fixture.store.Finish(context.Background(), fixture.finishRequest("finish-self-missing-receipt"))
-		if err == nil {
-			t.Fatal("self-remediation accepted an approved authority without its receipt")
+		completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-self-missing-receipt"))
+		if err != nil || !completed.Complete || completed.Binding == nil || completed.Binding.Revision != fixture.binding.Revision {
+			t.Fatalf("self-remediation consulted a missing review receipt: status=%#v err=%v", completed, err)
 		}
-		assertRuntimeSelfRemediationUnchanged(t, fixture, before)
-	})
-
-	t.Run("bound lineage must remain the compact recovery leaf", func(t *testing.T) {
-		fixture := newRuntimeSelfRemediationFixture(t)
-		// A later scope change hands the lineage a true recovery successor; the
-		// stale self-successor must then be refused at the leaf boundary.
-		write(t, filepath.Join(fixture.changeRoot, "design.md"), "# Design\n# post-remediation scope change\n")
-		createRuntimeRecoverySuccessor(t, fixture.repo, fixture.lineage, "runtime-self-leaf-successor", false)
-		err := validateRuntimeRemediationSelfSuccessor(context.Background(), fixture.repo, fixture.binding, fixture.binding)
-		if err == nil || !strings.Contains(err.Error(), "compact recovery leaf") {
-			t.Fatalf("superseded self-successor error = %v", err)
+		if countRuntimeRecords(t, fixture.store.Dir) != before+1 {
+			t.Fatalf("receipt-independent self-remediation records=%d want %d", countRuntimeRecords(t, fixture.store.Dir), before+1)
 		}
 	})
 }
@@ -257,8 +246,6 @@ func (fixture runtimeSelfRemediationFixture) finishRequest(requestID string) Fin
 		EvidenceRevision: runtimeTestHash('7'), Diagnosis: "bounded self remediation passed corrected verification",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "self remediation cleanup completed",
 		ProcessEvidence:            "self remediation process scan found no descendants",
-		ExpectedBindingRevision:    fixture.binding.Revision,
-		SuccessorLineageID:         fixture.lineage,
 		RemediatesEvidenceRevision: fixture.failedEvidence,
 	}
 }

@@ -33,7 +33,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -165,110 +164,15 @@ func TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate(t *testin
 	runReviewCLIGit(t, repo, "add", "scripts/deploy.sh")
 
 	var output bytes.Buffer
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	if err == nil {
-		t.Fatalf("declined candidate validate unexpectedly allowed:\n%s", output.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err != nil {
+		t.Fatalf("declined candidate delivery: %v\n%s", err, output.String())
 	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Result != reviewtransaction.GateInvalidated || result.Allowed || result.Delivery != "" {
-		t.Fatalf("declined candidate gate verdict = %#v, want a plain (non-unmanaged) denial", result)
-	}
-	if result.Context.Denial == nil || result.Context.Denial.Stage != "receipt-discovery" ||
-		result.Context.Denial.Code != "receipt_missing" {
-		t.Fatalf("declined candidate context = %#v, want the same receipt-discovery/receipt_missing denial any never-reviewed candidate reaches", result.Context)
-	}
+	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePreCommit)
 
 	// The decline never created review authority for this lineage.
 	if store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "review-decline-characterization"); err == nil {
 		if _, loadErr := store.Load(); !errors.Is(loadErr, os.ErrNotExist) {
 			t.Fatalf("declined candidate gate evaluation persisted review authority: %v", loadErr)
 		}
-	}
-}
-
-// TestLegacyFunnelCharacterization_RunFacadeLegacyValidateNegotiated pins
-// runFacadeLegacyValidateNegotiated (review_facade.go), the funnel's final
-// fallback for a legacy v1-only lineage: it re-enters the legacy
-// review-validate path (runReviewValidate -> EvaluateNativeGate) in-process
-// (not a subprocess) and, only when negotiated, buffers that call's raw JSON
-// output, decodes it strictly, and re-encodes the identical
-// ReviewValidateResult inside the negotiated envelope -- while still
-// propagating the buffered call's original error (ReviewGateDeniedError on
-// denial) even though the envelope was already written to stdout. No
-// existing test drives a legacy v1 lineage through the RunReviewFacadeValidate
-// funnel (existing "PreservesLegacyResult" coverage exercises only a compact
-// v2/v3-authority lineage's raw-vs-negotiated JSON shape, not this legacy
-// re-entry seam) -- confirmed by direct read of discoverCompactFacadeReview
-// (review_facade.go:3684-3706): a legacy-only lineage's compact discovery
-// fails with the plain sentinel reviewtransaction.ErrLegacyReadOnly, which
-// matches neither the !negotiated early-return's GateTargetResolutionError
-// nor ReviewReceiptDiscoveryError checks, so execution reaches
-// discoverFacadeReview/runFacadeLegacyValidateNegotiated identically for
-// both negotiated and non-negotiated calls.
-func TestLegacyFunnelCharacterization_RunFacadeLegacyValidateNegotiated(t *testing.T) {
-	reviewEnabledHome(t)
-	fixture := newLegacyCLIFixture(t, "legacy-funnel-characterization")
-	runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
-
-	// Non-negotiated: the funnel's legacy fallback returns the raw legacy
-	// JSON unchanged (negotiated=false short-circuits runFacadeLegacyValidateNegotiated
-	// straight through to runReviewValidate with no buffering/re-encoding).
-	var plain bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{
-		"--cwd", fixture.repo, "--lineage", fixture.lineage, "--gate", string(reviewtransaction.GatePreCommit),
-	}, &plain); err != nil {
-		t.Fatalf("legacy funnel validate (plain): %v\n%s", err, plain.String())
-	}
-	var plainResult ReviewValidateResult
-	decodeStrictReviewJSON(t, plain.Bytes(), &plainResult)
-	if plainResult.Result != reviewtransaction.GateAllow || !plainResult.Allowed {
-		t.Fatalf("legacy funnel plain result = %#v", plainResult)
-	}
-
-	// Negotiated: the funnel wraps the byte-for-byte identical legacy result
-	// inside the negotiated envelope.
-	var negotiated bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{
-		"--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo, "--lineage", fixture.lineage,
-		"--gate", string(reviewtransaction.GatePreCommit),
-	}, &negotiated); err != nil {
-		t.Fatalf("legacy funnel validate (negotiated): %v\n%s", err, negotiated.String())
-	}
-	envelope := decodeReviewOperationEnvelope(t, negotiated.Bytes())
-	if envelope.Operation != ReviewIntegrationOperationValidate {
-		t.Fatalf("legacy funnel negotiated operation = %q", envelope.Operation)
-	}
-	var negotiatedResult ReviewValidateResult
-	decodeStrictReviewJSON(t, envelope.Result, &negotiatedResult)
-	if !reflect.DeepEqual(plainResult, negotiatedResult) {
-		t.Fatalf("legacy funnel negotiated wrapping changed the legacy result:\nplain=%#v\nnegotiated=%#v", plainResult, negotiatedResult)
-	}
-
-	// Denial shape: an out-of-scope staged addition must still deny AND the
-	// negotiated call must still return ReviewGateDeniedError even though an
-	// envelope was already written to stdout -- the wrapper's buffered runErr
-	// must propagate after encoding, not be swallowed by the successful encode.
-	if err := os.WriteFile(fixture.repo+"/unrelated.txt", []byte("not reviewed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runReviewCLIGit(t, fixture.repo, "add", "unrelated.txt")
-	var deniedOutput bytes.Buffer
-	err := RunReviewFacadeValidate([]string{
-		"--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo, "--lineage", fixture.lineage,
-		"--gate", string(reviewtransaction.GatePreCommit),
-	}, &deniedOutput)
-	var deniedErr ReviewGateDeniedError
-	if !errors.As(err, &deniedErr) {
-		t.Fatalf("legacy funnel negotiated denial error = %T %v", err, err)
-	}
-	if deniedOutput.Len() == 0 {
-		t.Fatal("legacy funnel negotiated denial emitted no envelope despite returning an error")
-	}
-	deniedEnvelope := decodeReviewOperationEnvelope(t, deniedOutput.Bytes())
-	var deniedResult ReviewValidateResult
-	decodeStrictReviewJSON(t, deniedEnvelope.Result, &deniedResult)
-	if deniedResult.Allowed || deniedResult.Result == reviewtransaction.GateAllow {
-		t.Fatalf("legacy funnel negotiated denial result = %#v", deniedResult)
 	}
 }

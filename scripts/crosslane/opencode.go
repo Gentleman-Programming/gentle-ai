@@ -90,6 +90,10 @@ func (b *battery) runOpenCodeLane() {
 		b.fail(openCodeLane, "consent granted round-trip", fmt.Sprintf("exit=%d state=%q risk=%q %s", code, getString(startDoc, "state"), getString(startDoc, "risk_level"), firstLine(stderr)))
 		return
 	}
+	if err := b.rememberStarted(repo, target, startDoc); err != nil {
+		b.fail(openCodeLane, "consent granted round-trip", err.Error())
+		return
+	}
 	b.pass(openCodeLane, "consent granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage")
 
 	// Reviewer collect slot: this is where the host assembles the binding.
@@ -370,7 +374,7 @@ func (b *battery) runOpenCodeLane() {
 		b.fail(openCodeLane, "correction lifecycle approved", fmt.Sprintf("exit=%d state=%q %s", code, operationState(finalize), firstLine(stderr)))
 		return
 	}
-	b.pass(openCodeLane, "correction lifecycle approved", "plan, fix, evidence, and captured validation reached the approved receipt")
+	b.burnApproved(openCodeLane, "correction lifecycle burned", repo, "opencode", nil, finalize)
 }
 
 // driveCorrectionToValidation walks finalize -> correction plan -> fix edit ->

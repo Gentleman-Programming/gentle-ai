@@ -31,6 +31,7 @@ func init() {
 		Name:     compatibilityAxis,
 		Title:    "Non-negotiated, legacy-facing surfaces a real user (or a script, or an old integration) can still reach directly",
 		BlackBox: true,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Black-box: every journey drives the product's own CLI only, exactly like the core corpus; nothing product-owned is read or written.",
 			"Opt-in anyway: the core and every prior axis measure the NEGOTIATED lifecycle exclusively. This axis measures the DIRECT/manual compatibility surfaces the execution contract explicitly keeps alongside it. \"N core journeys\" and \"N plus compatibility\" must never look alike, because the whole point of #2447 is that the two populations are not interchangeable.",

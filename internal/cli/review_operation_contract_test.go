@@ -28,7 +28,7 @@ func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *
 	negotiatedOutput, negotiatedStore := finalizeNegotiatedOperationFixture(t, negotiatedRepo, lineage, true)
 
 	legacyFields := strictReviewJSONFields(t, legacyOutput)
-	wantLegacyFields := []string{"action", "lineage_id", "operation", "receipt_path", "state", "store_revision"}
+	wantLegacyFields := []string{"action", "lineage_id", "operation", "state", "store_revision"}
 	if !reflect.DeepEqual(legacyFields, wantLegacyFields) {
 		t.Fatalf("legacy finalize fields = %v, want %v\n%s", legacyFields, wantLegacyFields, legacyOutput)
 	}
@@ -41,100 +41,29 @@ func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *
 	var negotiated ReviewIntegrationFinalizeResult
 	decodeStrictReviewJSON(t, envelope.Result, &negotiated)
 	if negotiated.Operation != legacy.Operation || negotiated.LineageID != legacy.LineageID || negotiated.State != legacy.State ||
-		negotiated.Action != legacy.Action || negotiated.StoreRevision != legacy.StoreRevision {
+		negotiated.Action != legacy.Action {
 		t.Fatalf("negotiated finalize result = %#v, legacy %#v", negotiated, legacy)
+	}
+	if legacy.ReceiptPath != "" {
+		t.Fatalf("legacy finalize retained a receipt path %q", legacy.ReceiptPath)
 	}
 	assertNoPrivateReviewOperationFields(t, negotiatedOutput)
 
-	legacyAuthority := readReviewOperationFile(t, legacyStore.StatePath())
-	negotiatedAuthority := readReviewOperationFile(t, negotiatedStore.StatePath())
-	legacyReceipt := readReviewOperationFile(t, legacyStore.ReceiptPath())
-	negotiatedReceipt := readReviewOperationFile(t, negotiatedStore.ReceiptPath())
-	if !bytes.Equal(legacyAuthority, negotiatedAuthority) || !bytes.Equal(legacyReceipt, negotiatedReceipt) {
-		t.Fatalf("negotiation changed canonical authority or receipt bytes")
-	}
-}
-
-func TestNegotiatedReviewValidateCoversAllGatesAndPreservesLegacyResult(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	writeNegotiatedOperationChange(t, repo, "thin")
-	lineage := "review-operation-validate"
-	_, _ = finalizeNegotiatedOperationFixture(t, repo, lineage, true)
-	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
-	configureCLIReviewPublicationRemote(t, repo, branch)
-	runReviewCLIGit(t, repo, "add", "-A")
-	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
-
-	var legacyOutput bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", lineage, "--gate", string(reviewtransaction.GatePostApply)}, &legacyOutput); err != nil {
-		t.Fatal(err)
-	}
-	wantLegacyFields := []string{"action", "allowed", "context", "reason", "result", "schema"}
-	if fields := strictReviewJSONFields(t, legacyOutput.Bytes()); !reflect.DeepEqual(fields, wantLegacyFields) {
-		t.Fatalf("legacy validate fields = %v, want %v", fields, wantLegacyFields)
-	}
-	var legacy ReviewValidateResult
-	decodeStrictReviewJSON(t, legacyOutput.Bytes(), &legacy)
-	var negotiatedOutput bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{
-		"--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage, "--gate", string(reviewtransaction.GatePostApply),
-	}, &negotiatedOutput); err != nil {
-		t.Fatal(err)
-	}
-	var negotiatedLegacyEquivalent ReviewValidateResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, negotiatedOutput.Bytes()).Result, &negotiatedLegacyEquivalent)
-	if !reflect.DeepEqual(legacy, negotiatedLegacyEquivalent) {
-		t.Fatalf("negotiated validate result changed legacy semantics:\nlegacy=%#v\nnegotiated=%#v", legacy, negotiatedLegacyEquivalent)
-	}
-
-	allowed, denied := 0, 0
-	for _, gate := range []reviewtransaction.GateKind{
-		reviewtransaction.GatePostApply, reviewtransaction.GatePreCommit, reviewtransaction.GatePrePush,
-		reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
-	} {
-		negotiatedOutput.Reset()
-		err := RunReviewFacadeValidate([]string{
-			"--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage, "--gate", string(gate),
-		}, &negotiatedOutput)
-		if negotiatedOutput.Len() == 0 {
-			t.Fatalf("%s negotiated validation emitted no result: %v", gate, err)
-		}
-		envelope := decodeReviewOperationEnvelope(t, negotiatedOutput.Bytes())
-		if envelope.Operation != ReviewIntegrationOperationValidate {
-			t.Fatalf("%s negotiated operation = %q", gate, envelope.Operation)
-		}
-		var result ReviewValidateResult
-		decodeStrictReviewJSON(t, envelope.Result, &result)
-		if result.Context.Gate != "" && result.Context.Gate != gate || result.Allowed != (err == nil) {
-			t.Fatalf("%s negotiated validation = %#v, err %v", gate, result, err)
-		}
-		if result.Allowed {
-			allowed++
-		} else {
-			var deniedError ReviewGateDeniedError
-			if !errors.As(err, &deniedError) {
-				t.Fatalf("%s denial error = %T %v", gate, err, err)
-			}
-			denied++
-		}
-		assertNoPrivateReviewOperationFields(t, negotiatedOutput.Bytes())
-	}
-	if allowed == 0 || denied == 0 {
-		t.Fatalf("all-gate negotiated matrix requires success and denial, got allow=%d deny=%d", allowed, denied)
-	}
+	assertApprovedCompactAuthorityBurned(t, legacyStore, lineage)
+	assertApprovedCompactAuthorityBurned(t, negotiatedStore, lineage)
 }
 
 func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing.T) {
 	reviewEnabledHome(t)
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
+	lineage := "review-operation-binding"
 	for _, repo := range []string{legacyRepo, negotiatedRepo} {
 		writeNegotiatedOperationChange(t, repo, "thin")
+		seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, lineage, reviewtransaction.Target{
+			Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+		})
 	}
-	lineage := "review-operation-binding"
-	finalizeNegotiatedOperationFixture(t, legacyRepo, lineage, false)
-	finalizeNegotiatedOperationFixture(t, negotiatedRepo, lineage, true)
 
 	var legacyOutput bytes.Buffer
 	if err := RunReview([]string{
@@ -170,49 +99,6 @@ func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing
 		t.Fatal("contract negotiation changed native SDD binding authority")
 	}
 	assertNoPrivateReviewOperationFields(t, negotiatedOutput.Bytes())
-}
-
-func TestNegotiatedReviewBindSDDAcceptsSemanticallyEquivalentCompactReceiptArrays(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	writeNegotiatedOperationChange(t, repo, "thin")
-	runReviewCLIGit(t, repo, "add", "-A")
-	runReviewCLIGit(t, repo, "commit", "-qm", "OpenSpec binding baseline")
-	started, store := approveDiscoveryMarkdown(t, repo, "review-binding-arrays", "docs/reviewed.md", "reviewed\n")
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority := readReviewOperationFile(t, store.StatePath())
-	receipt := readReviewOperationFile(t, store.ReceiptPath())
-	receipt = bytes.Replace(receipt, []byte(`"selected_lenses": []`), []byte(`"selected_lenses": null`), 1)
-	receipt = bytes.Replace(receipt, []byte(`"resolved_finding_ids": null`), []byte(`"resolved_finding_ids": []`), 1)
-	if err := os.WriteFile(store.ReceiptPath(), receipt, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var output bytes.Buffer
-	if err := RunReview([]string{
-		"bind-sdd", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--change", "thin",
-		"--lineage", started.LineageID, "--expected-binding-revision=",
-	}, &output); err != nil {
-		t.Fatalf("semantically equivalent compact receipt arrays: %v\n%s", err, output.String())
-	}
-	var binding sddstatus.ReviewBinding
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &binding)
-	if got := readReviewOperationRuntimeBinding(t, repo, "thin"); !reflect.DeepEqual(got, binding) {
-		t.Fatal("BIND-SDD did not publish the returned binding in native authority")
-	}
-	receiptHash, err := reviewtransaction.HashArtifact(store.ReceiptPath())
-	if after, loadErr := store.Load(); err != nil || loadErr != nil || after.Revision != record.Revision || binding.AuthorityRevision != record.Revision || binding.ReceiptHash != receiptHash {
-		t.Fatalf("binding identities changed: binding=%#v receipt_err=%v load_err=%v", binding, err, loadErr)
-	}
-	if got := readReviewOperationFile(t, store.StatePath()); !bytes.Equal(got, authority) {
-		t.Fatal("BIND-SDD rewrote compact authority bytes")
-	}
-	if got := readReviewOperationFile(t, store.ReceiptPath()); !bytes.Equal(got, receipt) {
-		t.Fatal("BIND-SDD rewrote compact receipt bytes")
-	}
 }
 
 func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelope(t *testing.T) {
@@ -287,8 +173,7 @@ func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testi
 			writeNegotiatedOperationChange(t, repo, "thin")
 			lineage := "review-invalid-read-boundary"
 			_, store := finalizeNegotiatedOperationFixture(t, repo, lineage, false)
-			beforeAuthority := readReviewOperationFile(t, store.StatePath())
-			beforeReceipt := readReviewOperationFile(t, store.ReceiptPath())
+			assertApprovedCompactAuthorityBurned(t, store, lineage)
 			for _, call := range []struct {
 				name string
 				args []string
@@ -310,10 +195,7 @@ func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testi
 					t.Fatalf("invalid %s contract %q failure = %#v", call.name, contract, failure)
 				}
 			}
-			if !bytes.Equal(beforeAuthority, readReviewOperationFile(t, store.StatePath())) ||
-				!bytes.Equal(beforeReceipt, readReviewOperationFile(t, store.ReceiptPath())) {
-				t.Fatal("invalid contract changed authority or receipt")
-			}
+			assertApprovedCompactAuthorityBurned(t, store, lineage)
 			if _, err := os.Stat(reviewOperationBindingPath(store, "thin")); !os.IsNotExist(err) {
 				t.Fatalf("invalid bind contract published binding: %v", err)
 			}
@@ -383,12 +265,12 @@ func finalizeNegotiatedOperationFixture(t *testing.T, repo, lineage string, nego
 
 func startReviewOperationFixture(t *testing.T, repo, lineage string) ReviewFacadeStartResult {
 	t.Helper()
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &output); err != nil {
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	return started
 }
 

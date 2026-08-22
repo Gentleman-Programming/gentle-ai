@@ -20,25 +20,77 @@ import (
 // only consumer is the preserved OpenCode orchestrator prompt.
 var requiredLedgerClauses = boundedReviewRequiredClausesFor(model.AgentOpenCode)
 
-const requiredOrchestratorMergeModeClause = "Parent orchestrator and native CLI only"
+const requiredOrchestratorMergeModeClause = "Native Compact Review Orchestration"
 
-func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
+func TestBoundedReviewContractLeavesAtomicLifecycleToNativeGo(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
-		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
+		"Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation",
 		"Only candidate-caused severe findings block",
-		"Claude Code, OpenCode, Codex, and Pi advertise immutable reviewer execution",
-		"Kilo remains dormant",
-		"read-only native Git commands",
+		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
+		"Compiled capability is authoritative",
+		"Reviewers inspect only the provider-bound immutable trees",
+		"burns that exact authority and its artifacts",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("orchestrator contract missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"canonical empty ledger bytes are exactly", "MUST NOT serialize", "Unknown native finding fields remain rejected"} {
+	for _, forbidden := range []string{"reconcile-terminal-mirrors", "reviewGate.result: allow", "staged_delivery_candidate_required"} {
 		if strings.Contains(content, forbidden) {
-			t.Errorf("orchestrator contract retains model-facing canonicalization rule %q", forbidden)
+			t.Errorf("orchestrator contract retains obsolete lifecycle rule %q", forbidden)
 		}
+	}
+}
+
+func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousFinalizeReplay(t *testing.T) {
+	for _, runtime := range []struct {
+		name  string
+		agent model.AgentID
+		path  string
+	}{
+		{name: "claude", agent: model.AgentClaudeCode, path: "claude/sdd-orchestrator.md"},
+		{name: "codex", agent: model.AgentCodex, path: "codex/sdd-orchestrator.md"},
+		{name: "opencode", agent: model.AgentOpenCode, path: "opencode/sdd-orchestrator.md"},
+	} {
+		t.Run(runtime.name, func(t *testing.T) {
+			rendered := renderBoundedReviewAsset(runtime.agent, runtime.path)
+			for _, clause := range []string{
+				"Clean FINALIZE success stops with no terminal STATUS.",
+				"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+			} {
+				if !strings.Contains(rendered, clause) {
+					t.Fatalf("%s rendered contract is missing %q", runtime.name, clause)
+				}
+			}
+			if strings.Contains(rendered, "only while that authority still exists") {
+				t.Fatalf("%s rendered contract still narrows ambiguous FINALIZE recovery to a surviving authority", runtime.name)
+			}
+		})
+	}
+}
+
+func TestReviewerTransportAdaptersNeverInvokeLifecycleFinalize(t *testing.T) {
+	for _, transport := range []struct {
+		name string
+		path string
+	}{
+		{name: "claude", path: "../../reviewerprovider/claude_adapter.go"},
+		{name: "codex", path: "../../reviewerprovider/codex_adapter.go"},
+		{name: "opencode", path: "../../assets/opencode/plugins/opencode-review-transport.ts"},
+	} {
+		t.Run(transport.name, func(t *testing.T) {
+			content, err := os.ReadFile(transport.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lowered := strings.ToLower(string(content))
+			for _, forbidden := range []string{"review finalize", "review.finalize"} {
+				if strings.Contains(lowered, forbidden) {
+					t.Fatalf("%s transport invokes lifecycle FINALIZE through %q", transport.name, forbidden)
+				}
+			}
+		})
 	}
 }
 
@@ -368,10 +420,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts (+458 characters each); no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	// #2758 adds the staged_delivery_candidate_required continuation row to
-	// the shared contract. Kilocode embeds it in the orchestrator prompt, so
-	// the hash moved. A rendered comparison against origin/main confirmed this
-	// is the only changed settings scalar.
+	// #3417 removes the stale staged_delivery_candidate_required continuation
+	// row because STATUS no longer emits that stop. Kilocode embeds the shared
+	// contract in the orchestrator prompt, so the rendered settings hash moves.
 	// The defect handoff's admissibility gate now tests what PRODUCED a failure
 	// instead of whether the workflow appeared blocked, so the automated report
 	// stops filing other projects' defects. Kilocode embeds the orchestrator in
@@ -402,7 +453,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #3249 registers Pi as an immutable-reviewer runtime in the shared
 	// contract's advertised-runtimes paragraph, so the hash moved.
 	// Deliberate, not drift.
-	const want = "c478b283aeceb83e3c5d74453a0ecd7a66d154ed2d7ef84337f8ccc60a916966"
+	// #3417 restores the shared static Native Checking Contract, which Kilo
+	// renders through the OpenCode orchestrator asset. The hash is rederived.
+	// #3417 also classifies OpenCode background launch acknowledgements as
+	// nonterminal, preventing false task-result failures and session latches.
+	const want = "8b4e161971530355248addfc62fb101d1ea71a5ba4e293b427e85c87a2c535c7"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -533,9 +588,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// compression — the fall-through branch in renderBoundedReviewAsset
 		// injects the whole orchestrator contract into an agent it does not
 		// recognize, which is what beforeChars measures (42,301 / 106,998, the
-		// un-rendered protocol). The ceilings below sit ~15% above the pins so
-		// an ordinary wording fix never touches them, and 4-5x below the
-		// un-rendered sizes so a renderer regression still fails loudly.
+		// un-rendered protocol). The fixed renderer budgets stay far below the
+		// un-rendered sizes; exact pins catch every ordinary wording change.
 		// Provider-bound preflight and the immutable Git recipe initially pushed
 		// the pins too close to those ceilings. Removing repeated prose restores
 		// more than 15% headroom without weakening either contract.
@@ -604,8 +658,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// because the machine now routes them as collect transitions, so the
 		// rendered protocol got 372 characters cheaper. The pins move DOWN,
 		// which is the direction this table exists to protect.
-		// #2758 adds one staged-delivery STOP continuation (383 rendered
-		// characters per row). The ceilings preserve the required 15% headroom.
+		// #3417 removes the stale staged-delivery STOP continuation because
+		// STATUS no longer emits it (-383 characters per rendered row).
 		// #3102 adds one empty-base-diff bootstrap STOP continuation (448 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
 		// #2773 adds one lens-context-budget terminal continuation (379 rendered
@@ -617,8 +671,14 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3249: the advertised-runtimes paragraph gains Pi's host relay
 		// (+247 characters in both renderings, ~62 tokens, still over 15%
 		// headroom). Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_179, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_524, maxCharacters: 41_000},
+		// #3417 groups the atomic stop inventory behind exact D/S continuations.
+		// The standard surface remains below its unchanged 15,866-character
+		// renderer budget, and every rendered runtime has one STATUS binding.
+		// #3417 replaces the terminal commit question with non-deciding delivery
+		// guidance and adds the one-status ambiguous-FINALIZE reconciliation rule.
+		// The rendered byte pins are regenerated from those shared source bytes.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_304, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_649, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -638,9 +698,6 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 			}
 			if chars > tt.maxCharacters {
 				t.Fatalf("rendered protocol cost = %d characters / %d estimated tokens, target <= %d / %d", chars, tokens, tt.maxCharacters, tt.maxCharacters/4)
-			}
-			if chars*115 > tt.maxCharacters*100 {
-				t.Fatalf("rendered protocol cost = %d characters leaves less than 15%% headroom below ceiling %d", chars, tt.maxCharacters)
 			}
 		})
 	}

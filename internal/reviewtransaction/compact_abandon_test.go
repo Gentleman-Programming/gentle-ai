@@ -242,7 +242,7 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	}
 
 	writeSnapshotFile(t, repo, "tracked.txt", "base\nfresh work\n")
-	if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "abandon-fresh")}); err != nil {
+	if _, err := createAtomicCompactAuthority(t, context.Background(), repo, newCompactTestState(t, repo, "abandon-fresh")); err != nil {
 		t.Fatalf("post-abandon lineage-less start: %v", err)
 	}
 }

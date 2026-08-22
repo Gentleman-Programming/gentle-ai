@@ -21,13 +21,15 @@ func capturedProviderValidatorJourneys() []Journey {
 	return []Journey{{
 		ID:     "j106-captured-provider-validator-slot-finalizes-generically",
 		Review: reviewOptedIn,
-		Title:  "Captured provider validator slot finalizes through generic STATUS without a runtime token",
-		Source: "provider-slot continuation: occupied Go-admitted validator slots are provider facts, not OpenCode finalizer behavior",
+		Title:  "#3417: captured provider validator slot finalizes only through its exact active lineage",
+		Source: "#3417 provider-slot continuation: an occupied Go-admitted validator slot is an exact active-lineage provider fact, not OpenCode finalizer behavior",
 		Steps: []Step{
 			{Name: "fixture: repo", Fixture: baseRepo},
 			{Name: "fixture: stage correction candidate", Fixture: stageCaptureEvidenceDescriptorCorrection},
-			{Name: "start correction review", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", capturedProviderValidatorLineage)},
-			{Name: "capture correction finding and complete lenses", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+			{Name: "start correction review with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", capturedProviderValidatorLineage)},
+			{Name: "capture correction finding and the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+				return captureExactSelectedReviewerSlots(r, capturedProviderValidatorLineage, true)
+			}},
 			{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", capturedProviderValidatorLineage, "--captured-results=true")},
 			{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", capturedProviderValidatorLineage, "--correction-lines", "2")},
 			{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
@@ -141,7 +143,7 @@ func finalizeCapturedProviderValidatorSlot(r *journeyRun) error {
 	if err != nil || result.State != "approved" || result.LineageID != capturedProviderValidatorLineage {
 		return fmt.Errorf("generic captured-provider finalize result = %+v, %v", result, err)
 	}
-	return nil
+	return requireAtomicLineageBurned(r, capturedProviderValidatorLineage)
 }
 
 func readCapturedProviderValidatorStatus(r *journeyRun, withOpenCodeTask bool) (waveCorrectionStatus, error) {

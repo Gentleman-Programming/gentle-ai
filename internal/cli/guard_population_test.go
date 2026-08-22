@@ -20,7 +20,7 @@ import (
 
 const (
 	guardPopulationMarkerHint = "guard:population"
-	guardPopulationCount      = 11
+	guardPopulationCount      = 10
 )
 
 var guardPopulationMarkerPattern = regexp.MustCompile(`^guard:population\s+([a-z0-9-]+)\s+(too-tight|too-loose|fail-closed):\s*(\S.*)$`)

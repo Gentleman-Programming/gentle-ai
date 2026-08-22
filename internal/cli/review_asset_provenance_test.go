@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
@@ -36,11 +34,6 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 		"bundle import": func(t *testing.T, home, repo string) (bool, error) {
 			staleManagedReviewerAssets(t, home)
 			return true, RunReviewBundleImport([]string{"--cwd", repo, "--bundle", filepath.Join(t.TempDir(), "bundle.json")}, &bytes.Buffer{})
-		},
-		"receipt-backed delivery": func(t *testing.T, home, repo string) (bool, error) {
-			approveDiscoveryMarkdown(t, repo, "provenance-delivery", "docs/review.md", "reviewed\n")
-			staleManagedReviewerAssets(t, home)
-			return true, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -68,40 +61,6 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 	if _, err := os.Stat(decoy); err != nil || readErr != nil || persisted.ManagedAssetDigest != "sha256:previous-writer" {
 		t.Fatalf("decoy plugin bypassed provenance: stat=%v state=%#v read=%v", err, persisted, readErr)
 	}
-}
-func TestManagedReviewerAssetProvenanceReceiptOrdering(t *testing.T) {
-	t.Run("corrupt compact receipt", func(t *testing.T) {
-		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
-		_, store := approveDiscoveryMarkdown(t, repo, "provenance-corrupt", "docs/review.md", "reviewed\n")
-		requireManagedAssetProvenanceNoError(t, os.WriteFile(store.ReceiptPath(), []byte("{"), 0o644))
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{}), "complete review authority inventory is unavailable or corrupted")
-	})
-	t.Run("escalated compact receipt", func(t *testing.T) {
-		home := reviewEnabledHome(t)
-		repo, _, record := escalatedCurrentChangesRecoveryFixture(t, "provenance-escalated")
-		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
-		requireManagedAssetProvenanceNoError(t, err)
-		receipt, err := record.State.Receipt()
-		requireManagedAssetProvenanceNoError(t, err)
-		requireManagedAssetProvenanceNoError(t, reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt))
-		runReviewCLIGit(t, repo, "add", "tracked.txt")
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{}), "compact review authority is escalated (budget_exceeded)")
-	})
-	t.Run("valid legacy receipt", func(t *testing.T) {
-		home := reviewEnabledHome(t)
-		fixture := newLegacyCLIFixture(t, "provenance-legacy")
-		runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", fixture.repo, "--lineage", fixture.lineage, "--gate", "pre-commit"}, &bytes.Buffer{}), managedAssetProvenanceRefusal)
-	})
-	t.Run("in-flight compact receipt", func(t *testing.T) {
-		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
-		startNewLineageForFinalizeTest(t, repo, "provenance-inflight")
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", "provenance-inflight", "--gate", "pre-commit"}, &bytes.Buffer{}), reviewFacadeReceiptNotAvailableReason("provenance-inflight"))
-	})
 }
 
 // TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew pins the two

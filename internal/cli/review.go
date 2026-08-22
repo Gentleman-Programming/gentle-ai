@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -672,33 +671,34 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 	})
 }
 
-func RunReviewValidate(args []string, stdout io.Writer) error {
-	return runReviewValidate(context.Background(), args, stdout)
-}
-
-func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review-validate", stdout, "Validate a receipt using either --request or native authority flags. Explicit and native modes are mutually exclusive.")
+// RunReviewValidateNonDeciding is the shipped legacy review-validate route.
+// It retains legacy syntax only far enough to identify the repository and gate;
+// it never reads a receipt, authority, candidate, or gate evidence. The retained
+// RunReviewValidate evaluator below remains available for internal historical
+// coverage that explicitly exercises the old gate algebra.
+func RunReviewValidateNonDeciding(args []string, stdout io.Writer) error {
+	flags := newReviewFlagSet("review-validate", stdout, "Report the repository policy that governs delivery without deciding review authority.")
 	cwd := flags.String("cwd", "", "repository root")
-	receiptPath := flags.String("receipt", "", "review receipt JSON")
-	requestPath := flags.String("request", "", "review gate request JSON containing artifact paths, not derived facts")
-	lineage := flags.String("lineage", "", "authoritative review lineage identifier (native mode)")
-	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release (native mode)")
-	bundlePath := flags.String("bundle", "", "authoritative chain bundle artifact (native mode)")
-	policyPath := flags.String("policy", "", "receipt-bound policy artifact (native mode)")
-	ledgerPath := flags.String("ledger", "", "frozen ledger artifact (native mode)")
-	fixDeltaPath := flags.String("fix-delta", "", "optional correction delta artifact (native mode)")
-	evidencePath := flags.String("evidence", "", "final verification evidence artifact (native mode)")
-	baseRef := flags.String("base-ref", "", "optional expected remote publication base for pre-pr native mode")
-	ciAttestation := flags.String("pre-pr-ci-attestation", "", "signed exact-merged-tree CI attestation for a compatible base advance")
-	requestOut := flags.String("request-out", "", "optional canonical native gate request output path")
-	releaseConfiguration := flags.String("release-configuration", "", "release configuration artifact")
-	releaseGenerated := flags.String("release-generated", "", "generated artifact manifest")
-	releaseProvenance := flags.String("release-provenance", "", "release provenance artifact")
-	releaseBoundary := flags.String("release-publication-boundary", "", "semantic sealed publication boundary artifact")
-	releaseFreshness := flags.String("release-evidence-freshness", "", "semantic current evidence freshness artifact")
-	manifest := flags.String("intended-untracked-manifest", "", "newline-delimited intended untracked paths")
+	_ = flags.String("receipt", "", "accepted historical review receipt JSON")
+	requestPath := flags.String("request", "", "optional historical gate request JSON used only to identify the gate")
+	_ = flags.String("lineage", "", "accepted historical authoritative review lineage identifier")
+	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
+	_ = flags.String("bundle", "", "accepted historical authoritative chain bundle artifact")
+	_ = flags.String("policy", "", "accepted historical receipt-bound policy artifact")
+	_ = flags.String("ledger", "", "accepted historical frozen ledger artifact")
+	_ = flags.String("fix-delta", "", "accepted historical correction delta artifact")
+	_ = flags.String("evidence", "", "accepted historical final verification evidence artifact")
+	_ = flags.String("base-ref", "", "accepted historical expected remote publication base")
+	_ = flags.String("pre-pr-ci-attestation", "", "accepted historical pre-pr CI attestation")
+	_ = flags.String("request-out", "", "accepted historical canonical native gate request output path")
+	_ = flags.String("release-configuration", "", "accepted historical release configuration artifact")
+	_ = flags.String("release-generated", "", "accepted historical generated artifact manifest")
+	_ = flags.String("release-provenance", "", "accepted historical release provenance artifact")
+	_ = flags.String("release-publication-boundary", "", "accepted historical sealed publication boundary artifact")
+	_ = flags.String("release-evidence-freshness", "", "accepted historical current release evidence artifact")
+	_ = flags.String("intended-untracked-manifest", "", "accepted historical intended untracked manifest")
 	var intended repeatedString
-	flags.Var(&intended, "intended-untracked", "repository-relative intended untracked path; repeatable")
+	flags.Var(&intended, "intended-untracked", "accepted historical repository-relative intended untracked path")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -708,185 +708,27 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-validate argument %q", flags.Arg(0))
 	}
-	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*receiptPath) == "" {
-		return errors.New("review-validate requires --cwd and --receipt")
+	if strings.TrimSpace(*cwd) == "" {
+		return errors.New("review-validate requires --cwd") // refusal:by-design operator-knowledge: only the caller knows the repository; retry with --cwd <repo>
 	}
-	if _, err := reviewDrivenDevelopmentDisabled(ctx, *cwd); err != nil {
-		return fmt.Errorf("read review mode: %w", err)
-	}
-	receiptPayload, err := os.ReadFile(*receiptPath)
-	if err != nil {
-		return fmt.Errorf("read review receipt: %w", err)
-	}
-	if reviewtransaction.CompactReceiptSchemaOf(receiptPayload) == reviewtransaction.CompactReceiptSchema {
-		if strings.TrimSpace(*requestPath) != "" {
-			return errors.New("compact review receipts require native authority flags --lineage and --gate, not --request")
+	selectedGate := reviewtransaction.GateKind(strings.TrimSpace(*gate))
+	if selectedGate == "" && strings.TrimSpace(*requestPath) != "" {
+		var requestHeader struct {
+			Gate reviewtransaction.GateKind `json:"gate"`
 		}
-		compactReceipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
-		if err != nil {
-			return fmt.Errorf("parse compact review receipt: %w", err)
-		}
-		manifestPaths, err := readIntendedManifest(*manifest)
-		if err != nil {
-			return err
-		}
-		intended = append(intended, manifestPaths...)
-		evaluation := reviewtransaction.EvaluateCompactGate(ctx, *cwd, compactReceipt, reviewtransaction.NativeGateRequestInput{
-			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
-			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
-			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
-			ReleaseConfiguration: *releaseConfiguration, ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
-			ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
-		})
-		if err := reviewGateContentionError(evaluation); err != nil {
-			return err
-		}
-		result := ReviewValidateResult{
-			Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
-			Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
-			Relation: evaluation.Relation, Next: evaluation.Next,
-		}
-		if err := encodeReviewJSON(stdout, result); err != nil {
-			return err
-		}
-		if !result.Allowed {
-			return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context}
-		}
-		return nil
-	}
-	receipt, err := reviewtransaction.ParseReceipt(receiptPayload)
-	if err != nil {
-		return fmt.Errorf("parse review receipt: %w", err)
-	}
-	nativeFlags := map[string]bool{}
-	flags.Visit(func(current *flag.Flag) {
-		switch current.Name {
-		case "cwd", "receipt", "request":
-		default:
-			nativeFlags[current.Name] = true
-		}
-	})
-	var request reviewtransaction.GateRequest
-	if strings.TrimSpace(*requestPath) != "" {
-		if len(nativeFlags) != 0 {
-			return errors.New("review-validate --request mode cannot be combined with native request flags")
-		}
-		requestPayload, err := os.ReadFile(*requestPath)
+		payload, err := os.ReadFile(*requestPath)
 		if err != nil {
 			return fmt.Errorf("read review gate request: %w", err)
 		}
-		request, err = reviewtransaction.ParseGateRequest(requestPayload)
-		if err != nil {
-			return fmt.Errorf("parse review gate request: %w", err)
+		if err := json.Unmarshal(payload, &requestHeader); err != nil {
+			return fmt.Errorf("parse review gate request gate: %w", err)
 		}
-	} else {
-		if strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*gate) == "" {
-			return errors.New("review-validate native mode requires --lineage and --gate")
-		}
-		manifestPaths, err := readIntendedManifest(*manifest)
-		if err != nil {
-			return err
-		}
-		intended = append(intended, manifestPaths...)
-		request, err = reviewtransaction.BuildNativeGateRequest(ctx, *cwd, reviewtransaction.NativeGateRequestInput{
-			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
-			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
-			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
-			ReleaseConfiguration: *releaseConfiguration, ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
-			ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
-		})
-		if err != nil {
-			return fmt.Errorf("build native review gate request: %w", err)
-		}
-		if strings.TrimSpace(*requestOut) != "" {
-			if err := writeCanonicalReviewJSON(*requestOut, request); err != nil {
-				return fmt.Errorf("write canonical review gate request: %w", err)
-			}
-		}
+		selectedGate = requestHeader.Gate
 	}
-	evaluation := reviewtransaction.EvaluateNativeGate(ctx, *cwd, receipt, request)
-	result := ReviewValidateResult{
-		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
-		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
+	if !validReviewIntegrationGate(selectedGate) {
+		return fmt.Errorf("review-validate requires --gate, or --request containing one of %s", strings.Join(reviewIntegrationGateNames(), ", ")) // refusal:by-design operator-knowledge: only the caller knows the intended delivery gate
 	}
-	if err := encodeReviewJSON(stdout, result); err != nil {
-		return err
-	}
-	if !result.Allowed {
-		return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context}
-	}
-	return nil
-}
-
-func writeCanonicalReviewJSON(path string, value any) error {
-	payload, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	payload = append(payload, '\n')
-	return os.WriteFile(path, payload, 0o644)
-}
-
-func readIntendedManifest(path string) ([]string, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read intended-untracked manifest: %w", err)
-	}
-	defer file.Close()
-	paths := []string{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		if value := strings.TrimSpace(scanner.Text()); value != "" {
-			paths = append(paths, value)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read intended-untracked manifest: %w", err)
-	}
-	return paths, nil
-}
-
-// reviewGateContentionError converts a non-verdict into the typed refusal a
-// caller can act on. A delivery gate that lost a race for the advisory
-// authority lock evaluated nothing, so it must publish no gate result at all:
-// emitting `invalidated` would claim the receipt no longer covers the
-// candidate, and route an ordinary controller fan-out into maintainer
-// escalation for a condition that clears itself (1861).
-//
-// The refusal names the only thing that resolves it. There is no command to
-// run — the block is another process holding a lock — so it says retry
-// instead of routing to a command that would add nothing.
-func reviewGateContentionError(evaluation reviewtransaction.NativeGateEvaluation) error {
-	if !evaluation.Contended {
-		return nil
-	}
-	cause := evaluation.Cause
-	if cause == nil {
-		cause = errors.New("authority lock is held by a concurrent review operation")
-	}
-	return fmt.Errorf(
-		"review lifecycle gate reached no verdict: a concurrent review operation holds the authority lock, so nothing was evaluated and nothing changed; retry: %w",
-		cause,
-	)
-}
-
-// reviewRetrySafeDenialAction overrides the result-derived gate action for
-// the two retry-safe receipt-discovery denials (issue #3342). Both stay
-// denied (allowed=false), but their action is "retry": the reason already
-// names the runnable continuation, and routing either to
-// explicit-maintainer-action escalated conditions that clear themselves.
-func reviewRetrySafeDenialAction(denial *reviewtransaction.GateDenial) string {
-	if denial == nil || denial.Stage != "receipt-discovery" {
-		return ""
-	}
-	switch ReviewReceiptDiscoveryKind(denial.Code) {
-	case ReviewGateRemoteFetchRequired, ReviewAuthorityInventoryBusy:
-		return "retry"
-	}
-	return ""
+	return runNonDecidingReviewGate(context.Background(), *cwd, selectedGate, false, "", stdout)
 }
 
 func reviewGateAction(result reviewtransaction.GateResult) string {

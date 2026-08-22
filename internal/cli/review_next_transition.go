@@ -134,6 +134,11 @@ type ReviewTransitionArtifact struct {
 	AdmissionDecision reviewtransaction.ArtifactAdmissionDecision `json:"admission_decision"`
 }
 
+// reviewStatusOmitsApprovedReceiptTransition is retained as the one status
+// predicate callers share. A published compact approval now always exposes its
+// exact FINALIZE burn retry, so no ordinary approved status omits routing.
+func reviewStatusOmitsApprovedReceiptTransition(ReviewTargetStatusResult) bool { return false }
+
 func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, capturedEvidence *reviewtransaction.VerificationEvidenceRecord, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
 	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		switch status.Applicability {
@@ -343,37 +348,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewRecoveryCollection(status, binding, input)
 		}
 		if status.Receipt.Status == ReviewReceiptPresent {
-			if input.gate() == reviewtransaction.GatePreCommit && input.PreCommitDeliveryAssessment != nil &&
-				*input.PreCommitDeliveryAssessment != reviewtransaction.CompactGateTargetExact {
-				return reviewStopTransition("staged_delivery_candidate_required")
-			}
-			if input.Selector != nil && input.gate() == reviewtransaction.GatePrePR && !input.Selector.PrePRRepresentable {
-				// Root 7 (#2471): the caller supplied a raw commit SHA where
-				// pre-PR needs a symbolic ref. That is a missing input, not a
-				// terminal state, and the reason code stays byte-identical so
-				// consumers routing on it keep working while the kind stops
-				// lying about there being nothing to do. Same shape as
-				// empty_candidate_base_ref_required above: name the input
-				// without deriving it, because only the caller knows which
-				// ref is the intended base.
-				return reviewCollectTransition("pre_pr_selector_unrepresentable", ReviewTransitionInput{
-					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
-					Arguments: reviewTargetArguments(status),
-				})
-			}
-			arguments := []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "gate", Value: string(input.gate())}}
-			selectors := []ReviewTransitionArgument{}
-			if input.Selector != nil &&
-				(input.gate() == reviewtransaction.GatePrePush || input.gate() == reviewtransaction.GatePrePR) &&
-				input.Selector.BaseRef != "" {
-				selectors = append(selectors, ReviewTransitionArgument{Name: "base-ref", Value: input.Selector.BaseRef})
-				arguments = append(arguments, selectors...)
-			}
-			transition := reviewExecuteTransition("approved_receipt_ready", "review.validate", arguments, []ReviewTransitionArgument{{Name: "state", Value: "approved"}, {Name: "receipt", Value: "present"}}, binding, nil)
-			if input.Selector != nil {
-				transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(selectors)
-			}
-			return transition
+			// Approval is not a delivery gate. Its only ordinary lifecycle work is
+			// the exact FINALIZE retry that burns the compact authority, whether it
+			// is still live or read-only staged after an interrupted burn.
+			return reviewExecuteTransition("approved_compact_burn_required", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}}, []ReviewTransitionArgument{{Name: "state", Value: "approved"}, {Name: "receipt", Value: "published"}}, binding, nil)
 		}
 		if status.Replayability == reviewtransaction.ReplayabilityExactReplaySafe {
 			return reviewExecuteTransition("exact_receipt_replay", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}}, []ReviewTransitionArgument{{Name: "state", Value: "approved"}, {Name: "receipt", Value: "publication_pending"}}, binding, nil)
@@ -931,13 +909,6 @@ func newReviewCaptureContext(state reviewtransaction.CompactState, revision stri
 	return &reviewCaptureContext{FrozenContext: frozen, ArtifactSubjects: subjects}, nil
 }
 
-func (input reviewNextTransitionInput) gate() reviewtransaction.GateKind {
-	if validReviewIntegrationGate(input.Gate) {
-		return input.Gate
-	}
-	return reviewtransaction.GatePreCommit
-}
-
 func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTransitionBinding, input reviewNextTransitionInput) ReviewNextTransition {
 	disposition := status.ActionDisposition
 	if disposition == "" {
@@ -1254,8 +1225,6 @@ func reviewReasonDescription(reason string) string {
 		return "Captured reviewer results are complete and ready for finalization"
 	case "native_low_risk_verification":
 		return "Low risk candidate eligible for native verification"
-	case "approved_receipt_ready":
-		return "Review is approved and receipt is ready for gate validation"
 	case "exact_receipt_replay":
 		return "Exact receipt replay safe for finalization"
 	case "lineage_selection_required":
@@ -1272,8 +1241,6 @@ func reviewReasonDescription(reason string) string {
 		return "Verification evidence required prior to finalization"
 	case "delivery_gate_required":
 		return "Delivery gate selection required before validation"
-	case "staged_delivery_candidate_required":
-		return "The staged delivery candidate must exactly match the approved review"
 	case "staged_workspace_overlay_recovery_unavailable":
 		return "Staged workspace overlay recovery is unavailable"
 	case "empty_base_diff_bootstrap_required":

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -27,7 +28,7 @@ func startHighRiskCLIReview(t *testing.T, repo string) ReviewFacadeStartResult {
 	}
 	runReviewCLIGit(t, repo, "add", "-A")
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo}, &output); err != nil {
 		t.Fatalf("review start: %v", err)
 	}
 	var started ReviewFacadeStartResult
@@ -117,7 +118,7 @@ func TestReviewFinalizeRefusesUnadmittedReviewerResults(t *testing.T) {
 	// that errors after moving the lineage to validating still leaves the
 	// fabricated results governing the next transition.
 	var resumed bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", started.LineageID}, &resumed); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", started.LineageID}, &resumed); err != nil {
 		t.Fatalf("resume after refusal: %v", err)
 	}
 	var after ReviewFacadeStartResult
@@ -138,16 +139,17 @@ func TestReviewFinalizeRefusesUnadmittedReviewerResults(t *testing.T) {
 		t.Fatalf("refused finalize published terminal receipts %v", receipts)
 	}
 	var gate bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &gate); err == nil {
-		t.Fatalf("pre-commit gate allowed delivery with no admitted lens result: %s", gate.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &gate); err != nil {
+		t.Fatalf("pre-commit ordinary delivery with no admitted lens result: %v\n%s", err, gate.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, gate.Bytes(), reviewtransaction.GatePreCommit)
 }
 
 // TestReviewFinalizeNamedContinuationReachesApproval proves the other half of
 // the branch's governing rule: a refusal may name a command only if running that
 // command resolves the block. The refusal above names capture-result followed by
-// finalize --captured-results, so that exact sequence must reach an approved
-// receipt the delivery gate honours.
+// finalize --captured-results, so that exact sequence reaches an immediate
+// approved verdict before the compact authority is burned.
 func TestReviewFinalizeNamedContinuationReachesApproval(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -166,9 +168,21 @@ func TestReviewFinalizeNamedContinuationReachesApproval(t *testing.T) {
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath}, &finalized); err != nil {
 		t.Fatalf("finalize with verification evidence: %v", err)
 	}
+	var result ReviewFacadeFinalizeResult
+	if err := json.Unmarshal(finalized.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.State != reviewtransaction.StateApproved || result.ReceiptPath != "" {
+		t.Fatalf("named continuation finalize = %#v, want immediate approval without receipt path", result)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 	var gate bytes.Buffer
 	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &gate); err != nil {
-		t.Fatalf("pre-commit gate after the named continuation: %v\n%s", err, gate.String())
+		t.Fatalf("pre-commit ordinary delivery after burned compact authority: %v\n%s", err, gate.String())
 	}
-	assertReviewGateResult(t, gate.Bytes(), reviewtransaction.GateAllow)
+	assertEnabledUnmanagedGatePayload(t, gate.Bytes(), reviewtransaction.GatePreCommit)
 }

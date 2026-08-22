@@ -49,19 +49,11 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - Record current test/build commands, exit codes, and `test_output_hash` / `build_output_hash` values in the strict envelope.
 - Model/provider/profile/effort selection remains user-owned and is never changed by verification.
 - This is the one independent requirements/runtime final verification. A contradiction or new failing check returns FAIL/escalation; it never starts 4R, Judgment Day, a refuter, another correction, or scoped validation.
-- For native final verification, consume only the authoritative preterminal transaction plus the preserved policy and canonical ledger preimages. Do not require `receipt.json`, `chain-bundle.json`, `gate-context.json`, or any terminal-only artifact: final verification must complete before those artifacts can exist.
-- Return and preserve the exact canonical verification-evidence bytes, not only their hash. The parent hashes that preimage for `complete-final-verification` and retains the same bytes for the later GateRequest; hashes cannot reconstruct artifact content.
-- If authoritative preflight alone denies verification because review authority is missing, persist a failed strict envelope with the five fields below. Both declared commands must not be executed: record exit `125` for each, hash their exact empty output, and bind the observed authority revision from that preflight. Do not use this envelope for substantive failures or command failures.
-
-```yaml
-authority_only_failure: true
-missing_review_authority: true
-substantive_failure: false
-command_failed: false
-observed_authority_revision: sha256:{observed-authority-revision}
-test_exit_code: 125
-build_exit_code: 125
-```
+- Review state is informational and never a verification prerequisite.
+- A missing, pending, invalid, or non-allow review state never suppresses tests or builds.
+- Native review artifacts, when present, are review-context evidence only. Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.
+- Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
+- Return and preserve the exact canonical verification-evidence bytes, not only their hash. The parent hashes that preimage for `complete-final-verification` and retains the same bytes for any later review-context observation; hashes cannot reconstruct artifact content.
 
 ## Decision Gates
 
@@ -148,21 +140,13 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 - Preserve user-owned model/provider/profile/effort selection; do not prescribe or override it.
 - Do not fix issues; report them for the orchestrator/user
 - A contradiction or failing check escalates; never start another review/fix loop.
-- When participating in native final verification, use only the preterminal transaction and preserved policy/ledger inputs. Do not require a receipt, bundle, or gate context that can exist only after completion.
-- Return the exact verification-evidence content with the result so the parent can hash it and preserve its preimage for native gate validation.
+- Review state is informational and never a verification prerequisite.
+- A missing, pending, invalid, or non-allow review state never suppresses tests or builds.
+- Do not require a review transaction, policy, ledger, receipt, bundle, or gate context to begin or complete independent SDD verification.
+- Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
+- Return the exact verification-evidence content with the result so the parent can hash it and preserve its preimage for any later review-context observation.
 - Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
-- For an authority-only preflight denial, both declared commands must not be executed. Record exit `125`, empty-output hashes, and exactly these five recovery fields in the strict envelope:
-
-```yaml
-authority_only_failure: true
-missing_review_authority: true
-substantive_failure: false
-command_failed: false
-observed_authority_revision: sha256:{observed-authority-revision}
-test_exit_code: 125
-build_exit_code: 125
-```
 - Return minimal report
 
 ## Return Minimal Report

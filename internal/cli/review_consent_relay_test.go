@@ -231,7 +231,7 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 
 	grantArgs := invocationArgs(t, question.Choices[0].Invocation)
 	started := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || started.LineageID != "review-consent-grant" ||
+	if started.Action != "created" || started.LineageID != "review-consent-grant" ||
 		started.RiskLevel != reviewtransaction.RiskHigh || len(started.SelectedLenses) != 4 {
 		t.Fatalf("granted consent did not reach the lens plan: %#v", started)
 	}
@@ -239,9 +239,9 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 		t.Fatalf("a negotiated grant must not touch the legacy latch: asked=%v err=%v", asked, err)
 	}
 
-	// The grant leg replays: the same invocation resumes the same authority.
+	// The grant leg replays the same compact authority.
 	replayed := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
-	if replayed.Action != string(reviewtransaction.CompactStartResumed) || replayed.LineageID != started.LineageID {
+	if replayed.Action != "replayed" || replayed.LineageID != started.LineageID {
 		t.Fatalf("replayed grant = %#v", replayed)
 	}
 
@@ -385,7 +385,7 @@ func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.
 		"--lineage", "review-undeclared",
 	}))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || len(started.SelectedLenses) != 4 {
+	if started.Action != "created" || len(started.SelectedLenses) != 4 {
 		t.Fatalf("undeclared negotiated START changed behavior: %#v", started)
 	}
 	if strings.Contains(output.String(), "consent") {
@@ -406,7 +406,7 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 	output := runConsentRelayStart(t, transitionStartArgs(repo, status))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if started.RiskLevel != reviewtransaction.RiskLow || len(started.SelectedLenses) != 0 ||
-		started.Action != string(reviewtransaction.CompactStartCreated) {
+		started.Action != "created" {
 		t.Fatalf("low-risk relay START = %#v", started)
 	}
 	if console.Len() != 0 {

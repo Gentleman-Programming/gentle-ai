@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,96 @@ func validatePublishedReviewSchema(t *testing.T, schema *jsonschema.Schema, payl
 	}
 }
 
+func validatePublishedReviewSchemaRejects(t *testing.T, schema *jsonschema.Schema, payload []byte) {
+	t.Helper()
+	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(document); err == nil {
+		t.Fatalf("published schema accepted invalid envelope: %s", payload)
+	}
+}
+
+func TestNegotiatedStartOmitsRetiredBurnFieldsInPublishedSchemas(t *testing.T) {
+	tests := []struct {
+		name       string
+		contract   string
+		version    string
+		schemaName string
+	}{
+		{name: "v1", contract: ReviewIntegrationContractV1, version: "v1", schemaName: "start-v2.schema.json"},
+		{name: "v2", contract: ReviewIntegrationContractV2, version: "v2", schemaName: "start.schema.json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("USERPROFILE", os.Getenv("HOME"))
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, "tracked.txt", "reviewing candidate\n", 0o644)
+
+			start := func(lineage string) []byte {
+				t.Helper()
+				var output bytes.Buffer
+				if err := RunReview(boundNegotiatedStartArgs(t, []string{
+					"start", "--contract", tt.contract, "--cwd", repo, "--lineage", lineage,
+				}), &output); err != nil {
+					t.Fatal(err)
+				}
+				return output.Bytes()
+			}
+
+			ordinary := start("published-schema-stale")
+			writeReviewStartCandidate(t, repo, "added.txt", "current candidate scope\n", 0o644)
+			fresh := start("published-schema-fresh")
+			schema := compileWholePublishedReviewSchema(t, tt.version, tt.schemaName)
+
+			var ordinaryFields map[string]json.RawMessage
+			if err := json.Unmarshal(ordinary, &ordinaryFields); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"burned_stale_lineage", "hint"} {
+				if _, present := ordinaryFields[field]; present {
+					t.Fatalf("ordinary START unexpectedly exposes %q: %s", field, ordinary)
+				}
+			}
+			validatePublishedReviewSchema(t, schema, ordinary)
+
+			var freshFields map[string]json.RawMessage
+			if err := json.Unmarshal(fresh, &freshFields); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"burned_stale_lineage", "hint"} {
+				if _, present := freshFields[field]; present {
+					t.Fatalf("fresh START exposed retired %q: %s", field, fresh)
+				}
+			}
+			validatePublishedReviewSchema(t, schema, fresh)
+
+			for _, invalid := range []struct {
+				name   string
+				mutate func(map[string]any)
+			}{
+				{name: "unknown property", mutate: func(payload map[string]any) { payload["unknown"] = true }},
+			} {
+				t.Run(invalid.name, func(t *testing.T) {
+					var payload map[string]any
+					if err := json.Unmarshal(fresh, &payload); err != nil {
+						t.Fatal(err)
+					}
+					invalid.mutate(payload)
+					encoded, err := json.Marshal(payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					validatePublishedReviewSchemaRejects(t, schema, encoded)
+				})
+			}
+		})
+	}
+}
+
 // TestNegotiatedStartEnvelopeMatchesPublishedStartSchemaV3 pins the whole live
 // negotiated START envelope to the published start/v3 schema. The battery
 // found the live emitter publishing repository_context.event_id and .outcome
@@ -90,10 +181,8 @@ func TestNegotiatedStartEnvelopeMatchesPublishedStartSchemaV3(t *testing.T) {
 	if started.Schema != ReviewIntegrationStartSchema {
 		t.Fatalf("negotiated START schema = %q, want %q", started.Schema, ReviewIntegrationStartSchema)
 	}
-	// The divergence needs the reconciled event identity present, so this
-	// test proves the live emitter really publishes it before validating.
-	if started.RepositoryContext == nil || started.RepositoryContext.EventID == "" || started.RepositoryContext.Outcome == "" {
-		t.Fatalf("negotiated START repository context carries no event identity: %#v", started.RepositoryContext)
+	if started.RepositoryContext == nil {
+		t.Fatalf("negotiated START repository context is missing: %#v", started.RepositoryContext)
 	}
 	schema := compileWholePublishedReviewSchema(t, "v2", "start.schema.json")
 	validatePublishedReviewSchema(t, schema, output.Bytes())
@@ -106,11 +195,12 @@ func TestNegotiatedStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc conformance() {}\n", 0o644)
-	runNegotiatedReviewStart(t, repo, "published-schema-status")
+	const lineage = "published-schema-status"
+	runNegotiatedReviewStart(t, repo, lineage)
 
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
 		"--agent", string(model.AgentClaudeCode), "--next-transition",
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -260,9 +350,10 @@ func TestPiHostRelayStatusEnvelopeMatchesPublishedStatusSchemaV5(t *testing.T) {
 }
 
 // TestReviewGateResultEnvelopeMatchesPublishedSchema walks one low-risk
-// lifecycle to its approved receipt, runs the delivery gate, and validates the
-// emitted gentle-ai.review-gate-result/v1 envelope against its published
-// schema — the envelope the battery found had no published schema at all.
+// lifecycle through approved compact FINALIZE, then validates the denied
+// post-burn gate envelope against its published schema. Compact FINALIZE burns
+// the approved authority and receipt, so this assertion must not invent a
+// delivery allowance before the later non-deciding-gate work ships.
 func TestReviewGateResultEnvelopeMatchesPublishedSchema(t *testing.T) {
 	reviewEnabledHome(t)
 	// Compiled before the printed-command execution below changes the working
@@ -285,7 +376,7 @@ func TestReviewGateResultEnvelopeMatchesPublishedSchema(t *testing.T) {
 
 	output.Reset()
 	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"status", "--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2,
 		"--agent", string(model.AgentClaudeCode), "--next-transition",
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -309,9 +400,9 @@ func TestReviewGateResultEnvelopeMatchesPublishedSchema(t *testing.T) {
 
 	output.Reset()
 	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output); err != nil {
-		t.Fatalf("post-apply gate: %v\n%s", err, output.String())
+		t.Fatalf("post-burn post-apply ordinary delivery: %v\n%s", err, output.String())
 	}
-	assertReviewGateResult(t, output.Bytes(), reviewtransaction.GateAllow)
+	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePostApply)
 	var gate ReviewValidateResult
 	decodeStrictReviewJSON(t, output.Bytes(), &gate)
 	if gate.Schema != ReviewValidateSchema {
@@ -320,10 +411,124 @@ func TestReviewGateResultEnvelopeMatchesPublishedSchema(t *testing.T) {
 	validatePublishedReviewSchema(t, schema, output.Bytes())
 }
 
+// TestShippedReviewGateUnmanagedEnvelopeMatchesPublishedSchema keeps the
+// shipped route separate from TestReviewGateResultEnvelopeMatchesPublishedSchema:
+// the latter deliberately exercises the retained historical evaluator, while
+// this one validates the public non-deciding gate bytes.
+func TestShippedReviewGateUnmanagedEnvelopeMatchesPublishedSchema(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"enable", "--scope", "global", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	gateResultSchema := compileWholePublishedReviewSchema(t, "v2", "gate-result.schema.json")
+	for _, tt := range []struct {
+		contract string
+		version  string
+	}{
+		{contract: ReviewIntegrationContractV1, version: "v1"},
+		{contract: ReviewIntegrationContractV2, version: "v2"},
+	} {
+		t.Run(tt.contract, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview([]string{
+				"validate", "--contract", tt.contract, "--cwd", repo, "--gate", string(reviewtransaction.GateRelease),
+			}, &output); err != nil {
+				t.Fatalf("review validate: %v\n%s", err, output.String())
+			}
+			var envelope ReviewIntegrationOperationResult
+			decodeStrictReviewJSON(t, output.Bytes(), &envelope)
+			if envelope.Operation != ReviewIntegrationOperationValidate || envelope.Contract != tt.contract {
+				t.Fatalf("review validate envelope = %#v", envelope)
+			}
+			validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, tt.version, "operation.schema.json"), output.Bytes())
+			validatePublishedReviewSchema(t, gateResultSchema, envelope.Result)
+			var result map[string]any
+			if err := json.Unmarshal(envelope.Result, &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result["context"].(map[string]any)) != 1 || result["context"].(map[string]any)["gate"] != "release" ||
+				result["result"] != "invalidated" || result["allowed"] != false || result["action"] != reviewDeliveryPolicyAction ||
+				result["delivery"] != string(reviewtransaction.RDDDeliveryUnmanaged) {
+				t.Fatalf("shipped non-deciding gate result = %s", envelope.Result)
+			}
+		})
+	}
+}
+
 // TestOpenCodeProviderRoleEnvelopeMatchesPublishedSchema validates the exact
 // bytes the OpenCode transport publishes for a captured provider role result
 // against its published schema — the second envelope the battery found had no
 // published schema.
+func TestReviewGateResultSchemaSeparatesHistoricalAndNonDecidingContexts(t *testing.T) {
+	schema := compileWholePublishedReviewSchema(t, "v2", "gate-result.schema.json")
+	sha256 := "sha256:" + strings.Repeat("a", 64)
+	historicalContext := map[string]any{
+		"gate":                    "pre-commit",
+		"lineage_id":              "historical-lineage",
+		"generation":              1,
+		"base_tree":               "",
+		"candidate_tree":          "",
+		"paths_digest":            sha256,
+		"fix_delta_hash":          sha256,
+		"policy_hash":             sha256,
+		"ledger_hash":             sha256,
+		"evidence_hash":           sha256,
+		"base_relationship_valid": true,
+	}
+	gateOnlyContext := map[string]any{"gate": "pre-commit"}
+	encode := func(t *testing.T, payload map[string]any) []byte {
+		t.Helper()
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	gateResult := func(delivery string, context map[string]any) map[string]any {
+		return map[string]any{
+			"schema":   ReviewValidateSchema,
+			"result":   "invalidated",
+			"allowed":  false,
+			"action":   "repository-policy",
+			"reason":   "delivery follows repository policy",
+			"delivery": delivery,
+			"context":  context,
+		}
+	}
+
+	for _, delivery := range []string{"unmanaged", "disabled/unmanaged"} {
+		t.Run(delivery+" gate-only context", func(t *testing.T) {
+			validatePublishedReviewSchema(t, schema, encode(t, gateResult(delivery, gateOnlyContext)))
+		})
+	}
+
+	historical := gateResult("receipt_governed", historicalContext)
+	historical["result"] = "allow"
+	historical["allowed"] = true
+	historical["action"] = "continue"
+	validatePublishedReviewSchema(t, schema, encode(t, historical))
+
+	withoutDelivery := gateResult("", historicalContext)
+	delete(withoutDelivery, "delivery")
+	withoutDelivery["action"] = "review.status"
+	validatePublishedReviewSchema(t, schema, encode(t, withoutDelivery))
+
+	for _, test := range []struct {
+		name    string
+		payload map[string]any
+	}{
+		{name: "historical managed gate-only context", payload: gateResult("receipt_governed", gateOnlyContext)},
+		{name: "candidate declined gate-only context", payload: gateResult("candidate_declined/unmanaged", gateOnlyContext)},
+		{name: "unknown delivery", payload: gateResult("unknown", gateOnlyContext)},
+		{name: "unmanaged historical context", payload: gateResult("unmanaged", historicalContext)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			validatePublishedReviewSchemaRejects(t, schema, encode(t, test.payload))
+		})
+	}
+}
+
 func TestOpenCodeProviderRoleEnvelopeMatchesPublishedSchema(t *testing.T) {
 	t.Parallel()
 	schema := compileWholePublishedReviewSchema(t, "v2", "opencode-provider-role.schema.json")

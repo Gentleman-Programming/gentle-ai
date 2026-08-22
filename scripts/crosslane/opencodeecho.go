@@ -119,6 +119,7 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 	}
 	b.pass(openCodeLane, openCodeEchoStep,
 		"drifted host echo was rebuilt into Go-canonical bytes and captured; only the exact bytes stay a pass-through")
+	b.finishApproved(openCodeLane, "host-echo lifecycle burned", repo, "opencode", nil)
 }
 
 // hostEchoedMaterialization reproduces the drift a re-typed materialization
@@ -158,6 +159,10 @@ func (b *battery) openCodeMediumLensSlot(repo string) (map[string]string, bool) 
 	if code != 0 || getString(startDoc, "state") != "reviewing" {
 		b.fail(openCodeLane, openCodeEchoStep, fmt.Sprintf("consent granted start exit=%d state=%q %s",
 			code, getString(startDoc, "state"), firstLine(stderr)))
+		return nil, false
+	}
+	if err := b.rememberStarted(repo, target, startDoc); err != nil {
+		b.fail(openCodeLane, openCodeEchoStep, err.Error())
 		return nil, false
 	}
 	statusDoc, stderr, _ = b.status(repo, "opencode")

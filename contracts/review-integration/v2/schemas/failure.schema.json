@@ -24,7 +24,8 @@
     "retry_safe": {"type": "boolean"},
     "replayability": {"$ref": "../../v1/schemas/failure.schema.json#/properties/replayability"},
     "lineage_id": {"$ref": "../../v1/schemas/failure.schema.json#/properties/lineage_id"},
-    "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
+    "target_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/target_identity"},
+        "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
     "progress_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/progress_identity"},
     "required_inputs": {"$ref": "../../v1/schemas/failure.schema.json#/properties/required_inputs"},
     "next_action": {"$ref": "../../v1/schemas/failure.schema.json#/properties/next_action"},
@@ -34,6 +35,7 @@
   },
   "allOf": [
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
-    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"},
+        {"$ref": "../../v1/schemas/failure.schema.json#/allOf/2"}
   ]
 }

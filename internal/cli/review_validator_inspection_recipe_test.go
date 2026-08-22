@@ -81,6 +81,34 @@ func TestTargetedValidatorPromptCarriesEveryInspectionArgument(t *testing.T) {
 	}
 }
 
+func TestTargetedValidatorPromptCarriesFrozenPolicyAndCausalFindingEvidence(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, state, revision := driveReviewToOpenTargetedValidation(t)
+	prompt := string(targetedValidatorProviderPrompt(t, repo, state, revision))
+
+	if !strings.Contains(prompt, facadeReviewPolicy) {
+		t.Fatal("targeted validator prompt omits the exact policy bound when the review started")
+	}
+	for _, findingID := range state.FixFindingIDs {
+		var finding reviewtransaction.Finding
+		for _, candidate := range state.Findings {
+			if candidate.ID == findingID {
+				finding = candidate
+				break
+			}
+		}
+		classification, found := state.Classifications[findingID]
+		if finding.ID == "" || !found {
+			t.Fatalf("open correction has no frozen causal finding for %q: %#v", findingID, state)
+		}
+		for _, value := range append([]string{finding.ID, finding.Location, finding.Claim, classification.Proof}, finding.ProofRefs...) {
+			if !strings.Contains(prompt, value) {
+				t.Fatalf("targeted validator prompt omits frozen causal finding evidence %q", value)
+			}
+		}
+	}
+}
+
 // TestTargetedValidatorInspectionRecipeExecutes is the honest half: it does not
 // assert that the prompt mentions a command, it executes the command the
 // prompt describes, using only values parsed out of that prompt. A recipe that

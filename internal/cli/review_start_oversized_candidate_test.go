@@ -52,7 +52,7 @@ func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) 
 
 	var status bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", start.LineageID, "--next-transition",
 	}, &status); err != nil {
 		t.Fatal(err)
 	}

@@ -718,34 +718,6 @@ func CompactScopeChangeDiagnostics(ctx context.Context, repo string, state Compa
 	return diagnostics, nil
 }
 
-// CompactDeliveryShapeScopeChangeDiagnostics derives recovery evidence for the
-// pre-push scope-changed class whose target ASSESSMENT errored -- the
-// deterministic one-commit delivery rule (ErrReviewedDeliveryNotOneCommit) and
-// the ambiguous published delivery base (GateDeliveryBaseResolutionError) both
-// fail before any actual snapshot exists, so buildCompactScopeChangeDiagnostics
-// is not even callable there. It derives the actual side independently, from
-// the publication boundary the pre-push gate itself binds to HEAD, which is
-// simultaneously the evidence and the scope the recommended recovery freezes.
-//
-// It returns an error -- never a fabricated recommendation -- whenever no
-// correct recovery is derivable: a non-current-changes receipt (which never
-// armed the one-commit rule), an unresolvable or bootstrap-empty publication
-// boundary, or a boundary that already equals the candidate, meaning the
-// delivery is fully published and there is nothing left for a successor to
-// freeze. Callers keep the honest terminal fallback in those cases.
-func CompactDeliveryShapeScopeChangeDiagnostics(ctx context.Context, repo string, state CompactState, revision string, gate GateKind) (GateScopeChangeDiagnostics, error) {
-	baseRef, actual, ok := compactCommittedDeliveryRecovery(ctx, repo, state, gate)
-	if !ok {
-		return GateScopeChangeDiagnostics{}, errors.New("no committed base-diff recovery is derivable for this delivery")
-	}
-	diagnostics, err := buildCompactScopeChangeDiagnostics(ctx, repo, state, revision, actual)
-	if err != nil {
-		return GateScopeChangeDiagnostics{}, err
-	}
-	diagnostics.RecoveryScope, diagnostics.RecoveryBaseRef = RecoveryScopeCommittedBaseDiff, baseRef
-	return diagnostics, nil
-}
-
 // compactCommittedDeliveryRecovery derives the committed base-diff recovery a
 // pre-push scope-changed denial can honestly name, together with the successor
 // scope that recovery would freeze.

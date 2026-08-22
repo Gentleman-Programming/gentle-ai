@@ -32,9 +32,11 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/capabilities-v1.4.schema.json":  "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
-		"schemas/start-v2.schema.json":           "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":             "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
-		"schemas/status-v2.schema.json":          "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
+		// Frozen v1 START artifacts do not project the v3 replay or retired
+		// stale-burn fields.
+		"schemas/start-v2.schema.json":  "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
+		"schemas/status.schema.json":    "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
+		"schemas/status-v2.schema.json": "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -142,7 +144,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/gate-result.schema.json":            "38aa37bdea8bdc8ea664d888f7c7217beac7e34c43a95a3ed7d9354bf76709ed",
+		"schemas/gate-result.schema.json":            "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {

@@ -385,13 +385,19 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		return errors.New("invalid negotiated review target identity")
 	}
 	if result.RepositoryContext != nil {
+		expectedRepositoryContextTarget := reviewAuthorityTargetIdentity(result)
+		correctionTerminalContext := result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
+			result.ValidationRequest == nil && result.NextTransition != nil && result.NextTransition.Kind == reviewNextTransitionStop
+		if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
+			expectedRepositoryContextTarget = result.ValidationRequest.CorrectionTargetIdentity
+		}
 		if result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
 			reviewtransaction.ValidateReviewRepositoryContextHandle(result.RepositoryContext.Handle) != nil ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
 			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
 			result.Authority == nil || result.RepositoryContext.Revision != result.Authority.Revision ||
-			result.RepositoryContext.TargetIdentity != reviewAuthorityTargetIdentity(result) {
+			!correctionTerminalContext && result.RepositoryContext.TargetIdentity != expectedRepositoryContextTarget {
 			return errors.New("negotiated STATUS repository context is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
 		}
 	}

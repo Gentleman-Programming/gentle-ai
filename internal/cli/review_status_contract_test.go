@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,14 +23,16 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var startedOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-status-fixture"}, &startedOutput); err != nil {
+	// This compact-v2 authority is setup for negotiated STATUS; exercise the
+	// retained historical fixture seam so production START stays v3-only.
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", "review-status-fixture",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	if err := json.Unmarshal(startedOutput.Bytes(), &started); err != nil {
-		t.Fatal(err)
-	}
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		t.Fatalf("unnegotiated status fields = %v, want %v\n%s", gotGlobalFields, wantGlobalFields, global.String())
 	}
 
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", repo}
+	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", repo, "--lineage", started.LineageID}
 	var first, second bytes.Buffer
 	if err := RunReview(args, &first); err != nil {
 		t.Fatal(err)
@@ -133,11 +134,6 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	normalized = bytes.ReplaceAll(normalized, []byte(gotSubject.AuthorityRevision), []byte(wantSubject.AuthorityRevision))
 	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("status fixture mismatch:\ngot=%s\nwant=%s", first.String(), fixture)
-	}
-	var denied bytes.Buffer
-	err = RunReview([]string{"validate", "--cwd", repo, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePostApply)}, &denied)
-	if err == nil || !strings.Contains(err.Error(), "receipt is not available") || denied.Len() != 0 {
-		t.Fatalf("fresh START validate result = %q, %v", denied.String(), err)
 	}
 	after, err := os.ReadFile(store.StatePath())
 	if err != nil {
@@ -531,134 +527,62 @@ func TestReviewTargetStatusProjectionRejectsNonCanonicalRepositoryPaths(t *testi
 	}
 }
 
-func TestNegotiatedStatusAcceptsHistoricalApprovedOrdinary4RWithoutCompactFrozenInputs(t *testing.T) {
-	tests := []struct {
-		name          string
-		mutateReceipt func(t *testing.T, path string)
-		wantCurrent   bool
-	}{
-		{name: "canonical receipt", wantCurrent: true},
-		{name: "missing receipt", mutateReceipt: func(t *testing.T, path string) {
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "corrupt receipt", mutateReceipt: func(t *testing.T, path string) {
-			if err := os.WriteFile(path, []byte("{\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lineage := "historical-status-" + strings.ReplaceAll(tt.name, " ", "-")
-			fixture := newLegacyCLIFixture(t, lineage)
-			if tt.mutateReceipt != nil {
-				tt.mutateReceipt(t, fixture.receiptPath)
-			}
-			before := readLegacyAuthorityTree(t, fixture.store.Dir)
-			args := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo, "--lineage", lineage}
-			var first, second bytes.Buffer
-			if err := RunReview(args, &first); err != nil {
-				t.Fatalf("historical negotiated status: %v\n%s", err, first.String())
-			}
-			if err := RunReview(args, &second); err != nil {
-				t.Fatalf("historical negotiated status restart: %v\n%s", err, second.String())
-			}
-			if !bytes.Equal(first.Bytes(), second.Bytes()) {
-				t.Fatalf("historical status changed across restart:\n%s\n%s", first.String(), second.String())
-			}
-			var status ReviewTargetStatusResult
-			decodeStrictReviewJSON(t, first.Bytes(), &status)
-			if err := status.Validate(); err != nil {
-				t.Fatalf("historical negotiated status validation: %v\n%s", err, first.String())
-			}
-			if status.Frozen != nil {
-				t.Fatalf("historical ordinary_4r invented compact frozen inputs: %#v", status.Frozen)
-			}
-			if tt.wantCurrent {
-				identity, err := reviewtransaction.HashArtifact(fixture.receiptPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
-					status.Authority.Version != reviewtransaction.AuthorityVersionLegacy || status.Authority.State != reviewtransaction.StateApproved ||
-					status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity != identity ||
-					status.Action != reviewtransaction.TargetStatusActionValidate || status.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
-					strings.Contains(first.String(), string(ReviewReceiptPublicationPending)) {
-					t.Fatalf("historical approved status = %#v\n%s", status, first.String())
-				}
-			} else if status.Applicability != reviewtransaction.TargetApplicabilityCorrupted || status.Authority != nil ||
-				status.Receipt.Status != ReviewReceiptNotApplicable || status.Action != reviewtransaction.TargetStatusActionRepairAuthority ||
-				status.Replayability != reviewtransaction.ReplayabilityManualActionRequired {
-				t.Fatalf("invalid historical receipt status = %#v\n%s", status, first.String())
-			}
-			if after := readLegacyAuthorityTree(t, fixture.store.Dir); !reflect.DeepEqual(before, after) {
-				t.Fatal("historical negotiated status mutated legacy authority bytes")
-			}
-		})
-	}
-}
-
-func TestNegotiatedRuntimeReplaysPublishedV149AuthorityReadOnly(t *testing.T) {
+func TestNegotiatedStatusIgnoresHistoricalOnlyAuthority(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, authorityRoot, receiptPath := newPublishedV149CLIRepo(t)
-	before := readLegacyAuthorityTree(t, authorityRoot)
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "legacy-valid"}
+	fixture := newLegacyCLIFixture(t, "historical-status-only")
+	before := readLegacyAuthorityTree(t, fixture.store.Dir)
+	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", fixture.repo, "--lineage", fixture.lineage}
 	var first, second bytes.Buffer
 	if err := RunReview(args, &first); err != nil {
-		t.Fatalf("published v1.49 negotiated status: %v\n%s", err, first.String())
+		t.Fatalf("compact-only negotiated status: %v\n%s", err, first.String())
 	}
 	if err := RunReview(args, &second); err != nil {
-		t.Fatalf("published v1.49 negotiated status restart: %v\n%s", err, second.String())
+		t.Fatalf("compact-only negotiated status restart: %v\n%s", err, second.String())
 	}
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
-		t.Fatalf("published v1.49 status changed across restart:\n%s\n%s", first.String(), second.String())
+		t.Fatalf("compact-only status changed across restart:\n%s\n%s", first.String(), second.String())
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, first.Bytes(), &status)
 	if err := status.Validate(); err != nil {
-		t.Fatalf("published v1.49 status validation: %v\n%s", err, first.String())
+		t.Fatalf("compact-only negotiated status validation: %v\n%s", err, first.String())
 	}
-	receiptIdentity, err := reviewtransaction.HashArtifact(receiptPath)
-	if err != nil {
-		t.Fatal(err)
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated || status.Authority != nil ||
+		status.Receipt.Status != ReviewReceiptNotApplicable || status.Action != reviewtransaction.TargetStatusActionStart ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("historical-only ordinary status selected authority instead of fresh compact START: %#v\n%s", status, first.String())
 	}
-	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
-		status.Authority.Version != reviewtransaction.AuthorityVersionLegacy || status.Authority.State != reviewtransaction.StateApproved ||
-		status.Frozen != nil || status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity != receiptIdentity ||
-		status.Action != reviewtransaction.TargetStatusActionValidate || status.Replayability != reviewtransaction.ReplayabilityNotReplayable {
-		t.Fatalf("published v1.49 negotiated status = %#v\n%s", status, first.String())
+	if after := readLegacyAuthorityTree(t, fixture.store.Dir); !reflect.DeepEqual(before, after) {
+		t.Fatal("ordinary STATUS mutated historical authority bytes")
+	}
+}
+
+func TestPublishedHistoricalAuthorityRequiresExplicitCompatibilityCommand(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, authorityRoot, _ := newPublishedV149CLIRepo(t)
+	before := readLegacyAuthorityTree(t, authorityRoot)
+	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", "legacy-valid"}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("compact-only status beside published historical authority: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Authority != nil || status.Action != reviewtransaction.TargetStatusActionStart ||
+		status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("ordinary status selected published historical authority: %#v\n%s", status, output.String())
 	}
 	if afterStatus := readLegacyAuthorityTree(t, authorityRoot); !reflect.DeepEqual(before, afterStatus) {
-		t.Fatal("published v1.49 status mutated authority bytes")
+		t.Fatal("ordinary STATUS mutated published historical authority bytes")
 	}
 
-	writeNegotiatedOperationChange(t, repo, "thin")
-	var bind bytes.Buffer
-	err = RunReview([]string{
-		"bind-sdd", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--change", "thin",
-		"--lineage", "legacy-valid", "--expected-binding-revision=",
-	}, &bind)
-	if err == nil {
-		t.Fatalf("published v1.49 bind-sdd succeeded: %s", bind.String())
+	var resumed bytes.Buffer
+	if err := RunReviewResume([]string{"--cwd", repo, "--lineage", "legacy-valid"}, &resumed); err != nil {
+		t.Fatalf("explicit historical compatibility resume: %v\n%s", err, resumed.String())
 	}
-	failure := decodeReviewIntegrationFailure(t, bind.Bytes())
-	// organic-dx Phase 3b task 3b.4: negotiated legacy_read_only now names
-	// the same "choose a new lineage for compact authority" route the
-	// non-negotiated START collision already names.
-	if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != reviewtransaction.LegacyReadOnlyErrorCode ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "review.start" {
-		t.Fatalf("published v1.49 bind-sdd failure = %#v\n%s", failure, bind.String())
-	}
-	var typed *reviewtransaction.LegacyReadOnlyError
-	if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !errors.As(err, &typed) ||
-		typed.Operation != "review/bind-sdd" || typed.LineageID != "legacy-valid" {
-		t.Fatalf("published v1.49 bind-sdd lost typed cause: %#v", err)
-	}
-	if afterBind := readLegacyAuthorityTree(t, authorityRoot); !reflect.DeepEqual(before, afterBind) {
-		t.Fatal("published v1.49 bind-sdd mutated authority bytes")
+	if afterResume := readLegacyAuthorityTree(t, authorityRoot); !reflect.DeepEqual(before, afterResume) {
+		t.Fatal("explicit historical compatibility resume mutated authority bytes")
 	}
 }
 
@@ -1110,14 +1034,16 @@ func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var startedOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "status-unreadable-authority"}, &startedOutput); err != nil {
+	// Build the compact predecessor directly: STATUS corruption handling remains
+	// the production behavior under test, not the current v3 START route.
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", "status-unreadable-authority",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	if err := json.Unmarshal(startedOutput.Bytes(), &started); err != nil {
-		t.Fatal(err)
-	}
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)

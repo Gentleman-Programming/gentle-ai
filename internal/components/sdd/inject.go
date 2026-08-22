@@ -1154,14 +1154,12 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 }
 
 // nativeReviewAuthorityRule is rule 7 of the managed delegation block. It
-// replaces a rule that pointed at retired work-routing contracts: those commands
-// no longer exist, so a prompt naming them sends the orchestrator after dead
-// authority. What survives is the local review receipt plus the native review
-// status/validate surface, and the ownership boundary the old rule protected --
-// the orchestrator still never selects lenses or authors PASS itself.
-const nativeReviewAuthorityRule = "7. **Authority rule**: read native review state with `gentle-ai review status`" +
-	" and let `gentle-ai review validate --gate <gate>` check the exact owner-issued receipt at every lifecycle gate." +
-	" Never select lenses, synthesize transitions, or infer PASS from prose."
+// replaces a rule that pointed at retired work-routing contracts. The current
+// lifecycle starts only from current-worktree preflight, retains the explicit
+// transaction binding, and leaves delivery to the user rather than a gate.
+const nativeReviewAuthorityRule = "7. **Authority rule**: use selectorless `gentle-ai review status` only to preflight the current worktree" +
+	" and execute its exact START; retain that transaction's lineage, revision, and target for every later lifecycle call." +
+	" Gates are informational only. Never select lenses, synthesize transitions, infer PASS, or authorize delivery from prose."
 
 func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 	prompt = removeRetiredWorkRoutingAuthorityRule(prompt)
@@ -1172,15 +1170,15 @@ func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 	// plain-text policy beneath it.
 	prompt = strings.NewReplacer(
 		"run a fresh-context review unless the diff is trivial docs/text",
-		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		nativeReviewAuthorityRule,
 		"stop and run a fresh audit before continuing",
 		"stop with one typed Needs your decision result until native authority validates the immutable candidate",
 		"use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents",
-		"let native RAR schedule adversarial review; PR readiness and incidents validate the same receipt",
+		nativeReviewAuthorityRule,
 		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
-		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		nativeReviewAuthorityRule,
 		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		nativeReviewAuthorityRule,
 	).Replace(prompt)
 
 	delegation := `

@@ -442,15 +442,87 @@ func TestReviewProviderStatusFinalizesCapturedTargetedValidatorWithoutSecondProv
 		providerCalls++
 		return nil, errors.New("captured provider slot finalization must not launch another provider")
 	}
-	if err := RunReviewFacadeFinalize(gotTokens, &bytes.Buffer{}); err != nil {
+	var terminalOutput bytes.Buffer
+	if err := RunReviewFacadeFinalize(gotTokens, &terminalOutput); err != nil {
 		t.Fatalf("execute captured provider validator finalize: %v", err)
 	}
 	if providerCalls != 0 {
 		t.Fatalf("captured provider finalization launched %d provider(s), want none", providerCalls)
 	}
-	terminal, err := store.Load()
-	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
-		t.Fatalf("captured provider validator terminal authority = %#v, %v", terminal, err)
+	envelope := decodeReviewOperationEnvelope(t, terminalOutput.Bytes())
+	var terminal ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, envelope.Result, &terminal)
+	if terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("captured provider finalization terminal result = %#v, want approved", terminal)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
+}
+
+func TestReviewProviderStatusFinalizesFailedCapturedTargetedValidatorAsEscalated(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, request := providerCorrectionReady(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{
+			"inspected the frozen corrected candidate; the causal finding remains reproducible",
+		}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{
+			"inspected the frozen corrected candidate; no unrelated regression",
+		}},
+		FollowUps: []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision, failedPayload); err != nil {
+		t.Fatalf("capture conclusive failed validator: %v", err)
+	}
+
+	var statusOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+		"--next-transition",
+	}, &statusOutput); err != nil {
+		t.Fatalf("captured failed-validator STATUS: %v\n%s", err, statusOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("captured failed-validator STATUS validation: %v", err)
+	}
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+		status.NextTransition.ReasonCode != "captured_provider_targeted_validation_ready" || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.finalize" {
+		t.Fatalf("captured failed-validator transition = %#v", status.NextTransition)
+	}
+	tokens := make([]string, len(status.NextTransition.Execute.Arguments))
+	for index, argument := range status.NextTransition.Execute.Arguments {
+		tokens[index] = argument.Token
+	}
+
+	var terminalOutput bytes.Buffer
+	if err := RunReviewFacadeFinalize(tokens, &terminalOutput); err != nil {
+		t.Fatalf("execute captured failed-validator finalize: %v", err)
+	}
+	envelope := decodeReviewOperationEnvelope(t, terminalOutput.Bytes())
+	var terminal ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, envelope.Result, &terminal)
+	if terminal.State != reviewtransaction.StateEscalated {
+		t.Fatalf("captured failed-validator terminal result = %#v, want escalated", terminal)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateEscalated || len(after.State.CorrectionAttempts) != 1 ||
+		after.State.OriginalCriteria == nil || after.State.OriginalCriteria.Passed {
+		t.Fatalf("captured failed-validator authority = %#v, %v", after, err)
 	}
 }
 
@@ -469,7 +541,7 @@ func TestReviewProviderStatusSurfacesUnreadableCapturedValidatorSlot(t *testing.
 		t.Fatal(err)
 	}
 	slotPath := filepath.Join(store.Dir, "targeted-validator-results", strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), strings.TrimPrefix(request.RequestHash, "sha256:"), "result.json")
 	if err := os.WriteFile(slotPath, []byte(`{"targeted_validation_request_hash":"sha256:forged"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

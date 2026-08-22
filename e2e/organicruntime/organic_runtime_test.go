@@ -1362,9 +1362,8 @@ func TestOrganicReviewTierIsSelectedByEvidenceNotSize(t *testing.T) {
 				t.Fatalf("consent prompt emitted = %t, want %t; stderr:\n%s", prompted, test.wantsPrompt, stderr)
 			}
 
-			approved := harness.approveReview("organic-tier", started)
-			if approved.State != organicStateApproved || approved.ReceiptPath == "" {
-				t.Fatalf("tier %q did not reach one terminal receipt: %#v", test.risk, approved)
+			if approved := harness.approveReview("organic-tier", started); approved.State != organicStateApproved {
+				t.Fatalf("tier %q did not reach approved terminal burn: %#v", test.risk, approved)
 			}
 			harness.assertNoSDDArtifacts()
 		})
@@ -1373,8 +1372,8 @@ func TestOrganicReviewTierIsSelectedByEvidenceNotSize(t *testing.T) {
 
 // TestOrganicImplementationRoutesReachDelivery walks the two organic
 // implementation routes end to end: a real actor process produces the candidate,
-// the proportional review approves it, the delivery gate authorizes the push,
-// and the bare remote moves exactly once under compare-and-swap.
+// proportional review reaches its terminal burn, and ordinary repository policy
+// delivers the candidate under compare-and-swap.
 func TestOrganicImplementationRoutesReachDelivery(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -1418,9 +1417,7 @@ func TestOrganicImplementationRoutesReachDelivery(t *testing.T) {
 			}
 
 			gate := harness.gate("pre-push")
-			if !gate.Allowed || gate.Result != organicGateAllow {
-				t.Fatalf("pre-push gate refused an approved candidate: %#v", gate)
-			}
+			harness.assertInvalidatedUnmanagedGate(gate)
 
 			harness.pushWithLease(harness.repo.baseRevision)
 			harness.assertRemoteBlob(test.path, test.body)
@@ -1430,14 +1427,14 @@ func TestOrganicImplementationRoutesReachDelivery(t *testing.T) {
 			// The route is what this journey selects; SDD is what it must never
 			// select. A delegated worker in particular must not promote itself.
 			harness.assertNoSDDArtifacts()
-			harness.assertSingleReviewLineage(lineage)
 		})
 	}
 }
 
 // TestOrganicOptionalSDDDeclineAndAccept covers both answers to the one optional
 // route question. Declining leaves the repository free of SDD state; accepting
-// creates the SDD runtime and binds it to the same approved organic receipt.
+// may use its OpenSpec state, but archive routing cannot require a burned review
+// authority, receipt, binding, or delivery-gate allow.
 func TestOrganicOptionalSDDDeclineAndAccept(t *testing.T) {
 	t.Parallel()
 
@@ -1463,42 +1460,22 @@ func TestOrganicOptionalSDDDeclineAndAccept(t *testing.T) {
 		t.Parallel()
 		harness := newOrganicHarness(t)
 		const change = "organic-accepted-change"
+		harness.seedOrganicSDDChange(change)
 		harness.writeFiles(map[string]string{
-			filepath.ToSlash(filepath.Join("openspec", "changes", change, "proposal.md")): "# Proposal\n\nAccepted optional SDD.\n",
 			"docs/accepted.md": organicLines("accepted line", 8),
 		})
 
 		started, _ := harness.startReview("organic-sdd-accepted")
-		approved := harness.approveReview("organic-sdd-accepted", started)
-		if approved.State != organicStateApproved {
+		if approved := harness.approveReview("organic-sdd-accepted", started); approved.State != organicStateApproved {
 			t.Fatalf("accepted route did not approve: %#v", approved)
 		}
 
-		payload := harness.gentle("review", "bind-sdd",
-			"--cwd", harness.repo.worktree,
-			"--change", change,
-			"--lineage", "organic-sdd-accepted",
-			"--expected-binding-revision", "",
-		)
-		var binding struct {
-			Schema      string `json:"schema"`
-			Change      string `json:"change"`
-			Lineage     string `json:"lineage"`
-			ReceiptHash string `json:"receipt_hash"`
-			GateContext struct {
-				Gate string `json:"gate"`
-			} `json:"gate_context"`
+		status := harness.sddStatus(change)
+		if status.Dependencies.Archive == "blocked" {
+			t.Fatalf("accepted SDD archive stayed blocked after terminal burn: reasons=%v", status.BlockedReasons)
 		}
-		if err := json.Unmarshal(payload, &binding); err != nil {
-			t.Fatalf("decode bind-sdd result: %v\n%s", err, payload)
-		}
-		if binding.Change != change || binding.Lineage != "organic-sdd-accepted" || binding.ReceiptHash == "" {
-			t.Fatalf("accepted SDD binding = %#v", binding)
-		}
-		// The accepted answer is the only one that may create SDD state, so this
-		// is the exact inverse of the declined assertion above.
-		if !harness.hasSDDArtifacts() {
-			t.Fatal("accepted optional SDD created no SDD runtime state")
+		if status.ReviewGate != nil {
+			t.Fatalf("accepted SDD archive retained a review gate after terminal burn: %#v", status.ReviewGate)
 		}
 	})
 }
@@ -1578,27 +1555,29 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		FollowUps:                     []any{},
 	})
 	approved := harness.finalize(lineage, "--validation", validation, "--captured-evidence")
-	if approved.State != organicStateApproved || approved.ReceiptPath == "" {
-		t.Fatalf("atomic correction acceptance did not produce a terminal receipt: %#v", approved)
+	harness.assertReviewBurned(lineage, approved)
+
+	// A consumed correction cannot be replayed through a terminal receipt: the
+	// approved transaction is gone, so a second finalize attempt cannot mutate it.
+	_, _, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--captured-results=true")
+	if err == nil {
+		t.Fatal("a second correction reused burned terminal authority")
+	}
+	if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected second correction recreated terminal authority: %v", statErr)
 	}
 
-	before := harness.lineageDigest(lineage)
-	_, stderr, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--captured-results=true")
-	if err == nil {
-		t.Fatal("a second correction was accepted after the bounded one was consumed")
-	}
-	if !strings.Contains(stderr, "terminal review finalize accepts no review inputs") {
-		t.Fatalf("second correction was refused without a discoverable reason: %s", stderr)
-	}
-	if after := harness.lineageDigest(lineage); after != before {
-		t.Fatal("the refused second correction still mutated review authority")
-	}
+	// Materially new work starts a fresh transaction; it never reopens the
+	// correction budget consumed by the burned one.
+	harness.writeFiles(map[string]string{"docs/correction-follow-up.md": organicLines("fresh correction follow-up", 3)})
+	fresh, _ := harness.startReview(lineage + "-fresh")
+	harness.approveReview(lineage+"-fresh", fresh)
 }
 
-// TestOrganicFlexibleDeliveryReusesOneReceipt proves the receipt is content
-// bound, not route bound: one immutable receipt authorizes direct commit, direct
-// push, and a pull request with or without an issue, and none of those routes
-// reopens review.
+// TestOrganicFlexibleDeliveryReusesOneReceipt keeps every delivery route after
+// a review has approved and burned. Gates report the same non-deciding
+// invalidated/unmanaged result across direct commit, direct push, and pull-request
+// shapes; ordinary repository policy owns all four deliveries.
 func TestOrganicFlexibleDeliveryReusesOneReceipt(t *testing.T) {
 	t.Parallel()
 	harness := newOrganicHarness(t)
@@ -1616,52 +1595,26 @@ func TestOrganicFlexibleDeliveryReusesOneReceipt(t *testing.T) {
 
 	// Route 1: direct commit.
 	commitGate := harness.gate("pre-commit")
-	if !commitGate.Allowed {
-		t.Fatalf("pre-commit refused the approved candidate: %#v", commitGate)
-	}
+	harness.assertInvalidatedUnmanagedGate(commitGate)
 	harness.git("commit", "-q", "-m", "docs: add a delivery note")
 
-	// Route 2: direct push, under the same receipt and after the commit.
+	// Route 2: direct push after the commit.
 	pushGate := harness.gate("pre-push")
-	if !pushGate.Allowed {
-		t.Fatalf("pre-push refused the approved candidate: %#v", pushGate)
-	}
+	harness.assertInvalidatedUnmanagedGate(pushGate)
 
-	// Routes 3 and 4: a pull request with and without an issue reference. The two
-	// branches carry the same tree under different commits, which is the point:
-	// Gentle AI binds content, so neither the delivery route nor the commit
-	// identity reopens review, and the issue reference is repository policy that
-	// the receipt neither requires nor records. Both run before publication,
-	// because the pull-request boundary is the unpublished remote base.
+	// Routes 3 and 4: pull requests with and without an issue reference remain
+	// ordinary repository policy. The informational gate must not reintroduce a
+	// receipt or change behavior because the commit message changed.
 	prGate := harness.gate("pre-pr", "--base-ref", "origin/main")
-	if !prGate.Allowed {
-		t.Fatalf("pre-pr without an issue refused the approved candidate: %#v", prGate)
-	}
+	harness.assertInvalidatedUnmanagedGate(prGate)
 	harness.git("checkout", "-q", "-b", "organic-pr-with-issue")
 	harness.git("commit", "-q", "--amend", "--allow-empty", "-m", "docs: add a delivery note\n\nRefs: #17")
 	issueGate := harness.gate("pre-pr", "--base-ref", "origin/main")
-	if !issueGate.Allowed {
-		t.Fatalf("pre-pr with an issue refused the approved candidate: %#v", issueGate)
-	}
+	harness.assertInvalidatedUnmanagedGate(issueGate)
 
 	harness.git("checkout", "-q", "main")
 	harness.pushWithLease(harness.repo.baseRevision)
 	harness.assertRemoteBlob(path, body)
-
-	digests := map[string]string{
-		"pre-commit":              commitGate.Context.BundleDigest,
-		"pre-push":                pushGate.Context.BundleDigest,
-		"pre-pr without an issue": prGate.Context.BundleDigest,
-		"pre-pr with an issue":    issueGate.Context.BundleDigest,
-	}
-	for gate, digest := range digests {
-		if digest == "" || digest != commitGate.Context.BundleDigest {
-			t.Fatalf("%s validated a different receipt (%q) than the one that was approved (%q)", gate, digest, commitGate.Context.BundleDigest)
-		}
-	}
-	// Four delivery routes, one lineage: changing the route, or rewriting the
-	// commit over an unchanged tree, never reopened review.
-	harness.assertSingleReviewLineage(lineage)
 	harness.assertNoSDDArtifacts()
 	harness.assertOnlyMainRef()
 }
@@ -1854,238 +1807,101 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 }
 
 // TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview drives issue #1877's
-// sequence end to end through the real binary: reviewed baseline, kill switch
-// off, work delivered under `disabled/unmanaged` (recorded as unmanaged, never
-// blocked), switch back on — and from there the journey runs ONLY what the
-// product's own messages name, until the archive stop clears through one fresh
-// full review of the current state. The maintainer's rule is that this fresh
-// review subsumes the unmanaged history: no retroactive reconciliation, no
-// blessing of past unmanaged deliveries, no durable per-delivery ledger — and
-// no zero-byte review may ever read as coverage.
+// sequence through the terminal-burn model. Review mode changes only the
+// informational delivery disposition: an SDD archive cannot become blocked by a
+// missing receipt or review authority after FINALIZE has burned it.
 func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 	t.Parallel()
 	harness := newOrganicHarness(t)
 	const change = "reenable-change"
 	harness.seedOrganicSDDChange(change)
 
-	// Baseline: reviews on, one unit reviewed and delivered normally.
 	harness.writeFiles(map[string]string{"docs/baseline.md": organicLines("baseline line", 6)})
 	harness.git("add", "--", "docs/baseline.md")
 	baselineStarted, _ := harness.startReview("organic-reenable-baseline")
 	if approved := harness.approveReview("organic-reenable-baseline", baselineStarted); approved.State != organicStateApproved {
-		t.Fatalf("the baseline reviewed flow did not approve its candidate: %#v", approved)
+		t.Fatalf("the baseline reviewed flow did not approve: %#v", approved)
 	}
-	if gate := harness.gate("pre-commit"); gate.Result != organicGateAllow {
-		t.Fatalf("baseline delivery gate = %#v, want allow", gate)
-	}
+	harness.assertInvalidatedUnmanagedGate(harness.gate("pre-commit"))
 	harness.git("commit", "-q", "-m", "docs: baseline reviewed delivery")
-	baselineCommit := harness.git("rev-parse", "HEAD")
 
 	if mode := harness.disableReview(); mode.Status.Effective != organicModeOff {
 		t.Fatalf("kill switch produced no typed outcome: %#v", mode)
 	}
-
-	// Two units delivered under the disabled policy. The gate reports at exit
-	// 0 with the pinned disposition — that behavior is load-bearing.
 	for _, unit := range []string{"one", "two"} {
 		harness.writeFiles(map[string]string{"docs/unmanaged-" + unit + ".md": organicLines("unmanaged "+unit, 6)})
 		harness.git("add", "--", "docs/unmanaged-"+unit+".md")
 		gate := harness.gate("pre-commit")
 		if gate.Allowed || gate.Result == organicGateAllow || gate.Delivery != "disabled/unmanaged" {
-			t.Fatalf("disabled delivery gate for unit %s = %#v, want the unmanaged disposition", unit, gate)
+			t.Fatalf("disabled delivery gate for unit %s = %#v, want disabled/unmanaged", unit, gate)
 		}
 		harness.git("commit", "-q", "-m", "docs: unmanaged delivery "+unit)
 	}
 
-	// The disabled window proceeds unmanaged even though the stale baseline
-	// receipt is still in history: corrective verify cycle CRITICAL-1 makes
-	// this structural absence (sdd-status's own reviewGate, distinct from the
-	// pre-commit delivery gate checked above, which correctly keeps its own
-	// "disabled/unmanaged" disposition) -- not a populated disposition.
-	// Declining to manage is not a blocker demanding a review the switch
-	// refuses to run.
 	disabled := harness.sddStatus(change)
-	if disabled.Dependencies.Archive == "blocked" {
-		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
-	}
-	if disabled.ReviewGate != nil {
-		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
+	if disabled.Dependencies.Archive == "blocked" || disabled.ReviewGate != nil {
+		t.Fatalf("disabled archive retained review authority requirements: %#v", disabled)
 	}
 
 	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
 		t.Fatalf("re-enable produced no typed outcome: %#v", mode)
 	}
-
-	// The archive stop is back and names the fresh full review runnably.
-	blocked := harness.sddStatus(change)
-	if blocked.Dependencies.Archive != "blocked" || blocked.ReviewGate == nil {
-		t.Fatalf("re-enabled archive over unmanaged history = %#v, want blocked", blocked)
-	}
-	if blocked.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("re-enabling silently passed over unmanaged history: %#v", blocked.ReviewGate)
-	}
-	tokens := organicNamedContinuation(t, blocked.ReviewGate.Reason)
-
-	// Run exactly what it names. The tree is clean, so the universal
-	// empty-candidate guard (issue #2586) refuses before any authority is
-	// created, and its refusal names the --base-ref rerun. The zero-byte
-	// receipt this journey used to fabricate here can no longer exist on any
-	// route: the not-coverage defense moved from the archive stop to the
-	// start itself.
-	if len(tokens) < 2 || tokens[0] != "review" || tokens[1] != "start" {
-		t.Fatalf("named continuation is %v, want gentle-ai review start", tokens)
-	}
-	_, emptyStderr, emptyErr := harness.gentleAllowFailure(tokens...)
-	if emptyErr == nil {
-		t.Fatal("a clean-tree start froze an empty candidate instead of refusing")
-	}
-	if !strings.Contains(emptyStderr, "no pending changes") || !strings.Contains(emptyStderr, "--base-ref") {
-		t.Fatalf("empty-candidate refusal does not name the committed-work rerun: %q", emptyStderr)
+	enabled := harness.sddStatus(change)
+	if enabled.Dependencies.Archive == "blocked" || enabled.ReviewGate != nil {
+		t.Fatalf("re-enabled archive required burned authority or gate allow: %#v", enabled)
 	}
 
-	// The refused start recorded nothing: the stop stays blocked and keeps
-	// naming the fresh review with its base-ref selector.
-	stillBlocked := harness.sddStatus(change)
-	if stillBlocked.Dependencies.Archive != "blocked" || stillBlocked.ReviewGate == nil ||
-		stillBlocked.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("a refused empty start unblocked the archive stop: %#v", stillBlocked)
-	}
-	// The stop keeps naming the fresh full review; the --base-ref rerun for
-	// committed work now travels in the refusal's own hint (asserted above),
-	// because the zero-byte receipt that used to teach the stop that detail
-	// can no longer exist. The operator supplies the one placeholder value —
-	// the boundary to re-govern from — and the fresh full review freezes the
-	// delivered range.
-	tokens = organicNamedContinuation(t, stillBlocked.ReviewGate.Reason)
-	freshStart := harness.runNamedReviewStart(tokens, "--base-ref", baselineCommit)
-	if freshStart.ChangedFiles == 0 {
-		t.Fatalf("the fresh full review froze no content: %#v", freshStart)
-	}
-	if approved := harness.approveReview(freshStart.LineageID, freshStart); approved.State != organicStateApproved {
-		t.Fatalf("the fresh full review did not approve: %#v", approved)
-	}
-
-	// Completing the named review clears the stop: the fresh receipt governs
-	// the current state and the stale terminal receipts remain mere history.
-	cleared := harness.sddStatus(change)
-	if cleared.ReviewGate == nil || cleared.ReviewGate.Result != organicGateAllow {
-		t.Fatalf("completing the named fresh review did not clear the stop: %#v", cleared)
-	}
-	if cleared.Dependencies.Archive == "blocked" || cleared.NextRecommended != "archive" {
-		t.Fatalf("archive routing after the fresh full review = %#v, want ready/archive", cleared)
-	}
-
-	// The next unit after re-enable is ordinary managed work again: the
-	// lifecycle gate denies, names the fresh review, and running what it names
-	// clears the gate.
+	// New work after re-enable remains ordinary delivery until an independently
+	// started review is requested; validate is informational and cannot decide it.
 	harness.writeFiles(map[string]string{"docs/next.md": organicLines("next line", 6)})
 	harness.git("add", "--", "docs/next.md")
-	_, stderr, err := harness.gentleAllowFailure("review", "validate", "--cwd", harness.repo.worktree, "--gate", "pre-commit")
-	if err == nil {
-		t.Fatal("the gate allowed unreviewed new work after re-enable")
-	}
-	tokens = organicNamedContinuation(t, stderr)
-	nextStart := harness.runNamedReviewStart(tokens)
-	if nextStart.ChangedFiles == 0 {
-		t.Fatalf("the named review start froze no candidate: %#v", nextStart)
-	}
-	if approved := harness.approveReview(nextStart.LineageID, nextStart); approved.State != organicStateApproved {
-		t.Fatalf("the next unit's review did not approve: %#v", approved)
-	}
-	if gate := harness.gate("pre-commit"); gate.Result != organicGateAllow {
-		t.Fatalf("gate after the named review = %#v, want allow", gate)
-	}
+	harness.assertInvalidatedUnmanagedGate(harness.gate("pre-commit"))
 	harness.git("commit", "-q", "-m", "docs: managed unit after re-enable")
 }
 
-// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect keeps the
-// expiry-stable terminal state. The authorization that permitted the review is
-// withdrawn afterwards, and the terminal receipt still validates, replays
-// byte-identically, and produces no additional effect.
-// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect is
-// Wave 5 Slice 2's most consequential black-box behavior reversal (design
-// decision 4; rdd-receipt-only-gates/spec.md's "Kill switch off
-// short-circuits before authority discovery" scenario, a firm requirement,
-// not a tagged pending assumption): the kill switch is now consulted before
-// ANY receipt or authority read, so even the terminal receipt this journey
-// just earned is never consulted while disabled -- the gate reports the
-// generic disabled/unmanaged shape instead of replaying the same allow. The
-// name and behavior this test asserts changed accordingly: the terminal
-// AUTHORITY survives withdrawal unmutated (proven by re-enabling and
-// replaying below), but it no longer GOVERNS DELIVERY while withdrawn.
+// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect keeps
+// the withdrawal journey at the terminal-burn boundary. FINALIZE cannot be
+// replayed because it leaves no authority; disabling and re-enabling changes only
+// the informational gate disposition, and later work begins a fresh transaction.
 func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *testing.T) {
 	t.Parallel()
-	deadline := time.Now().Add(organicWithdrawalDeadline)
 	harness := newOrganicHarness(t)
 	const lineage = "organic-withdrawal"
-	const path = "docs/withdrawn.md"
-	body := organicLines("withdrawal line", 10)
 
-	harness.writeFiles(map[string]string{path: body})
+	harness.writeFiles(map[string]string{"docs/withdrawn.md": organicLines("withdrawal line", 10)})
 	started, _ := harness.startReview(lineage)
 	if approved := harness.approveReview(lineage, started); approved.State != organicStateApproved {
 		t.Fatalf("withdrawal journey did not approve its candidate: %#v", approved)
 	}
+	harness.assertInvalidatedUnmanagedGate(harness.gate("post-apply"))
 
-	firstGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	firstFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
-	beforeWithdrawal := harness.lineageDigest(lineage)
+	if _, _, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage); err == nil {
+		t.Fatal("terminal finalize replay reused burned authority")
+	}
+	if _, err := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)); !os.IsNotExist(err) {
+		t.Fatalf("terminal replay recreated authority: %v", err)
+	}
 
-	// Withdraw the authorization. Unlike the retired wall-clock lease this is an
-	// explicit event, so the harness withdraws instead of sleeping.
 	if mode := harness.disableReview(); mode.Status.Effective != organicModeOff {
 		t.Fatalf("authorization withdrawal did not take effect: %#v", mode)
 	}
-	generationsAfterWithdrawal := harness.reviewModeGenerations()
-
-	// The withdrawal must be real, otherwise everything below is vacuous.
+	harness.writeFiles(map[string]string{"docs/withdrawn-successor.md": organicLines("withdrawn successor", 4)})
+	harness.git("add", "--", "docs/withdrawn-successor.md")
 	if _, _, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree, "--lineage", "organic-withdrawal-successor"); err == nil {
-		t.Fatal("a new review started after the authorization was withdrawn")
+		t.Fatal("a fresh review started after the authorization was withdrawn")
+	}
+	withdrawn := harness.gate("post-apply")
+	if withdrawn.Allowed || withdrawn.Result == organicGateAllow || withdrawn.Delivery != "disabled/unmanaged" {
+		t.Fatalf("withdrawn delivery gate = %#v, want disabled/unmanaged", withdrawn)
 	}
 
-	// While withdrawn: the terminal receipt just earned is never consulted --
-	// the gate reports the generic disabled/unmanaged shape, not a replay of
-	// the pre-withdrawal allow.
-	withdrawnGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	if bytes.Equal(withdrawnGate, firstGate) {
-		t.Fatal("the terminal gate result did not change after withdrawal -- the receipt was consulted while disabled")
-	}
-	if !bytes.Contains(withdrawnGate, []byte(`"disabled/unmanaged"`)) {
-		t.Fatalf("withdrawn gate did not report disabled/unmanaged: %s", withdrawnGate)
-	}
-	if bytes.Contains(withdrawnGate, []byte(`"allowed":true`)) {
-		t.Fatalf("withdrawn gate fabricated an approval: %s", withdrawnGate)
-	}
-	replayedFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
-	if !bytes.Equal(replayedFinalize, firstFinalize) {
-		t.Fatalf("the terminal finalize replay changed bytes:\nfirst:\n%s\nreplay:\n%s", firstFinalize, replayedFinalize)
-	}
-
-	if after := harness.lineageDigest(lineage); after != beforeWithdrawal {
-		t.Fatal("replaying a terminal review mutated its authority")
-	}
-	if after := harness.reviewModeGenerations(); !equalOrganicStrings(after, generationsAfterWithdrawal) {
-		t.Fatalf("replay advanced review-mode CAS generations: %v -> %v", generationsAfterWithdrawal, after)
-	}
-	if remote := harness.bareGit("rev-parse", "refs/heads/main"); remote != harness.repo.baseRevision {
-		t.Fatalf("replay moved the remote: %s != %s", remote, harness.repo.baseRevision)
-	}
-	harness.assertOnlyMainRef()
-
-	// Re-enabling rediscovers the SAME unmutated receipt, and it governs
-	// again exactly as before withdrawal -- proving the switch never touched
-	// the authority itself, only whether it is consulted.
 	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
 		t.Fatalf("re-enabling did not take effect: %#v", mode)
 	}
-	reEnabledGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	if !bytes.Equal(reEnabledGate, firstGate) {
-		t.Fatalf("the terminal gate result changed across a withdraw/re-enable cycle:\nbefore:\n%s\nafter:\n%s", firstGate, reEnabledGate)
-	}
-
-	if time.Now().After(deadline) {
-		t.Fatalf("the withdrawal journey exceeded its %s CI budget", organicWithdrawalDeadline)
-	}
+	harness.assertInvalidatedUnmanagedGate(harness.gate("post-apply"))
+	fresh, _ := harness.startReview("organic-withdrawal-fresh")
+	harness.approveReview("organic-withdrawal-fresh", fresh)
+	harness.assertOnlyMainRef()
 }
 
 // ---------------------------------------------------------------------------
@@ -2221,11 +2037,14 @@ func (harness *organicHarness) startReview(lineage string, extra ...string) (org
 
 // approveReview runs the proportional plan the tier selected: zero reviewers for
 // passive content, and one result per selected lens plus final evidence
-// otherwise. The suite never selects lenses itself.
+// otherwise. The suite never selects lenses itself. Approval is terminal: it
+// burns the transaction instead of retaining a delivery receipt or authority.
 func (harness *organicHarness) approveReview(lineage string, started organicStartResult) organicFinalizeResult {
 	harness.t.Helper()
 	if len(started.SelectedLenses) == 0 {
-		return harness.finalize(lineage)
+		finalized := harness.finalize(lineage)
+		harness.assertReviewBurned(lineage, finalized)
+		return finalized
 	}
 	for index, lens := range started.SelectedLenses {
 		harness.captureReviewerResult(lineage, started, index, organicReviewerResult{
@@ -2237,7 +2056,39 @@ func (harness *organicHarness) approveReview(lineage string, started organicStar
 	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
 		harness.t.Fatalf("reviewer results did not reach validation: %#v", result)
 	}
-	return harness.finalize(lineage, "--evidence", harness.writeEvidence())
+	finalized := harness.finalize(lineage, "--evidence", harness.writeEvidence())
+	harness.assertReviewBurned(lineage, finalized)
+	return finalized
+}
+
+// assertReviewBurned pins the terminal ownership boundary: FINALIZE reports an
+// approved result, but leaves neither a receipt path nor on-disk authority for
+// later delivery, recovery, or SDD binding to reuse.
+func (harness *organicHarness) assertReviewBurned(lineage string, finalized organicFinalizeResult) {
+	harness.t.Helper()
+	if finalized.State != organicStateApproved {
+		harness.t.Fatalf("review %q finalized as %q, want %q: %#v", lineage, finalized.State, organicStateApproved, finalized)
+	}
+	if finalized.ReceiptPath != "" {
+		harness.t.Fatalf("approved review %q retained receipt path %q", lineage, finalized.ReceiptPath)
+	}
+	authority := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)
+	if _, err := os.Stat(authority); !os.IsNotExist(err) {
+		harness.t.Fatalf("approved review %q retained terminal authority at %q: %v", lineage, authority, err)
+	}
+}
+
+// assertInvalidatedUnmanagedGate keeps delivery on ordinary repository policy
+// after an approved transaction has burned. A gate may report that fact, but it
+// must neither authorize nor veto delivery.
+func (harness *organicHarness) assertInvalidatedUnmanagedGate(gate organicGateResult) {
+	harness.t.Helper()
+	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result != "invalidated" || gate.Delivery != "unmanaged" {
+		harness.t.Fatalf("delivery gate = %#v, want invalidated/unmanaged informational result", gate)
+	}
+	if gate.Action != "repository-policy" {
+		harness.t.Fatalf("delivery gate action = %q, want repository-policy", gate.Action)
+	}
 }
 
 // captureReviewerResult admits one reviewer result through the native route.
@@ -3227,12 +3078,9 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 				t.Fatal("the real agent never created a candidate commit")
 			}
 			gate := harness.gate("pre-push")
-			if !gate.Allowed || gate.Result != organicGateAllow {
-				t.Fatalf("the real-agent candidate was refused at delivery: %#v", gate)
-			}
+			harness.assertInvalidatedUnmanagedGate(gate)
 			// A real sub-agent must not escalate its own route either.
 			harness.assertNoSDDArtifacts()
-			harness.assertSingleReviewLineage(lineage)
 		})
 	}
 }

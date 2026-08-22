@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,45 +93,26 @@ func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 	}
 }
 
-// corruptCloneLocalReviewMode damages the clone-local override head record.
-// The switch becomes unreadable, which is not the same as being off.
+// corruptCloneLocalReviewMode damages the authoritative clone-local head.
+// The fixture creates exactly generation 1, so corrupting that exact path
+// proves status does not confuse a mode-resolution failure with a gate result.
 func corruptCloneLocalReviewMode(t *testing.T, repo string) {
 	t.Helper()
-	// #2882 moved the switch out of the review authority tree so a damaged
-	// authority can no longer make the kill switch unreachable. The record
-	// this helper corrupts is the switch's own, wherever it now lives.
-	root := filepath.Join(repo, ".git", "gentle-ai", "review-mode")
-	corrupted := 0
-	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || filepath.Base(filepath.Dir(path)) != "rdd-mode" {
-			return nil
-		}
-		if !strings.HasPrefix(entry.Name(), "gen-") {
-			return nil
-		}
-		if writeErr := os.WriteFile(path, []byte("{\n"), 0o644); writeErr != nil {
-			return writeErr
-		}
-		corrupted++
-		return nil
-	}); err != nil {
-		t.Fatalf("walk clone-local review mode records: %v", err)
+	path, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("locate clone-local review mode head: %v", err)
 	}
-	if corrupted == 0 {
-		t.Fatal("no clone-local review mode record to corrupt; the fixture never wrote one")
+	if path == "" {
+		t.Fatal("no clone-local review mode head to corrupt; the fixture never wrote one")
+	}
+	if err := os.WriteFile(path, []byte("{\n"), 0o600); err != nil {
+		t.Fatalf("corrupt clone-local review mode head: %v", err)
 	}
 }
 
-// seedScopeChangedApprovedSDDChange stages an archive-gated SDD change,
-// approves a review over its current content, then changes the candidate
-// afterward. Real review activity happened here and then went stale --
-// unlike a genuinely missing receipt (corrective verify cycle 4's decline
-// case), this still blocks archive while reviews are enabled and is the
-// fixture that lets "enabled enforces" and "disabled does not" keep visibly
-// differing after BLOCKER-1.
+// seedScopeChangedApprovedSDDChange leaves a historical scope change behind
+// after FINALIZE burns its baseline authority. The historical review is not a
+// governing receipt and must not become an SDD archive blocker.
 func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
 	t.Helper()
 	seedArchiveGatedSDDChange(t, root)
@@ -144,14 +125,10 @@ func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
 	commitAllSDDStatus(t, root, "scope changed after approval")
 }
 
-// TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled pins today's behaviour
-// for a fixture where real review activity happened and then went stale.
-// Corrective verify cycle 4, BLOCKER-1: superseded from its original
-// "genuinely missing receipt" fixture, which is now decline-by-absence-of-
-// action on both sides of the switch (see
-// TestSDDStatusArchiveGateCarriesOnWhileReviewIsDisabled's sibling in
-// internal/sddstatus for that case) and so could no longer distinguish
-// enabled enforcement from disabled leniency.
+// TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled retains its stable fixture
+// name while pinning #3417's replacement behavior: FINALIZE burned the old
+// approval, so a historical scope change has no deciding gate. Enabled status
+// offers a new review but archive proceeds under ordinary repository policy.
 func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 	reviewEnabledHome(t)
 	root := t.TempDir()
@@ -161,15 +138,7 @@ func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 		t.Fatalf("fixture must enable receipt-driven development: disabled=%t err=%v", disabled, err)
 	}
 	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged {
-		t.Fatalf("enabled reviewGate = %#v, want scope-changed", status.ReviewGate)
-	}
-	if status.ReviewGate.Delivery != "" {
-		t.Fatalf("enabled reviewGate.delivery = %q, want absent from the enabled wire shape", status.ReviewGate.Delivery)
-	}
-	if status.Dependencies.Archive != sddstatus.DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("enabled archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
-	}
+	requireEnabledOrdinaryArchive(t, status, "enabled archive after burned scope-changed review")
 }
 
 // TestSDDStatusArchiveGateCarriesOnWhileReviewIsDisabled is the seam under
@@ -225,35 +194,41 @@ func TestSDDStatusWithoutCWDUsesLinkedWorktreeCommonDirMode(t *testing.T) {
 	}
 }
 
-// TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable holds the last
-// property: a broken or tampered mode record must never be able to relax the
-// archive gate, so an unreadable switch behaves exactly like an enabled one.
-// Corrective verify cycle 4, BLOCKER-1: uses the scope-changed fixture (real
-// review activity gone stale), not the original "genuinely missing receipt"
-// fixture -- the latter is decline-by-absence-of-action on both sides of the
-// switch now, so it could no longer distinguish "correctly fails closed to
-// enabled" from "incorrectly resolved to disabled".
+// TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable keeps the two
+// decisions separate. The mode reader still reports malformed persisted state
+// as a real error, but SDD status fails closed to enabled and has no governing
+// receipt to enforce. It must therefore proceed under ordinary policy without
+// fabricating a reviewGate from the mode error.
 func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 	reviewEnabledHome(t)
 	root := t.TempDir()
-	seedScopeChangedApprovedSDDChange(t, root)
+	seedArchiveGatedSDDChange(t, root)
 	disableReviewForClone(t, root)
 	corruptCloneLocalReviewMode(t, root)
 
-	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
-		t.Fatalf("unreadable switch must fail closed to enabled: disabled=%t err=%v", disabled, err)
+	mode, modeErr := reviewModeStatus(context.Background(), root)
+	if modeErr == nil || mode.Enabled() {
+		t.Fatalf("unreadable switch must remain a failed-closed mode resolution: mode=%#v err=%v", mode, modeErr)
 	}
+	var unreadable *ReviewModeUnreadableError
+	if !errors.As(modeErr, &unreadable) {
+		t.Fatalf("mode-resolution error = %T %v, want ReviewModeUnreadableError", modeErr, modeErr)
+	}
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("SDD mode projection = disabled=%t err=%v, want enabled fallback for the non-deciding archive path", disabled, err)
+	}
+
 	t.Chdir(root)
 	for _, args := range [][]string{
 		{"thin", "--cwd", root, "--json"},
 		{"thin", "--json"},
 	} {
 		status := runSDDCommandJSON(t, RunSDDStatus, args...)
-		if status.ReviewGate == nil || status.ReviewGate.Delivery != "" {
-			t.Fatalf("unreadable-switch reviewGate = %#v, want the enforcing shape", status.ReviewGate)
+		if status.ReviewGate != nil || status.ReviewOffer != nil {
+			t.Fatalf("unreadable mode fabricated review state: gate=%#v offer=%#v", status.ReviewGate, status.ReviewOffer)
 		}
-		if status.Dependencies.Archive != sddstatus.DependencyBlocked || status.NextRecommended != "resolve-review" {
-			t.Fatalf("unreadable-switch archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
+		if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
+			t.Fatalf("unreadable mode archive=%q next=%q, want ordinary ready/archive", status.Dependencies.Archive, status.NextRecommended)
 		}
 	}
 }

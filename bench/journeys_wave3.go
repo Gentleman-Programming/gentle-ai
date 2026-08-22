@@ -7,171 +7,456 @@ import (
 	"strings"
 )
 
-// Wave 3 Slice 5 (task 6.7): black-box new-lineage lifecycle journeys.
-// GENTLE_AI_RDD_NEW_LINEAGE is opted into per-journey via
-// Journey.NewLineageActivation (bench/runner.go) — every wave1/wave2/edge/sdd
-// journey stays on the byte-identical legacy `review start` path.
-//
-// Wave 3 remediation (verify-report CRITICAL C1, then CRITICAL C5): `review
-// finalize` is now CLI-wired for new lineages, and default-deny (C5) means a
-// `review start`-only lineage — never finalized — correctly DENIES at every
-// gate rather than allowing. These two journeys now drive the complete
-// product-reachable lifecycle S3's own SUGGESTION named as missing:
-// tier-0 `review start` freezing a v3 authority, `review finalize` reaching
-// a genuine approved receipt, then `review validate` across the gates task
-// 6.7's own fix (governingAuthorityLiveEvidence's per-gate-accurate
-// projection) makes correct — an exact match allowing at both post-apply and
-// pre-commit, and an unstaged-only drift correctly denying scope-changed at
-// post-apply while still allowing at pre-commit, exactly the distinction
-// review_new_lineage_gate_selector_test.go proves at the Go integration
-// layer, reproduced here end-to-end through the built binary.
-
 const (
-	newLineageExactLineage    = "wave-three-new-lineage-exact"
-	newLineageSelectorLineage = "wave-three-new-lineage-selector"
+	atomicSiblingBindingKey = "atomic-sibling-binding"
+	atomicBurnInitialKey    = "atomic-burn-initial-binding"
+	atomicCorrectionLineage = "atomic-four-lens-correction"
 )
 
-type newLineageStartResult struct {
-	Operation string `json:"operation"`
-	LineageID string `json:"lineage_id"`
-	State     string `json:"state"`
-	RiskLevel string `json:"risk_level"`
+var atomicReviewStatusCapability = &Capability{Verb: []string{"review", "status"}, Flags: []string{
+	"--cwd", "--contract", "--lineage", "--next-transition",
+}}
+
+// Wave 3 now ratifies #3417's compact atomic boundary. The former environment
+// activation and receipt-governed gate journeys belonged to the removed lineage
+// implementation; these journeys exercise only the shipped worktree/candidate
+// binding and the active transaction's compact continuation.
+type atomicReviewStartResult struct {
+	Action         string   `json:"action"`
+	LineageID      string   `json:"lineage_id"`
+	State          string   `json:"state"`
+	SelectedLenses []string `json:"selected_lenses"`
 }
 
-// requireNewLineageStarted proves the v3-specific start response shape
-// (ReviewFacadeStartNewLineageResult, internal/cli/review_facade_new_lineage.go)
-// rather than assuming the legacy start envelope's fields apply.
-func requireNewLineageStarted(lineage string) func(*Sandbox, Observation) error {
-	return func(_ *Sandbox, observation Observation) error {
-		var result newLineageStartResult
-		if err := decodeWaveObservation(observation, &result, "new-lineage start"); err != nil {
-			return err
-		}
-		if result.Operation != "review/start" || result.LineageID != lineage || result.State != "reviewing" {
-			return fmt.Errorf("new-lineage start = %+v, want operation=review/start lineage_id=%q state=reviewing", result, lineage)
-		}
-		return nil
-	}
-}
-
-// requireNewLineageScopeChangedDenied proves the collect(changed) ->
-// GateScopeChanged mapping task 6.2 wires (newLineageGateEvaluation) reaches
-// the built binary's stdout, not just the Go unit-test layer: a denial that
-// still exits non-zero but carries the parseable scope-changed envelope.
-func requireNewLineageScopeChangedDenied(lineage string) func(*Sandbox, Observation) error {
-	return func(_ *Sandbox, observation Observation) error {
-		var gate waveGateResult
-		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
-			return fmt.Errorf("parse new-lineage scope-changed denial: %w (stderr: %s)", err, firstLine(observation.Stderr))
-		}
-		if observation.ExitCode == 0 || gate.Allowed || gate.Result != "scope-changed" || gate.Context.LineageID != lineage {
-			return fmt.Errorf("new-lineage post-apply drift = exit=%d gate=%+v, want a scope-changed denial for lineage %q", observation.ExitCode, gate, lineage)
-		}
-		return nil
-	}
-}
-
-type newLineageFinalizeResult struct {
-	Operation string `json:"operation"`
-	LineageID string `json:"lineage_id"`
-	State     string `json:"state"`
-}
-
-// requireNewLineageFinalized proves the v3-specific finalize response shape
-// (ReviewFacadeFinalizeNewLineageResult, internal/cli/review_facade_finalize_new_lineage.go)
-// reaches a genuine approved terminal state and receipt through the built
-// binary — the C1/C5 remediation's own product-surface evidence.
-func requireNewLineageFinalized(lineage string) func(*Sandbox, Observation) error {
-	return func(_ *Sandbox, observation Observation) error {
-		var result newLineageFinalizeResult
-		if err := decodeWaveObservation(observation, &result, "new-lineage finalize"); err != nil {
-			return err
-		}
-		if result.Operation != "review/finalize" || result.LineageID != lineage || result.State != "approved" {
-			return fmt.Errorf("new-lineage finalize = %+v, want operation=review/finalize lineage_id=%q state=approved", result, lineage)
-		}
-		return nil
-	}
-}
-
-// stagePassiveTierZeroDoc stages one genuinely tier-0 (RiskLow) candidate:
-// ClassifyRisk's OnlyPassiveContentChanges carve-out (risk.go) requires
-// every authored path to be passive prose content (.md/.mdx/.rst/.adoc/
-// images) — ordinary code never qualifies, landing in RiskMedium instead,
-// whose non-empty SelectedLenses now requires captured lens results before
-// finalize approves (absorbed N1, Wave 5 Slice 4). j59/j60 test the gate
-// selector's staged-vs-workspace projection distinction, which is orthogonal
-// to file type, so a passive doc keeps them genuinely tier-0 (their own
-// stated title) with a product-reachable finalize path, rather than
-// (before N1) silently self-approving a RiskMedium candidate with zero
-// captured lens results.
-func stagePassiveTierZeroDoc(sandbox *Sandbox) error {
-	path := filepath.Join(sandbox.Repo, "docs", "gate-selector-notes.md")
-	content := "# gate selector notes\n\nOrdinary prose with no executable content.\n"
-	if err := sandbox.write(path, content); err != nil {
+func stageAtomicSiblingWorktrees(sandbox *Sandbox) error {
+	linked := filepath.Join(sandbox.Root, "atomic-sibling-worktree")
+	if err := sandbox.git(sandbox.Repo, "worktree", "add", "--detach", linked, "HEAD"); err != nil {
 		return err
 	}
-	return sandbox.git(sandbox.Repo, "add", "-A")
+	for _, root := range []string{sandbox.Repo, linked} {
+		if err := sandbox.write(filepath.Join(root, "docs", "atomic-boundary.md"), "# Atomic boundary\n"); err != nil {
+			return err
+		}
+		if err := sandbox.git(root, "add", "--", "docs/atomic-boundary.md"); err != nil {
+			return err
+		}
+	}
+	sandbox.Scratch["atomic-sibling-worktree"] = linked
+	return nil
 }
 
-// dirtyTrackedFileWithoutStaging edits stagePassiveTierZeroDoc's own tracked
-// file again, without staging the edit — the exact unstaged-drift fixture
-// review_new_lineage_gate_selector_test.go proves at the Go layer.
-func dirtyTrackedFileWithoutStaging(sandbox *Sandbox) error {
-	path := sandbox.Repo + "/docs/gate-selector-notes.md"
-	content := "# gate selector notes\n\nOrdinary prose with no executable content.\nUnstaged drift: never committed, never staged.\n"
-	return sandbox.write(path, content)
+func stageAtomicHighRiskCorrectionCandidate(sandbox *Sandbox) error {
+	if err := stageCaptureEvidenceDescriptorCorrection(sandbox); err != nil {
+		return err
+	}
+	path := filepath.Join(sandbox.Repo, "scripts", "atomic-review.sh")
+	if err := sandbox.write(path, "#!/bin/sh\nprintf '%s\\n' atomic-review\n"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "add", "--", "scripts/atomic-review.sh")
+}
+
+func readAtomicReviewStatus(r *journeyRun, lineage string) (statusEnvelope, error) {
+	return readAtomicReviewStatusAt(r, r.sandbox.Repo, lineage)
+}
+
+func readAtomicReviewStatusAt(r *journeyRun, cwd, lineage string) (statusEnvelope, error) {
+	args := []string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--cwd", cwd}
+	if lineage != "" {
+		args = append(args, "--lineage", lineage)
+	}
+	observation := r.runAt(cwd, args, false)
+	if observation.ExitCode != 0 {
+		return statusEnvelope{}, fmt.Errorf("atomic STATUS exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+	var status statusEnvelope
+	if err := json.Unmarshal([]byte(observation.Stdout), &status); err != nil {
+		return statusEnvelope{}, fmt.Errorf("parse atomic STATUS: %w", err)
+	}
+	return status, nil
+}
+
+func decodeAtomicReviewStart(observation Observation, wantLineage string) (atomicReviewStartResult, error) {
+	var started atomicReviewStartResult
+	if err := json.Unmarshal([]byte(observation.Stdout), &started); err != nil {
+		return started, fmt.Errorf("parse atomic START: %w", err)
+	}
+	if started.Action != "created" || started.LineageID != wantLineage || started.State != "reviewing" {
+		return started, fmt.Errorf("atomic START = %+v, want created reviewing lineage %q", started, wantLineage)
+	}
+	return started, nil
+}
+
+// resolveAtomicStartConsentAt executes the granted invocation emitted by the
+// product only after the exact rendered START has returned its consent envelope.
+// The benchmark never substitutes --consent itself or hand-assembles a START.
+func resolveAtomicStartConsentAt(r *journeyRun, cwd string, status statusEnvelope, relay Observation) (Observation, error) {
+	var response struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal([]byte(relay.Stdout), &response); err != nil {
+		return Observation{}, fmt.Errorf("parse printed START response: %w", err)
+	}
+	if response.Action == "created" {
+		return relay, nil
+	}
+	if response.Action != "consent_required" {
+		return Observation{}, fmt.Errorf("printed START action = %q, want created or consent_required", response.Action)
+	}
+	var consent waveConsentResult
+	if err := json.Unmarshal([]byte(relay.Stdout), &consent); err != nil {
+		return Observation{}, fmt.Errorf("parse START consent relay: %w", err)
+	}
+	grantInvocation := ""
+	for _, choice := range consent.Choices {
+		if choice.Answer == "granted" {
+			grantInvocation = choice.Invocation
+			break
+		}
+	}
+	if consent.TargetIdentity != status.TargetIdentity || grantInvocation == "" {
+		return Observation{}, fmt.Errorf("START consent did not bind the selectorless target: %+v", consent)
+	}
+	grantArgs, err := waveReviewInvocationArgs(grantInvocation)
+	if err != nil {
+		return Observation{}, err
+	}
+	granted := r.runAt(cwd, grantArgs, false)
+	if granted.ExitCode != 0 {
+		return Observation{}, fmt.Errorf("emitted START consent grant exited %d: %s", granted.ExitCode, firstLine(granted.Stderr))
+	}
+	return granted, nil
+}
+
+// startAtomicTransactionFromSelectorlessStatusAt executes only the START command
+// rendered by selectorless STATUS for cwd. It never reconstructs the legacy START
+// flags, so a changed negotiated binding cannot be hidden by bench-owned arguments.
+func startAtomicTransactionFromSelectorlessStatusAt(r *journeyRun, cwd string, forbiddenLineages ...string) (string, error) {
+	status, err := readAtomicReviewStatusAt(r, cwd, "")
+	if err != nil {
+		return "", err
+	}
+	lineage := status.executeArgument("lineage")
+	if status.NextTransition.Kind != "execute" || status.NextTransition.Execute.Operation != "review.start" || lineage == "" {
+		return "", fmt.Errorf("selectorless STATUS = %+v, want a runnable START with a derived lineage", status.NextTransition)
+	}
+	if status.Authority.LineageID != "" || status.Authority.State != "" {
+		return "", fmt.Errorf("selectorless STATUS reused active authority instead of deriving a fresh compact transaction: %+v", status.Authority)
+	}
+	for _, forbidden := range forbiddenLineages {
+		if forbidden != "" && (status.Authority.LineageID == forbidden || lineage == forbidden) {
+			return "", fmt.Errorf("selectorless STATUS reused forbidden lineage %q: authority=%+v transition=%+v", forbidden, status.Authority, status.NextTransition)
+		}
+	}
+	if status.executeArgument("expected-untracked-inventory") != "" || status.executeArgument("intended-untracked") != "" {
+		return "", fmt.Errorf("selectorless STATUS unexpectedly reused untracked selection inventory: %+v", status.NextTransition.Execute.Arguments)
+	}
+	started, err := runPrintedTransitionAt(r, cwd, status)
+	if err != nil {
+		return "", err
+	}
+	if started.ExitCode != 0 {
+		return "", fmt.Errorf("printed selectorless START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	}
+	started, err = resolveAtomicStartConsentAt(r, cwd, status, started)
+	if err != nil {
+		return "", err
+	}
+	if _, err := decodeAtomicReviewStart(started, lineage); err != nil {
+		return "", err
+	}
+	return lineage, nil
+}
+
+func startAtomicTransactionFromSelectorlessStatus(r *journeyRun, forbiddenLineages ...string) (string, error) {
+	return startAtomicTransactionFromSelectorlessStatusAt(r, r.sandbox.Repo, forbiddenLineages...)
+}
+
+func proveCurrentStatusAndStartIgnoreSiblingWorktree(r *journeyRun) error {
+	linked := r.sandbox.Scratch["atomic-sibling-worktree"]
+	if linked == "" {
+		return fmt.Errorf("atomic sibling worktree fixture did not record its path")
+	}
+	siblingLineage, err := startAtomicTransactionFromSelectorlessStatusAt(r, linked)
+	if err != nil {
+		return fmt.Errorf("start sibling transaction from its selectorless STATUS: %w", err)
+	}
+	r.sandbox.Scratch[atomicSiblingBindingKey] = siblingLineage
+
+	currentLineage, err := startAtomicTransactionFromSelectorlessStatus(r, siblingLineage)
+	if err != nil {
+		return fmt.Errorf("start current worktree from its selectorless STATUS: %w", err)
+	}
+	selected, err := readAtomicReviewStatus(r, currentLineage)
+	if err != nil {
+		return err
+	}
+	if selected.Authority.LineageID != currentLineage || selected.Authority.State != "reviewing" {
+		return fmt.Errorf("explicit current-worktree STATUS = authority=%+v, want independent current reviewing transaction", selected.Authority)
+	}
+	return nil
+}
+
+func requireExplicitAtomicFourLensStatus(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, atomicCorrectionLineage)
+	if err != nil {
+		return err
+	}
+	if status.Authority.LineageID != atomicCorrectionLineage || status.Authority.State != "reviewing" ||
+		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "reviewer_results_required" ||
+		len(status.NextTransition.Collect.Inputs) != 4 {
+		return fmt.Errorf("explicit active atomic STATUS = authority=%+v transition=%+v, want four compact lens slots", status.Authority, status.NextTransition)
+	}
+	for index, input := range status.NextTransition.Collect.Inputs {
+		lineage, order := "", ""
+		for _, argument := range input.Arguments {
+			switch argument.Name {
+			case "lineage":
+				lineage = argument.Value
+			case "order":
+				order = argument.Value
+			}
+		}
+		if input.Name != "reviewer_result" || input.ArtifactSubject.SubjectHash == "" || input.CaptureOperation != "review.capture-result" ||
+			lineage != atomicCorrectionLineage || order != fmt.Sprintf("%d", index) {
+			return fmt.Errorf("atomic lens slot %d = %+v, want a bound reviewer_result", index, input)
+		}
+	}
+	return nil
+}
+
+func captureAtomicReviewerSlots(r *journeyRun, lineageID string, includeCorrectableFinding bool) error {
+	for capture := 0; capture < 4; capture++ {
+		status, err := readAtomicReviewStatus(r, lineageID)
+		if err != nil {
+			return err
+		}
+		if status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "reviewer_results_required" ||
+			len(status.NextTransition.Collect.Inputs) == 0 {
+			return fmt.Errorf("atomic capture %d STATUS = %+v, want a reviewer-result slot", capture, status.NextTransition)
+		}
+		input := status.NextTransition.Collect.Inputs[0]
+		lineage, target, revision, lens, order := "", "", "", "", ""
+		for _, argument := range input.Arguments {
+			switch argument.Name {
+			case "lineage":
+				lineage = argument.Value
+			case "target":
+				target = argument.Value
+			case "expected-revision":
+				revision = argument.Value
+			case "lens":
+				lens = argument.Value
+			case "order":
+				order = argument.Value
+			}
+		}
+		if lineage != lineageID || target == "" || revision == "" || lens == "" || order == "" {
+			return fmt.Errorf("atomic capture %d binding = %+v", capture, input)
+		}
+
+		paths := make([]string, 0, len(input.ChangedPathManifest))
+		for _, entry := range input.ChangedPathManifest {
+			paths = append(paths, entry.Path)
+		}
+		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, paths)
+		if err != nil {
+			return err
+		}
+		if capture == 0 && includeCorrectableFinding {
+			payload, err = json.Marshal(map[string]any{
+				"subject_hash": input.ArtifactSubject.SubjectHash,
+				"inspection":   map[string]any{"status": "completed", "paths": paths},
+				"findings": []any{map[string]any{
+					"location": "candidate.go:3", "severity": "CRITICAL", "claim": "candidate returns the wrong value",
+					"proof_refs":     []string{"candidate.go:3 changed hunk fails the focused check"},
+					"evidence_class": "deterministic", "causal_disposition": "introduced",
+				}},
+				"evidence": []string{"focused differential check failed on the frozen candidate"},
+			})
+			if err != nil {
+				return err
+			}
+		}
+		path, err := writeScratch(r.sandbox, fmt.Sprintf("atomic-reviewer-%d.json", capture), payload)
+		if err != nil {
+			return err
+		}
+		observation := r.run([]string{
+			"review", "capture-result", "--cwd", r.sandbox.Repo,
+			"--lineage", lineage, "--target", target, "--expected-revision", revision,
+			"--lens", lens, "--order", order, "--input", path,
+		}, true)
+		if observation.ExitCode != 0 {
+			return fmt.Errorf("capture atomic reviewer slot %d: %s", capture, firstLine(observation.Stderr))
+		}
+	}
+	return nil
+}
+
+// captureExactSelectedReviewerSlots follows one explicit active lineage through
+// every lens STATUS selected, in its published order. Unlike the fixed 4R helper
+// above, this also covers standard-risk one-lens reviews without treating their
+// single slot as an incomplete high-risk set.
+func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeCorrectableFinding bool) error {
+	initial, err := readAtomicReviewStatus(r, lineageID)
+	if err != nil {
+		return err
+	}
+	if initial.Authority.LineageID != lineageID || initial.Authority.State != "reviewing" ||
+		initial.NextTransition.Kind != "collect" || initial.NextTransition.ReasonCode != "reviewer_results_required" ||
+		len(initial.NextTransition.Collect.Inputs) == 0 {
+		return fmt.Errorf("exact active STATUS = authority=%+v transition=%+v, want selected reviewer slots", initial.Authority, initial.NextTransition)
+	}
+
+	type selectedSlot struct {
+		lineage, target, revision, lens, order string
+	}
+	bindings := func(status statusEnvelope) ([]selectedSlot, error) {
+		slots := make([]selectedSlot, 0, len(status.NextTransition.Collect.Inputs))
+		for index, input := range status.NextTransition.Collect.Inputs {
+			slot := selectedSlot{}
+			for _, argument := range input.Arguments {
+				switch argument.Name {
+				case "lineage":
+					slot.lineage = argument.Value
+				case "target":
+					slot.target = argument.Value
+				case "expected-revision":
+					slot.revision = argument.Value
+				case "lens":
+					slot.lens = argument.Value
+				case "order":
+					slot.order = argument.Value
+				}
+			}
+			if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" ||
+				input.ArtifactSubject.SubjectHash == "" || slot.lineage != lineageID || slot.target == "" ||
+				slot.revision == "" || slot.lens == "" || slot.order != fmt.Sprintf("%d", index) {
+				return nil, fmt.Errorf("selected reviewer slot %d = %+v", index, input)
+			}
+			slots = append(slots, slot)
+		}
+		return slots, nil
+	}
+
+	expected, err := bindings(initial)
+	if err != nil {
+		return err
+	}
+	for capture := range expected {
+		status, err := readAtomicReviewStatus(r, lineageID)
+		if err != nil {
+			return err
+		}
+		got, err := bindings(status)
+		if err != nil || len(got) != len(expected)-capture {
+			return fmt.Errorf("selected reviewer slots after %d captures = %+v, %v", capture, status.NextTransition, err)
+		}
+		for index := range got {
+			if got[index] != expected[capture+index] {
+				return fmt.Errorf("selected reviewer slot order changed after %d captures: got=%+v want=%+v", capture, got, expected[capture:])
+			}
+		}
+		input := status.NextTransition.Collect.Inputs[0]
+		paths := make([]string, 0, len(input.ChangedPathManifest))
+		for _, entry := range input.ChangedPathManifest {
+			paths = append(paths, entry.Path)
+		}
+		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, paths)
+		if err != nil {
+			return err
+		}
+		if capture == 0 && includeCorrectableFinding {
+			payload, err = json.Marshal(map[string]any{
+				"subject_hash": input.ArtifactSubject.SubjectHash,
+				"inspection":   map[string]any{"status": "completed", "paths": paths},
+				"findings": []any{map[string]any{
+					"location": "candidate.go:3", "severity": "CRITICAL", "claim": "candidate returns the wrong value",
+					"proof_refs":     []string{"candidate.go:3 changed hunk fails the focused check"},
+					"evidence_class": "deterministic", "causal_disposition": "introduced",
+				}},
+				"evidence": []string{"focused differential check failed on the frozen candidate"},
+			})
+			if err != nil {
+				return err
+			}
+		}
+		path, err := writeScratch(r.sandbox, fmt.Sprintf("exact-selected-reviewer-%d.json", capture), payload)
+		if err != nil {
+			return err
+		}
+		observation := r.run([]string{
+			"review", "capture-result", "--cwd", r.sandbox.Repo,
+			"--lineage", got[0].lineage, "--target", got[0].target, "--expected-revision", got[0].revision,
+			"--lens", got[0].lens, "--order", got[0].order, "--input", path,
+		}, true)
+		if observation.ExitCode != 0 {
+			return fmt.Errorf("capture selected reviewer slot %d: %s", capture, firstLine(observation.Stderr))
+		}
+	}
+
+	after, err := readAtomicReviewStatus(r, lineageID)
+	if err != nil {
+		return err
+	}
+	if after.NextTransition.Kind != "execute" || after.NextTransition.Execute.Operation != "review.finalize" {
+		return fmt.Errorf("full selected lens set did not advance to finalize: %+v", after.NextTransition)
+	}
+	return nil
+}
+
+func requireAtomicLineageBurned(r *journeyRun, lineageID string) error {
+	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
+	var head authorityHead
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
+		return fmt.Errorf("parse burned lineage inventory: %w", err)
+	}
+	for _, entry := range head.Entries {
+		if entry.LineageID == lineageID {
+			return fmt.Errorf("terminal #3417 lineage %q remained durable: %+v", lineageID, entry)
+		}
+	}
+	return nil
+}
+
+func captureAtomicCorrectableFinding(r *journeyRun) error {
+	return captureAtomicReviewerSlots(r, atomicCorrectionLineage, true)
 }
 
 func waveThreeJourneys() []Journey {
 	return []Journey{
 		{
-			ID:                   "j59-new-lineage-exact-candidate-allows-post-apply-and-pre-commit",
-			Review:               reviewOptedIn,
-			Title:                "New-lineage tier-0 candidate: an unchanged candidate allows at both post-apply and pre-commit",
-			Source:               "Wave 3 Slice 5, task 6.7 (governingAuthorityLiveEvidence per-gate-accurate selector)",
-			NewLineageActivation: true,
+			ID:     "j59-current-status-and-start-ignore-sibling-worktree-transaction",
+			Review: reviewOptedIn,
+			Title:  "#3417: selectorless current STATUS and START ignore an unrelated sibling worktree transaction",
+			Source: "#3417: compact atomic review is bound to the selected worktree and candidate, never ambient sibling authority",
 			Steps: []Step{
-				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: one exact passive tier-0 doc candidate staged", Fixture: stagePassiveTierZeroDoc},
-				{Name: "new-lineage review start", Requires: startNamedCapability,
-					Args: productArgs("review", "start", "--lineage", newLineageExactLineage), After: requireNewLineageStarted(newLineageExactLineage)},
-				{Name: "new-lineage review finalize", Requires: finalizeCapability,
-					Args: productArgs("review", "finalize", "--lineage", newLineageExactLineage), After: requireNewLineageFinalized(newLineageExactLineage)},
-				{Name: "unchanged candidate allows at post-apply", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--lineage", newLineageExactLineage, "--gate", "post-apply"),
-					After: func(_ *Sandbox, observation Observation) error {
-						return requireGateForLineage(observation, newLineageExactLineage, false)
-					}},
-				{Name: "unchanged candidate still allows at pre-commit", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--lineage", newLineageExactLineage, "--gate", "pre-commit"),
-					After: func(_ *Sandbox, observation Observation) error {
-						return requireGateForLineage(observation, newLineageExactLineage, false)
-					}},
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: sibling worktree stages the same candidate independently", Fixture: stageAtomicSiblingWorktrees},
+				{Name: "selectorless STATUS and current-worktree START ignore the sibling worktree transaction", Requires: atomicReviewStatusCapability, Composite: proveCurrentStatusAndStartIgnoreSiblingWorktree},
 			},
 		},
 		{
-			ID:                   "j60-new-lineage-unstaged-drift-denies-post-apply-allows-pre-commit",
-			Review:               reviewOptedIn,
-			Title:                "New-lineage gate-accurate selector: unstaged-only drift denies scope-changed at post-apply but still allows at pre-commit",
-			Source:               "Wave 3 Slice 5, task 6.7 (S4's documented scope cut, governingAuthorityLiveEvidence)",
-			NewLineageActivation: true,
+			ID:     "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+			Review: reviewOptedIn,
+			Title:  "#3417: explicit active lineage keeps its exact four lenses through correction and validator flow",
+			Source: "#3417: active compact authority continues only through its bound four-lens correction and validator transaction",
 			Steps: []Step{
-				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: one exact passive tier-0 doc candidate staged", Fixture: stagePassiveTierZeroDoc},
-				{Name: "new-lineage review start", Requires: startNamedCapability,
-					Args: productArgs("review", "start", "--lineage", newLineageSelectorLineage), After: requireNewLineageStarted(newLineageSelectorLineage)},
-				{Name: "new-lineage review finalize", Requires: finalizeCapability,
-					Args: productArgs("review", "finalize", "--lineage", newLineageSelectorLineage), After: requireNewLineageFinalized(newLineageSelectorLineage)},
-				{Name: "fixture: same tracked file edited again, never staged", Fixture: dirtyTrackedFileWithoutStaging},
-				{Name: "unstaged drift denies scope-changed at post-apply", Requires: validateCapability,
-					Args:  productArgs("review", "validate", "--lineage", newLineageSelectorLineage, "--gate", "post-apply"),
-					After: requireNewLineageScopeChangedDenied(newLineageSelectorLineage)},
-				{Name: "the identical unstaged drift still allows at pre-commit: pre-commit reads the staged index, not the live workspace", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--lineage", newLineageSelectorLineage, "--gate", "pre-commit"),
-					After: func(_ *Sandbox, observation Observation) error {
-						return requireGateForLineage(observation, newLineageSelectorLineage, false)
-					}},
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
+				{Name: "START the compact high-risk transaction", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", atomicCorrectionLineage)},
+				{Name: "explicit active STATUS exposes exactly four compact lenses", Requires: atomicReviewStatusCapability, Composite: requireExplicitAtomicFourLensStatus},
+				{Name: "capture a correction finding and every remaining compact lens", Requires: captureResultCapability, Composite: captureAtomicCorrectableFinding},
+				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", atomicCorrectionLineage, "--captured-results=true")},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", atomicCorrectionLineage, "--correction-lines", "2")},
+				{Name: "fixture: correct only the reviewed candidate", Fixture: writeCorrectedCandidate},
+				{Name: "capture correction evidence for the explicit active lineage", Requires: captureEvidenceDescriptorCapability, Composite: func(r *journeyRun) error {
+					return captureV5CorrectionEvidenceDescriptorFor(r, atomicCorrectionLineage)
+				}},
+				{Name: "run the compact validator continuation", Requires: finalizeValidationCapability, Composite: func(r *journeyRun) error {
+					return completeV5DescriptorCorrectionFor(r, atomicCorrectionLineage)
+				}},
 			},
 		},
 	}

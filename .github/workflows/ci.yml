@@ -73,15 +73,14 @@ jobs:
               [.journeys[] | select(.id == $id)] as $matches
               | ($matches | length == 1) and ($matches[0].status == "completed");
             completed_once("j51-negotiated-status-correction-continuation") and
-            completed_once("j52-sdd-stale-authority-does-not-shadow-approved-candidate") and
-            completed_once("j53-sdd-ambiguous-authorities-fail-closed") and
-            completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
-            completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
-            completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
-            completed_once("j58-sdd-foreign-openspec-path-fails-closed") and
-            completed_once("j104-repository-context-survives-fresh-process") and
+            completed_once("j59-current-status-and-start-ignore-sibling-worktree-transaction") and
+            completed_once("j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow") and
+            completed_once("j75-intended-untracked-selection-executes-printed-start") and
             completed_once("j81-rc1-consecutive-rescope-repair-executes-printed-command") and
-            completed_once("j75-intended-untracked-selection-executes-printed-start")
+            completed_once("j89-staged-validation-is-informational-and-unmanaged") and
+            completed_once("j104-repository-context-survives-fresh-process") and
+            completed_once("j110-untracked-terminal-burn-and-unmanaged-staged-validation") and
+            completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged")
           ' "$RUNNER_TEMP/bench-portable.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
           jq -e '
@@ -112,13 +111,6 @@ jobs:
             completed_once("tr10-scope-change-after-the-review-is-bound") and
             completed_once("tr11-abandon-the-review-while-an-attempt-is-open")
           ' "$RUNNER_TEMP/bench-transition.json"
-          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
-          jq -e '
-            def unsupported_once($id):
-              [.journeys[] | select(.id == $id)] as $matches
-              | ($matches | length == 1) and ($matches[0].status == "unsupported");
-            unsupported_once("j57-sdd-authority-drift-during-discovery-fails-closed")
-          ' "$RUNNER_TEMP/bench-source-coupled-untagged.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker-untagged.json"
           jq -e '
             def unsupported_once($id):
@@ -127,13 +119,6 @@ jobs:
             unsupported_once("j97-opencode-custom-agent-model-picker-runtime")
           ' "$RUNNER_TEMP/bench-model-picker-untagged.json"
           go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
-          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled.json"
-          jq -e '
-            def completed_once($id):
-              [.journeys[] | select(.id == $id)] as $matches
-              | ($matches | length == 1) and ($matches[0].status == "completed");
-            completed_once("j57-sdd-authority-drift-during-discovery-fails-closed")
-          ' "$RUNNER_TEMP/bench-source-coupled.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker.json"
           jq -e '
             def completed_once($id):

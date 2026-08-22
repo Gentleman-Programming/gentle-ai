@@ -30,6 +30,7 @@ func init() {
 		Name:     transitionAxis,
 		Title:    "Journeys that change mode or chain operations in the middle of a lifecycle",
 		BlackBox: true,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Every state here is reached through the CLI alone. No fixture authors a store file, which is what separates this axis from damaged-store: these are sequences a user can type, not corruption a user cannot cause.",
 			"Each journey asserts the ledger is still READABLE after the sequence, not merely that the last command refused. A refusal that leaves the store unable to answer is a wedge, and that distinction is the reason this axis exists.",
@@ -134,12 +135,11 @@ func transitionJourneys() []Journey {
 			Review: reviewOptedIn,
 			Title:  "Turn review back ON in the middle of a change that started without it",
 			Source: "the mirror of tr03; the switch is documented as reversible",
-			// tr03 proves work survives the switch going off. Nothing proved
-			// the other direction, and it is the riskier one: turning review ON
-			// mid-change means delivery starts demanding a receipt for work
-			// that has none yet. If that wedges, a user who enables review to
-			// be careful is punished for it, which is the opposite of what the
-			// switch is for.
+			// tr03 proves work survives the switch going off. This is the other
+			// direction: turning review on mid-change may surface review context,
+			// but it must not make SDD delivery demand a receipt or wedge work
+			// that started without one. A user who enables review to be careful
+			// must still keep moving under ordinary repository policy.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "turn review off before starting", Requires: modeCapability,
@@ -246,31 +246,28 @@ func transitionJourneys() []Journey {
 		{
 			ID:     "tr10-scope-change-after-the-review-is-bound",
 			Review: reviewOptedIn,
-			Title:  "Bind an approved review to the change, then move the objective under it",
-			Source: "cross-surface pairing: the binding names an objective a scope change replaces",
-			// The highest-value pair left after tr08, and the most plausible in
-			// real use: you get a review approved, bind it to the change, and
-			// then discover the scope was wrong. The binding records the
-			// objective it was bound against; a rescope replaces that objective
-			// with a new generation. Two records now disagree about which
-			// objective is current, which is the same shape as #2830 one
-			// surface over.
+			Title:  "Complete and burn a review, then move the SDD objective",
+			Source: "#3417 terminal burn: SDD scope remains movable without durable review authority or binding",
+			// Approval ends and burns the exact review transaction. No receipt,
+			// authority, or SDD binding survives for a later rescope to reconcile.
+			// The cross-surface invariant is structural absence before rescope
+			// creates a new objective generation.
 			//
-			// Whether the rescope should be admitted here is a product
-			// question. Whether both surfaces still answer afterwards is not.
+			// Whether the rescope succeeds is still secondary to #2830's safety
+			// property: every ordinary sequence must leave both stores readable.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "begin, fail, begin again", Requires: sddAttemptBeginCapability, Composite: sddBeginFailBegin},
 				{Name: "fixture: the bounded correction moves the candidate", Fixture: sddBoundedCorrection},
 				{Name: "review start on the corrected candidate", Requires: startCapability,
 					Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability,
+				{Name: "review finalize burns without creating an SDD binding", Requires: finalizeCapability,
 					Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "bind the approved review to the change", Requires: bindSDDCapability,
-					Composite: sddBindApprovedReview},
-				{Name: "now move the objective the binding names",
+				{Name: "prove the completed review left no authority or binding",
+					Composite: transitionProveReviewBurnedAndUnbound},
+				{Name: "now move the unbound objective",
 					Requires:  sddAttemptRescopeCapability,
-					Composite: transitionRescope("bench-rescope-after-bind", "narrower after binding")},
+					Composite: transitionRescope("bench-rescope-after-burn", "narrower after review burn")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 				{Name: "and so does review status", Requires: statusCapability,
 					Args: productArgs("review", "status")},
@@ -479,6 +476,27 @@ func transitionBeginAgain(r *journeyRun) error {
 		return err
 	}
 	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-transition-begin-again", sddObjective...), false)
+	return nil
+}
+
+// transitionProveReviewBurnedAndUnbound proves #3417's cross-surface boundary:
+// terminal review completion leaves neither review authority nor an SDD binding.
+// The SDD attempt stays active and may be rescoped under ordinary ledger policy.
+func transitionProveReviewBurnedAndUnbound(r *journeyRun) error {
+	head, err := proveAuthorities(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if len(head.Entries) != 0 {
+		return fmt.Errorf("terminal review burn left durable authority: %+v", head.Entries)
+	}
+	status, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if status.Binding != nil || status.BindingRevision != "" {
+		return fmt.Errorf("terminal review burn invented an SDD binding: binding=%+v revision=%q", status.Binding, status.BindingRevision)
+	}
 	return nil
 }
 

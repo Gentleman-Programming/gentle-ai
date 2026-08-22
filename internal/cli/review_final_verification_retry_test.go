@@ -556,7 +556,12 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	started := runNegotiatedReviewStart(t, repo, "retry-corrected-cli-source")
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", "retry-corrected-cli-source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{

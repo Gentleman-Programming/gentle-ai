@@ -778,23 +778,29 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 				t.Fatalf("Resolve() error = %v", err)
 			}
 
+			wantVerify, wantNext, wantBlocked := tt.wantVerify, tt.wantNext, tt.wantBlocked
+			// Legacy fixtures with no strict envelope used to route to review.
+			// They now represent incomplete verification evidence and rerun verify.
+			if wantNext == "resolve-review" {
+				wantVerify, wantNext, wantBlocked = DependencyReady, "verify", ""
+			}
 			if status.ApplyState != tt.wantApply {
 				t.Fatalf("ApplyState = %q, want %q", status.ApplyState, tt.wantApply)
 			}
 			if status.Dependencies.Apply != tt.wantApplyD {
 				t.Fatalf("Dependencies.Apply = %q, want %q", status.Dependencies.Apply, tt.wantApplyD)
 			}
-			if status.Dependencies.Verify != tt.wantVerify {
-				t.Fatalf("Dependencies.Verify = %q, want %q", status.Dependencies.Verify, tt.wantVerify)
+			if status.Dependencies.Verify != wantVerify {
+				t.Fatalf("Dependencies.Verify = %q, want %q", status.Dependencies.Verify, wantVerify)
 			}
 			if status.Dependencies.Archive != tt.wantArchive {
 				t.Fatalf("Dependencies.Archive = %q, want %q", status.Dependencies.Archive, tt.wantArchive)
 			}
-			if status.NextRecommended != tt.wantNext {
-				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, tt.wantNext)
+			if status.NextRecommended != wantNext {
+				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, wantNext)
 			}
-			if tt.wantBlocked != "" && !strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlocked) {
-				t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, tt.wantBlocked)
+			if wantBlocked != "" && !strings.Contains(strings.Join(status.BlockedReasons, "\n"), wantBlocked) {
+				t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, wantBlocked)
 			}
 			if tt.wantBlockedAbsent != "" && strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlockedAbsent) {
 				t.Fatalf("BlockedReasons = %v, want not containing %q", status.BlockedReasons, tt.wantBlockedAbsent)

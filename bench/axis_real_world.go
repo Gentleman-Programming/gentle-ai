@@ -72,6 +72,7 @@ func init() {
 		Name:     realWorldAxis,
 		Title:    "Repositories with tool residue, and review lifecycles interleaved with ordinary git life",
 		BlackBox: true,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Black-box, unlike damaged-store: every fixture is built with git, the filesystem and the product's own CLI, every state is proven through git or the product before a counted command runs, and nothing product-owned is read or written. These journeys stay portable across builds the way the core does.",
 			"Opt-in anyway, because it is a different population: the core's repositories are sterile and its sequences contiguous; these repositories carry tool residue and accumulated review state, and their lifecycles are interleaved with rebase, amend and pull. \"45 core journeys\" and \"45 plus real-world\" must never look alike.",

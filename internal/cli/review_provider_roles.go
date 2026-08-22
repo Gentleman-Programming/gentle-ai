@@ -304,7 +304,14 @@ func reviewProviderRolePrompt(contract reviewProviderRoleContract, request any) 
 	if err != nil {
 		return nil, err
 	}
-	prompt := []byte(fmt.Sprintf("%s\n\nInput:\n%s\n\nOutput schema:\n%s", contract.PromptInstruction, payload, contract.ResultSchema))
+	instruction := contract.PromptInstruction
+	if targeted, ok := request.(reviewProviderTargetedValidatorRequest); ok {
+		// JSON necessarily escapes policy line breaks. Materialize the same
+		// request-bound bytes before the machine-readable input so the validator
+		// can inspect the exact frozen policy text without a second policy model.
+		instruction += "\n\nFrozen policy:\n" + targeted.ValidationRequest.PolicyContent
+	}
+	prompt := []byte(fmt.Sprintf("%s\n\nInput:\n%s\n\nOutput schema:\n%s", instruction, payload, contract.ResultSchema))
 	if len(prompt) > contract.ResultLimit {
 		return nil, fmt.Errorf("provider %s prompt exceeds the native %d byte limit", contract.Role, contract.ResultLimit) // refusal:by-design operator-knowledge: provider evidence is never truncated; split the candidate
 	}
@@ -570,7 +577,8 @@ func reviewProviderCaptureTargetedValidator(ctx context.Context, repo string, st
 func reviewTargetedValidatorSlotPath(storeDir string, request reviewtransaction.TargetedValidationRequest) string {
 	return filepath.Join(storeDir, "targeted-validator-results",
 		strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"),
+		strings.TrimPrefix(request.RequestHash, "sha256:"), "result.json")
 }
 
 // maxInconclusiveTargetedValidations bounds the non-verdicts one correction may

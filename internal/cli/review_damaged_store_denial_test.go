@@ -26,20 +26,24 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// mintDamagedStoreRecoveryPair builds, through the CLI alone, one approved
-// authority and one recovery successor over a widened docs scope — the same
-// healthy store the bench damaged-store fixtures then damage.
-func mintDamagedStoreRecoveryPair(t *testing.T, repo string) (predecessorID, successorID string) {
+// mintHistoricalCompatibilityDamagedStoreRecoveryPair seeds one historical
+// compatibility approved compact predecessor and receipt directly, then creates
+// a recovery successor over a widened docs scope. The bench damaged-store
+// fixtures damage that healthy compatibility setup; they do not call production
+// FINALIZE, which now burns stale predecessors.
+func mintHistoricalCompatibilityDamagedStoreRecoveryPair(t *testing.T, repo string) (predecessorID, successorID string) {
 	t.Helper()
 	writeDamagedStoreProse(t, repo, "intro")
-	finalizeFacadeReviewForRepo(t, repo)
+	historical := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, "review-damaged-predecessor", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
 	leaves, err := reviewtransaction.CompactAuthorityLeaves(t.Context(), repo)
 	if err != nil || len(leaves) != 1 {
-		t.Fatalf("approved predecessor leaves = %#v, %v", leaves, err)
+		t.Fatalf("historical approved predecessor leaves = %#v, %v", leaves, err)
 	}
 	predecessor, err := leaves[0].Load()
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || predecessor.State.LineageID != historical.Record.State.LineageID {
+		t.Fatalf("historical approved predecessor = %#v, %v", predecessor, err)
 	}
 	writeDamagedStoreProse(t, repo, "widened")
 	const successor = "review-damaged-successor"
@@ -51,6 +55,14 @@ func mintDamagedStoreRecoveryPair(t *testing.T, repo string) (predecessorID, suc
 		t.Fatalf("recover successor: %v", err)
 	}
 	return predecessor.State.LineageID, successor
+}
+
+// mintDamagedStoreRecoveryPair preserves existing damaged-store test call sites
+// while routing their setup through the explicitly historical compatibility
+// fixture above.
+func mintDamagedStoreRecoveryPair(t *testing.T, repo string) (predecessorID, successorID string) {
+	t.Helper()
+	return mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 }
 
 func writeDamagedStoreProse(t *testing.T, repo, name string) {
@@ -234,7 +246,7 @@ func TestDamagedEntryNamesItsOwnDamageKindAndDiagnosis(t *testing.T) {
 		{
 			name: "forged authorization binding",
 			stage: func(t *testing.T, repo string) {
-				_, successor := mintDamagedStoreRecoveryPair(t, repo)
+				_, successor := mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 				forgeDamagedStoreRecoveryReason(t, repo, successor)
 			},
 			wantKind:    forgedKind,
@@ -248,7 +260,7 @@ func TestDamagedEntryNamesItsOwnDamageKindAndDiagnosis(t *testing.T) {
 		{
 			name: "dangling predecessor",
 			stage: func(t *testing.T, repo string) {
-				predecessor, _ := mintDamagedStoreRecoveryPair(t, repo)
+				predecessor, _ := mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 				if err := os.RemoveAll(damagedStoreLineageDir(t, repo, predecessor)); err != nil {
 					t.Fatal(err)
 				}
@@ -265,7 +277,7 @@ func TestDamagedEntryNamesItsOwnDamageKindAndDiagnosis(t *testing.T) {
 		{
 			name: "record truncated mid-write",
 			stage: func(t *testing.T, repo string) {
-				_, successor := mintDamagedStoreRecoveryPair(t, repo)
+				_, successor := mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 				truncateDamagedStoreRecord(t, repo, successor)
 			},
 			wantKind:    truncatedKind,
@@ -383,7 +395,7 @@ func anyDamagedStoreProblemContains(problems []string, fragment string) bool {
 func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	predecessor, successor := mintDamagedStoreRecoveryPair(t, repo)
+	predecessor, successor := mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 	if err := os.RemoveAll(damagedStoreLineageDir(t, repo, predecessor)); err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +472,7 @@ func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.
 func TestReclaimRefusalOverTruncatedRecordNamesDiagnosisNotReconcile(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	_, successor := mintDamagedStoreRecoveryPair(t, repo)
+	_, successor := mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 	truncateDamagedStoreRecord(t, repo, successor)
 
 	err := RunReviewReclaim([]string{"--cwd", repo, "--lineage", successor,
@@ -486,7 +498,7 @@ func TestReclaimRefusalOverTruncatedRecordNamesDiagnosisNotReconcile(t *testing.
 func TestNegotiatedFinalizeClassifiesNamedDamagedAuthorization(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	_, successor := mintDamagedStoreRecoveryPair(t, repo)
+	_, successor := mintHistoricalCompatibilityDamagedStoreRecoveryPair(t, repo)
 	forgeDamagedStoreRecoveryReason(t, repo, successor)
 	statePath := filepath.Join(damagedStoreLineageDir(t, repo, successor), "review-state.json")
 	before, err := os.ReadFile(statePath)

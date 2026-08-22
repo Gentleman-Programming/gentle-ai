@@ -548,16 +548,15 @@ func TestReviewCaptureValidationMaterializesExecutesAndFinalizeDiscovers(t *test
 	if err != nil || !slot.Occupied {
 		t.Fatalf("validator execution did not occupy the result slot: %#v, %v", slot, err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-evidence=true"}, &bytes.Buffer{}); err != nil {
+	var finalOutput bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-evidence=true"}, &finalOutput); err != nil {
 		t.Fatalf("host-mediated finalize did not discover the captured validator slot: %v", err)
 	}
-	final, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	final := assertApprovedBurnedCompactFacadeFinalize(t, finalOutput.Bytes())
+	if final.LineageID != lineage {
+		t.Fatalf("finalize lineage = %q, want the passed validator verdict to close %q", final.LineageID, lineage)
 	}
-	if final.State.State == reviewtransaction.StateCorrectionRequired {
-		t.Fatalf("finalize state = %q, want the passed validator verdict to close the correction", final.State.State)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {

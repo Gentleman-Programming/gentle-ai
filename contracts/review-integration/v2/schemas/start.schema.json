@@ -18,7 +18,7 @@
     },
     {
       "if": {
-        "properties": {"action": {"enum": ["created", "resumed"]}, "state": {"const": "reviewing"}},
+        "properties": {"action": {"enum": ["created", "replayed"]}, "state": {"const": "reviewing"}},
         "required": ["action", "state"]
       },
       "then": {"required": ["repository_context"]},
@@ -33,7 +33,7 @@
     "schema": {"const": "gentle-ai.review-integration.start/v3"},
     "contract": {"const": "gentle-ai.review-integration/v2"},
     "operation": {"const": "review.start"},
-    "action": {"enum": ["created", "resumed", "reuse-receipt", "blocked-scope-action"]},
+    "action": {"enum": ["created", "replayed"]},
     "lenses_required": {"type": "boolean"},
     "lineage_id": {"type": "string", "minLength": 1},
     "state": {

@@ -63,7 +63,7 @@ func seedCapturedValidatorSlot(t *testing.T, repo, lineage string, request revie
 	}
 	slotPath := filepath.Join(store.Dir, "targeted-validator-results",
 		strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), strings.TrimPrefix(request.RequestHash, "sha256:"), "result.json")
 	if err := os.WriteFile(slotPath, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -160,22 +160,26 @@ func TestReviewInconclusiveCapturedValidationReachesApprovedReceipt(t *testing.T
 	slot := submission.Value.SubstitutionLocation
 	tokens[slot] = strings.Replace(tokens[slot], reviewSubmissionValuePlaceholder, validationPath, 1)
 
-	if err := RunReviewFacadeFinalize(tokens, &bytes.Buffer{}); err != nil {
-		t.Fatalf("finalize the recaptured conclusive validation: %v", err)
-	}
-	terminal, err := store.Load()
-	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
-		t.Fatalf("recaptured conclusive validation terminal authority = %#v, %v", terminal, err)
-	}
-	// The inconclusive bytes are still preserved exactly as captured: this
-	// recovery never destroys immutable provider output.
+	// The inconclusive bytes remain immutable while the fresh external verdict is
+	// submitted; approval burns the authority only after that evidence path has
+	// completed.
 	slotPath := filepath.Join(store.Dir, "targeted-validator-results",
 		strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), strings.TrimPrefix(request.RequestHash, "sha256:"), "result.json")
 	preserved, err := os.ReadFile(slotPath)
 	if err != nil || !bytes.Equal(preserved, inconclusive) {
-		t.Fatalf("inconclusive validator payload was not preserved: %v", err)
+		t.Fatalf("inconclusive validator payload was not preserved before approval: %v", err)
 	}
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize(tokens, &output); err != nil {
+		t.Fatalf("finalize the recaptured conclusive validation: %v", err)
+	}
+	terminal := assertApprovedBurnedCompactNegotiatedFinalize(t, output.Bytes())
+	if terminal.LineageID != lineage {
+		t.Fatalf("recaptured conclusive validation terminal lineage = %q, want %q", terminal.LineageID, lineage)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 // TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute is the
@@ -246,24 +250,27 @@ func TestReviewInconclusiveCapturedValidationCompletesTheHostRelayRoute(t *testi
 		after.NextTransition.Execute == nil || after.NextTransition.Execute.Operation != "review.finalize" {
 		t.Fatalf("post-recapture transition = %#v", after.NextTransition)
 	}
+	// The host relay moves the superseded non-verdict aside before FINALIZE
+	// consumes the conclusive provider result. Burn happens only after that
+	// provider evidence path has completed.
+	archived := reviewQuarantinedTargetedValidatorPath(store.Dir, request, "")
+	preserved, err := os.ReadFile(archived)
+	if err != nil || !bytes.Equal(preserved, inconclusive) {
+		t.Fatalf("superseded inconclusive payload was not preserved at %s before approval: %v", archived, err)
+	}
 	tokens := make([]string, len(after.NextTransition.Execute.Arguments))
 	for index, argument := range after.NextTransition.Execute.Arguments {
 		tokens[index] = argument.Token
 	}
-	if err := RunReviewFacadeFinalize(tokens, &bytes.Buffer{}); err != nil {
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize(tokens, &output); err != nil {
 		t.Fatalf("execute the finalize STATUS emitted after the recapture: %v", err)
 	}
-	terminal, err := store.Load()
-	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
-		t.Fatalf("host-relay recapture terminal authority = %#v, %v", terminal, err)
+	terminal := assertApprovedBurnedCompactNegotiatedFinalize(t, output.Bytes())
+	if terminal.LineageID != lineage {
+		t.Fatalf("host-relay recapture terminal lineage = %q, want %q", terminal.LineageID, lineage)
 	}
-
-	// The superseded non-verdict is archived, never destroyed.
-	archived := reviewQuarantinedTargetedValidatorPath(store.Dir, request, "")
-	preserved, err := os.ReadFile(archived)
-	if err != nil || !bytes.Equal(preserved, inconclusive) {
-		t.Fatalf("superseded inconclusive payload was not preserved at %s: %v", archived, err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 // TestReviewStatusStopsInconclusiveRecaptureAtItsBound drives the live route

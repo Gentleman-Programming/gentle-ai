@@ -284,52 +284,6 @@ func TestAssessTargetStatusRecognizesAuthorizedCorrection(t *testing.T) {
 	}
 }
 
-func TestHistoricalFailedValidatorRequiresChangedTargetRecovery(t *testing.T) {
-	repo, state, record, before := historicalFailedValidatorFixture(t, "historical-status")
-	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}
-	requested := newCompactTestState(t, repo, "historical-status-new")
-	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	if err != nil || started.Action != CompactStartBlocked || started.Record.Revision != record.Revision {
-		t.Fatalf("same-target historical START = %#v, %v", started, err)
-	}
-	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: state.LineageID})
-	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.Action != TargetStatusActionStop ||
-		status.Replayability != ReplayabilityManualActionRequired || status.LineageID != state.LineageID || status.Revision != record.Revision {
-		t.Fatalf("same-target historical status = %#v, %v", status, err)
-	}
-	writeSnapshotFile(t, repo, "tracked.txt", "changed recovery target\n")
-	requested = newCompactTestState(t, repo, "historical-status-changed")
-	started, err = StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: state.LineageID})
-	if err != nil || statusErr != nil || started.Action != CompactStartRecover || status.Action != TargetStatusActionRecover || status.Replayability != ReplayabilityManualActionRequired {
-		t.Fatalf("changed-target recovery: START=%#v status=%#v errors=%v/%v", started, status, err, statusErr)
-	}
-	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	after, _ := os.ReadFile(store.StatePath())
-	if !bytes.Equal(before, after) {
-		t.Fatal("START/status migrated historical authority")
-	}
-
-	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n")
-	forecast := 1
-	state.ProposedCorrectionLines = &forecast
-	record, before, _ = makeCompactRecord(state)
-	if err := os.WriteFile(store.StatePath(), before, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	status, statusErr = AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: state.LineageID})
-	if statusErr != nil || status.Action != TargetStatusActionStop || status.Revision != record.Revision {
-		t.Fatalf("same-target forecasted historical status = %#v, %v", status, statusErr)
-	}
-	writeSnapshotFile(t, repo, "tracked.txt", "changed forecasted recovery target\n")
-	requested = newCompactTestState(t, repo, "historical-status-forecasted")
-	started, err = StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	status, statusErr = AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: state.LineageID})
-	if err != nil || statusErr != nil || started.Action != CompactStartRecover || status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
-		t.Fatalf("changed forecasted historical recovery: START=%#v status=%#v errors=%v/%v", started, status, err, statusErr)
-	}
-}
-
 func TestEscalatedChangedTargetWithChangedScopeRecovers(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state := accountingOnlyEscalatedState(t, repo, "escalated-changed-scope-status")
@@ -462,26 +416,6 @@ func TestAccountingOnlyEscalationRecoveryStillRequiresMaintainerAuthorization(t 
 	})
 	if err == nil || !errors.Is(err, ErrCompactRecoveryAuthorizationInexact) {
 		t.Fatalf("accounting-only recovery without exact maintainer authorization = %v, want authorization error", err)
-	}
-}
-
-func TestCorrectionScopeExpansionGuidesStatusAndStartToRecovery(t *testing.T) {
-	repo, predecessor, _, _ := correctionScopeRecoveryFixture(t, "review-correction-expansion")
-	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
-	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"process_helper.go"}}
-	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: predecessor.LineageID})
-	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateCorrectionRequired ||
-		status.Action != TargetStatusActionRecover || status.Replayability != ReplayabilityManualActionRequired {
-		t.Fatalf("expanded correction status = %#v, %v", status, err)
-	}
-	requested := newCompactStartStateForTarget(t, repo, "review-correction-expansion-new", target)
-	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	if err != nil || started.Action != CompactStartAction("recover") || started.Record.State.LineageID != predecessor.LineageID {
-		t.Fatalf("expanded correction start = %#v, %v", started, err)
-	}
-	requestedStore, _ := CompactAuthoritativeStore(context.Background(), repo, requested.LineageID)
-	if _, err := os.Stat(requestedStore.StatePath()); !os.IsNotExist(err) {
-		t.Fatalf("start published an unauthorized successor: %v", err)
 	}
 }
 
@@ -620,8 +554,9 @@ func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyIn
 	if err != nil {
 		t.Fatal(err)
 	}
-	if global.Applicability != TargetApplicabilityCorrupted || global.Action != TargetStatusActionRepairAuthority {
-		t.Fatalf("unscoped invalid inventory did not fail closed: %#v", global)
+	if global.Applicability != TargetApplicabilityCurrent || global.AuthorityVersion != AuthorityVersionCompact ||
+		global.LineageID != compact.LineageID || global.Action != TargetStatusActionFinalize {
+		t.Fatalf("ordinary status did not keep the compact authority exclusive: %#v", global)
 	}
 	report, err := InventoryAuthority(context.Background(), repo)
 	if err != nil {
@@ -639,7 +574,7 @@ func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyIn
 	}
 }
 
-func TestAssessTargetStatusStopsApplicableNonTerminalLegacyWithoutMutation(t *testing.T) {
+func TestAssessTargetStatusLeavesNonTerminalLegacyForManualCompatibilityWithoutMutation(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "legacy candidate\n")
@@ -660,9 +595,9 @@ func TestAssessTargetStatusStopsApplicableNonTerminalLegacyWithoutMutation(t *te
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Applicability != TargetApplicabilityCurrent || got.AuthorityVersion != AuthorityVersionLegacy ||
-			got.Action != TargetStatusActionStop || got.Replayability != ReplayabilityManualActionRequired || got.State != StateReviewing {
-			t.Fatalf("legacy status = %#v", got)
+		if got.Applicability != TargetApplicabilityUnrelated || got.AuthorityVersion != "" ||
+			got.Action != TargetStatusActionStart || got.Replayability != ReplayabilityNotReplayable || got.State != "" {
+			t.Fatalf("ordinary status consulted legacy authority: %#v", got)
 		}
 		if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(after, before) {
 			t.Fatalf("attempt %d mutated legacy authority", attempt+1)
@@ -673,20 +608,10 @@ func TestAssessTargetStatusStopsApplicableNonTerminalLegacyWithoutMutation(t *te
 func TestAssessTargetStatusValidatesApplicableApprovedLegacyReceiptWithoutMutation(t *testing.T) {
 	requireSnapshotGit(t)
 	tests := []struct {
-		name              string
-		mutateReceipt     func(t *testing.T, path string, receipt Receipt)
-		wantApplicability TargetApplicability
-		wantAction        TargetStatusAction
-		wantReplay        Replayability
-		wantIdentity      bool
+		name          string
+		mutateReceipt func(t *testing.T, path string, receipt Receipt)
 	}{
-		{
-			name:              "approved receipt is present and valid",
-			wantApplicability: TargetApplicabilityCurrent,
-			wantAction:        TargetStatusActionValidate,
-			wantReplay:        ReplayabilityNotReplayable,
-			wantIdentity:      true,
-		},
+		{name: "approved receipt is present and valid"},
 		{
 			name: "approved receipt is missing",
 			mutateReceipt: func(t *testing.T, path string, _ Receipt) {
@@ -694,9 +619,6 @@ func TestAssessTargetStatusValidatesApplicableApprovedLegacyReceiptWithoutMutati
 					t.Fatal(err)
 				}
 			},
-			wantApplicability: TargetApplicabilityCorrupted,
-			wantAction:        TargetStatusActionRepairAuthority,
-			wantReplay:        ReplayabilityManualActionRequired,
 		},
 		{
 			name: "approved receipt is corrupt",
@@ -705,9 +627,6 @@ func TestAssessTargetStatusValidatesApplicableApprovedLegacyReceiptWithoutMutati
 					t.Fatal(err)
 				}
 			},
-			wantApplicability: TargetApplicabilityCorrupted,
-			wantAction:        TargetStatusActionRepairAuthority,
-			wantReplay:        ReplayabilityManualActionRequired,
 		},
 		{
 			name: "approved receipt belongs to different authority",
@@ -717,9 +636,6 @@ func TestAssessTargetStatusValidatesApplicableApprovedLegacyReceiptWithoutMutati
 					t.Fatal(err)
 				}
 			},
-			wantApplicability: TargetApplicabilityCorrupted,
-			wantAction:        TargetStatusActionRepairAuthority,
-			wantReplay:        ReplayabilityManualActionRequired,
 		},
 	}
 	for _, tt := range tests {
@@ -754,22 +670,12 @@ func TestAssessTargetStatusValidatesApplicableApprovedLegacyReceiptWithoutMutati
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(first, second) || first.Applicability != tt.wantApplicability ||
-				first.Action != tt.wantAction || first.Replayability != tt.wantReplay {
-				t.Fatalf("legacy receipt status = %#v, second %#v", first, second)
+			if !reflect.DeepEqual(first, second) || first.Applicability != TargetApplicabilityUnrelated ||
+				first.Action != TargetStatusActionStart || first.Replayability != ReplayabilityNotReplayable {
+				t.Fatalf("ordinary status consulted legacy receipt authority: %#v, second %#v", first, second)
 			}
-			if tt.wantIdentity {
-				payload, err := os.ReadFile(receiptPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				sum := sha256.Sum256(payload)
-				want := "sha256:" + hex.EncodeToString(sum[:])
-				if first.ReceiptIdentity != want || first.AuthorityVersion != AuthorityVersionLegacy || first.State != StateApproved {
-					t.Fatalf("approved legacy receipt status = %#v, want identity %q", first, want)
-				}
-			} else if first.ReceiptIdentity != "" || first.Action == TargetStatusActionFinalize || first.Replayability == ReplayabilityExactReplaySafe {
-				t.Fatalf("invalid legacy receipt exposed compact replay semantics: %#v", first)
+			if first.ReceiptIdentity != "" || first.AuthorityVersion != "" || first.State != "" {
+				t.Fatalf("ordinary status exposed historical receipt authority: %#v", first)
 			}
 			if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
 				t.Fatalf("legacy receipt status mutated authority: before=%v after=%v", before, after)
@@ -787,8 +693,8 @@ func TestAssessTargetStatusMatchesCorrectedLegacyDelivery(t *testing.T) {
 	}
 	base := strings.SplitN(fixture.Request.Target.Revision, "..", 2)[0]
 	got, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: fixture.Transaction.Snapshot.IntendedUntracked}, LineageID: fixture.Transaction.LineageID})
-	if err != nil || got.Applicability != TargetApplicabilityCurrent || got.State != StateApproved || got.Action != TargetStatusActionValidate || got.Projection.Kind != TargetBaseDiff {
-		t.Fatalf("corrected legacy status = %#v, err = %v", got, err)
+	if err != nil || got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStart || got.AuthorityVersion != "" || got.Projection.Kind != TargetBaseDiff {
+		t.Fatalf("ordinary status consulted corrected legacy authority = %#v, err = %v", got, err)
 	}
 	writeSnapshotFile(t, repo, "delivery.txt", "mismatched delivery\n")
 	gitSnapshot(t, repo, "add", "delivery.txt")
@@ -950,7 +856,7 @@ func TestAssessTargetStatusReportsPluralStaleStagedOverlayLineagesAsUnrelatedWit
 	}
 }
 
-func TestAssessTargetStatusFailsClosedForMixedSameLineageAuthority(t *testing.T) {
+func TestAssessTargetStatusKeepsCompactExclusiveBesideSameLineageLegacyAuthority(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -962,8 +868,9 @@ func TestAssessTargetStatusFailsClosedForMixedSameLineageAuthority(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Applicability != TargetApplicabilityCorrupted || got.Action != TargetStatusActionRepairAuthority {
-		t.Fatalf("status = %#v", got)
+	if got.Applicability != TargetApplicabilityCurrent || got.AuthorityVersion != AuthorityVersionCompact ||
+		got.LineageID != state.LineageID || got.Action != TargetStatusActionFinalize {
+		t.Fatalf("ordinary status did not keep compact authority exclusive: %#v", got)
 	}
 }
 
@@ -1993,106 +1900,6 @@ func TestAssessTargetStatusStopsStableReadOnDeadline(t *testing.T) {
 	// exhaust it before the first authority observation. No second attempt may start.
 	if calls > 1 {
 		t.Fatalf("deadline coherent read attempts = %d, want at most 1", calls)
-	}
-}
-
-func TestCompactCorrectionTargetStartStatusParity(t *testing.T) {
-	requireSnapshotGit(t)
-	scopeFixture := func(t *testing.T, lineage string) (string, CompactState) {
-		repo, state, _, _ := correctionScopeRecoveryFixture(t, lineage)
-		return repo, state
-	}
-	contractionFixture := func(t *testing.T, lineage string) (string, CompactState) {
-		repo, state, _, _ := correctionContractionRecoveryFixture(t, lineage)
-		return repo, state
-	}
-	historicalFixture := func(t *testing.T, lineage string) (string, CompactState) {
-		repo, state, _, _ := historicalFailedValidatorFixture(t, lineage)
-		return repo, state
-	}
-	tests := []struct {
-		name        string
-		fixture     func(*testing.T, string) (string, CompactState)
-		mutate      func(*testing.T, string) []string
-		prepare     func(*testing.T, *CompactState)
-		want        compactCorrectionTargetClaim
-		operational bool
-	}{
-		{name: "same", fixture: scopeFixture, want: compactCorrectionTargetResume},
-		{name: "contraction", fixture: contractionFixture, mutate: func(t *testing.T, repo string) []string {
-			writeSnapshotFile(t, repo, "deleted.txt", "delete me\n")
-			return []string{}
-		}, want: compactCorrectionTargetRecover},
-		{name: "expansion", fixture: scopeFixture, mutate: func(t *testing.T, repo string) []string {
-			writeSnapshotFile(t, repo, "outside.go", "package outside\n")
-			return []string{"outside.go"}
-		}, want: compactCorrectionTargetRecover},
-		{name: "overlap", fixture: contractionFixture, mutate: func(t *testing.T, repo string) []string {
-			writeSnapshotFile(t, repo, "deleted.txt", "delete me\n")
-			writeSnapshotFile(t, repo, "outside.go", "package outside\n")
-			return []string{"outside.go"}
-		}, want: compactCorrectionTargetRecover},
-		{name: "unrelated", fixture: scopeFixture, mutate: func(t *testing.T, repo string) []string {
-			writeSnapshotFile(t, repo, "tracked.txt", "base\n")
-			writeSnapshotFile(t, repo, "outside.go", "package outside\n")
-			return []string{"outside.go"}
-		}, want: compactCorrectionTargetUnclaimed},
-		{name: "historical exhausted unchanged", fixture: historicalFixture, want: compactCorrectionTargetBlocked},
-		{name: "historical exhausted changed", fixture: historicalFixture, mutate: func(t *testing.T, repo string) []string {
-			writeSnapshotFile(t, repo, "tracked.txt", "changed exhausted target\n")
-			return []string{}
-		}, want: compactCorrectionTargetRecover},
-		{name: "operational error", fixture: scopeFixture, prepare: func(t *testing.T, state *CompactState) {
-			if err := state.BeginCorrection(1); err != nil {
-				t.Fatal(err)
-			}
-		}, mutate: func(t *testing.T, repo string) []string {
-			writeSnapshotFile(t, repo, "tracked.txt", "candidate requiring correction\n")
-			return []string{}
-		}, operational: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo, existing := tt.fixture(t, "parity-"+strings.ReplaceAll(tt.name, " ", "-"))
-			if tt.prepare != nil {
-				tt.prepare(t, &existing)
-			}
-			intended := []string{}
-			if tt.mutate != nil {
-				intended = tt.mutate(t, repo)
-			}
-			live, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
-				Kind: TargetCurrentChanges, IntendedUntracked: intended,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			requested := existing
-			requested.InitialSnapshot = live
-
-			originalCommand := gitCommandContext
-			if tt.operational {
-				t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "exit73")
-				gitCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-					return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")
-				}
-			}
-			startClaim, startErr := classifyCompactCorrectionTargetForStart(context.Background(), repo, existing, requested)
-			statusClaim, statusErr := classifyCompactCorrectionTargetForStatus(context.Background(), repo, existing, live)
-			gitCommandContext = originalCommand
-
-			if tt.operational {
-				var startGit, statusGit *GitCommandError
-				if !errors.As(startErr, &startGit) || !errors.As(statusErr, &statusGit) ||
-					startGit.ExitCode != 73 || statusGit.ExitCode != 73 {
-					t.Fatalf("operational parity: start=(%v,%T %v) status=(%v,%T %v)", startClaim, startErr, startErr, statusClaim, statusErr, statusErr)
-				}
-				return
-			}
-			if startErr != nil || statusErr != nil || startClaim != tt.want || statusClaim != tt.want {
-				t.Fatalf("claim parity: start=(%v,%v) status=(%v,%v), want %v", startClaim, startErr, statusClaim, statusErr, tt.want)
-			}
-		})
 	}
 }
 

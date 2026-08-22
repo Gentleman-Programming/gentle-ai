@@ -139,19 +139,20 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 	output, err = runSubmissionDescriptor(t, *validation.Submission, wrongValidation)
 	assertSubmissionNotStarted(t, err, output, store, before)
 
-	if output, err := runSubmissionDescriptor(t, *validation.Submission, validationPath); err != nil {
+	output, err = runSubmissionDescriptor(t, *validation.Submission, validationPath)
+	if err != nil {
 		t.Fatalf("execute validation descriptor: %v\n%s", err, output)
 	}
-	terminal, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	terminal := assertApprovedBurnedCompactNegotiatedFinalize(t, output)
+	if terminal.LineageID != started.LineageID {
+		t.Fatalf("validation descriptor terminal lineage = %q, want %q", terminal.LineageID, started.LineageID)
 	}
-	if terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
-		t.Fatalf("validation descriptor terminal state = %#v", terminal.State)
-	}
-	before = readReviewOperationFile(t, store.StatePath())
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 	output, err = runSubmissionDescriptor(t, *validation.Submission, validationPath)
-	assertSubmissionNotStarted(t, err, output, store, before)
+	if err == nil {
+		t.Fatalf("burned validation descriptor succeeded: %s", output)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func submissionDescriptorCorrectionFixture(t *testing.T) (string, ReviewIntegrationStartResult, reviewtransaction.CompactStore) {

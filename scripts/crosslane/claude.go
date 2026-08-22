@@ -51,6 +51,10 @@ func (b *battery) runClaudeLowLifecycle() {
 		b.fail(claudeLane, "low lifecycle: start", "low-risk start unexpectedly selected lenses")
 		return
 	}
+	if err := b.rememberStarted(repo, target, startDoc); err != nil {
+		b.fail(claudeLane, "low lifecycle: start", err.Error())
+		return
+	}
 
 	statusDoc, stderr, _ = b.status(repo, "claude-code")
 	if getString(statusDoc, "next_transition", "execute", "operation") != "review.finalize" {
@@ -63,26 +67,7 @@ func (b *battery) runClaudeLowLifecycle() {
 		b.fail(claudeLane, "low lifecycle: finalize", fmt.Sprintf("exit=%d state=%q %s", code, operationState(finalize), firstLine(stderr)))
 		return
 	}
-	lineage := operationLineage(finalize)
-
-	// Stage the reviewed candidate exactly as reviewed, then gate.
-	if err := runGit(repo, "add", "-A"); err != nil {
-		b.fail(claudeLane, "low lifecycle: gate allow", err.Error())
-		return
-	}
-	statusDoc, stderr, _ = b.status(repo, "claude-code", "--lineage", lineage, "--projection", "staged", "--gate", "pre-commit")
-	if getString(statusDoc, "next_transition", "execute", "operation") != "review.validate" {
-		b.fail(claudeLane, "low lifecycle: gate allow", fmt.Sprintf("expected validate transition, got %s/%s %s",
-			getString(statusDoc, "next_transition", "kind"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
-		return
-	}
-	gate, stderr, code := b.runCommandLine("gate", repo, getString(statusDoc, "next_transition", "execute", "command"))
-	allowed, _ := gate["allowed"].(bool)
-	if code != 0 || getString(gate, "result") != "allow" || !allowed {
-		b.fail(claudeLane, "low lifecycle: gate allow", fmt.Sprintf("exit=%d result=%q %s", code, getString(gate, "result"), firstLine(stderr)))
-		return
-	}
-	b.pass(claudeLane, "low lifecycle to gate allow", "start (low, zero lenses) -> finalize approved -> pre-commit validate allow")
+	b.burnApproved(claudeLane, "low lifecycle burned", repo, "claude-code", nil, finalize)
 }
 
 func (b *battery) runClaudeMediumConsent() {
@@ -128,6 +113,10 @@ func (b *battery) runClaudeMediumConsent() {
 	if code != 0 || getString(startDoc, "state") != "reviewing" || getString(startDoc, "risk_level") != "medium" || len(lenses) != 1 {
 		b.fail(claudeLane, "medium consent: granted round-trip", fmt.Sprintf("exit=%d state=%q risk=%q lenses=%d %s",
 			code, getString(startDoc, "state"), getString(startDoc, "risk_level"), len(lenses), firstLine(stderr)))
+		return
+	}
+	if err := b.rememberStarted(repo, target, startDoc); err != nil {
+		b.fail(claudeLane, "medium consent: granted round-trip", err.Error())
 		return
 	}
 	b.pass(claudeLane, "medium consent: granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage with one lens")
@@ -185,7 +174,7 @@ func (b *battery) runClaudeModelReview(repo string) {
 				return
 			}
 			if operationState(doc) == "approved" {
-				b.pass(claudeLane, "medium lifecycle after model run", "model-reviewed lineage reached the approved receipt")
+				b.burnApproved(claudeLane, "medium lifecycle after model run", repo, "claude-code", nil, doc)
 				return
 			}
 			if operationState(doc) == "correction_required" {

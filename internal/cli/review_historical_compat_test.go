@@ -79,7 +79,7 @@ func TestReviewFacadeStartResumesHistoricalCandidateArtifactRequiredWithoutRewri
 	if err := json.Unmarshal(resumedOutput.Bytes(), &resumed); err != nil {
 		t.Fatal(err)
 	}
-	if resumed.Action != string(reviewtransaction.CompactStartResumed) || resumed.LineageID != created.LineageID || resumed.TargetIdentity != created.TargetIdentity {
+	if resumed.Action != "replayed" || resumed.LineageID != created.LineageID || resumed.TargetIdentity != created.TargetIdentity {
 		t.Fatalf("resumed review = %#v, want exact historical authority", resumed)
 	}
 	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
@@ -229,15 +229,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("historical candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	historical := startFacadeReview(t, repo)
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("go test ./...: pass\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	args := append([]string{"--cwd", repo, "--lineage", historical.LineageID}, facadeReviewerResultArgs(t, repo, historical)...)
-	if err := RunReviewFacadeFinalize(append(args, "--evidence", evidencePath), io.Discard); err != nil {
-		t.Fatal(err)
-	}
+	historical := finalizeHistoricalFacadeReviewForRepo(t, repo, "historical-zero-edit-escalation")
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "historical candidate")
 
@@ -245,13 +237,10 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 		t.Fatal(err)
 	}
 	current := startFacadeReview(t, repo)
-	if current.LineageID == historical.LineageID {
+	if current.LineageID == historical.Record.State.LineageID {
 		t.Fatalf("current review reused historical lineage %q", current.LineageID)
 	}
-	historicalStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, historical.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	historicalStore := historical.Store
 	injectCLIRetiredCompactStateField(t, historicalStore.StatePath(), "zero_edit_escalation", true)
 	before, err := os.ReadFile(historicalStore.StatePath())
 	if err != nil {
@@ -279,7 +268,7 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 		t.Fatalf("historical record left status incomplete: %#v", report)
 	}
 	for _, entry := range report.Entries {
-		if entry.LineageID == historical.LineageID && entry.Status == reviewtransaction.AuthorityStatusInvalid {
+		if entry.LineageID == historical.Record.State.LineageID && entry.Status == reviewtransaction.AuthorityStatusInvalid {
 			t.Fatalf("historical entry reported invalid: %#v", entry)
 		}
 	}

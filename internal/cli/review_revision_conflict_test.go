@@ -37,17 +37,17 @@ func TestFinalizeRevisionConflictIsRetryableNotUnknown(t *testing.T) {
 	t.Cleanup(func() { reviewFacadePlannedTransitionHook = original })
 	var advanced atomic.Bool
 	var competingErr error
+	var competingOutput bytes.Buffer
 	reviewFacadePlannedTransitionHook = func(_ context.Context, _ string, _ string, _ string) error {
 		// The nested FINALIZE below re-enters this hook; only the outermost
 		// call may hand the authority to a competing writer.
 		if !advanced.CompareAndSwap(false, true) {
 			return nil
 		}
-		var competing bytes.Buffer
 		if err := RunReview([]string{
 			"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
-		}, &competing); err != nil {
-			competingErr = fmt.Errorf("competing FINALIZE: %v\n%s", err, competing.String())
+		}, &competingOutput); err != nil {
+			competingErr = fmt.Errorf("competing FINALIZE: %v\n%s", err, competingOutput.String())
 		}
 		return nil
 	}
@@ -88,16 +88,18 @@ func TestFinalizeRevisionConflictIsRetryableNotUnknown(t *testing.T) {
 		t.Fatalf("superseded-revision message does not name the retry continuation: %q", failure.Message)
 	}
 
-	// Retry-safe is a claim, not a wish: the identical request must converge on
-	// the terminal receipt the competing writer already published.
-	for attempt := 1; attempt <= 5; attempt++ {
-		var converged bytes.Buffer
-		if err := RunReview([]string{
-			"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
-		}, &converged); err != nil {
-			t.Fatalf("retry %d after the superseded revision: %v\n%s", attempt, err, converged.String())
-		}
+	// The competing writer owns the one terminal approval. Its published result
+	// must be the burn terminal shape, and the pre-write loser must never recreate
+	// the authority by replaying after that burn.
+	terminal := assertApprovedBurnedCompactNegotiatedFinalize(t, competingOutput.Bytes())
+	if terminal.LineageID != lineage {
+		t.Fatalf("competing terminal lineage = %q, want %q", terminal.LineageID, lineage)
 	}
+	store, storeErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 // TestRevisionConflictAfterACommittedTransitionStillReportsUnknown is the guard

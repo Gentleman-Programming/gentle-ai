@@ -123,34 +123,13 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 	runReviewCLIGit(t, repo, "add", "--", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-m", "candidate")
 
-	// This is SETUP for the "recover" behavior under test, not the start
-	// refusal itself; the committed candidate selects a lens, so a direct
-	// base-diff start now hits issue #2447's up-front refusal.
-	var output bytes.Buffer
-	startArgs := boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--base-ref", firstBase,
-	})
-	if err := RunReview(startArgs, &output); err != nil {
-		t.Fatal(err)
-	}
-	var started ReviewFacadeStartResult
-	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
-		t.Fatal(err)
-	}
-	resultPath := filepath.Join(t.TempDir(), "review.json")
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{}, Evidence: []string{"reviewed"}})
-	if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath, "--evidence", evidencePath}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	predecessorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	predecessor, err := predecessorStore.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// This predecessor represents a compact approval from before v3 started
+	// burning approved authority. Seed it through the reviewtransaction fixture
+	// seam instead of current FINALIZE so the recovery behavior sees the frozen
+	// base-diff authority it is meant to protect.
+	predecessor := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, "recover-1744-frozen-base", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseDiff, BaseRef: firstBase, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	}).Record
 	if predecessor.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff {
 		t.Fatalf("predecessor fixture is not base-diff: %#v", predecessor.State)
 	}
@@ -164,7 +143,7 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 	runReviewCLIGit(t, repo, "commit", "-m", "unrelated base")
 	differentBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 
-	err = RunReviewRecover([]string{
+	err := RunReviewRecover([]string{
 		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
 		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "recover-1744-different-base-successor",
 		"--disposition", "scope_changed", "--reason", "recover with a different base", "--actor", "maintainer",
@@ -220,7 +199,10 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+	// The escalated compact predecessor is fixture setup for RECOVER admission.
+	// Construct it through the test-only legacy seam; production RECOVER remains
+	// the behavior exercised by this helper's callers.
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	resultPath := filepath.Join(t.TempDir(), "review.json")
@@ -234,7 +216,10 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage, "--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
 	predecessor, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
