@@ -7369,6 +7369,45 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 // command line itself is platform-aware, so running under pwsh on Linux
 // exercises the same reconstruction logic as on Windows.
 
+// TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem verifies that when
+// an outer UserPromptSubmit entry contains the legacy literal alongside a
+// non-legacy sibling, only the legacy entry is removed. The hook kind and the
+// non-legacy sibling must survive intact.
+func TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem(t *testing.T) {
+	legacy := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	keeper := `some-other-tool --flag value`
+	root := map[string]any{
+		"hooks": map[string]any{
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": legacy},
+						map[string]any{"type": "command", "command": keeper},
+					},
+				},
+			},
+		},
+	}
+
+	pruneLegacyClaudeHook(root, legacy)
+
+	hooks := root["hooks"].(map[string]any)
+	ups := hooks["UserPromptSubmit"].([]any)
+	if len(ups) != 1 {
+		t.Fatalf("UserPromptSubmit entry count = %d, want 1 (entry must survive prune of one inner hook): %v", len(ups), ups)
+	}
+	item := ups[0].(map[string]any)
+	inner := item["hooks"].([]any)
+	if len(inner) != 1 {
+		t.Fatalf("inner hook count = %d, want 1 (only the legacy must be removed): %v", len(inner), inner)
+	}
+	gotCmd, _ := inner[0].(map[string]any)["command"].(string)
+	if gotCmd != keeper {
+		t.Errorf("surviving inner hook command = %q, want %q", gotCmd, keeper)
+	}
+}
+
 // TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned
 // documents the destructive edge case: if every inner hook under every outer
 // UserPromptSubmit entry matches the legacy literal, the prune removes all of
