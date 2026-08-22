@@ -35,6 +35,13 @@ internal/agents/pi/model_routing.go	scanJSONValue
 internal/agents/pi/model_routing.go	selectPackageBin
 internal/agents/pi/model_routing.go	unsafeBinPath
 internal/agents/pi/model_routing.go	windowsDrivePath
+internal/agents/pi/model_routing_candidates.go	CandidateError.Error
+internal/agents/pi/model_routing_candidates.go	CandidateError.Unwrap
+internal/agents/pi/model_routing_candidates.go	EnumerateModelRoutingCandidates
+internal/agents/pi/model_routing_candidates.go	canonicalRoutingExecutable
+internal/agents/pi/model_routing_candidates.go	enumerateModelRoutingPATH
+internal/agents/pi/model_routing_candidates.go	modelRoutingExecutableNames
+internal/agents/pi/model_routing_candidates.go	routingPathErrorKind
 internal/agents/pi/package_root.go	ResolvePackageRoot
 internal/agents/pi/package_source.go	NotConfiguredError.Error
 internal/agents/pi/package_source.go	NotConfiguredError.Unwrap
