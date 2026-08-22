@@ -457,7 +457,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// renders through the OpenCode orchestrator asset. The hash is rederived.
 	// #3417 also classifies OpenCode background launch acknowledgements as
 	// nonterminal, preventing false task-result failures and session latches.
-	const want = "8b4e161971530355248addfc62fb101d1ea71a5ba4e293b427e85c87a2c535c7"
+	// #3470 adds explicit parallel apply scheduling policy to SDD orchestrators.
+	const want = "3cfe96db894b1bf5c0622349db57645e98f0d3aa32583b419fa34dcf774631af"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

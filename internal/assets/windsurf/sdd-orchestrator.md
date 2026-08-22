@@ -273,6 +273,19 @@ Automatic mode does not override this guard. Always include the resolved `delive
 
 When executing the inline `sdd-apply` phase, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the phase context.
 
+### Parallel Apply Scheduling Policy
+
+The coordinator manages parallel-apply scheduling for compatible SDD work items:
+
+- `parallel_apply: serialized | auto` (default `serialized`).
+- `serialized`: launches at most one ready item actor at a time while retaining item-level authority (`gentle-ai.sdd-items/v1`), acquire/settle contracts, and join barriers. Background subagents remain available for unrelated work.
+- `auto`: permits concurrent item actors only when provider background-subagent launch capability is available, >=2 compatible items are ready, dependencies are satisfied, edit roots are pairwise disjoint, and each acquire returns `proceed`.
+- Overlapping, dependent, malformed, shared, unresolved, or unknown edit scopes are never auto-eligible and remain blocked or serialized.
+- Background-subagent availability alone never activates parallel apply.
+- The policy is cached at coordinator/session or change scope and is never persisted in the runtime ledger.
+- In automatic mode without an explicit policy, execution remains `serialized` silently without extra prompts.
+- In interactive mode without an explicit policy, the coordinator asks once when at least two items are actually eligible, then caches the choice for that change.
+
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments
 

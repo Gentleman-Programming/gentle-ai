@@ -29,6 +29,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged":           reviewOptedIn,
 	"j112-sdd-attempt-settle-survives-review-mode-transition":                   reviewUntouched,
 	"j113-correction-removes-candidate-only-path":                               reviewOptedIn,
+	"j114-sdd-parallel-apply-scheduling-policy-serialized-by-default":           reviewUntouched,
 	"j12-rejected-capture-then-recapture":                                       reviewOptedIn,
 	"j13-next-transition-runs-verbatim":                                         reviewOptedIn,
 	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,

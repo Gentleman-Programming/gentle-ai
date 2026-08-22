@@ -116,6 +116,19 @@ SDD must protect reviewer cognitive load, not only generate tasks.
 
 This guard exists to reduce reviewer burnout and keep implementation delivery safe. Do not treat it as optional process noise.
 
+## G. Parallel Apply Scheduling Policy
+
+The coordinator manages parallel-apply scheduling for compatible SDD work items:
+
+- `parallel_apply: serialized | auto` (default `serialized`).
+- `serialized`: launches at most one ready item actor at a time while retaining item-level authority (`gentle-ai.sdd-items/v1`), acquire/settle contracts, and join barriers.
+- `auto`: permits concurrent item actors only when provider background-subagent launch capability is available, >=2 compatible items are ready, dependencies are satisfied, edit roots are pairwise disjoint, and each acquire returns `proceed`.
+- Overlapping, dependent, malformed, shared, unresolved, or unknown edit scopes are never auto-eligible and remain blocked or serialized.
+- Background-subagent availability alone never activates parallel apply.
+- The policy is cached at coordinator/session or change scope and is never persisted in the runtime ledger.
+- In automatic mode without an explicit policy, execution remains `serialized` silently without extra prompts.
+- In interactive mode without an explicit policy, the coordinator asks once when at least two items are actually eligible, then caches the choice for that change.
+
 ## F. Key Learnings Closing
 
 Close your **final report message** (the return envelope) with a `## Key Learnings` section to enable engram passive capture.
