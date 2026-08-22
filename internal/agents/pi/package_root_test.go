@@ -96,7 +96,7 @@ func TestResolvePackageRootRejectsGrammarAndLocalAmbiguity(t *testing.T) {
 		{"encoded traversal", "./packages/%2e%2e/gentle-pi", "unsafe-local", false}, {"ambiguous relative", "packages/gentle-pi", "invalid-local", false},
 		{"file remote host", "file://remote/tmp/pkg", "invalid-file-url", false}, {"file query", file + "?query", "invalid-file-url", false},
 		{"file encoded separator", file + "%2Fchild", "unsafe-file-url", false}, {"file malformed escape", file + "%zz", "invalid-file-url", true},
-		{"git shorthand", "git:github.com/team/gentle-pi", "unsupported-source", false}, {"scp", "git@github.com:team/gentle-pi", "unsupported-source", false}, {"host shorthand", "github.com/team/gentle-pi", "unsupported-source", false}, {"ssh", "ssh://git@github.com/team/gentle-pi", "unsupported-source", false}, {"https", "https://github.com/team/gentle-pi", "unsupported-source", false}, {"http", "http://github.com/team/gentle-pi", "unsupported-source", false}, {"git+ssh", "git+ssh://git@github.com/team/gentle-pi", "unsupported-source", false}, {"localhost shorthand", "localhost/team/gentle-pi", "unsupported-source", false},
+		{"scp", "git@github.com:team/gentle-pi", "unsupported-source", false}, {"host shorthand", "github.com/team/gentle-pi", "unsupported-source", false}, {"git+ssh", "git+ssh://git@github.com/team/gentle-pi", "unsupported-source", false}, {"localhost shorthand", "localhost/team/gentle-pi", "unsupported-source", false},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

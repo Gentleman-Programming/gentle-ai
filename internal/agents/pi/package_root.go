@@ -32,9 +32,9 @@ func (e *SourceError) Unwrap() error { return e.Cause }
 
 type packageRootHandler func(PackageSourceSelection) (root string, matched bool, err error)
 
-// Keep remote rejection last so a future handler (for example git) can be
-// inserted before it without changing npm or local semantics.
-var packageRootHandlers = []packageRootHandler{resolveNPMPackageRoot, resolveLocalPackageRoot, rejectUnsupportedPackageRoot}
+// Keep remote rejection last so source-specific handlers stay before it without
+// changing npm or local semantics.
+var packageRootHandlers = []packageRootHandler{resolveNPMPackageRoot, resolveGitPackageRoot, resolveLocalPackageRoot, rejectUnsupportedPackageRoot}
 
 // ResolvePackageRoot is lexical and read-only: it does not reread settings or
 // touch the filesystem. Ordered handlers make new source grammars additive.

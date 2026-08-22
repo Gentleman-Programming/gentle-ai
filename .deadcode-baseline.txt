@@ -31,14 +31,11 @@ internal/agents/pi/model_routing.go	duplicateJSONKeyError.Error
 internal/agents/pi/model_routing.go	manifestError
 internal/agents/pi/model_routing.go	missingKind
 internal/agents/pi/model_routing.go	packageError
-internal/agents/pi/model_routing.go	pathWithin
 internal/agents/pi/model_routing.go	scanJSONValue
 internal/agents/pi/model_routing.go	selectPackageBin
 internal/agents/pi/model_routing.go	unsafeBinPath
 internal/agents/pi/model_routing.go	windowsDrivePath
 internal/agents/pi/package_root.go	ResolvePackageRoot
-internal/agents/pi/package_root.go	SourceError.Error
-internal/agents/pi/package_root.go	SourceError.Unwrap
 internal/agents/pi/package_source.go	NotConfiguredError.Error
 internal/agents/pi/package_source.go	NotConfiguredError.Unwrap
 internal/agents/pi/package_source.go	SelectPackageSource
