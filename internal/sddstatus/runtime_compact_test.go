@@ -182,12 +182,15 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	failNextCompactStoreSync(t, fixture.store)
 	before := countRuntimeRecords(t, fixture.store.Dir)
 	legacy := fixture.finishRequest("compact-remediation-settle")
+	evidence := remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.predecessorBinding.Lineage, fixture.predecessorBinding.GateContext.Generation)
+	legacy.EvidenceRevision, _ = AdmitRemediationEvidence(evidence, fixture.failedEvidence)
 	request := CompactSettleRequest{
 		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,
 		EvidenceRevision: legacy.EvidenceRevision, Diagnosis: legacy.Diagnosis,
 		HarnessDisposition: legacy.HarnessDisposition, CleanupEvidence: legacy.CleanupEvidence,
 		ProcessEvidence: legacy.ProcessEvidence, SuccessorLineageID: legacy.SuccessorLineageID,
 		RemediatesEvidenceRevision: legacy.RemediatesEvidenceRevision,
+		RemediationEvidence:        evidence,
 	}
 
 	result, err := fixture.store.Settle(context.Background(), request)
@@ -206,7 +209,9 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 		t.Fatalf("compact remediation status = %#v records=%d", status, countRuntimeRecords(t, fixture.store.Dir))
 	}
 
-	replayed, err := fixture.store.Settle(context.Background(), request)
+	replayWithoutFreshEvidence := request
+	replayWithoutFreshEvidence.RemediationEvidence = nil
+	replayed, err := fixture.store.Settle(context.Background(), replayWithoutFreshEvidence)
 	if err != nil || replayed != result || countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 		t.Fatalf("compact remediation replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, fixture.store.Dir))
 	}
@@ -229,6 +234,53 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 				t.Fatalf("conflicting replay = %#v err=%v records=%d", blocked, settleErr, countRuntimeRecords(t, fixture.store.Dir))
 			}
 		})
+	}
+}
+
+func TestCompactSettleMissingSuccessfulRevisionPreservesActiveToken(t *testing.T) {
+	fixture := newRuntimeRemediationFixture(t, true)
+	request := fixture.finishRequest("compact-missing-success-revision")
+	request.EvidenceRevision = ""
+	_, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
+		Token: request.ExpectedRevision, RequestID: request.RequestID, Outcome: request.Outcome,
+		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
+		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
+		ProcessEvidence: request.ProcessEvidence, SuccessorLineageID: request.SuccessorLineageID,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+	})
+	if err == nil || !strings.Contains(err.Error(), "evidence_revision") {
+		t.Fatalf("missing successful revision error = %v, want actionable evidence_revision refusal", err)
+	}
+	status, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != fixture.active.ActiveAttempt.Ordinal {
+		t.Fatalf("missing successful revision changed active token state: %#v", status)
+	}
+}
+
+func TestCompactSettleDifferentValidSuccessfulRevisionPreservesActiveToken(t *testing.T) {
+	fixture := newRuntimeRemediationFixture(t, true)
+	request := fixture.finishRequest("compact-mismatched-success-revision")
+	request.EvidenceRevision = runtimeTestHash('6')
+	_, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
+		Token: request.ExpectedRevision, RequestID: request.RequestID, Outcome: request.Outcome,
+		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
+		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
+		ProcessEvidence: request.ProcessEvidence, SuccessorLineageID: request.SuccessorLineageID,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+		RemediationEvidence:        remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.predecessorBinding.Lineage, fixture.predecessorBinding.GateContext.Generation),
+	})
+	if err == nil || !strings.Contains(err.Error(), "native admission revision") {
+		t.Fatalf("mismatched successful revision error = %v", err)
+	}
+	status, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != fixture.active.ActiveAttempt.Ordinal {
+		t.Fatalf("mismatched successful revision changed active token state: %#v", status)
 	}
 }
 
@@ -299,7 +351,8 @@ func TestCompactSettleReviewDisabledClosesOrdinaryWithoutAdvancingBinding(t *tes
 		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,
 		EvidenceRevision: legacy.EvidenceRevision, Diagnosis: legacy.Diagnosis,
 		HarnessDisposition: legacy.HarnessDisposition, CleanupEvidence: legacy.CleanupEvidence,
-		ProcessEvidence: legacy.ProcessEvidence,
+		ProcessEvidence:     legacy.ProcessEvidence,
+		RemediationEvidence: remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.predecessorBinding.Lineage, fixture.predecessorBinding.GateContext.Generation),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,11 +380,13 @@ func TestCompactSettleTokenSurvivesBindingCASAndDerivesSelfSuccessor(t *testing.
 		t.Fatal("fixture did not advance runtime HEAD after acquire")
 	}
 	legacy := fixture.finishRequest("compact-self-remediation")
+	evidence := remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.binding.Lineage, fixture.binding.GateContext.Generation)
+	legacy.EvidenceRevision, _ = AdmitRemediationEvidence(evidence, fixture.failedEvidence)
 	result, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
 		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,
 		EvidenceRevision: legacy.EvidenceRevision, Diagnosis: legacy.Diagnosis,
 		HarnessDisposition: legacy.HarnessDisposition, CleanupEvidence: legacy.CleanupEvidence,
-		ProcessEvidence: legacy.ProcessEvidence,
+		ProcessEvidence: legacy.ProcessEvidence, RemediationEvidence: evidence,
 	})
 	if err != nil {
 		t.Fatal(err)

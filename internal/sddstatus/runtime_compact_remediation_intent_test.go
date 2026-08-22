@@ -126,11 +126,17 @@ func TestCompactAcquireRemediationIntentStillIssuesTokenForDirectCorrection(t *t
 	}
 
 	appendRuntimeLedgerFile(t, repo, "bounded unmanaged correction\n")
+	evidence := remediationJSONPayload(failedEvidence)
+	admitted, err := AdmitRemediationEvidence(evidence, failedEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
 	settled, err := store.Settle(context.Background(), CompactSettleRequest{
 		Token: correction.Token, RequestID: "direct-settle-correction", Outcome: AttemptPassed,
-		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "bounded correction passed focused checks",
+		EvidenceRevision: admitted, Diagnosis: "bounded correction passed focused checks",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
 		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
+		RemediationEvidence: evidence,
 	})
 	if err != nil {
 		t.Fatal(err)

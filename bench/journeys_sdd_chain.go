@@ -109,12 +109,15 @@ func sddChainInterruptedAttempt(r *journeyRun) error {
 // interruption's live pointer, blocks invalid_continuation, and leaves token 3
 // running. The chain-derived correction must instead settle atomically.
 func sddChainCorrectionCompletes(r *journeyRun) error {
+	if err := sddUnmanagedEvidence(r, sddFailedEvidence); err != nil {
+		return err
+	}
 	token := r.sandbox.Scratch["unmanaged-token"]
 	observation := r.run(append([]string{
 		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", token,
-		"--request-id", "bench-chain-correct", "--outcome", "passed", "--evidence-revision", sddCorrectedEvidence,
+		"--request-id", "bench-chain-correct", "--outcome", "passed", "--evidence-revision", r.sandbox.Scratch["unmanaged-evidence-revision"],
 		"--remediates-evidence-revision", sddFailedEvidence,
-	}, sddTerminalEvidence...), false)
+	}, append(append([]string{}, sddTerminalEvidence...), "--remediation-evidence-file", r.sandbox.Scratch["unmanaged-evidence-file"])...), false)
 	var result sddCompactAttemptResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
 		return fmt.Errorf("parse chain correction settle: %w (stderr: %s)", err, firstLine(observation.Stderr))

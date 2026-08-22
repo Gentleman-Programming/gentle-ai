@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1005,13 +1007,27 @@ func sddUnmanagedAcquireCorrection(r *journeyRun) error {
 	return nil
 }
 
+func sddUnmanagedEvidence(r *journeyRun, failedEvidence string) error {
+	payload := []byte(fmt.Sprintf(`{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"%s","commands":[{"command":"go test ./bench","exit_code":0,"result":"all commands passed"}],"runtime_harness":{"status":"not_applicable","command":"","result":"","na_reason":"No runtime boundary exists because this benchmark correction is repository-only."},"rollback":{"boundary":"the unmanaged remediation attempt","evidence":"the correction remains bounded by the attempt ledger."}}`, failedEvidence))
+	digest := sha256.Sum256(payload)
+	revision := "sha256:" + hex.EncodeToString(digest[:])
+	path := filepath.Join(r.sandbox.Repo, ".bench-remediation-evidence.json")
+	r.sandbox.Scratch["unmanaged-evidence-file"], r.sandbox.Scratch["unmanaged-evidence-revision"] = path, revision
+	return r.sandbox.write(path, string(payload))
+}
+
 func sddUnmanagedSettle(r *journeyRun, requestID, failedEvidence string, wantSuccess bool) error {
 	token := r.sandbox.Scratch["unmanaged-token"]
-	observation := r.run(append([]string{
+	if err := sddUnmanagedEvidence(r, sddFailedEvidence); err != nil {
+		return err
+	}
+	args := append([]string{
 		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", token,
-		"--request-id", requestID, "--outcome", "passed", "--evidence-revision", sddCorrectedEvidence,
+		"--request-id", requestID, "--outcome", "passed", "--evidence-revision", r.sandbox.Scratch["unmanaged-evidence-revision"],
 		"--remediates-evidence-revision", failedEvidence,
-	}, sddTerminalEvidence...), false)
+	}, sddTerminalEvidence...)
+	args = append(args, "--remediation-evidence-file", r.sandbox.Scratch["unmanaged-evidence-file"])
+	observation := r.run(args, false)
 	var result sddCompactAttemptResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
 		return fmt.Errorf("parse unmanaged correction settle: %w (stderr: %s)", err, firstLine(observation.Stderr))

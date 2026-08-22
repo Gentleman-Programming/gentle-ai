@@ -152,11 +152,17 @@ func TestObligationSurvivesAPassedSettlementOnlyUntilItIsDischarged(t *testing.T
 	// Discharge it the way the ledger admits: a correction that names the
 	// failure it repairs.
 	appendRuntimeLedgerFile(t, repo, "the correction\n")
+	evidence := remediationJSONPayload(failedEvidence)
+	admitted, err := AdmitRemediationEvidence(evidence, failedEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Settle(ctx, CompactSettleRequest{
 		Token: second.Token, RequestID: "d-settle-2", Outcome: AttemptPassed,
-		EvidenceRevision: runtimeTestHash('d'), Diagnosis: "correction passed",
+		EvidenceRevision: admitted, Diagnosis: "correction passed",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed",
 		ProcessEvidence: "no descendants", RemediatesEvidenceRevision: failedEvidence,
+		RemediationEvidence: evidence,
 	}); err != nil {
 		t.Fatal(err)
 	}

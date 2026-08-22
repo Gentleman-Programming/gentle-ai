@@ -114,13 +114,14 @@ type relationshipsV1 struct {
 }
 
 type remediationStateV1 struct {
-	Required               bool   `json:"required"`
-	Complete               bool   `json:"complete"`
-	FailedEvidenceRevision string `json:"failedEvidenceRevision"`
-	LineageID              string `json:"lineageId"`
-	Generation             int    `json:"generation"`
-	FixBatch               int    `json:"fixBatch"`
-	Reason                 string `json:"reason"`
+	Required                   bool   `json:"required"`
+	Complete                   bool   `json:"complete"`
+	FailedEvidenceRevision     string `json:"failedEvidenceRevision"`
+	SuccessfulEvidenceRevision string `json:"successfulEvidenceRevision,omitempty"`
+	LineageID                  string `json:"lineageId"`
+	Generation                 int    `json:"generation"`
+	FixBatch                   int    `json:"fixBatch"`
+	Reason                     string `json:"reason"`
 }
 
 // reviewGateStateV1 grows one omitempty field over the frozen v1 shape.
@@ -178,13 +179,14 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 		ActionContext: projectActionContextV1(status.ActionContext),
 		Relationships: projectRelationshipsV1(status.Relationships),
 		RemediationState: remediationStateV1{
-			Required:               status.RemediationState.Required,
-			Complete:               status.RemediationState.Complete,
-			FailedEvidenceRevision: status.RemediationState.FailedEvidenceRevision,
-			LineageID:              status.RemediationState.LineageID,
-			Generation:             status.RemediationState.Generation,
-			FixBatch:               status.RemediationState.FixBatch,
-			Reason:                 status.RemediationState.Reason,
+			Required:                   status.RemediationState.Required,
+			Complete:                   status.RemediationState.Complete,
+			FailedEvidenceRevision:     status.RemediationState.FailedEvidenceRevision,
+			SuccessfulEvidenceRevision: status.RemediationState.SuccessfulEvidenceRevision,
+			LineageID:                  status.RemediationState.LineageID,
+			Generation:                 status.RemediationState.Generation,
+			FixBatch:                   status.RemediationState.FixBatch,
+			Reason:                     status.RemediationState.Reason,
 		},
 		ReviewTransaction: status.ReviewTransaction,
 		NextRecommended:   status.NextRecommended,
