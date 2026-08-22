@@ -711,7 +711,10 @@ func (p *ActivationPlan) Apply() error {
 		if err := requireSnapshot(path, snapshot); err != nil {
 			return p.failAndRollback(fmt.Errorf("revalidate managed OpenCode launcher %q before removal: %w", path, err))
 		}
-		if err := p.options.RemoveFile(path); err != nil && !os.IsNotExist(err) {
+		if err := p.options.RemoveFile(path); err != nil {
+			if os.IsNotExist(err) {
+				return p.failAndRollback(fmt.Errorf("managed OpenCode launcher %q disappeared after revalidation during removal: %w", path, err))
+			}
 			return p.failAndRollback(fmt.Errorf("remove managed OpenCode launcher %q: %w", path, err))
 		}
 		p.changed = append(p.changed, path)
