@@ -43,6 +43,18 @@ var gateWriteGuardForbidden = map[string]bool{
 	"os.Remove":        true,
 }
 
+func gateWriteGuardCallExprName(call *ast.CallExpr) string {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name
+	case *ast.SelectorExpr:
+		if receiver, ok := fun.X.(*ast.Ident); ok {
+			return receiver.Name + "." + fun.Sel.Name
+		}
+	}
+	return ""
+}
+
 func scanGateWriteGuardFile(path string) ([]string, error) {
 	fileSet := token.NewFileSet()
 	tree, err := parser.ParseFile(fileSet, path, nil, 0)
@@ -58,7 +70,7 @@ func scanGateWriteGuardFile(path string) ([]string, error) {
 		if !ok {
 			return true
 		}
-		callee := derivedObservationCallExprName(call)
+		callee := gateWriteGuardCallExprName(call)
 		if gateWriteGuardForbidden[callee] {
 			violations = append(violations, fileSet.Position(call.Pos()).String()+": "+callee)
 		}

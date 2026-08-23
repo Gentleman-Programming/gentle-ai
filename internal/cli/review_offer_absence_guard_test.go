@@ -11,15 +11,12 @@ import (
 // for internal/cli's half of the guard: a static AST guard asserting ZERO
 // call edges into offer/ReviewCore symbols from internal/cli's SDD
 // apply/verify/archive/status/continue surface, except through the
-// package's one door for that surface (review_offer_door.go's
-// offerEntryHook).
-//
 // Scope (deliberately narrow, per design.md decision 4's own rationale):
 // only the SDD apply/verify/archive/status/continue files — sdd_attempt.go,
 // sdd_status.go, sdd_verify_validate.go — are scanned. The ~30 other
 // internal/cli files that import reviewtransaction (review_*.go) are
-// explicit, user-invoked `review` subcommands (review start, review status,
-// review finalize, etc.), not automatic SDD apply/verify/archive paths, and
+// explicit, user-invoked `review` subcommands, not automatic SDD
+// apply/verify/archive paths, and
 // are intentionally out of this guard's scope — scanning them would be a
 // false positive against code this guard is not meant to constrain.
 
@@ -84,8 +81,7 @@ func example(ctx context.Context) {
 // TestReviewOfferAbsenceGuardHoldsForScopedCLIFiles runs the scanner
 // against exactly the SDD apply/verify/archive/status/continue files this
 // guard names, failing with exact violation evidence if any of them
-// reference an offer/ReviewCore symbol directly instead of through
-// offerEntryHook.
+// reference an offer/ReviewCore symbol directly.
 func TestReviewOfferAbsenceGuardHoldsForScopedCLIFiles(t *testing.T) {
 	for _, file := range reviewOfferAbsenceScopedCLIFiles {
 		t.Run(file, func(t *testing.T) {
@@ -97,20 +93,6 @@ func TestReviewOfferAbsenceGuardHoldsForScopedCLIFiles(t *testing.T) {
 				t.Fatalf("%s references offer/ReviewCore symbols outside the door: %v", file, violations)
 			}
 		})
-	}
-}
-
-// TestOfferEntryHookIsTheOneCLIDoor proves offerEntryHook exists and is
-// invocable — the door the absence guard exempts, and the corroborating
-// OFF-mode bench call-absence counter overrides to prove it never fires.
-func TestOfferEntryHookIsTheOneCLIDoor(t *testing.T) {
-	called := false
-	previous := offerEntryHook
-	offerEntryHook = func() { called = true }
-	defer func() { offerEntryHook = previous }()
-	offerEntryHook()
-	if !called {
-		t.Fatal("offerEntryHook did not fire when invoked directly")
 	}
 }
 

@@ -678,21 +678,6 @@ func RecordRDDConsentAsked(ctx context.Context, repo string) error {
 	return publishPrivateRARImmutable(filepath.Join(dir, rddConsentName), rddConsentPayload)
 }
 
-// RDDDeliveryDisposition reports delivery under ordinary repository policy. An
-// existing receipt still governs delivery because disabling freezes authority
-// read-only; without one, disabled work stays explicitly unmanaged. No value
-// here fabricates an approval or a PASS.
-func RDDDeliveryDisposition(status RDDModeStatus, receiptPresent bool) RDDDelivery {
-	switch {
-	case receiptPresent:
-		return RDDDeliveryReceiptGoverned
-	case status.Enabled():
-		return RDDDeliveryUnmanaged
-	default:
-		return RDDDeliveryDisabledUnmanaged
-	}
-}
-
 func rddModeStatus(
 	globalMode RDDMode,
 	override rddModeOverrideRecord,

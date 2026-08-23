@@ -31,19 +31,8 @@ func TestNormalizeFinishAttemptRequestRevisionRefusalsAreSelfDiagnosing(t *testi
 		assertSelfDiagnosingRevisionRefusal(t, err, uppercaseHex, "--evidence-revision")
 	})
 
-	t.Run("expected_binding_revision", func(t *testing.T) {
-		request := base()
-		request.ExpectedBindingRevision = uppercaseHex
-		request.SuccessorLineageID = "lineage"
-		request.RemediatesEvidenceRevision = runtimeTestHash('3')
-		_, err := normalizeFinishAttemptRequest(request)
-		assertSelfDiagnosingRevisionRefusal(t, err, uppercaseHex, "--expected-binding-revision")
-	})
-
 	t.Run("remediates_evidence_revision", func(t *testing.T) {
 		request := base()
-		request.ExpectedBindingRevision = runtimeTestHash('4')
-		request.SuccessorLineageID = "lineage"
 		request.RemediatesEvidenceRevision = uppercaseHex
 		_, err := normalizeFinishAttemptRequest(request)
 		assertSelfDiagnosingRevisionRefusal(t, err, uppercaseHex, "--remediates-evidence-revision")
