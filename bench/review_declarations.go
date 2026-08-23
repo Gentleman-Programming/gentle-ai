@@ -27,6 +27,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j110-untracked-terminal-burn-and-unmanaged-staged-validation":              reviewOptedIn,
 	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged":           reviewOptedIn,
 	"j112-sdd-attempt-settle-survives-review-mode-transition":                   reviewUntouched,
+	"j115-selectorless-frozen-workspace-overlay-resumes-after-restart":          reviewOptedIn,
 	"j113-correction-removes-candidate-only-path":                               reviewOptedIn,
 	"j114-last-reviewer-capture-closes-and-burns":                               reviewOptedIn,
 	"j12-rejected-capture-then-recapture":                                       reviewOptedIn,

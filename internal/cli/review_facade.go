@@ -834,7 +834,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
 			}
 		}
-		if *nextTransition && (requestedLineage == "" || !requestedLineageOccupied) {
+		if *nextTransition && requestedLineage != "" && !requestedLineageOccupied {
 			// A free exact selector starts independently. Freeze its target without
 			// consulting sibling authority; START then creates or replays only this
 			// explicitly rendered lineage.

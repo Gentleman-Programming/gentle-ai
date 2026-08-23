@@ -76,12 +76,85 @@ func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {
 
 	selectorless := explicitFrozenReviewingStatus(t, repo, "")
 	status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
-	if selectorless.NextTransition == nil || selectorless.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+	if selectorless.Authority == nil || selectorless.Authority.LineageID != record.State.LineageID ||
+		!reflect.DeepEqual(selectorless.Projection.IntendedUntracked, []string{"frozen-untracked.txt"}) ||
+		selectorless.NextTransition == nil || selectorless.NextTransition.ReasonCode != "reviewer_results_required" {
 		t.Fatalf("selectorless mixed workspace status = %#v", selectorless)
 	}
 	if !reflect.DeepEqual(status.Projection.IntendedUntracked, []string{"frozen-untracked.txt"}) ||
 		status.NextTransition == nil || status.NextTransition.ReasonCode != "reviewer_results_required" {
 		t.Fatalf("explicit frozen untracked status = %#v", status)
+	}
+}
+
+func TestSelectorFreeFrozenReviewingStatusRediscoversFrozenAuthority(t *testing.T) {
+	tests := []struct {
+		name      string
+		fixture   func(*testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord)
+		wantKind  reviewtransaction.TargetKind
+		wantScope []string
+	}{
+		{
+			name: "recovered workspace overlay",
+			fixture: func(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
+				return frozenStagedReviewingStatusFixture(t)
+			},
+			wantKind:  reviewtransaction.TargetBaseWorkspaceOverlay,
+			wantScope: []string{},
+		},
+		{
+			name: "intended untracked workspace candidate",
+			fixture: func(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
+				return frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
+			},
+			wantKind:  reviewtransaction.TargetCurrentChanges,
+			wantScope: []string{"frozen-untracked.txt"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, _, record := tt.fixture(t)
+			before := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+
+			status := explicitFrozenReviewingStatus(t, repo, "")
+			if err := status.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
+				status.Authority.LineageID != record.State.LineageID || status.Authority.Revision != record.Revision ||
+				status.TargetIdentity != record.State.InitialSnapshot.Identity ||
+				status.Action != reviewtransaction.TargetStatusActionFinalize || status.NextTransition == nil ||
+				status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "reviewer_results_required" ||
+				status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != len(record.State.SelectedLenses) {
+				t.Fatalf("selector-free frozen status = %#v", status)
+			}
+			frozen, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), record.State.InitialSnapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for order, input := range status.NextTransition.Collect.Inputs {
+				wantSubject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, record.State.SelectedLenses[order], order, "")
+				if err != nil || input.ArtifactSubject == nil || input.ArtifactSubject.SelectedOrder != order ||
+					!reflect.DeepEqual(*input.ArtifactSubject, wantSubject) {
+					t.Fatalf("selector-free frozen collect input %d = %#v, want subject %#v, err = %v", order, input, wantSubject, err)
+				}
+			}
+			if status.Projection.Kind != tt.wantKind ||
+				status.Projection.BaseTree != record.State.InitialSnapshot.BaseTree ||
+				status.Projection.InitialReviewTree != record.State.InitialSnapshot.CandidateTree ||
+				status.Projection.CurrentCandidateTree != record.State.InitialSnapshot.CandidateTree ||
+				status.Projection.PathsDigest != record.State.InitialSnapshot.PathsDigest ||
+				!reflect.DeepEqual(status.Projection.Paths, record.State.InitialSnapshot.Paths) ||
+				!reflect.DeepEqual(status.Projection.IntendedUntracked, tt.wantScope) ||
+				status.Projection.IntendedUntrackedProof != record.State.InitialSnapshot.IntendedUntrackedProof ||
+				status.Projection.InitialSnapshotIdentity != record.State.InitialSnapshot.Identity ||
+				status.Projection.CurrentSnapshotIdentity != record.State.InitialSnapshot.Identity {
+				t.Fatalf("selector-free frozen projection = %#v, authority = %#v", status.Projection, record.State.InitialSnapshot)
+			}
+			if after := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(before, after) {
+				t.Fatalf("selector-free status changed authority inventory: before=%#v after=%#v", before, after)
+			}
+		})
 	}
 }
 
