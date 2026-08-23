@@ -20,7 +20,7 @@ import (
 
 const (
 	guardPopulationMarkerHint = "guard:population"
-	guardPopulationCount      = 10
+	guardPopulationCount      = 7
 )
 
 var guardPopulationMarkerPattern = regexp.MustCompile(`^guard:population\s+([a-z0-9-]+)\s+(too-tight|too-loose|fail-closed):\s*(\S.*)$`)
@@ -120,7 +120,7 @@ func TestEveryRegisteredGuardPopulationDeclarationMatchesProduction(t *testing.T
 		return
 	}
 	if len(analysis.declarations) != guardPopulationCount {
-		t.Fatalf("found %d guard-population declarations, want the frozen v2.2.1 scope of %d", len(analysis.declarations), guardPopulationCount)
+		t.Fatalf("found %d guard-population declarations, want the frozen current scope of %d", len(analysis.declarations), guardPopulationCount)
 	}
 
 	current := make(map[string]bool, len(analysis.declarations))

@@ -93,19 +93,16 @@ func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t 
 	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--input", input), &output); err != nil {
 		t.Fatal(err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
-	if artifact.Lens != lens || artifact.SelectedOrder != 0 || artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
-		t.Fatalf("submitted reviewer artifact = %#v", artifact)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("submitted reviewer terminal result = %#v", terminal)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("submission did not occupy the reviewer result slot: %#v, %v", slot, err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }
 
 func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {

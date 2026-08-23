@@ -16,6 +16,9 @@ const (
 var atomicReviewStatusCapability = &Capability{Verb: []string{"review", "status"}, Flags: []string{
 	"--cwd", "--contract", "--lineage", "--next-transition",
 }}
+var captureCorrectionPlanCapability = &Capability{Verb: []string{"review", "capture-correction-plan"}, Flags: []string{
+	"--repository-context", "--lineage", "--target", "--expected-revision", "--request-hash", "--correction-lines",
+}}
 
 // Wave 3 now ratifies #3417's compact atomic boundary. The former environment
 // activation and receipt-governed gate journeys belonged to the removed lineage
@@ -34,10 +37,12 @@ func stageAtomicSiblingWorktrees(sandbox *Sandbox) error {
 		return err
 	}
 	for _, root := range []string{sandbox.Repo, linked} {
-		if err := sandbox.write(filepath.Join(root, "docs", "atomic-boundary.md"), "# Atomic boundary\n"); err != nil {
+		path := filepath.Join(root, "internal", "auth", "session.go")
+		content := "package auth\n\nfunc CheckToken(token string) bool { return token != \"\" }\n"
+		if err := sandbox.write(path, content); err != nil {
 			return err
 		}
-		if err := sandbox.git(root, "add", "--", "docs/atomic-boundary.md"); err != nil {
+		if err := sandbox.git(root, "add", "--", "internal/auth/session.go"); err != nil {
 			return err
 		}
 	}
@@ -400,8 +405,66 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 	if err != nil {
 		return err
 	}
-	if after.NextTransition.Kind != "execute" || after.NextTransition.Execute.Operation != "review.finalize" {
-		return fmt.Errorf("full selected lens set did not advance to finalize: %+v", after.NextTransition)
+	if includeCorrectableFinding {
+		if after.Authority.LineageID != lineageID || after.Authority.State != "correction_required" ||
+			after.NextTransition.Kind != "collect" || after.NextTransition.ReasonCode != "correction_plan_required" ||
+			len(after.NextTransition.Collect.Inputs) != 1 || after.NextTransition.Collect.Inputs[0].Name != "correction_lines" ||
+			after.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-correction-plan" {
+			return fmt.Errorf("full selected lens set did not advance to its correction-plan capture: authority=%+v transition=%+v", after.Authority, after.NextTransition)
+		}
+		return nil
+	}
+	if after.Authority.LineageID != "" || after.Authority.State != "" || after.NextTransition.Kind != "execute" ||
+		after.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("clean full selected lens set did not close and burn: authority=%+v transition=%+v", after.Authority, after.NextTransition)
+	}
+	return nil
+}
+
+// captureCorrectionPlanFor follows the correction-plan input STATUS published
+// after the last severe reviewer capture. The plan is the one public pre-edit
+// event; FINALIZE never participates in a last-event-closure correction.
+func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines int) error {
+	if correctionLines <= 0 {
+		return fmt.Errorf("correction plan needs a positive line forecast")
+	}
+	status, err := readAtomicReviewStatus(r, lineageID)
+	if err != nil {
+		return err
+	}
+	if status.Authority.LineageID != lineageID || status.Authority.State != "correction_required" ||
+		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "correction_plan_required" ||
+		len(status.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("correction plan STATUS = authority=%+v transition=%+v", status.Authority, status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Name != "correction_lines" || input.CaptureOperation != "review.capture-correction-plan" ||
+		status.argument("lineage") != lineageID || status.argument("target") == "" ||
+		status.argument("expected-revision") == "" || status.argument("request-hash") == "" ||
+		status.argument("repository-context") == "" {
+		return fmt.Errorf("correction-plan binding = %+v", input)
+	}
+	arguments := []string{"review", "capture-correction-plan"}
+	for _, argument := range input.Arguments {
+		arguments = append(arguments, "--"+argument.Name+"="+argument.Value)
+	}
+	arguments = append(arguments, fmt.Sprintf("--correction-lines=%d", correctionLines))
+	observation := r.runAt(r.sandbox.Root, arguments, false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("capture correction plan: %s", firstLine(observation.Stderr))
+	}
+	var captured struct {
+		Schema    string `json:"schema"`
+		Operation string `json:"operation"`
+		LineageID string `json:"lineage_id"`
+		State     string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil {
+		return fmt.Errorf("decode correction-plan capture: %w", err)
+	}
+	if captured.Schema != "gentle-ai.review-last-event-closure/v1" || captured.Operation != "review.capture-correction-plan" ||
+		captured.LineageID != lineageID || captured.State != "correction_required" {
+		return fmt.Errorf("correction-plan capture = %+v", captured)
 	}
 	return nil
 }
@@ -429,8 +492,8 @@ func waveThreeJourneys() []Journey {
 		{
 			ID:     "j59-current-status-and-start-ignore-sibling-worktree-transaction",
 			Review: reviewOptedIn,
-			Title:  "#3417: selectorless current STATUS and START ignore an unrelated sibling worktree transaction",
-			Source: "#3417: compact atomic review is bound to the selected worktree and candidate, never ambient sibling authority",
+			Title:  "#3587: selectorless current STATUS and START ignore an unrelated sibling worktree transaction",
+			Source: "#3587: compact atomic review is bound to the selected worktree and candidate, never ambient sibling authority",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: sibling worktree stages the same candidate independently", Fixture: stageAtomicSiblingWorktrees},
@@ -440,22 +503,23 @@ func waveThreeJourneys() []Journey {
 		{
 			ID:     "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 			Review: reviewOptedIn,
-			Title:  "#3417: explicit active lineage keeps its exact four lenses through correction and validator flow",
-			Source: "#3417: active compact authority continues only through its bound four-lens correction and validator transaction",
+			Title:  "#3587: explicit active lineage keeps its exact four lenses through correction and validator flow",
+			Source: "#3587: active compact authority continues only through its bound four-lens correction plan and terminal validator capture",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
 				{Name: "START the compact high-risk transaction", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", atomicCorrectionLineage)},
 				{Name: "explicit active STATUS exposes exactly four compact lenses", Requires: atomicReviewStatusCapability, Composite: requireExplicitAtomicFourLensStatus},
 				{Name: "capture a correction finding and every remaining compact lens", Requires: captureResultCapability, Composite: captureAtomicCorrectableFinding},
-				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", atomicCorrectionLineage, "--captured-results=true")},
-				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", atomicCorrectionLineage, "--correction-lines", "2")},
-				{Name: "fixture: correct only the reviewed candidate", Fixture: writeCorrectedCandidate},
-				{Name: "capture correction evidence for the explicit active lineage", Requires: captureEvidenceDescriptorCapability, Composite: func(r *journeyRun) error {
-					return captureV5CorrectionEvidenceDescriptorFor(r, atomicCorrectionLineage)
+				{Name: "capture the status-bound bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, atomicCorrectionLineage, 2)
 				}},
-				{Name: "run the compact validator continuation", Requires: finalizeValidationCapability, Composite: func(r *journeyRun) error {
-					return completeV5DescriptorCorrectionFor(r, atomicCorrectionLineage)
+				{Name: "fixture: correct only the reviewed candidate", Fixture: writeCorrectedCandidate},
+				{Name: "capture the Go-issued targeted validator that closes and burns", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+					return captureProviderValidatorSlotFor(r, atomicCorrectionLineage)
+				}},
+				{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageBurned(r, atomicCorrectionLineage)
 				}},
 			},
 		},

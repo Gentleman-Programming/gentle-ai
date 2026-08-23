@@ -4,6 +4,29 @@ import (
 	"testing"
 )
 
+func accountingOnlyEscalatedState(t *testing.T, repo, lineage string) CompactState {
+	t.Helper()
+	state, fix := pendingCompactCorrection(t, repo, lineage)
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := bindTargetedValidationForTest(ScopedValidationResult{
+		LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
+	}, fix)
+	if err := state.CompleteCorrection(fix, 2, validation); err != nil {
+		t.Fatal(err)
+	}
+
+	state.State = StateEscalated
+	state.OriginalChangedLines = 1
+	state.CorrectionBudget = 1
+	state.CorrectionBudgetPolicy = ""
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
 // TestCompactEscalationAccountingBudgetExceeded pins that an accounting-only
 // escalation (both correction criteria passed, cumulative correction lines
 // exceed the frozen budget) reports Cause=budget_exceeded with Remaining
@@ -84,35 +107,20 @@ func TestCompactEscalationAccountingCorrectionRegressionFailed(t *testing.T) {
 	}
 }
 
-// TestCompactEscalationAccountingForecastBudgetCrossing pins the escalation
-// shape the testing guide's Flow 17 actually describes and the defect report
-// actually reproduced: a correction forecast pushed past the frozen budget.
-// BeginCorrection escalates on CumulativeCorrectionLines+proposed and leaves
-// ActualCorrectionLines nil, so the lines that crossed the budget live in
-// ProposedCorrectionLines. Reading CumulativeCorrectionLines alone reported
-// "spent 0" with no derivable cause for exactly the escalation the guide
-// promises numbers for.
-func TestCompactEscalationAccountingForecastBudgetCrossing(t *testing.T) {
+// TestBeginCorrectionRefusesForecastBeyondTheFrozenBudget proves that a
+// pre-edit forecast never escalates or consumes authority. The caller must
+// choose a plan within the bound before changing the candidate.
+func TestBeginCorrectionRefusesForecastBeyondTheFrozenBudget(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
 	state, _, _ := correctionRequiredAuthorityFixture(t, repo, "escalation-accounting-forecast")
 	proposed := state.CorrectionBudget + 1
-	if err := state.BeginCorrection(proposed); err != nil {
-		t.Fatal(err)
+	if err := state.BeginCorrection(proposed); !IsCorrectionBudgetExceeded(err) {
+		t.Fatalf("over-budget correction forecast error = %v, want CorrectionBudgetExceededError", err)
 	}
-	if state.State != StateEscalated || state.ActualCorrectionLines != nil || state.CumulativeCorrectionLines != 0 {
-		t.Fatalf("fixture is not a forecast-only budget crossing: %#v", state)
-	}
-
-	accounting := state.EscalationAccounting()
-	if accounting.Cause != CompactEscalationCauseBudgetExceeded {
-		t.Fatalf("Cause = %q, want %q", accounting.Cause, CompactEscalationCauseBudgetExceeded)
-	}
-	if accounting.Spent != proposed {
-		t.Fatalf("Spent = %d, want the %d forecast lines that crossed the budget", accounting.Spent, proposed)
-	}
-	if accounting.Total != state.CorrectionBudget || accounting.Remaining != 0 {
-		t.Fatalf("accounting = %#v, want total %d and remaining clamped to 0", accounting, state.CorrectionBudget)
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines != nil ||
+		state.ActualCorrectionLines != nil || state.CumulativeCorrectionLines != 0 {
+		t.Fatalf("over-budget forecast mutated correction authority: %#v", state)
 	}
 }
 

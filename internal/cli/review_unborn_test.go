@@ -46,16 +46,10 @@ func writeUnbornReviewCandidate(t *testing.T, repo string) {
 	}
 }
 
-func finalizeUnbornFacadeReview(t *testing.T, repo string, started ReviewFacadeStartResult) {
+func closeUnbornReviewOnSelectedCaptures(t *testing.T, repo string, started ReviewFacadeStartResult) {
 	t.Helper()
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
-	args = append(args, "--evidence", evidencePath)
-	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
-		t.Fatalf("finalize unborn review: %v", err)
+	for order := range started.SelectedLenses {
+		captureCleanCLIReviewerResult(t, repo, started, order, &bytes.Buffer{})
 	}
 }
 
@@ -132,7 +126,7 @@ func TestReviewFacadeUnbornHeadStagedLifecycle(t *testing.T) {
 		t.Fatalf("genesis paths = %v, want every candidate path %v", record.State.GenesisPaths, want)
 	}
 
-	finalizeUnbornFacadeReview(t, repo, started)
+	closeUnbornReviewOnSelectedCaptures(t, repo, started)
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 
 	runReviewCLIGit(t, repo, "commit", "-qm", "first commit")
@@ -180,7 +174,7 @@ func TestReviewFacadeExistingRemoteEmptyCommitAllowsPublicationGates(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalizeUnbornFacadeReview(t, repo, started)
+	closeUnbornReviewOnSelectedCaptures(t, repo, started)
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 
 	runReviewCLIGit(t, repo, "commit", "-qm", "deliver reviewed candidate")

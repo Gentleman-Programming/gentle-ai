@@ -423,7 +423,8 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		"--repository-context", binding["repository-context"], "--expected-revision", binding["expected-revision"],
 		"--lineage", binding["lineage"], "--target", binding["target"], "--lens", binding["lens"], "--order", strconv.Itoa(order),
 	}
-	if stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...); err != nil {
+	stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+	if err != nil {
 		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	if responseRequests != 1 {
@@ -443,9 +444,14 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("Codex egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", denied, len(connections), connections)
-	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-		t.Fatalf("registered Codex provider capture did not enter validation: %#v", result)
+	var terminal organicFinalizeResult
+	if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
+		t.Fatalf("decode terminal Codex provider capture: %v\n%s", err, stdout)
 	}
+	if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
+		t.Fatalf("registered Codex provider capture did not close the clean review: %#v", terminal)
+	}
+	harness.assertReviewBurned(lineage, terminal)
 }
 
 // codexTracedConnectAddresses parses one trace per child process. strace -ff
@@ -844,8 +850,9 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
-	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-		t.Fatalf("OpenCode capture did not enter validation: %#v", result)
+	status := organicProviderStatus(t, harness, lineage, "opencode")
+	if status.NextTransition == nil || status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("OpenCode terminal capture did not continue with an executable fresh target: %#v", status.NextTransition)
 	}
 }
 
@@ -908,9 +915,14 @@ func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
 			if err != nil {
 				t.Fatalf("provider capture: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 			}
-			if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-				t.Fatalf("provider capture did not enter validation: %#v", result)
+			var terminal organicFinalizeResult
+			if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
+				t.Fatalf("decode terminal provider capture: %v\n%s", err, stdout)
 			}
+			if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
+				t.Fatalf("provider capture did not close the clean review: %#v", terminal)
+			}
+			harness.assertReviewBurned(lineage, terminal)
 		})
 	}
 }
@@ -968,9 +980,10 @@ type organicProviderStatusResult struct {
 }
 
 type organicProviderTransition struct {
-	Kind    string                  `json:"kind"`
-	Execute *organicProviderExecute `json:"execute"`
-	Collect *organicProviderCollect `json:"collect"`
+	Kind       string                  `json:"kind"`
+	ReasonCode string                  `json:"reason_code"`
+	Execute    *organicProviderExecute `json:"execute"`
+	Collect    *organicProviderCollect `json:"collect"`
 }
 
 type organicProviderExecute struct {
@@ -1495,7 +1508,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		t.Fatalf("correction journey needs one consolidated review with a budget: %#v", started)
 	}
 
-	harness.captureReviewerResultOrFail(lineage, started, 0, organicReviewerResult{
+	stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []organicFinding{{
 			Location:          path + ":5",
@@ -1507,64 +1520,52 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		}},
 		Evidence: []string{"the focused differential test failed on the candidate"},
 	})
-	required := harness.finalize(lineage, "--captured-results=true")
-	if required.State != organicStateCorrectionRequired {
+	if err != nil {
+		t.Fatalf("capture candidate-caused result: %v\n%s", err, stderr)
+	}
+	var required organicFinalizeResult
+	if err := json.Unmarshal([]byte(stdout), &required); err != nil {
+		t.Fatalf("decode correction-required capture: %v\n%s", err, stdout)
+	}
+	if required.Operation != "review/capture-result" || required.State != organicStateCorrectionRequired {
 		t.Fatalf("candidate-caused blocker did not require a correction: %#v", required)
 	}
 
-	forecast := harness.finalize(lineage, "--correction-lines", "2")
-	if forecast.State != organicStateCorrectionRequired {
-		t.Fatalf("in-budget forecast escalated: %#v", forecast)
-	}
-
-	harness.writeFiles(map[string]string{path: organicLimitSource("fixed")})
 	waiting := harnessCorrectionStatus(t, harness, lineage)
 	if waiting.NextTransition == nil || waiting.NextTransition.Kind != "collect" ||
-		waiting.NextTransition.ReasonCode != "correction_repository_verification_required" ||
+		waiting.NextTransition.ReasonCode != "correction_plan_required" ||
 		waiting.NextTransition.Collect == nil || len(waiting.NextTransition.Collect.Inputs) != 1 {
-		t.Fatalf("corrected candidate did not request repository verification evidence: %#v", waiting)
+		t.Fatalf("correction-required review did not request a bound correction plan: %#v", waiting)
 	}
 	input := waiting.NextTransition.Collect.Inputs[0]
-	if input.CaptureOperation != "review.capture-evidence" {
-		t.Fatalf("correction evidence capture operation = %q", input.CaptureOperation)
+	if input.CaptureOperation != "review.capture-correction-plan" {
+		t.Fatalf("correction-plan capture operation = %q", input.CaptureOperation)
 	}
-	var correctionTarget string
+	planArguments := []string{"review", "capture-correction-plan"}
+	hasRepositoryContext := false
 	for _, argument := range input.Arguments {
-		if argument.Name == "target" {
-			correctionTarget = argument.Value
+		if argument.Name == "repository-context" && argument.Value != "" {
+			hasRepositoryContext = true
 		}
+		planArguments = append(planArguments, "--"+argument.Name, argument.Value)
 	}
-	if correctionTarget == "" {
-		t.Fatalf("correction evidence transition omitted its candidate target: %#v", input)
+	if !hasRepositoryContext {
+		planArguments = append(planArguments, "--cwd", harness.repo.worktree)
 	}
-	harness.gentle(
-		"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-		"--target", correctionTarget, "--expected-revision", waiting.Authority.Revision,
-		"--outcome", "passed", "--input", harness.writeEvidence(),
-	)
-	ready := harnessCorrectionStatus(t, harness, lineage)
-	if ready.ValidationRequest == nil || ready.ValidationRequest.CorrectionTargetIdentity != correctionTarget ||
-		ready.NextTransition == nil || ready.NextTransition.Kind != "collect" || ready.NextTransition.ReasonCode != "targeted_validation_required" {
-		t.Fatalf("passed correction evidence did not expose the bound targeted-validation request: %#v", ready)
+	planArguments = append(planArguments, "--correction-lines", "2")
+	var forecast organicFinalizeResult
+	payload := harness.gentle(planArguments...)
+	if err := json.Unmarshal(payload, &forecast); err != nil {
+		t.Fatalf("decode correction plan capture: %v\n%s", err, payload)
 	}
-	validation := harness.writeJSON("validation.json", organicValidationResult{
-		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
-		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
-		OriginalCriteria:              organicValidationCheck{Passed: true, Evidence: []string{"the original acceptance test passed"}},
-		CorrectionRegression:          organicValidationCheck{Passed: true, Evidence: []string{"the targeted regression test passed"}},
-		FollowUps:                     []any{},
-	})
-	approved := harness.finalize(lineage, "--validation", validation, "--captured-evidence")
-	harness.assertReviewBurned(lineage, approved)
+	if forecast.Operation != "review.capture-correction-plan" || forecast.State != organicStateCorrectionRequired {
+		t.Fatalf("in-budget correction plan did not retain the correction authority: %#v", forecast)
+	}
 
-	// A consumed correction cannot be replayed through a terminal receipt: the
-	// approved transaction is gone, so a second finalize attempt cannot mutate it.
-	_, _, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--captured-results=true")
-	if err == nil {
-		t.Fatal("a second correction reused burned terminal authority")
-	}
-	if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected second correction recreated terminal authority: %v", statErr)
+	// The one forecast is immutable. Repeating it must fail before a second
+	// correction route exists, rather than reviving a retired FINALIZE path.
+	if _, _, err := harness.gentleAllowFailure(planArguments...); err == nil {
+		t.Fatal("a second correction plan was accepted after the one bounded forecast")
 	}
 
 	// Materially new work starts a fresh transaction; it never reopens the
@@ -2035,28 +2036,32 @@ func (harness *organicHarness) startReview(lineage string, extra ...string) (org
 	return started, stderr
 }
 
-// approveReview runs the proportional plan the tier selected: zero reviewers for
-// passive content, and one result per selected lens plus final evidence
-// otherwise. The suite never selects lenses itself. Approval is terminal: it
-// burns the transaction instead of retaining a delivery receipt or authority.
+// approveReview runs the proportional plan the tier selected. The final
+// admitted reviewer event is terminal: it burns compact authority without a
+// receipt publication or FINALIZE replay.
 func (harness *organicHarness) approveReview(lineage string, started organicStartResult) organicFinalizeResult {
 	harness.t.Helper()
 	if len(started.SelectedLenses) == 0 {
-		finalized := harness.finalize(lineage)
+		finalized := organicFinalizeResult{LineageID: lineage, State: started.State, Action: started.Action}
 		harness.assertReviewBurned(lineage, finalized)
 		return finalized
 	}
+	var finalized organicFinalizeResult
 	for index, lens := range started.SelectedLenses {
-		harness.captureReviewerResult(lineage, started, index, organicReviewerResult{
+		stdout, stderr, err := harness.captureReviewerResult(lineage, started, index, organicReviewerResult{
 			Lens:     lens,
 			Findings: []organicFinding{},
 			Evidence: []string{"inspected every frozen candidate path for " + lens},
 		})
+		if err != nil {
+			harness.t.Fatalf("capture reviewer result for %s: %v\n%s", lens, err, stderr)
+		}
+		if index == len(started.SelectedLenses)-1 {
+			if err := json.Unmarshal([]byte(stdout), &finalized); err != nil {
+				harness.t.Fatalf("decode terminal reviewer capture: %v\n%s", err, stdout)
+			}
+		}
 	}
-	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-		harness.t.Fatalf("reviewer results did not reach validation: %#v", result)
-	}
-	finalized := harness.finalize(lineage, "--evidence", harness.writeEvidence())
 	harness.assertReviewBurned(lineage, finalized)
 	return finalized
 }
@@ -2141,21 +2146,6 @@ type organicCapturePreflight struct {
 type organicInspection struct {
 	Status string   `json:"status"`
 	Paths  []string `json:"paths"`
-}
-
-func (harness *organicHarness) finalize(lineage string, extra ...string) organicFinalizeResult {
-	harness.t.Helper()
-	arguments := []string{"review", "finalize", "--cwd", harness.repo.worktree}
-	if lineage != "" {
-		arguments = append(arguments, "--lineage", lineage)
-	}
-	arguments = append(arguments, extra...)
-	var result organicFinalizeResult
-	payload := harness.gentle(arguments...)
-	if err := json.Unmarshal(payload, &result); err != nil {
-		harness.t.Fatalf("decode review finalize: %v\n%s", err, payload)
-	}
-	return result
 }
 
 func (harness *organicHarness) gate(gate string, extra ...string) organicGateResult {
@@ -2759,7 +2749,7 @@ func harnessCorrectionStatus(t *testing.T, harness *organicHarness, lineage stri
 	t.Helper()
 	payload := harness.gentle(
 		"review", "status", "--cwd", harness.repo.worktree, "--lineage", lineage,
-		"--contract", "gentle-ai.review-integration/v1", "--next-transition",
+		"--contract", "gentle-ai.review-integration/v2", "--next-transition",
 	)
 	var status organicCorrectionStatus
 	if err := json.Unmarshal(payload, &status); err != nil {

@@ -712,6 +712,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, sddPostReviewVerifyReportJourneys()...)
 	journeys = append(journeys, issue3564Journeys()...)
 	journeys = append(journeys, issue3321Journeys()...)
+	journeys = append(journeys, issue3587Journeys()...)
 	journeys = append(journeys, handoffJourneys()...)
 	journeys = removeRetiredAtomicJourneys(journeys)
 	return declareCoreJourneyReviewModes(journeys)
@@ -733,29 +734,6 @@ func coreJourneys() []Journey {
 				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
 				{Name: "fixture: commit", Fixture: commitStaged("docs: intro")},
 				{Name: "gate pre-push", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-push")},
-			},
-		},
-		{
-			ID:     "j02-high-risk-four-lens",
-			Review: reviewOptedIn,
-			Title:  "#3417: high-risk code change completes an actual four-lens capture and burns its terminal transaction",
-			Source: "#3417 atomic review: v2 STATUS binds each captured reviewer result before final evidence burns the exact transaction rather than publishing a durable receipt",
-			Steps: []Step{
-				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: stage auth code", Fixture: stageAuthCode},
-				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "actual four-lens capture follows v2 STATUS bindings", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
-					if r.sandbox.Lineage == "" {
-						return errors.New("high-risk START did not publish a lineage for actual four-lens capture")
-					}
-					return captureAtomicReviewerSlots(r, r.sandbox.Lineage, false)
-				}},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
-				{Name: "finalize without evidence", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
-				{Name: "capture final evidence through the v2 STATUS descriptor", Requires: captureEvidenceDescriptorCapability, Composite: captureJ02FinalEvidence},
-				{Name: "final evidence burns the exact transaction", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true"), After: func(sandbox *Sandbox, observation Observation) error {
-					return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
-				}},
 			},
 		},
 		{
@@ -936,8 +914,8 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j12-rejected-capture-then-recapture",
 			Review: reviewOptedIn,
-			Title:  "#3417: an exact active-lineage reviewer result is rejected, then the full selected set recaptures",
-			Source: "#2614 under #3417: incomplete inspection coverage refuses on its exact active lineage, then an unordered complete manifest recaptures",
+			Title:  "#3587: an exact active-lineage reviewer result is rejected, then the full selected set recaptures",
+			Source: "#2614 under #3587: incomplete inspection coverage refuses on its exact active lineage, then an unordered complete manifest recaptures",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage ordinary code", Fixture: stageOrdinaryCode},
@@ -945,11 +923,9 @@ func coreJourneys() []Journey {
 				{Name: "exact active-lineage rejected capture then full selected-set recapture", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return rejectedThenRecaptureFor(r, rejectedRecaptureLineage)
 				}},
-				{Name: "finalize exact active-lineage captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", rejectedRecaptureLineage, "--captured-results=true")},
-				{Name: "capture exact active-lineage final evidence through the STATUS descriptor", Requires: captureEvidenceDescriptorCapability, Composite: func(r *journeyRun) error {
-					return captureAtomicFinalEvidenceDescriptorFor(r, rejectedRecaptureLineage, "j12-final-evidence.txt")
+				{Name: "the final accepted capture burns the exact active-lineage transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageBurned(r, rejectedRecaptureLineage)
 				}},
-				{Name: "final evidence burns the exact active-lineage transaction", Requires: finalizeEvidenceCapability, Composite: finalizeRejectedRecapture},
 			},
 		},
 		{
@@ -972,7 +948,7 @@ func coreJourneys() []Journey {
 			Source: "review abandon contract",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
+				{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 			},

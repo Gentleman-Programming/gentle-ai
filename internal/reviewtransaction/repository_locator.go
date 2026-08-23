@@ -79,16 +79,22 @@ type RepositoryIdentityLease struct {
 	commonControl *reviewRepositoryControlIdentity
 }
 
+type reviewTargetedValidationContext struct {
+	RequestHash             string `json:"request_hash"`
+	CorrectionCandidateTree string `json:"correction_candidate_tree"`
+}
+
 type reviewRepositoryContextFile struct {
-	Schema             string `json:"schema"`
-	Handle             string `json:"handle"`
-	LineageID          string `json:"lineage_id"`
-	TargetIdentity     string `json:"target_identity"`
-	Revision           string `json:"revision"`
-	RepositoryIdentity string `json:"repository_identity"`
-	RepositoryRoot     string `json:"repository_root"`
-	GitCommonDir       string `json:"git_common_dir"`
-	GitDir             string `json:"git_dir"`
+	Schema             string                           `json:"schema"`
+	Handle             string                           `json:"handle"`
+	LineageID          string                           `json:"lineage_id"`
+	TargetIdentity     string                           `json:"target_identity"`
+	Revision           string                           `json:"revision"`
+	RepositoryIdentity string                           `json:"repository_identity"`
+	RepositoryRoot     string                           `json:"repository_root"`
+	GitCommonDir       string                           `json:"git_common_dir"`
+	GitDir             string                           `json:"git_dir"`
+	TargetedValidation *reviewTargetedValidationContext `json:"targeted_validation,omitempty"`
 }
 
 // OpenRepositoryIdentityLease resolves and captures one exact Git worktree
@@ -180,11 +186,31 @@ func ValidateReviewRepositoryContextHandle(handle string) error {
 // returns its opaque, deterministic handle. The record contains paths only in
 // provider-private storage and is not authority.
 func PublishReviewRepositoryContext(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
+	return publishReviewRepositoryContextForBinding(ctx, repo, binding, nil)
+}
+
+// PublishTargetedValidationReviewRepositoryContext freezes the exact targeted
+// validation request that issued an inspection context. It is request metadata,
+// not terminal evidence or review authority; the resolver still validates the
+// current open correction authority before exposing its immutable trees.
+func PublishTargetedValidationReviewRepositoryContext(ctx context.Context, repo string, request TargetedValidationRequest) (string, error) {
+	if err := ValidateTargetedValidationRequest(request); err != nil {
+		return "", err
+	}
+	return publishReviewRepositoryContextForBinding(ctx, repo, ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	}, &reviewTargetedValidationContext{RequestHash: request.RequestHash, CorrectionCandidateTree: request.CorrectionCandidateTree})
+}
+
+func publishReviewRepositoryContextForBinding(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, targeted *reviewTargetedValidationContext) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if err := validateReviewRepositoryContextBinding(binding); err != nil {
 		return "", err
+	}
+	if targeted != nil && (!validSHA256(targeted.RequestHash) || !validGitTree(targeted.CorrectionCandidateTree)) {
+		return "", errors.New("targeted validation repository context is incomplete") // refusal:by-design world-action: immutable inspection context must carry the exact provider-issued correction binding
 	}
 	identity, err := reviewRepositoryIdentity(ctx, repo)
 	if err != nil {
@@ -213,7 +239,7 @@ func PublishReviewRepositoryContext(ctx context.Context, repo string, binding Re
 		Schema: ReviewRepositoryContextSchema, Handle: handle,
 		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
 		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
-		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir, TargetedValidation: targeted,
 	}
 	payload, err := json.Marshal(record)
 	if err != nil {
@@ -290,13 +316,35 @@ var resolveReviewRepositoryContextLoadedHook = func() {}
 // resolveOpaqueReviewRepositoryContext proves the private locator still names
 // its original Git worktree without reading compact authority or Git content.
 func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
-	if err := ctx.Err(); err != nil {
+	root, record, err := resolveOpaqueReviewRepositoryContextRecord(ctx, handle)
+	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
+	}
+	return root, ReviewRepositoryContextBinding{
+		LineageID: record.LineageID, TargetIdentity: record.TargetIdentity, Revision: record.Revision,
+	}, nil
+}
+
+func resolveTargetedValidationReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, reviewTargetedValidationContext, error) {
+	root, record, err := resolveOpaqueReviewRepositoryContextRecord(ctx, handle)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, err
+	}
+	if record.TargetedValidation == nil {
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errors.New("review repository context does not carry a frozen targeted validation request") // refusal:by-design operator-knowledge: a targeted inspector must use the exact context emitted with its provider request
+	}
+	binding := ReviewRepositoryContextBinding{LineageID: record.LineageID, TargetIdentity: record.TargetIdentity, Revision: record.Revision}
+	return root, binding, *record.TargetedValidation, nil
+}
+
+func resolveOpaqueReviewRepositoryContextRecord(ctx context.Context, handle string) (string, reviewRepositoryContextFile, error) {
+	if err := ctx.Err(); err != nil {
+		return "", reviewRepositoryContextFile{}, err
 	}
 	if err := ValidateReviewRepositoryContextHandle(handle); err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
+		return "", reviewRepositoryContextFile{}, err
 	}
-	empty := ReviewRepositoryContextBinding{}
+	empty := reviewRepositoryContextFile{}
 	path, err := reviewRepositoryContextPath(handle)
 	if err != nil {
 		return "", empty, err
@@ -352,7 +400,7 @@ func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (s
 		!sameLocatorDirectory(stored.GitDir, live.GitDir) || live.RepositoryIdentity != stored.RepositoryIdentity {
 		return "", empty, errors.New("review repository context identity changed") // refusal:by-design world-action: the bound Git worktree was replaced outside this product and only restoring or re-creating that exact repository resolves it
 	}
-	return live.RepositoryRoot, binding, nil
+	return live.RepositoryRoot, record, nil
 }
 
 // reviewRepositoryContextIdentityError reports that the repository bound by a
@@ -595,6 +643,10 @@ func decodeReviewRepositoryContext(payload []byte, target *reviewRepositoryConte
 			LineageID: target.LineageID, TargetIdentity: target.TargetIdentity, Revision: target.Revision,
 		}) != nil || !validSHA256(target.RepositoryIdentity) || !filepath.IsAbs(target.RepositoryRoot) ||
 		!filepath.IsAbs(target.GitCommonDir) || !filepath.IsAbs(target.GitDir) {
+		return fs.ErrInvalid
+	}
+	if targeted := target.TargetedValidation; targeted != nil &&
+		(!validSHA256(targeted.RequestHash) || !validGitTree(targeted.CorrectionCandidateTree)) {
 		return fs.ErrInvalid
 	}
 	return nil

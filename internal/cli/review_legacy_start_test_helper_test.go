@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -17,10 +16,10 @@ import (
 // runLegacyFacadeStartForTest preserves the historical test-helper signature
 // while building its authority through the current exact atomic START boundary.
 // It parses the retained fixture flags and emits ReviewFacadeStartResult so
-// callers can keep exercising status, finalize, correction, and capture flows.
+// callers can keep exercising status, correction, and capture flows.
 //
 // This is the fixture-construction pattern established (and individually
-// verified) on finalizeApprovedFacadeReview, approveDiscoveryMarkdownProjection,
+// verified) on current closure fixtures, approveDiscoveryMarkdownProjection,
 // and startFacadeReview -- generalized here to cover every flag combination
 // those three narrower helpers didn't need, for the many remaining test
 // files with their own ad hoc RunReviewFacadeStart call sites.
@@ -150,10 +149,10 @@ func runLegacyFacadeStartForTestBytes(t *testing.T, args []string) ([]byte, erro
 	return output.Bytes(), err
 }
 
-// finalizeHistoricalFacadeReviewForRepo creates a historical compact approval
-// directly through reviewtransaction fixture seams. It is only for evaluators
-// whose premise is a receipt produced before current FINALIZE burned approvals.
-func finalizeHistoricalFacadeReviewForRepo(t *testing.T, repo, lineage string, startExtra ...string) historicalCompatibilityCompactReceiptFixture {
+// seedHistoricalApprovalForRepo creates a historical compact approval directly
+// through reviewtransaction fixture seams. It is only for evaluators whose
+// premise is a receipt produced before current last-event closure burned approvals.
+func seedHistoricalApprovalForRepo(t *testing.T, repo, lineage string, startExtra ...string) historicalCompatibilityCompactReceiptFixture {
 	t.Helper()
 	return seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, lineage, historicalFacadeReviewTarget(t, startExtra))
 }
@@ -194,18 +193,15 @@ func historicalFacadeReviewTarget(t *testing.T, args []string) reviewtransaction
 }
 
 // historicalCompatibilityCompactReceiptFixture is test-only persisted compact
-// authority that represents an approval minted before v3 started burning stale
-// predecessor records. It is created through reviewtransaction fixture seams,
-// never through production FINALIZE or post-approval gate routing.
+// authority that represents an approval minted before current terminal closure.
 type historicalCompatibilityCompactReceiptFixture struct {
 	Record reviewtransaction.CompactRecord
 	Store  reviewtransaction.CompactStore
 }
 
 // seedHistoricalCompatibilityApprovedCompactReceipt persists an approved
-// compact authority and receipt directly for compatibility tests. Callers must
-// prepare the exact candidate before invoking it; this helper deliberately does
-// not dispatch production FINALIZE.
+// compact authority directly for compatibility tests. Callers must prepare the
+// exact candidate before invoking it; this helper does not dispatch terminal closure.
 func seedHistoricalCompatibilityApprovedCompactReceipt(t *testing.T, repo, lineage string, target reviewtransaction.Target) historicalCompatibilityCompactReceiptFixture {
 	t.Helper()
 	ctx := t.Context()
@@ -246,13 +242,12 @@ func seedHistoricalCompatibilityApprovedCompactReceipt(t *testing.T, repo, linea
 	if _, err := store.Replace("", "review/start", state); err != nil {
 		t.Fatalf("persist historical compatibility review start: %v", err)
 	}
-	return finalizeHistoricalFacadeReviewForLineage(t, root, lineage)
+	return seedHistoricalApprovalForLineage(t, root, lineage)
 }
 
-// finalizeHistoricalFacadeReviewForLineage advances a reviewing compact
-// authority directly to its matching historical receipt. It deliberately does
-// not call current FINALIZE, so approval-burn tests retain their production path.
-func finalizeHistoricalFacadeReviewForLineage(t *testing.T, repo, lineage string) historicalCompatibilityCompactReceiptFixture {
+// seedHistoricalApprovalForLineage advances a reviewing compact authority
+// directly to historical state. It deliberately bypasses current closure.
+func seedHistoricalApprovalForLineage(t *testing.T, repo, lineage string) historicalCompatibilityCompactReceiptFixture {
 	t.Helper()
 	ctx := t.Context()
 	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, lineage)
@@ -274,49 +269,24 @@ func finalizeHistoricalFacadeReviewForLineage(t *testing.T, repo, lineage string
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
 		t.Fatalf("complete historical compatibility review: %v", err)
 	}
-	revision, err := store.Replace(record.Revision, "review/complete-review", state)
-	if err != nil {
-		t.Fatalf("persist historical compatibility completed review: %v", err)
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
+		t.Fatalf("close historical compatibility review: %v", err)
 	}
-	if err := state.CompleteVerification([]byte("historical compatibility verification passed\n"), true); err != nil {
-		t.Fatalf("complete historical compatibility verification: %v", err)
-	}
-	return persistHistoricalCompatibilityCompactApproval(t, store, reviewtransaction.CompactRecord{Revision: revision, State: state}, "review/complete-verification", state)
+	return persistHistoricalCompatibilityCompactApproval(t, store, record, "review/complete-review", state)
 }
 
 // persistHistoricalCompatibilityCompactApproval writes one approved compact
-// record and matching receipt directly. It is intentionally limited to test
-// fixtures for authority that predates current FINALIZE's approval burn.
+// record directly. It is intentionally limited to historical fixture setup.
 func persistHistoricalCompatibilityCompactApproval(t *testing.T, store reviewtransaction.CompactStore, expected reviewtransaction.CompactRecord, operation string, state reviewtransaction.CompactState) historicalCompatibilityCompactReceiptFixture {
 	t.Helper()
 	if state.State != reviewtransaction.StateApproved {
 		t.Fatalf("historical compatibility terminal state = %q, want approved", state.State)
-	}
-	if _, err := os.Stat(store.ReceiptPath()); err == nil {
-		t.Fatalf("historical compatibility receipt already exists; refusing to overwrite %q", store.ReceiptPath())
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("inspect historical compatibility receipt: %v", err)
 	}
 	targetIdentity := expected.State.InitialSnapshot.Identity
 	predecessor := expected.State.Recovery
 	revision, err := store.Replace(expected.Revision, operation, state)
 	if err != nil {
 		t.Fatalf("persist historical compatibility approved review: %v", err)
-	}
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatalf("create historical compatibility receipt: %v", err)
-	}
-	if err := reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
-		t.Fatalf("persist historical compatibility receipt: %v", err)
-	}
-	persistedReceiptBytes, err := os.ReadFile(store.ReceiptPath())
-	if err != nil {
-		t.Fatalf("read historical compatibility receipt: %v", err)
-	}
-	persistedReceipt, err := reviewtransaction.ParseCompactReceipt(persistedReceiptBytes)
-	if err != nil || !reviewtransaction.CompactReceiptEqual(receipt, persistedReceipt) {
-		t.Fatalf("historical compatibility receipt binding = %#v, %v", persistedReceipt, err)
 	}
 	approved, err := store.Load()
 	if err != nil || approved.Revision != revision || approved.State.State != reviewtransaction.StateApproved || approved.State.InitialSnapshot.Identity != targetIdentity {
@@ -333,10 +303,10 @@ func persistHistoricalCompatibilityCompactApproval(t *testing.T, store reviewtra
 	return historicalCompatibilityCompactReceiptFixture{Record: approved, Store: store}
 }
 
-// finalizeHistoricalCapturedFacadeReviewForLineage preserves the current
+// seedHistoricalCapturedApprovalForLineage preserves the current
 // START/lens-context/capture-result setup, then persists its terminal compact
 // receipt directly so the receipt can remain available to the provenance test.
-func finalizeHistoricalCapturedFacadeReviewForLineage(t *testing.T, repo, lineage string) historicalCompatibilityCompactReceiptFixture {
+func seedHistoricalCapturedApprovalForLineage(t *testing.T, repo, lineage string) historicalCompatibilityCompactReceiptFixture {
 	t.Helper()
 	ctx := t.Context()
 	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, lineage)
@@ -350,33 +320,41 @@ func finalizeHistoricalCapturedFacadeReviewForLineage(t *testing.T, repo, lineag
 	if record.State.State != reviewtransaction.StateReviewing {
 		t.Fatalf("historical captured review precondition = %#v", record.State)
 	}
-	results, err := readCapturedReviewerResults(ctx, repo, store.Dir, record.State, record.Revision)
-	if err != nil {
-		t.Fatalf("read captured historical reviewer results: %v", err)
-	}
-	input, err := prepareCompactReviewerResults(record.State, results, facadeRefuterResult{}, facadeRepositoryEvidence{ctx: ctx, repo: repo})
-	if err != nil {
-		t.Fatalf("prepare captured historical reviewer results: %v", err)
-	}
 	state := record.State
-	state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, repo, store.Dir, state, record.Revision)
-	if err := state.CompleteReview(input); err != nil {
+	results := make([]reviewtransaction.LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = reviewtransaction.LensResult{
+			Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"historical captured review completed"},
+		}
+	}
+	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
+	if err != nil {
+		t.Fatalf("derive historical captured review context: %v", err)
+	}
+	subjects := make([]string, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, lens, index, "")
+		if subjectErr != nil {
+			t.Fatalf("derive historical captured reviewer subject: %v", subjectErr)
+		}
+		subjects[index] = subject.SubjectHash
+	}
+	state.ReviewerContextLevel = reviewtransaction.DiscoverReviewerContextLevel(
+		store.Dir, state.LineageID, state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects,
+	)
+	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
 		t.Fatalf("complete captured historical review: %v", err)
 	}
-	revision, err := store.Replace(record.Revision, "review/complete-review", state)
-	if err != nil {
-		t.Fatalf("persist captured historical review: %v", err)
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
+		t.Fatalf("close captured historical review: %v", err)
 	}
-	if err := state.CompleteVerification([]byte("historical captured review verification passed\n"), true); err != nil {
-		t.Fatalf("complete captured historical verification: %v", err)
-	}
-	return persistHistoricalCompatibilityCompactApproval(t, store, reviewtransaction.CompactRecord{Revision: revision, State: state}, "review/complete-verification", state)
+	return persistHistoricalCompatibilityCompactApproval(t, store, record, "review/complete-review", state)
 }
 
-// finalizeHistoricalCorrectionFacadeReviewForLineage preserves a production
-// correction forecast and evidence capture, then directly persists the matching
+// seedHistoricalCorrectionApprovalForLineage preserves a production correction
+// forecast and validation capture, then directly persists the matching
 // historical approval and receipt for compatibility-gate evaluation.
-func finalizeHistoricalCorrectionFacadeReviewForLineage(t *testing.T, repo, lineage string, validation facadeValidationResult) historicalCompatibilityCompactReceiptFixture {
+func seedHistoricalCorrectionApprovalForLineage(t *testing.T, repo, lineage string, validation facadeValidationResult) historicalCompatibilityCompactReceiptFixture {
 	t.Helper()
 	ctx := t.Context()
 	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, lineage)
@@ -387,13 +365,9 @@ func finalizeHistoricalCorrectionFacadeReviewForLineage(t *testing.T, repo, line
 	if err != nil {
 		t.Fatalf("load historical correction review authority: %v", err)
 	}
-	fix, err := facadeVerificationEvidenceTarget(ctx, repo, record.State, record.Revision)
+	fix, err := reviewProviderTargetedValidatorCorrection(ctx, repo, record.State)
 	if err != nil {
 		t.Fatalf("build historical correction verification target: %v", err)
-	}
-	captured, err := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, lineage, record.Revision, fix)
-	if err != nil {
-		t.Fatalf("read captured historical correction evidence: %v", err)
 	}
 	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, record.State, record.Revision, fix)
 	if err != nil {
@@ -413,7 +387,7 @@ func finalizeHistoricalCorrectionFacadeReviewForLineage(t *testing.T, repo, line
 		t.Fatalf("build historical corrected candidate: %v", err)
 	}
 	state := record.State
-	if err := state.CompleteCorrectionVerification(fix, actual, native, captured.Record, captured.Payload, complete); err != nil {
+	if err := state.CompleteCorrectionVerification(fix, actual, native, complete); err != nil {
 		t.Fatalf("complete historical correction verification: %v", err)
 	}
 	return persistHistoricalCompatibilityCompactApproval(t, store, record, "review/complete-correction-verification", state)
@@ -423,7 +397,7 @@ func finalizeHistoricalCorrectionFacadeReviewForLineage(t *testing.T, repo, line
 // recovery successor through the shared historical completion seam.
 func completeHistoricalCompatibilityApprovedRecoveryReceipt(t *testing.T, repo, lineage string) {
 	t.Helper()
-	fixture := finalizeHistoricalFacadeReviewForLineage(t, repo, lineage)
+	fixture := seedHistoricalApprovalForLineage(t, repo, lineage)
 	if fixture.Record.State.Recovery == nil || fixture.Record.State.Recovery.PredecessorLineageID == "" {
 		t.Fatalf("historical compatibility recovery precondition failed: %#v", fixture.Record.State)
 	}

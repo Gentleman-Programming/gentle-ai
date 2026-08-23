@@ -81,7 +81,8 @@ jobs:
             completed_once("j104-repository-context-survives-fresh-process") and
             completed_once("j110-untracked-terminal-burn-and-unmanaged-staged-validation") and
             completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged") and
-            completed_once("j113-correction-removes-candidate-only-path")
+            completed_once("j113-correction-removes-candidate-only-path") and
+            completed_once("j114-last-reviewer-capture-closes-and-burns")
           ' "$RUNNER_TEMP/bench-portable.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
           jq -e '
@@ -234,7 +235,52 @@ jobs:
         env:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
-        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus ./internal/components/engram -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart|TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources|TestStdioHandshake_TerminatesDescendantOnContextEnd|TestStdioHandshake_PreservesEarlierDeadline|TestStdioHandshake_PreservesCallerCancellation|TestProbeStdio_MissingAbsoluteConfiguredCommandFails|TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled|TestCompactEffectMarkerStrictValidation|TestCompactEffectMarkerIsPrivateSeparateAndStable|TestCompactRepositoryContextIntentAndReconcilerContract|TestCompactStartReturnsCommittedRecordWhenRepositoryContextReconciliationFails|TestRARAuthorityExactReplayConflictAndConcurrentPublication|TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot)$' -count=1 -timeout=8m
+        run: |
+          $packages = @('./internal/cli', './internal/reviewtransaction', './internal/sddstatus', './internal/components/engram')
+          $expected = @(
+            'TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals',
+            'TestRARPrivateOwnerRemainsTokenUserOnly',
+            'TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags',
+            'TestWindowsSecureOpenDriveFallbackFailsClosed',
+            'TestWindowsSecureOpenDoesNotRetryOtherErrors',
+            'TestWindowsStoreLockUsesExistingInodeAdvisoryTruth',
+            'TestRunGitBoundsLocalAndRemoteCommands',
+            'TestRunGitDistinguishesAggregateDeadlineAndTypedExit',
+            'TestStoreLockReportsLiveOwnerAndCannotBeStolen',
+            'TestStoreLockRecoversCrashAndCorruptOwnerRecords',
+            'TestStoreLockIsReleasedWhenOwnerProcessExits',
+            'TestConcurrentStoreLockRecoverersCannotBothWin',
+            'TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline',
+            'TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance',
+            'TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays',
+            'TestRepairClassifiedAuthorityResumesEachDurablePhase',
+            'TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts',
+            'TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef',
+            'TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection',
+            'TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure',
+            'TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources',
+            'TestStdioHandshake_TerminatesDescendantOnContextEnd',
+            'TestStdioHandshake_PreservesEarlierDeadline',
+            'TestStdioHandshake_PreservesCallerCancellation',
+            'TestProbeStdio_MissingAbsoluteConfiguredCommandFails',
+            'TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled',
+            'TestCompactEffectMarkerStrictValidation',
+            'TestCompactEffectMarkerIsPrivateSeparateAndStable',
+            'TestCompactRepositoryContextIntentAndReconcilerContract',
+            'TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot',
+            'TestLastReviewerCaptureApprovesAndBurnsWithoutFinalize',
+            'TestCaptureCorrectionPlanBindsExactRequestAndRefusesBudgetOverrun',
+            'TestTargetedValidatorCaptureApprovesAndBurnsWithoutFinalize',
+            'TestReviewRecoverEscalatedRequiresExactSuccessorBoundAuthorization',
+            'TestCompactReceiptAndGateAPIsAreAbsentFromProductionPackages'
+          )
+          $selector = '^(' + [string]::Join('|', $expected) + ')$'
+          $selected = @(go test $packages -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list Windows release-blocker tests' }
+          $missing = @($expected | Where-Object { $_ -notin $selected })
+          if ($missing.Count -gt 0) { throw "Missing Windows release-blocker tests: $($missing -join ', ')" }
+          go test -v $packages -run $selector -count=1 -timeout=8m
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Stress repository-context sharing retry
         shell: pwsh

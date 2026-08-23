@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // reviewNarrationTier classifies every registered human-facing emission into
@@ -62,7 +62,7 @@ func buildReviewNarrationRegistry() map[string]reviewNarrationEmission {
 	// A representative rendering proves the template itself stays
 	// vocabulary-clean; the real call site (sddstatus/review_gate.go) fills
 	// in the same template with live numbers at run time.
-	escalationSample := fmt.Sprintf(sddstatus.EscalationAccountingReasonTemplate,
+	escalationSample := fmt.Sprintf(reviewtransaction.EscalationAccountingReasonTemplate,
 		reviewtransactionEscalationCauseSample, 10, 0, 10)
 	registry["escalation:accounting"] = reviewNarrationEmission{
 		ID: "escalation:accounting", Tier: reviewNarrationTierA, Statement: escalationSample,
@@ -111,9 +111,6 @@ const reviewModeDisableCloneCommand = "gentle-ai review mode disable --scope clo
 const reviewModeDisableCloneCaveat = "(omitting --scope disables it for every repository on the machine)"
 
 var reviewStopReasonNarration = map[string]string{
-	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
-		"Ask a maintainer to inspect the review record before trusting that evidence, or run `" + reviewModeDisableCloneCommand + "` " +
-		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
 		"Ask a maintainer to inspect the review record directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
@@ -121,8 +118,7 @@ var reviewStopReasonNarration = map[string]string{
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
-		"(or `gentle-ai review finalize --lineage <id>`). " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`. " +
 		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
 		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
 		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> " +
@@ -133,15 +129,9 @@ var reviewStopReasonNarration = map[string]string{
 		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
-		"to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
-		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
-		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"manual_intervention_required": "This review reached a state Gentle AI does not recognize. " +
 		"This is a product defect. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, ask a maintainer to review it and report the defect.",
@@ -151,16 +141,11 @@ var reviewStopReasonNarration = map[string]string{
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
 		"Ask a maintainer to review it before doing anything else, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
 	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
 		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",
-	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. " +
-		"`gentle-ai review start` on this exact unchanged candidate only resumes this same review, not a fresh one -- change the " +
-		"candidate content first, then run `gentle-ai review start` to begin a genuinely new one, or run `" +
-		reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 }
 
 // reviewConsentPromptNarration registers the one-time RDD consent prompt's

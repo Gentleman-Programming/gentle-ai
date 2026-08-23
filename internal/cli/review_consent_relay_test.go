@@ -406,7 +406,7 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 	output := runConsentRelayStart(t, transitionStartArgs(repo, status))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if started.RiskLevel != reviewtransaction.RiskLow || len(started.SelectedLenses) != 0 ||
-		started.Action != "created" {
+		started.Action != "closed" || started.State != reviewtransaction.StateApproved {
 		t.Fatalf("low-risk relay START = %#v", started)
 	}
 	if console.Len() != 0 {

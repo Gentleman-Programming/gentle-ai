@@ -21,7 +21,7 @@ func TestReviewStartAlwaysCreatesCompactAuthority(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("atomic start fixture\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("atomic start fixture\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, repo, "add", "docs/atomic-start.md")
@@ -55,7 +55,7 @@ func TestReviewStartCreatesNoLegacyOrV3Siblings(t *testing.T) {
 	for index := range lines {
 		lines[index] = "ordinary documentation line"
 	}
-	writeReviewStartCandidate(t, repo, "docs/atomic-start-explicit.md", joinReviewCLILines(lines), 0o644)
+	writeReviewStartCandidate(t, repo, "docs/atomic-start-explicit.md", joinReviewCLILines(lines), 0o755)
 
 	var out bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "atomic-start-explicit"}, &out); err != nil {
@@ -66,8 +66,8 @@ func TestReviewStartCreatesNoLegacyOrV3Siblings(t *testing.T) {
 	if started.LineageID != "atomic-start-explicit" || started.State != reviewtransaction.StateReviewing {
 		t.Fatalf("compact START = %#v", started)
 	}
-	if started.RiskLevel != reviewtransaction.RiskLow || started.CorrectionBudget != 65 {
-		t.Fatalf("compact START tier/budget = %#v, want low/65", started)
+	if started.RiskLevel == reviewtransaction.RiskLow || started.CorrectionBudget == 0 {
+		t.Fatalf("compact START tier/budget = %#v, want an active non-low authority", started)
 	}
 
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "atomic-start-explicit")

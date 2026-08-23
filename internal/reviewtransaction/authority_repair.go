@@ -281,13 +281,6 @@ func (scan *authorityRepairScan) scanCompact(ctx context.Context, budget *author
 			scan.unsupported++
 			continue
 		}
-		if !scan.validCompactReceipt(dir, record, budget) {
-			if budget.truncated {
-				return errAuthorityRepairTruncated
-			}
-			scan.unsupported++
-			continue
-		}
 		scan.compact[lineage] = record
 	}
 	// One count per lineage that actually carries a graph defect. Collapsing
@@ -298,20 +291,6 @@ func (scan *authorityRepairScan) scanCompact(ctx context.Context, budget *author
 	violations, _ := compactAuthorityGraphViolations(scan.compact)
 	scan.unsupported += len(violations)
 	return nil
-}
-
-func (scan *authorityRepairScan) validCompactReceipt(dir string, record CompactRecord, budget *authorityRepairBudget) bool {
-	path := filepath.Join(dir, compactReceiptFileName)
-	payload, err := budget.readOptional(path, authorityRepairMaxEventBytes)
-	if err != nil {
-		return false
-	}
-	if payload == nil {
-		return record.State.State != StateApproved && record.State.State != StateEscalated
-	}
-	receipt, parseErr := ParseCompactReceipt(payload)
-	authoritative, authorityErr := record.State.Receipt()
-	return parseErr == nil && authorityErr == nil && compactReceiptEqual(receipt, authoritative)
 }
 
 func (scan *authorityRepairScan) scanLegacy(ctx context.Context, budget *authorityRepairBudget) error {

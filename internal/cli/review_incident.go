@@ -42,7 +42,7 @@ type reviewCapturePreflightResult struct {
 
 // reviewIncidentArtifact references one durably preserved raw reviewer result.
 // Its schema is distinct from the captured-result artifact schema on purpose:
-// finalize rejects it, so a preserved incident can never masquerade as a
+// capture-result rejects it, so a preserved incident can never masquerade as a
 // verified lens capture.
 type reviewIncidentArtifact struct {
 	Schema         string                                `json:"schema"`

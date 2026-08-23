@@ -338,14 +338,29 @@ func firstLine(text string) string {
 
 func timestamp() string { return time.Now().UTC().Format("2006-01-02T15:04:05Z") }
 
-// operationState reads the finalize state from either the negotiated
-// operation envelope (result.state) or the legacy bare result (state):
-// provider-rendered finalize commands without --contract emit the latter.
+// operationState reads the state from either a negotiated operation envelope
+// (result.state) or a direct last-event capture result (state).
 func operationState(doc map[string]any) string {
 	if state := getString(doc, "result", "state"); state != "" {
 		return state
 	}
 	return getString(doc, "state")
+}
+
+// admittedCapture accepts both an intermediate result-artifact acknowledgement
+// and the terminal last-event response. The final selected lens or validator
+// no longer hands control to FINALIZE: it closes the review itself.
+func admittedCapture(doc map[string]any) bool {
+	switch getString(doc, "schema") {
+	case "gentle-ai.review-result-artifact/v2":
+		return getString(doc, "admission_decision") == "completed"
+	case "gentle-ai.review-last-event-closure/v1":
+		switch operationState(doc) {
+		case "approved", "correction_required", "escalated":
+			return true
+		}
+	}
+	return false
 }
 
 // operationLineage mirrors operationState for the lineage identifier.
@@ -356,47 +371,6 @@ func operationLineage(doc map[string]any) string {
 	return getString(doc, "lineage_id")
 }
 
-// finishApproved follows only native transitions through final evidence and burn.
-func (b *battery) finishApproved(lane, name, repo, agent string, env []string) bool {
-	evidencePath := filepath.Join(b.workRoot, lane+"-final-evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("crosslane final verification passed\n"), 0o644); err != nil {
-		b.fail(lane, name, err.Error())
-		return false
-	}
-	for step := 0; step < 5; step++ {
-		status, statusStderr, _ := b.statusEnv(repo, agent, env)
-		switch getString(status, "next_transition", "kind") {
-		case "execute":
-			result, stderr, code := b.runCommandLineEnv("operation", repo, env, getString(status, "next_transition", "execute", "command"))
-			if code != 0 {
-				b.fail(lane, name, fmt.Sprintf("%s exit=%d %s", getString(status, "next_transition", "execute", "operation"), code, firstLine(stderr)))
-				return false
-			}
-			if operationState(result) == "approved" {
-				return b.burnApproved(lane, name, repo, agent, env, result)
-			}
-		case "collect":
-			input := collectInput(status)
-			if input == nil || input["capture_operation"] != "review.capture-evidence" {
-				b.fail(lane, name, "unexpected collect input")
-				return false
-			}
-			tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
-			doc, stderr, code := b.runJSONEnv("verification-evidence", repo, env,
-				append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)...)
-			if code != 0 || getString(doc, "outcome") != "passed" {
-				b.fail(lane, name, fmt.Sprintf("evidence capture exit=%d %s", code, firstLine(stderr)))
-				return false
-			}
-		default:
-			b.fail(lane, name, fmt.Sprintf("unexpected transition %s/%s %s", getString(status, "next_transition", "kind"), getString(status, "next_transition", "reason_code"), firstLine(statusStderr)))
-			return false
-		}
-	}
-	b.fail(lane, name, "did not reach the terminal burn within the step budget")
-	return false
-}
-
 func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finalized map[string]any) bool {
 	scope, found := b.lineages[repo]
 	result := getMap(finalized, "result")
@@ -404,7 +378,7 @@ func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finaliz
 		result = finalized
 	}
 	if !found || operationState(finalized) != "approved" || getString(result, "lineage_id") != scope.Lineage || !strings.Contains(getString(result, "action"), "burned") {
-		b.fail(lane, name, "terminal finalize did not report approved+burn for the exact lineage")
+		b.fail(lane, name, "terminal capture did not report approved+burn for the exact lineage")
 		return false
 	}
 	for _, field := range []string{"receipt", "receipt_path", "authority", "next_transition"} {

@@ -242,10 +242,9 @@ type CompactTraceEntry struct {
 }
 
 type CompactTransport struct {
-	Schema       string          `json:"schema"`
-	Record       CompactRecord   `json:"record"`
-	Receipt      *CompactReceipt `json:"receipt,omitempty"`
-	BundleDigest string          `json:"bundle_digest"`
+	Schema       string        `json:"schema"`
+	Record       CompactRecord `json:"record"`
+	BundleDigest string        `json:"bundle_digest"`
 }
 
 type CompactRecoveryRequest struct {
@@ -289,9 +288,6 @@ func BuildReleaseScopeSnapshot(ctx context.Context, repo string) (Snapshot, erro
 
 func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRecoveryRequest) (CompactRecord, error) {
 	request.Successor = cloneCompactStateInitialAtomicStart(request.Successor)
-	if request.Disposition == RecoveryFinalVerificationRetry {
-		return CompactRecord{}, errors.New("final_verification_retry is provider-only; use the dedicated final-verification retry operation")
-	}
 	predecessorStore, err := CompactAuthoritativeStore(ctx, repo, request.PredecessorLineageID)
 	if err != nil {
 		return CompactRecord{}, err
@@ -318,32 +314,17 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
 	}
-	approvedStagedScopeRecovery := request.Disposition == RecoveryScopeChanged &&
-		compactApprovedStagedScopeRecoveryShape(predecessor.State, request.Successor.InitialSnapshot)
+	// Approved compact authorities burn on their terminal capture, so only an
+	// in-flight correction can require a staged-scope successor.
 	correctionStagedScopeRecovery := request.Disposition == RecoveryScopeChanged &&
 		compactCorrectionRequiredStagedScopeRecoveryShape(predecessor.State, request.Successor.InitialSnapshot)
-	stagedScopeRecovery := approvedStagedScopeRecovery || correctionStagedScopeRecovery
-	var predecessorReceipt compactTargetReceiptObservation
+	stagedScopeRecovery := correctionStagedScopeRecovery
 	if stagedScopeRecovery {
 		if request.MaintainerAuthorization != compactApprovedStagedScopeRecoveryAuthorizationBinding(
 			request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity,
 			request.Successor.LineageID, request.Actor, request.Reason,
 		) {
 			return CompactRecord{}, errors.New("staged scope recovery requires an exact successor-bound maintainer authorization") // refusal:by-design human-authority: only a maintainer can authorize this exact successor edge
-		}
-	}
-	if approvedStagedScopeRecovery {
-		predecessorReceipt, err = inspectCompactTargetReceipt(predecessorStore, predecessor.State)
-		if err != nil || !predecessorReceipt.published ||
-			!bytes.Equal(predecessorReceipt.artifact.content, predecessorReceipt.artifact.canonical) {
-			return CompactRecord{}, errors.New("approved staged scope recovery requires a canonical published predecessor receipt")
-		}
-		eligible, eligibilityErr := compactApprovedStagedScopeRecovery(ctx, successorStore.repo, predecessor.State, request.Successor.InitialSnapshot)
-		if eligibilityErr != nil {
-			return CompactRecord{}, eligibilityErr
-		}
-		if !eligible {
-			return CompactRecord{}, errors.New("approved staged scope recovery is not a complete same-base index expansion")
 		}
 	}
 	correctionLines := 0
@@ -457,13 +438,6 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if err := validateCompactRepositoryEvidence(ctx, successorStore.repo, nil, request.Successor, "review/start"); err != nil {
 		return CompactRecord{}, fmt.Errorf("%w: %v", ErrInvalidSuccessor, err)
 	}
-	if approvedStagedScopeRecovery {
-		currentReceipt, receiptErr := inspectCompactTargetReceipt(predecessorStore, predecessor.State)
-		if receiptErr != nil || currentReceipt.published != predecessorReceipt.published ||
-			!compactTargetArtifactObservationsEqual(currentReceipt.artifact, predecessorReceipt.artifact) {
-			return CompactRecord{}, fmt.Errorf("%w: predecessor receipt changed during staged scope recovery", ErrConcurrentUpdate)
-		}
-	}
 	record, payload, err := makeCompactRecord(request.Successor)
 	if err != nil {
 		return CompactRecord{}, err
@@ -520,13 +494,6 @@ func compactStagedScopeRecoverySnapshotShape(predecessor CompactState, next Snap
 		len(predecessor.GenesisPaths) > 0 && len(next.Paths) > len(predecessor.GenesisPaths) &&
 		pathsAreSubset(predecessor.GenesisPaths, next.Paths) == nil &&
 		next.CandidateTree != predecessor.CurrentSnapshot.CandidateTree
-}
-
-func compactApprovedStagedScopeRecovery(ctx context.Context, repo string, predecessor CompactState, next Snapshot) (bool, error) {
-	if !compactApprovedStagedScopeRecoveryShape(predecessor, next) {
-		return false, nil
-	}
-	return compactStagedScopeRecovery(ctx, repo, predecessor, next)
 }
 
 func compactCorrectionRequiredStagedScopeRecovery(ctx context.Context, repo string, predecessor CompactState, next Snapshot) (int, bool, error) {
@@ -696,8 +663,6 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
 			return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 		}
-	case RecoveryFinalVerificationRetry:
-		return validateCompactFinalVerificationRetryEdge(predecessor, successor)
 	default:
 		return errors.New("unsupported recovery disposition")
 	}
@@ -849,65 +814,6 @@ func CompactAuthorityLeaves(ctx context.Context, repo string) ([]CompactStore, e
 		return nil, err
 	}
 	return compactAuthorityLeaves(scan.records, scan.stores), nil
-}
-
-// CompactAuthorityLineageBlocked reports the reason one named lineage cannot
-// govern, and nothing about any other lineage. It is the scoped replacement
-// for asking whether the whole repository's authority graph validates: an
-// entry that does not apply to the operation under way must not be able to
-// refuse it.
-//
-// It answers nil for a lineage the graph does not carry at all, because "no
-// authority here" is not damage; the caller's own discovery already decides
-// what to do with an absent lineage.
-func CompactAuthorityLineageBlocked(ctx context.Context, repo, lineageID string) error {
-	if strings.TrimSpace(lineageID) == "" {
-		return nil
-	}
-	scan, err := scanCompactAuthority(ctx, repo)
-	if err != nil {
-		return err
-	}
-	return scan.blocked(lineageID)
-}
-
-// blocked names the exact entry that stops one lineage from governing, which
-// may be the lineage itself or an ancestor it inherits its authority through.
-// The refusal names a runnable continuation because a refusal that names none
-// is the one shape this project does not ship.
-func (scan compactAuthorityScan) blocked(lineageID string) error {
-	if loadErr, unreadable := scan.unreadable[lineageID]; unreadable {
-		return compactBlockedLineageError(lineageID, lineageID, loadErr)
-	}
-	if _, known := scan.records[lineageID]; !known {
-		return nil
-	}
-	violations, _ := compactAuthorityGraphViolations(scan.records)
-	carrier, cause := compactAuthorityBlockingCause(scan.records, violations, lineageID)
-	if cause == nil {
-		return nil
-	}
-	return compactBlockedLineageError(lineageID, carrier, cause)
-}
-
-// compactBlockedLineageError names the entry, the defect, and the ONE command
-// that is runnable for every shape of damage: the read-only diagnosis, which
-// then names each entry's own sanctioned exit if it has one.
-//
-// It deliberately does not guess a clearing command. `review abandon` refuses
-// a successor holding captured review data and cannot load a truncated record
-// at all, so printing it here would send an operator to a command that turns
-// around and refuses. A refusal that names an exit which does not work is
-// worse than one that names only the diagnosis.
-func compactBlockedLineageError(lineageID, carrier string, cause error) error {
-	if carrier == lineageID {
-		return fmt.Errorf(
-			"compact authority lineage %q cannot govern: %w. Every other lineage is unaffected; see this entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
-			lineageID, cause)
-	}
-	return fmt.Errorf(
-		"compact authority lineage %q cannot govern because the entry %q it recovers from carries: %w. Every lineage that does not recover through %q is unaffected; see that entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
-		lineageID, carrier, cause, carrier)
 }
 
 // compactAuthorityBlockingCause walks one lineage's recovery ancestry and
@@ -1244,84 +1150,6 @@ func acquireCompactStartLock(ctx context.Context, path string) (*storeLock, erro
 	}
 }
 
-// compactApprovedScopeChangedRecovery reports the approved-predecessor shape
-// START routes to recovery instead of a fresh lineage: the live candidate
-// keeps the exact frozen delivery scope while its candidate tree changed.
-// Target STATUS classifies with this same predicate on purpose — when the two
-// surfaces used different rules, negotiated status emitted a START the store
-// then refused, the closed loop confirmed on issue #1826.
-func compactApprovedScopeChangedRecovery(existing CompactState, live Snapshot) bool {
-	if existing.State != StateApproved {
-		return false
-	}
-	requested := existing
-	requested.InitialSnapshot = live
-	return compactStartDeliveryScopeMatches(existing, requested) &&
-		existing.CurrentSnapshot.CandidateTree != live.CandidateTree
-}
-
-// compactApprovedRebasedScopeRecovery recognizes one narrow committed-delivery
-// transition: an approved current-changes patch was committed, its base advanced
-// on disjoint paths, and the feature was rebased without changing its patch.
-func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, existing CompactState, live Snapshot) (bool, error) {
-	original, approved := existing.InitialSnapshot, existing.CurrentSnapshot
-	if existing.State != StateApproved || original.Kind != TargetCurrentChanges || approved.Kind != TargetCurrentChanges ||
-		live.Kind != TargetBaseDiff || !sameApprovedRebasedRecoveryProjection(original.Projection, live.Projection) ||
-		original.BaseTree != approved.BaseTree || original.BaseTree == live.BaseTree ||
-		approved.CandidateTree == live.CandidateTree || approved.Identity == live.Identity ||
-		len(existing.GenesisPaths) == 0 || !equalStrings(approved.Paths, existing.GenesisPaths) ||
-		!equalStrings(live.Paths, existing.GenesisPaths) ||
-		!equalStrings(original.IntendedUntracked, approved.IntendedUntracked) ||
-		original.IntendedUntrackedProof != approved.IntendedUntrackedProof || len(live.IntendedUntracked) != 0 ||
-		len(original.LedgerIDs) != 0 || len(approved.LedgerIDs) != 0 || len(live.LedgerIDs) != 0 {
-		return false, nil
-	}
-	for _, path := range original.IntendedUntracked {
-		if stringIndex(existing.GenesisPaths, path) < 0 {
-			return false, nil
-		}
-	}
-	builder := SnapshotBuilder{Repo: repo}
-	baseAdvancePaths, err := builder.changedPaths(ctx, original.BaseTree, live.BaseTree)
-	if err != nil {
-		return false, fmt.Errorf("derive rebased predecessor base-advance paths: %w", err)
-	}
-	if !disjointPaths(baseAdvancePaths, existing.GenesisPaths) {
-		return false, nil
-	}
-	originalPatch, err := patchIdentity(ctx, repo, original.BaseTree, approved.CandidateTree)
-	if err != nil {
-		candidateType, inspectErr := runGit(ctx, repo, nil, []byte(approved.CandidateTree+"\n"), "cat-file", "--batch-check=%(objectname) %(objecttype)")
-		if inspectErr != nil {
-			return false, fmt.Errorf("inspect approved predecessor candidate tree: %w", inspectErr)
-		}
-		candidateFields := strings.Fields(string(candidateType))
-		if len(candidateFields) == 2 && candidateFields[0] == approved.CandidateTree && candidateFields[1] == "missing" {
-			return false, nil
-		}
-		if len(candidateFields) != 2 || candidateFields[0] != approved.CandidateTree || candidateFields[1] != "tree" {
-			return false, fmt.Errorf("inspect approved predecessor candidate tree: unexpected git cat-file response %q", strings.TrimSpace(string(candidateType))) // refusal:by-design world-action: Git returned an unrecognized plumbing response, so only a code or Git-environment repair can define a trustworthy continuation
-		}
-		return false, fmt.Errorf("derive approved predecessor patch identity: %w", err)
-	}
-	livePatch, err := patchIdentity(ctx, repo, live.BaseTree, live.CandidateTree)
-	if err != nil {
-		return false, fmt.Errorf("derive live rebased patch identity: %w", err)
-	}
-	return originalPatch == livePatch, nil
-}
-
-// A base-diff has no index-backed staged execution mode. STATUS therefore
-// projects this narrow approved staged-current-changes rebase to its executable
-// committed-only base-diff form before identity derivation. No other mixed
-// projection is admitted here.
-func sameApprovedRebasedRecoveryProjection(original, live Projection) bool {
-	if live == "" {
-		live = ProjectionWorkspace
-	}
-	return sameRecoveryProjection(original, live) || original == ProjectionStaged && live == ProjectionWorkspace
-}
-
 // compactStartDeliveryScopeMatches compares the immutable delivery boundary
 // without Snapshot.Identity because current-changes and base-diff have distinct
 // representations for the same base-to-candidate tree range.
@@ -1503,10 +1331,6 @@ func compactCorrectionRemainingBudget(state CompactState) (int, error) {
 }
 
 func (store CompactStore) StatePath() string { return filepath.Join(store.Dir, compactStateFileName) }
-
-func (store CompactStore) ReceiptPath() string {
-	return filepath.Join(store.Dir, compactReceiptFileName)
-}
 
 // CreateOrReplayAtomicStart creates one fresh reviewing compact authority at
 // this exact lineage path, or replays it only when every immutable START input
@@ -1917,10 +1741,11 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-review":
-		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateEscalated {
+		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateApproved && next.State != StateEscalated {
 			return fmt.Errorf("%w: invalid compact review completion", ErrInvalidSuccessor)
 		}
-		if !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" {
+		cleanApproval := next.State == StateApproved && next.EvidenceHash == compactReviewEvidenceHash(next)
+		if !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval {
 			return fmt.Errorf("%w: compact review completion changed correction or delivery state", ErrInvalidSuccessor)
 		}
 	case "review/begin-fix":
@@ -1955,40 +1780,16 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		}
 		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil ||
 			(next.State != StateApproved && next.State != StateEscalated) || len(next.CorrectionAttempts) != len(previous.CorrectionAttempts)+1 {
-			return fmt.Errorf("%w: invalid atomic compact correction verification", ErrInvalidSuccessor)
+			return fmt.Errorf("%w: invalid terminal compact targeted validation", ErrInvalidSuccessor)
 		}
-		if next.State == StateApproved && (next.EvidenceOutcome != VerificationOutcomePassed ||
-			next.EvidenceAuthorityRevision != previousRevision || next.EvidenceTargetIdentity != next.CorrectionAttempts[len(next.CorrectionAttempts)-1].Snapshot.Identity) {
-			return fmt.Errorf("%w: approved atomic compact correction verification lacks passed evidence", ErrInvalidSuccessor)
-		}
-		if next.State == StateEscalated && (next.EvidenceHash != previous.EvidenceHash || next.EvidenceRecordDigest != previous.EvidenceRecordDigest ||
-			next.EvidenceOutcome != previous.EvidenceOutcome || next.EvidenceTargetIdentity != previous.EvidenceTargetIdentity ||
-			next.EvidenceAuthorityRevision != previous.EvidenceAuthorityRevision) {
-			return fmt.Errorf("%w: failed targeted validator escalation cannot consume repository verification evidence", ErrInvalidSuccessor)
+		if next.EvidenceHash != previous.EvidenceHash {
+			return fmt.Errorf("%w: targeted validator closure cannot change admitted review evidence", ErrInvalidSuccessor)
 		}
 		if len(previous.CorrectionAttempts) > 0 && !reflect.DeepEqual(previous.CorrectionAttempts, next.CorrectionAttempts[:len(previous.CorrectionAttempts)]) {
 			return fmt.Errorf("%w: compact correction attempt history is immutable", ErrInvalidSuccessor)
 		}
 		if !reflectCompactReviewData(previous, next) {
-			return fmt.Errorf("%w: atomic compact correction verification changed frozen review evidence", ErrInvalidSuccessor)
-		}
-	case "review/escalate-correction-verification":
-		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil || next.State != StateEscalated ||
-			next.CorrectionVerificationTarget == nil || next.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
-			next.EvidenceAuthorityRevision != previousRevision || len(next.CorrectionAttempts) != len(previous.CorrectionAttempts) ||
-			next.CumulativeCorrectionLines != previous.CumulativeCorrectionLines {
-			return fmt.Errorf("%w: invalid procedural correction verification escalation", ErrInvalidSuccessor)
-		}
-		expected := previous
-		expected.State = StateEscalated
-		expected.CorrectionVerificationTarget = next.CorrectionVerificationTarget
-		expected.EvidenceHash = next.EvidenceHash
-		expected.EvidenceRecordDigest = next.EvidenceRecordDigest
-		expected.EvidenceOutcome = next.EvidenceOutcome
-		expected.EvidenceTargetIdentity = next.EvidenceTargetIdentity
-		expected.EvidenceAuthorityRevision = next.EvidenceAuthorityRevision
-		if !compactStateEqual(expected, next) {
-			return fmt.Errorf("%w: procedural correction verification escalation changed unrelated state", ErrInvalidSuccessor)
+			return fmt.Errorf("%w: terminal targeted validation changed frozen review evidence", ErrInvalidSuccessor)
 		}
 	case CompactResultDispositionOperation:
 		// reviewing -> escalated. The disposition may only append its own audit
@@ -2040,21 +1841,6 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		expected.ResultReopens = next.ResultReopens
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: reviewer result reopen changed frozen scope, budget, or unrelated authority", ErrInvalidSuccessor)
-		}
-	case "review/complete-verification":
-		if previous.State != StateValidating || next.State != StateApproved && next.State != StateEscalated || !validSHA256(next.EvidenceHash) ||
-			next.EvidenceRecordDigest != "" && next.EvidenceAuthorityRevision != previousRevision {
-			return fmt.Errorf("%w: invalid compact verification completion", ErrInvalidSuccessor)
-		}
-		expected := previous
-		expected.State = next.State
-		expected.EvidenceHash = next.EvidenceHash
-		expected.EvidenceRecordDigest = next.EvidenceRecordDigest
-		expected.EvidenceOutcome = next.EvidenceOutcome
-		expected.EvidenceTargetIdentity = next.EvidenceTargetIdentity
-		expected.EvidenceAuthorityRevision = next.EvidenceAuthorityRevision
-		if !compactStateEqual(expected, next) {
-			return fmt.Errorf("%w: compact verification changed unrelated state", ErrInvalidSuccessor)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported compact operation %q", ErrInvalidSuccessor, operation)
@@ -2293,16 +2079,6 @@ func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historic
 			remint(snapshot)
 		}
 	}
-	if target := state.CorrectionVerificationTarget; target != nil {
-		if minted, seen := reminted[target.Identity]; seen {
-			target.Identity = minted
-		} else if target.Identity == retiredCompactSnapshotIdentity(*target) {
-			remint(target)
-		}
-	}
-	if minted, seen := reminted[state.EvidenceTargetIdentity]; seen {
-		state.EvidenceTargetIdentity = minted
-	}
 	for index := range state.CorrectionAttempts {
 		if minted, seen := reminted[state.CorrectionAttempts[index].CorrectionTargetIdentity]; seen {
 			state.CorrectionAttempts[index].CorrectionTargetIdentity = minted
@@ -2538,16 +2314,6 @@ func (store CompactStore) ExportTransport() (CompactTransport, error) {
 		return CompactTransport{}, fmt.Errorf("%w: lineage %q cannot be exported as compact transport", ErrHistoricalCompatReadOnly, record.State.LineageID)
 	}
 	transport := CompactTransport{Schema: CompactTransportSchema, Record: record}
-	if payload, readErr := os.ReadFile(store.ReceiptPath()); readErr == nil {
-		receipt, parseErr := ParseCompactReceipt(payload)
-		authoritative, authorityErr := record.State.Receipt()
-		if parseErr != nil || authorityErr != nil || !compactReceiptEqual(receipt, authoritative) {
-			return CompactTransport{}, errors.New("compact receipt does not match authority")
-		}
-		transport.Receipt = &receipt
-	} else if !os.IsNotExist(readErr) {
-		return CompactTransport{}, readErr
-	}
 	transport.BundleDigest = compactTransportDigest(transport)
 	return transport, nil
 }
@@ -2569,12 +2335,6 @@ func ParseCompactTransport(payload []byte) (CompactTransport, error) {
 	recordPayload, _ := json.Marshal(transport.Record)
 	if _, err := parseCompactRecord(recordPayload, transport.Record.State.LineageID); err != nil {
 		return CompactTransport{}, err
-	}
-	if transport.Receipt != nil {
-		authoritative, err := transport.Record.State.Receipt()
-		if err != nil || transport.Receipt.Validate() != nil || !compactReceiptEqual(*transport.Receipt, authoritative) {
-			return CompactTransport{}, errors.New("compact transport receipt does not match state")
-		}
 	}
 	return transport, nil
 }
@@ -2631,11 +2391,6 @@ func ImportCompactTransport(ctx context.Context, repo string, transport CompactT
 	if err := store.installTransportRecordLocked(ctx, validated.Record); err != nil {
 		return CompactRecord{}, err
 	}
-	if validated.Receipt != nil {
-		if err := store.writeReceiptLocked(*validated.Receipt); err != nil {
-			return CompactRecord{}, err
-		}
-	}
 	return store.loadCompactRecordLocked()
 }
 
@@ -2656,33 +2411,6 @@ func (store CompactStore) installTransportRecordLocked(ctx context.Context, reco
 		return errors.New("imported compact record checksum changed")
 	}
 	return writeAtomic(store.StatePath(), payload, 0o644)
-}
-
-// WriteReceipt validates the receipt against authoritative compact state while
-// holding maintenance shared access before the compact version lock.
-func (store CompactStore) WriteReceipt(ctx context.Context, receipt CompactReceipt) error {
-	// Bounded wait, not instant refusal: the receipt is derived from
-	// already-terminal authority and publication is idempotent, so a
-	// briefly-held advisory lock is a competitor completing the same
-	// publication, not a second writer to refuse.
-	lock, err := acquireStoreLockForConvergentCompletion(ctx, store.lockPath)
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	return store.writeReceiptLocked(receipt)
-}
-
-func (store CompactStore) writeReceiptLocked(receipt CompactReceipt) error {
-	record, err := store.loadCompactRecordLocked()
-	if err != nil {
-		return err
-	}
-	want, err := record.State.Receipt()
-	if err != nil || !compactReceiptEqual(receipt, want) {
-		return errors.New("compact receipt does not match authority")
-	}
-	return WriteCompactReceiptAtomic(store.ReceiptPath(), receipt)
 }
 
 func validateCompactTransportDelivery(ctx context.Context, repo string, state CompactState) error {

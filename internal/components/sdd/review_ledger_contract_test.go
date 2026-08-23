@@ -43,7 +43,7 @@ func TestBoundedReviewContractLeavesAtomicLifecycleToNativeGo(t *testing.T) {
 	}
 }
 
-func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousFinalizeReplay(t *testing.T) {
+func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousCaptureReplay(t *testing.T) {
 	for _, runtime := range []struct {
 		name  string
 		agent model.AgentID
@@ -56,15 +56,15 @@ func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousFinalizeRepla
 		t.Run(runtime.name, func(t *testing.T) {
 			rendered := renderBoundedReviewAsset(runtime.agent, runtime.path)
 			for _, clause := range []string{
-				"Clean FINALIZE success stops with no terminal STATUS.",
-				"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+				"The final reviewer, refuter, or targeted-validator capture owns closure.",
+				"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 			} {
 				if !strings.Contains(rendered, clause) {
 					t.Fatalf("%s rendered contract is missing %q", runtime.name, clause)
 				}
 			}
 			if strings.Contains(rendered, "only while that authority still exists") {
-				t.Fatalf("%s rendered contract still narrows ambiguous FINALIZE recovery to a surviving authority", runtime.name)
+				t.Fatalf("%s rendered contract still narrows ambiguous capture recovery to a surviving authority", runtime.name)
 			}
 		})
 	}
@@ -677,8 +677,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3417 replaces the terminal commit question with non-deciding delivery
 		// guidance and adds the one-status ambiguous-FINALIZE reconciliation rule.
 		// The rendered byte pins are regenerated from those shared source bytes.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_304, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_649, maxCharacters: 30_063},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_657, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_002, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

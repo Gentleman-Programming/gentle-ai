@@ -154,9 +154,9 @@ var openCodeTransportTrailingClosureTimeout = 5 * time.Second
 // died silently without ever completing or closing the relay pipe; it is not
 // the operating lifetime. The OpenCode host still owns the Task lifetime and
 // decides the wait well inside this deadline. It deliberately mirrors
-// reviewFacadeFinalizeProviderOperationTimeout so relay waits share the
-// repository's generous provider operation deadline.
-var openCodeTransportCompletionSafetyBound = reviewFacadeFinalizeProviderOperationTimeout
+// reviewProviderRoleCaptureTimeout so relay waits share the repository's
+// generous provider role capture deadline.
+var openCodeTransportCompletionSafetyBound = reviewProviderRoleCaptureTimeout
 
 func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 	return runReviewOpenCodeTransport(args, os.Stdin, stdout)
@@ -395,8 +395,20 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_completion_unavailable")
 	}
 	if session.binding.Role != "" {
-		if err := openCodeTransportCaptureRole(ctx, session.root, store, record, session.binding.Role, hostOutput); err != nil {
+		closure, err := openCodeTransportCaptureRole(ctx, session.root, store, record, session.binding.Role, hostOutput)
+		if err != nil {
 			return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_provider_role_result_refused")
+		}
+		if closure != nil {
+			if session.binding.Role == reviewerprovider.RoleRefuter {
+				closure.Operation = reviewCaptureRefuterCaptureOperation
+			}
+			payload, err := json.Marshal(closure)
+			if err != nil {
+				return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_provider_role_result_refused")
+			}
+			output := string(payload)
+			return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 		}
 		output := openCodeProviderRoleResultEnvelope(session.binding.Role)
 		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
@@ -424,6 +436,18 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		Level: reviewtransaction.ReviewerContextLevelProviderContract,
 	}); err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_emission_unavailable")
+	}
+	closure, err := closeReviewOnLastCapturedLens(ctx, session.root, store, record)
+	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, record) {
+		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
+	}
+	if closure != nil {
+		payload, err := json.Marshal(closure)
+		if err != nil {
+			return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
+		}
+		output := string(payload)
+		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 	}
 	artifact := reviewResultArtifact{
 		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability,
@@ -549,16 +573,18 @@ func decodeOpenCodeTransportMaterialization(prompt string) (taskPrompt string, r
 	return materialization.TaskPrompt, true, nil
 }
 
-func openCodeTransportCaptureRole(ctx context.Context, root string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, role reviewProviderRole, raw []byte) error {
+func openCodeTransportCaptureRole(ctx context.Context, root string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, role reviewProviderRole, raw []byte) (*reviewLastEventClosureResult, error) {
 	switch role {
 	case reviewerprovider.RoleRefuter:
-		_, err := reviewProviderCaptureRefuterRaw(ctx, root, store, record.State, record.Revision, raw)
-		return err
+		if _, err := reviewProviderCaptureRefuterRaw(ctx, root, store, record.State, record.Revision, raw); err != nil {
+			return nil, err
+		}
+		return closeReviewOnLastCapturedLens(ctx, root, store, record)
 	case reviewerprovider.RoleTargetedValidator:
-		_, _, err := reviewProviderCaptureTargetedValidatorRaw(ctx, root, store, record.State, record.Revision, raw)
-		return err
+		_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, root, store, record.State, record.Revision, raw)
+		return closure, err
 	default:
-		return fmt.Errorf("unsupported provider role task %q", role) // refusal:by-design world-action: the relay session role is fixed by the Go-issued Task binding
+		return nil, fmt.Errorf("unsupported provider role task %q", role) // refusal:by-design world-action: the relay session role is fixed by the Go-issued Task binding
 	}
 }
 

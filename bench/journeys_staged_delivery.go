@@ -110,14 +110,16 @@ func stagedDeliveryJourneys() []Journey {
 	return []Journey{{
 		ID:     "j89-staged-validation-is-informational-and-unmanaged",
 		Review: reviewOptedIn,
-		Title:  "#3417: staged validation is informational and unmanaged after the terminal burn",
-		Source: "#3417 replaces staged receipt reuse with a terminal burn; no staged validation authorizes delivery",
+		Title:  "#3587: staged validation is informational and unmanaged after the terminal burn",
+		Source: "#3587 replaces staged receipt reuse with a terminal event; no staged validation authorizes delivery",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: add a second tracked delivery path", Fixture: prepareWorkspaceDeliveryBaseline},
 			{Name: "fixture: two-path workspace candidate staged", Fixture: stageWorkspaceDeliveryCandidate},
-			{Name: "review the staged workspace candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},
-			{Name: "terminal finalization burns the staged transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", stagedDeliveryLineage), After: requireBurnedApproval(stagedDeliveryLineage)},
+			{Name: "review the staged workspace candidate; zero lenses close and burn at START", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},
+			{Name: "the zero-lens terminal event leaves no staged authority", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				return requireAtomicLineageBurned(r, stagedDeliveryLineage)
+			}},
 			{Name: "fixture: empty index after the terminal burn", Fixture: unstageWorkspaceDeliveryCandidate},
 			{Name: "empty index pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
 				return requireUnmanagedShippedGate(observation, "pre-commit")

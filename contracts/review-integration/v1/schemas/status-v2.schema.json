@@ -39,12 +39,12 @@
       "additionalProperties": false,
       "required": ["status"],
       "properties": {
-        "status": { "enum": ["expected_missing", "present", "publication_pending", "not_applicable"] },
+        "status": { "enum": ["expected_missing", "present", "not_applicable"] },
         "identity": { "$ref": "#/$defs/sha256" }
       }
     },
-    "action": { "enum": ["start", "finalize", "validate", "recover", "retry_final_verification", "maintainer_action", "select_lineage", "repair_authority", "reconcile_finalize", "stop"] },
-    "action_disposition": { "enum": ["scope_changed", "invalidated", "escalated", "final_verification_retry"] },
+    "action": { "enum": ["start", "validate", "recover", "maintainer_action", "select_lineage", "repair_authority", "stop"] },
+    "action_disposition": { "enum": ["scope_changed", "invalidated", "escalated"] },
     "replayability": { "enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"] },
     "frozen": {
       "type": "object",
@@ -73,21 +73,7 @@
     },
     "eligibility": { "$ref": "#/$defs/action_eligibility" },
     "next_transition": { "$ref": "#/$defs/next_transition" },
-    "validation_request": { "$ref": "targeted-validation-request.schema.json" },
-    "final_verification_retry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["incident_schema", "incident_class", "validating_revision", "target_identity", "failed_evidence_hash", "finalize_request_digest"],
-      "properties": {
-        "incident_schema": { "const": "gentle-ai.review-final-verification-incident/v1" },
-        "incident_class": { "const": "procedural_tooling_failure" },
-        "validating_revision": { "$ref": "#/$defs/sha256" },
-        "target_identity": { "$ref": "#/$defs/sha256" },
-        "failed_evidence_hash": { "$ref": "#/$defs/sha256" },
-        "failed_evidence_record_digest": { "$ref": "#/$defs/sha256" },
-        "finalize_request_digest": { "$ref": "#/$defs/sha256" }
-      }
-    }
+    "validation_request": { "$ref": "targeted-validation-request.schema.json" }
   },
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
@@ -126,7 +112,7 @@
     "transition_execution": {
       "type": "object", "additionalProperties": false, "required": ["operation", "arguments", "preconditions", "binding"],
       "properties": {
-        "operation": { "enum": ["review.start", "review.finalize", "review.recover", "review.repair", "review.validate"] },
+        "operation": { "enum": ["review.start", "review.recover", "review.repair", "review.validate"] },
         "command": { "$comment": "The complete, literally runnable command line for this transition, e.g. \"gentle-ai review start --contract=... --target=...\". Operation alone is a dotted logical name; command is what a caller can paste. Argument words are the execute arguments' own tokens, in order, POSIX-shell-quoted only when a value would otherwise be word-split.", "type": "string", "minLength": 1, "pattern": "^gentle-ai review [a-z][a-z-]*" },
         "arguments": { "type": "array", "items": { "$ref": "#/$defs/executable_transition_argument" } },
         "selector_arguments": { "type": "array", "items": { "$ref": "#/$defs/transition_argument" } },
@@ -190,10 +176,10 @@
             "additionalProperties": false,
             "required": ["action", "reason_code", "required_inputs"],
             "properties": {
-              "action": { "enum": ["stop", "review.start", "review.finalize", "review.validate", "review.recover", "review.repair", "review.retry_final_verification"] },
+              "action": { "enum": ["stop", "review.start", "review.validate", "review.recover", "review.repair"] },
               "reason_code": { "type": "string", "pattern": "^[a-z0-9_]+$" },
               "required_inputs": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9_]+$" } },
-              "disposition": { "enum": ["scope_changed", "invalidated", "escalated", "final_verification_retry"] },
+              "disposition": { "enum": ["scope_changed", "invalidated", "escalated"] },
               "binding": {
                 "type": "object",
                 "additionalProperties": false,
@@ -207,7 +193,7 @@
             },
             "allOf": [
               {
-                "if": { "properties": { "action": { "enum": ["review.recover", "review.retry_final_verification"] } }, "required": ["action"] },
+                "if": { "properties": { "action": { "const": "review.recover" } }, "required": ["action"] },
                 "then": { "required": ["disposition", "binding"] },
                 "else": { "not": { "anyOf": [{ "required": ["disposition"] }, { "required": ["binding"] }] } }
               }
@@ -221,7 +207,7 @@
             "additionalProperties": false,
             "required": ["action", "reason_code"],
             "properties": {
-              "action": { "enum": ["review.abandon", "review.finalize", "review.invalidate", "review.quarantine-legacy", "review.reclaim", "review.reconcile-authority", "review.reconcile-authority-batch", "review.recover", "review.repair", "review.retry_final_verification", "review.start", "review.validate"] },
+              "action": { "enum": ["review.abandon", "review.invalidate", "review.quarantine-legacy", "review.reclaim", "review.reconcile-authority", "review.reconcile-authority-batch", "review.recover", "review.repair", "review.start", "review.validate"] },
               "reason_code": { "type": "string", "pattern": "^[a-z0-9_]+$" }
             }
           }
@@ -231,18 +217,7 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "action": { "const": "reconcile_finalize" } } },
-      "then": {
-        "required": ["reconciliation"],
-        "properties": {
-          "applicability": { "const": "current_target" },
-          "replayability": { "const": "status_required" }
-        }
-      },
-      "else": { "not": { "required": ["reconciliation"] } }
-    },
-    {
-      "if": { "properties": { "action": { "enum": ["recover", "retry_final_verification"] } }, "required": ["action"] },
+      "if": { "properties": { "action": { "const": "recover" } }, "required": ["action"] },
       "then": { "required": ["action_disposition"] },
       "else": { "not": { "required": ["action_disposition"] } }
     },
@@ -292,24 +267,7 @@
           "authority": { "properties": { "state": { "const": "correction_required" } }, "required": ["state"] }
         }
       }
-    },
-    {
-      "if": { "properties": { "action": { "const": "retry_final_verification" } }, "required": ["action"] },
-      "then": {
-        "required": ["final_verification_retry"],
-        "properties": {
-          "applicability": { "const": "current_target" },
-          "authority": {
-            "required": ["version", "state"],
-            "properties": {
-              "version": { "const": "compact-v2" },
-              "state": { "const": "escalated" }
-            }
-          },
-          "action_disposition": { "const": "final_verification_retry" }
-        }
-      },
-      "else": { "not": { "required": ["final_verification_retry"] } }
+
     }
   ]
 }

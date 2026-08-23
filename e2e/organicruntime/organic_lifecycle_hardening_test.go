@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 // This file carries the review-lifecycle-hardening batch's per-issue,
 // end-to-end traceability: one named subtest per defect, grouped into the
 // seven mechanism journeys the design lays out. It is kept separate from

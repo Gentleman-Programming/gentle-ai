@@ -177,7 +177,7 @@ func TestNegotiatedStartConsentAnswersStayByteSilentOnStderr(t *testing.T) {
 }
 
 // TestNegotiatedLifecycleOperationsAreByteSilentOnStderr walks a complete
-// low-risk negotiated lifecycle — STATUS, START, FINALIZE, unmanaged VALIDATE —
+// low-risk negotiated lifecycle — STATUS, terminal START, unmanaged VALIDATE —
 // and requires zero stderr bytes from every successful operation, the exact
 // sequence gentle-pi drives fail-closed.
 func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
@@ -196,27 +196,8 @@ func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
 		t.Fatalf("low-risk negotiated START = %#v", started)
 	}
 
-	var finalizeStatus bytes.Buffer
-	if err := RunReview([]string{
-		"status", "--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2,
-		"--agent", "claude-code", "--next-transition",
-	}, &finalizeStatus); err != nil {
-		t.Fatalf("post-start STATUS: %v", err)
-	}
-	var ready ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, finalizeStatus.Bytes(), &ready)
-	if ready.NextTransition == nil || ready.NextTransition.Execute == nil ||
-		ready.NextTransition.Execute.Operation != "review.finalize" {
-		t.Fatalf("post-start transition = %#v", ready.NextTransition)
-	}
-
-	var finalized bytes.Buffer
-	if err := RunReview([]string{
-		"finalize", "--cwd", repo, "--lineage", started.LineageID,
-		"--captured-results=true", "--contract", ReviewIntegrationContractV2,
-		"--agent", "claude-code",
-	}, &finalized); err != nil {
-		t.Fatalf("negotiated FINALIZE: %v\n%s", err, finalized.String())
+	if started.State != reviewtransaction.StateApproved || started.Action != "closed" {
+		t.Fatalf("low-risk terminal START = %#v", started)
 	}
 
 	runReviewCLIGit(t, repo, "add", "--", "docs/notes.md")

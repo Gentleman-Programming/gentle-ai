@@ -113,32 +113,6 @@ func AuthoritativeStore(ctx context.Context, repo, lineageID string) (Store, err
 	return Store{Dir: dir, lineageID: lineageID, repo: root, maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: statErr == nil}, nil
 }
 
-// DiscoverAuthoritativeStores returns every canonical lineage rooted in the
-// repository Git common directory. Callers still validate each chain before
-// treating it as review authority.
-func DiscoverAuthoritativeStores(ctx context.Context, repo string) ([]Store, error) {
-	authorityRoot, root, err := authoritativeStoreRoot(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(authorityRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []Store{}, nil
-		}
-		return nil, err
-	}
-	stores := make([]Store, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() || validateLineageID(entry.Name()) != nil {
-			continue
-		}
-		stores = append(stores, Store{Dir: filepath.Join(authorityRoot, entry.Name()), lineageID: entry.Name(), repo: root,
-			maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: true})
-	}
-	return stores, nil
-}
-
 func authoritativeStoreRoot(ctx context.Context, repo string) (string, string, error) {
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {

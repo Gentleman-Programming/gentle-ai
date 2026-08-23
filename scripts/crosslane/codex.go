@@ -57,15 +57,20 @@ func (b *battery) runCodexLane() {
 		b.fail(codexLane, "compiled adapter capture", "Codex capture slot omitted artifact subject hash")
 		return
 	}
-	if capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,
-		append([]string{"review", "capture-result"}, argumentTokens(input)...)...); code != 0 || getString(capture, "admission_decision") != "completed" {
-		b.fail(codexLane, "compiled adapter capture", fmt.Sprintf("exit=%d admission=%q %s", code, getString(capture, "admission_decision"), firstLine(stderr)))
+	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,
+		append([]string{"review", "capture-result"}, argumentTokens(input)...)...)
+	if code != 0 || !admittedCapture(capture) {
+		b.fail(codexLane, "compiled adapter capture", fmt.Sprintf("exit=%d state=%q %s", code, operationState(capture), firstLine(stderr)))
 		return
 	}
 	if !b.checkCodexBoundary(log, subject) {
 		return
 	}
-	b.finishApproved(codexLane, "capture, final evidence, and burned lifecycle", repo, "codex", env)
+	if operationState(capture) != "approved" {
+		b.fail(codexLane, "final capture and burned lifecycle", fmt.Sprintf("terminal state = %q, want approved", operationState(capture)))
+		return
+	}
+	b.burnApproved(codexLane, "final capture and burned lifecycle", repo, "codex", env, capture)
 }
 
 func (b *battery) checkCodexBoundary(log, subject string) bool {

@@ -184,24 +184,12 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 	if len(started.SelectedLenses) == 0 {
 		t.Fatalf("review start selected no lenses: %#v", started)
 	}
-	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-			Location: candidatePath + ":3", Severity: "CRITICAL", Claim: "candidate value is wrong",
-			ProofRefs: []string{candidatePath + ":3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
-			CausalDisposition: reviewtransaction.CausalIntroduced,
-		}}, Evidence: []string{"inspected exact candidate"},
-	})
-	if err := finalizeReviewCLIArgs(t, repo, []string{
-		"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath,
-	}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1",
-	}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
+	captureCLIReviewerResultWithFindings(t, repo, started, 0, []facadeFinding{{
+		Location: candidatePath + ":3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+		ProofRefs: []string{candidatePath + ":3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, &bytes.Buffer{})
+	captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, 1)
 	writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
 
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -224,9 +212,10 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 	if status.Authority == nil || status.Authority.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("post-correction status lost the preserved authority: %#v", status.Authority)
 	}
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-		status.NextTransition.ReasonCode != "correction_repository_verification_required" {
-		t.Fatalf("post-correction status did not offer the continuation: %#v", status.NextTransition)
+	if status.ValidationRequest != nil || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "manual_intervention_required" {
+		t.Fatalf("post-correction status fabricated a validator continuation without an inspectable correction candidate: %#v", status.NextTransition)
 	}
 	after, err := os.ReadFile(store.StatePath())
 	if err != nil || !bytes.Equal(before, after) {

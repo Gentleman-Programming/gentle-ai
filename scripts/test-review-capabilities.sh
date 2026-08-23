@@ -43,16 +43,6 @@ assert features["classified_authority_repair"] == {
     "supported": True,
     "requires": ["native_next_transition", "uniform_failure_envelope"],
 }
-assert features["one_shot_final_verification_retry"] == {
-    "name": "one_shot_final_verification_retry",
-    "supported": True,
-    "requires": ["compact_v2_authority", "exact_receipt_replay", "native_next_transition"],
-}
-assert features["outcome_bound_verification_evidence"] == {
-    "name": "outcome_bound_verification_evidence",
-    "supported": True,
-    "requires": ["compact_v2_authority", "native_next_transition"],
-}
 assert features["native_frozen_candidate_context"] == {
     "name": "native_frozen_candidate_context",
     "supported": True,
@@ -88,10 +78,7 @@ assert "gentle-ai.review-admitted-result/v1" in document["schemas"]
 assert "gentle-ai.review-targeted-validation-request/v1" in document["schemas"]
 assert "gentle-ai.review-authority-repair-assessment/v1" in document["schemas"]
 assert "gentle-ai.review-integration.repair/v1" in document["schemas"]
-assert "gentle-ai.review-final-verification-incident/v1" in document["schemas"]
-assert "gentle-ai.review-verification-evidence/v2" in document["schemas"]
 assert "review.repair" in document["operations"]
-assert "review.retry_final_verification" in document["operations"]
 assert list(outside.iterdir()) == []
 
 def keys(value):

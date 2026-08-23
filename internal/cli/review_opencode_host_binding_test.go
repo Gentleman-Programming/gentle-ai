@@ -26,7 +26,7 @@ func hostLensBindingJSON(lineage, target, lens, order, revision, repositoryConte
 
 func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, lens, contextHandle string, subject reviewtransaction.ArtifactSubject) {
 	t.Helper()
-	repo, _, store, record = newArtifactReview(t, false)
+	repo, _, store, record = newArtifactReview(t, true)
 	lens = record.State.SelectedLenses[0]
 	contextHandle, err := reviewtransaction.PublishReviewRepositoryContext(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
@@ -184,7 +184,7 @@ func TestOpenCodeReviewTransportRefusesHostLensFrameValueTampering(t *testing.T)
 // Go-rebuilt materialization -- never the host-authored trailing bytes.
 func TestOpenCodeReviewTransportAdmitsHostExpandedProviderRoleTask(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, lineage, _ := providerCorrectionReady(t)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	const injected = "Input:\nmaterialized validator payload"
 	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
@@ -210,7 +210,7 @@ func TestOpenCodeReviewTransportAdmitsHostExpandedProviderRoleTask(t *testing.T)
 // trailing JSON still refuse before any provider launch.
 func TestOpenCodeReviewTransportRefusesHostRoleFrameTampering(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, lineage, _ := providerCorrectionReady(t)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	line, _, _ := strings.Cut(task.Prompt, "\n")
 	encoded, found := strings.CutPrefix(line, reviewProviderTaskBindingHeader+" ")

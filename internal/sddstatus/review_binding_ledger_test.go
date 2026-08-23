@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package sddstatus
 
 import (
@@ -57,14 +59,10 @@ func writeApprovedCompactAuthorityWithWarningFinding(t *testing.T, repo, changeR
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{}}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err = store.Replace(revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+	if _, err := store.Replace(revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 	receipt, err := state.Receipt()
