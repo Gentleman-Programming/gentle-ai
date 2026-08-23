@@ -462,6 +462,16 @@ When launching `sdd-apply` for a continuation batch:
 2. If found, add: `"PREVIOUS APPLY-PROGRESS EXISTS at topic_key 'sdd/{change-name}/apply-progress'. You MUST read it first via mem_search + mem_get_observation, merge your new progress with the existing progress, and save the combined result. Do NOT overwrite - MERGE."`
 3. If not found, no extra instruction is needed
 
+#### Remediation Executor Context (MANDATORY)
+
+When review-derived or verification-derived findings require `sdd-apply` remediation, launch a fresh provider executor/model context through the OpenCode Task prompt. Omit the prior provider `task_id` by default.
+
+- Forward the change name; spec, design, and tasks references; full merged apply-progress; exact findings and affected paths; and the exact remediation binding.
+- Preserve native authority unchanged: `lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token` remain bound to the same remediation attempt. Fresh executor identity never creates fresh runtime authority.
+- Forward or reuse the prior provider `task_id` only for a justified continuation of the exact same uninterrupted edit operation that needs volatile unpersisted state, or an explicit user request. The launch prompt must state the concrete reason. Review-triggered remediation does not resume by default.
+- Include the exact remediation binding in the `sdd-apply` task fingerprint, including `fix_batch` and `failed_evidence_revision`, so a new corrective batch is distinct without bypassing duplicate-launch protection.
+- Providers without resumable delegated-task identity use the artifact-first handoff above. Add no synthetic task identity, state, flag, gate, or runtime verb.
+
 #### Engram Topic Key Format
 
 | Artifact        | Topic Key                          |

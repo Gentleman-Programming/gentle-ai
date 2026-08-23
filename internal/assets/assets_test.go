@@ -1289,6 +1289,78 @@ func TestDelegatedSDDProvidersForwardApplyVerifyContext(t *testing.T) {
 	}
 }
 
+func TestSDDApplyRemediationUsesFreshExecutorContext(t *testing.T) {
+	tests := []struct {
+		path    string
+		context string
+	}{
+		{path: "opencode/sdd-orchestrator.md", context: "OpenCode Task prompt"},
+		{path: "codex/sdd-orchestrator.md", context: "Codex phase prompt"},
+		{path: "kimi/sdd-orchestrator.md", context: "Kimi custom-agent prompt"},
+		{path: "kiro/sdd-orchestrator.md", context: "native Kiro subagent context"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			section := markdownSection(MustRead(tc.path), "Remediation Executor Context (MANDATORY)")
+			if section == "" {
+				t.Fatalf("%s missing remediation executor context section", tc.path)
+			}
+			for _, required := range []string{
+				"fresh provider executor/model context",
+				"Omit the prior provider `task_id` by default",
+				"full merged apply-progress",
+				"exact findings and affected paths",
+				"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
+				"Forward or reuse the prior provider `task_id` only for a justified continuation",
+				"justified continuation of the exact same uninterrupted edit operation",
+				"explicit user request",
+				"concrete reason",
+				"Review-triggered remediation does not resume by default",
+				"fix_batch",
+				"failed_evidence_revision",
+				"Providers without resumable delegated-task identity",
+				"Add no synthetic task identity, state, flag, gate, or runtime verb.",
+				tc.context,
+			} {
+				if !strings.Contains(section, required) {
+					t.Fatalf("%s missing fresh-remediation executor policy %q", tc.path, required)
+				}
+			}
+		})
+	}
+
+	applySkill := MustRead("skills/sdd-apply/SKILL.md")
+	for _, tc := range []struct {
+		name, start, end string
+	}{
+		{"model-capable", "<!-- section:model-capable -->", "<!-- /section:model-capable -->"},
+		{"model-small", "<!-- section:model-small -->", "<!-- /section:model-small -->"},
+	} {
+		t.Run("skills/sdd-apply/"+tc.name, func(t *testing.T) {
+			section := markdownDelimitedSection(applySkill, tc.start, tc.end)
+			for _, required := range []string{
+				"fresh provider executor/model context",
+				"Omit the prior provider `task_id` by default",
+				"full merged apply-progress",
+				"exact findings and affected paths",
+				"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
+				"Forward or reuse the prior provider `task_id` only for a justified continuation",
+				"justified continuation of the exact same uninterrupted edit operation",
+				"explicit user request",
+				"concrete reason",
+				"Review-triggered remediation does not resume by default",
+				"Providers without resumable delegated-task identity",
+				"add no synthetic task identity, state, flag, gate, or runtime verb",
+			} {
+				if !strings.Contains(section, required) {
+					t.Fatalf("skills/sdd-apply/%s missing fresh-remediation policy %q", tc.name, required)
+				}
+			}
+		})
+	}
+}
+
 func hasApplyVerifyContextFlow(section, delegatedContext string) bool {
 	steps := []struct {
 		prefix  string
@@ -2177,6 +2249,19 @@ func markdownSection(content, heading string) string {
 		if next := strings.Index(section[len(heading):], levelHeading); next != -1 {
 			end = min(end, len(heading)+next)
 		}
+	}
+	return section[:end]
+}
+
+func markdownDelimitedSection(content, startMarker, endMarker string) string {
+	start := strings.Index(content, startMarker)
+	if start == -1 {
+		return ""
+	}
+	section := content[start+len(startMarker):]
+	end := strings.Index(section, endMarker)
+	if end == -1 {
+		return ""
 	}
 	return section[:end]
 }
