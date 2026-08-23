@@ -57,6 +57,7 @@ func ValidateProfileName(name string) error {
 var profilePhaseOrder = []string{
 	"sdd-init",
 	"sdd-explore",
+	"sdd-research",
 	"sdd-propose",
 	"sdd-spec",
 	"sdd-design",
@@ -261,7 +262,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 	}
 
 	// Build the agent map.
-	agentMap := make(map[string]any, 11)
+	agentMap := make(map[string]any, 12)
 
 	// Orchestrator entry
 	taskPerms := map[string]any{
@@ -334,16 +335,17 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 
 	// Sub-agent entries
 	phaseDescriptions := map[string]string{
-		"sdd-init":    "Bootstrap SDD context and project configuration",
-		"sdd-explore": "Investigate codebase and think through ideas",
-		"sdd-propose": "Create change proposals from explorations",
-		"sdd-spec":    "Write detailed specifications from proposals",
-		"sdd-design":  "Create technical design from proposals",
-		"sdd-tasks":   "Break down specs and designs into implementation tasks",
-		"sdd-apply":   "Implement code changes from task definitions",
-		"sdd-verify":  "Validate implementation against specs",
-		"sdd-archive": "Archive completed change artifacts",
-		"sdd-onboard": "Guide user through a complete SDD cycle using their real codebase",
+		"sdd-init":     "Bootstrap SDD context and project configuration",
+		"sdd-explore":  "Investigate codebase and think through ideas",
+		"sdd-research": "Collect auditable external evidence",
+		"sdd-propose":  "Create change proposals from explorations",
+		"sdd-spec":     "Write detailed specifications from proposals",
+		"sdd-design":   "Create technical design from proposals",
+		"sdd-tasks":    "Break down specs and designs into implementation tasks",
+		"sdd-apply":    "Implement code changes from task definitions",
+		"sdd-verify":   "Validate implementation against specs",
+		"sdd-archive":  "Archive completed change artifacts",
+		"sdd-onboard":  "Guide user through a complete SDD cycle using their real codebase",
 	}
 
 	for _, phase := range profilePhaseOrder {
@@ -693,16 +695,17 @@ func renderProfileModelAssignmentsSection(profile model.Profile) string {
 
 	// Phase rows
 	phaseReasons := map[string]string{
-		"sdd-init":    "Bootstrap SDD context",
-		"sdd-explore": "Reads code, structural - not architectural",
-		"sdd-propose": "Architectural decisions",
-		"sdd-spec":    "Structured writing",
-		"sdd-design":  "Architecture decisions",
-		"sdd-tasks":   "Mechanical breakdown",
-		"sdd-apply":   "Implementation",
-		"sdd-verify":  "Validation against spec",
-		"sdd-archive": "Copy and close",
-		"sdd-onboard": "Guided walkthrough",
+		"sdd-init":     "Bootstrap SDD context",
+		"sdd-explore":  "Reads code, structural - not architectural",
+		"sdd-research": "Collects source-backed evidence",
+		"sdd-propose":  "Architectural decisions",
+		"sdd-spec":     "Structured writing",
+		"sdd-design":   "Architecture decisions",
+		"sdd-tasks":    "Mechanical breakdown",
+		"sdd-apply":    "Implementation",
+		"sdd-verify":   "Validation against spec",
+		"sdd-archive":  "Copy and close",
+		"sdd-onboard":  "Guided walkthrough",
 	}
 
 	for _, phase := range profilePhaseOrder {

@@ -101,18 +101,20 @@ A lineage MUST permit at most one correction transaction. A second correction at
 - WHEN the SDD apply or pre-verify path is inspected
 - THEN no call into the offer transition exists on that path
 
-### Requirement: `validate` Is The Single Governing Path For Legacy Lineages
+### Requirement: `validate` Is The Single Review-Context Path For Legacy Lineages
 
-`validate` — the read-only evaluation transition — MUST become the sole governing path invoked by all five gates for legacy lineages, replacing bespoke per-gate or per-lineage discovery functions.
+`validate` — the read-only review-context evaluation transition — MUST become the sole path invoked by all five integration hooks for legacy lineages, replacing bespoke per-hook or per-lineage discovery functions. Its output is review-only evidence and MUST NOT govern commit, push, PR, release, or archive delivery.
 
 #### Scenario: Legacy lineage invokes the same transition as a new lineage
 
-- GIVEN a legacy-lineage candidate and a new-lineage candidate at the same gate
-- WHEN each is evaluated
-- THEN both invoke `validate`; no gate calls a lineage-specific discovery function that bypasses it
+- GIVEN a legacy-lineage candidate and a new-lineage candidate at the same integration hook
+- WHEN each review context is evaluated
+- THEN both invoke `validate`; no hook calls a lineage-specific discovery function that bypasses it
+- AND neither result changes ordinary delivery policy
 
 #### Scenario: No bespoke discovery fork remains
 
 - GIVEN the cutover has landed
-- WHEN a gate's code path is inspected
+- WHEN an integration hook's review-context path is inspected
 - THEN it contains no per-lineage-kind discovery branch outside `validate`
+- AND no review result acts as a delivery gate

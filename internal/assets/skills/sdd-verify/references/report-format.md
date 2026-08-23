@@ -84,18 +84,10 @@ The YAML envelope MUST be the first non-empty content and contains every field e
 
 Before persistence, hold the complete report as exact candidate bytes and run `gentle-ai sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>` before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and preserve the prior report; otherwise persist the same bytes, including a valid `fail`.
 
-## Authority-Only Preflight Denial
+## Review Context and Verification Availability
 
-When authoritative preflight alone denies entry because review authority is missing, emit the normal failed envelope plus exactly these five recovery fields:
+Review state is informational and never a verification prerequisite. A missing, pending, invalid, or non-allow review state never suppresses tests or builds. Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
 
-```yaml
-authority_only_failure: true
-missing_review_authority: true
-substantive_failure: false
-command_failed: false
-observed_authority_revision: sha256:{observed-authority-revision}
-```
-
-The observed revision is the authority revision read during the denied preflight. The declared test and build commands must not be executed; use `test_exit_code: 125` and `build_exit_code: 125`, with both output hashes set to the SHA-256 digest of exact empty output. Exit `125` describes preflight denial, so `command_failed` remains `false`. Never emit this recovery shape for substantive verification failures, executed command failures, malformed authority, or unknown authority.
+When a genuine prerequisite for the declared verification command is unavailable, record that condition using the established verification-result schema and preserve the command/output evidence it permits. Do not invent review-authority fields or treat review state as a command preflight. Substantive verification failures and executed command failures remain ordinary `fail` evidence.
 
 When Strict TDD is active, insert the TDD compliance, test layer distribution, changed-file coverage, and quality metrics sections from `strict-tdd-verify.md`.
