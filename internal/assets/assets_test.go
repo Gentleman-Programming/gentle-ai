@@ -1289,6 +1289,61 @@ func TestDelegatedSDDProvidersForwardApplyVerifyContext(t *testing.T) {
 	}
 }
 
+func TestSDDApplyRemediationUsesFreshExecutorContext(t *testing.T) {
+	tests := []struct {
+		path    string
+		context string
+	}{
+		{path: "opencode/sdd-orchestrator.md", context: "OpenCode Task prompt"},
+		{path: "codex/sdd-orchestrator.md", context: "Codex phase prompt"},
+		{path: "kimi/sdd-orchestrator.md", context: "Kimi custom-agent prompt"},
+		{path: "kiro/sdd-orchestrator.md", context: "native Kiro subagent context"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			content := MustRead(tc.path)
+			for _, required := range []string{
+				"fresh provider executor/model context",
+				"do not forward the prior apply `task_id`",
+				"full merged apply-progress",
+				"exact findings and affected paths",
+				"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
+				"uninterrupted implementation work unit",
+				"explicit user request",
+				"concrete reason",
+				"Review-triggered remediation does not resume by default",
+				"fix_batch",
+				"failed_evidence_revision",
+				"Providers without resumable delegated-task identity",
+				tc.context,
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing fresh-remediation executor policy %q", tc.path, required)
+				}
+			}
+		})
+	}
+
+	applySkill := MustRead("skills/sdd-apply/SKILL.md")
+	for _, required := range []string{
+		"fresh provider executor/model context",
+		"task_id",
+		"full merged apply-progress",
+		"exact findings and affected paths",
+		"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
+		"uninterrupted implementation work unit",
+		"explicit user request",
+		"concrete reason",
+		"Review-triggered remediation does not resume by default",
+		"Providers without resumable delegated-task identity",
+	} {
+		if got := strings.Count(applySkill, required); got != 2 {
+			t.Fatalf("skills/sdd-apply/SKILL.md fresh-remediation policy %q occurs %d times, want 2 model sections", required, got)
+		}
+	}
+}
+
 func hasApplyVerifyContextFlow(section, delegatedContext string) bool {
 	steps := []struct {
 		prefix  string

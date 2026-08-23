@@ -334,6 +334,16 @@ Before starting each delegated `sdd-apply` or `sdd-verify` phase:
 
 The Kiro phase result must prove that persistence contract. Refresh prior progress before every apply/verify launch; do not rely on a cached search preview or conversation history.
 
+### Remediation Executor Context (MANDATORY)
+
+When review-derived or verification-derived findings require `sdd-apply` remediation, launch a fresh provider executor/model context through the native Kiro subagent context. If the provider exposes resumable task identity, do not forward the prior apply `task_id`.
+
+- Forward the change name; spec, design, and tasks references; full merged apply-progress; exact findings and affected paths; and the exact remediation binding.
+- Preserve native authority unchanged: `lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token` remain bound to the same remediation attempt. Fresh executor identity never creates fresh runtime authority.
+- Resume an existing provider context only for an uninterrupted implementation work unit that needs volatile unpersisted state, or an explicit user request. The launch prompt must state the concrete reason. Review-triggered remediation does not resume by default.
+- Include the exact remediation binding in the `sdd-apply` task fingerprint, including `fix_batch` and `failed_evidence_revision`, so a new corrective batch is distinct without bypassing duplicate-launch protection.
+- Providers without resumable delegated-task identity use the artifact-first handoff above. Add no synthetic task identity, state, flag, gate, or runtime verb.
+
 ### Dependency Graph
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
