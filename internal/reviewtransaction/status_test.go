@@ -2,7 +2,6 @@ package reviewtransaction
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -207,61 +206,6 @@ func TestInventoryLockProbeFailureIsAmbiguousAndNonMutating(t *testing.T) {
 	}
 }
 
-func TestInventoryAuthorityRejectsStructurallyValidReceiptsThatMismatchTerminalAuthority(t *testing.T) {
-	for _, fixture := range []struct {
-		name    string
-		lineage string
-		write   func(t *testing.T, repo string)
-	}{
-		{
-			name:    "compact",
-			lineage: "compact-stale-receipt",
-			write: func(t *testing.T, repo string) {
-				t.Helper()
-				_, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-stale-receipt", []string{})
-				receipt.PolicyHash = "sha256:" + strings.Repeat("a", 64)
-				payload, err := json.MarshalIndent(receipt, "", "  ")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name:    "legacy",
-			lineage: "legacy-stale-receipt",
-			write: func(t *testing.T, repo string) {
-				t.Helper()
-				transaction, receipt, _ := nativeGateFixture(t, repo, "legacy-stale-receipt")
-				store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				appendApprovedStoreChain(t, store, transaction)
-				receipt.PolicyHash = "sha256:" + strings.Repeat("a", 64)
-				if err := WriteReceiptAtomic(filepath.Join(store.Dir, "artifacts", "receipt.json"), receipt); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-	} {
-		t.Run(fixture.name, func(t *testing.T) {
-			repo := initSnapshotRepo(t)
-			fixture.write(t, repo)
-
-			report, err := InventoryAuthority(context.Background(), repo)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !hasAuthorityInventoryStatus(report.Entries, fixture.lineage, AuthorityStatusInvalid) {
-				t.Fatalf("mismatched receipt report = %#v", report)
-			}
-		})
-	}
-}
-
 func TestInventoryAuthorityRejectsAmbiguousLockEvidence(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	root, _, err := reviewAuthorityRoot(context.Background(), repo)
@@ -286,20 +230,16 @@ func TestInventoryAuthorityRejectsAmbiguousLockEvidence(t *testing.T) {
 }
 
 func TestInventoryAuthorityReportsRecoveredSuccessorAndSupersededPredecessor(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
-	predecessor, store, _ := approvedCompactCurrentChangesFixture(t, repo, "recovery-predecessor", []string{})
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeSnapshotFile(t, repo, "tracked.txt", "successor candidate\n")
-	successor := newCompactTestState(t, repo, "recovery-successor")
+	repo, predecessor, store, record := correctionScopeRecoveryFixture(t, "recovery-predecessor")
+	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
+	successor := newCompactTestStateWithIntended(t, repo, "recovery-successor", []string{"process_helper.go"})
 	successor.Generation = predecessor.Generation + 1
-	recovered, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+	request := CompactRecoveryRequest{
 		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: record.Revision,
 		Successor: successor, Disposition: RecoveryScopeChanged, Reason: "scope changed", Actor: "maintainer",
-	})
+	}
+	request.MaintainerAuthorization = recoveryAuthorizationFixture(request)
+	recovered, err := RecoverCompactAuthority(context.Background(), repo, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,9 +277,6 @@ func TestInventoryAuthorityReportsRecoveredSuccessorAndSupersededPredecessor(t *
 	if !names[predecessor.LineageID] {
 		t.Fatalf("the undamaged predecessor was excluded: %#v", names)
 	}
-	if err := CompactAuthorityLineageBlocked(context.Background(), repo, successor.LineageID); err == nil {
-		t.Fatal("compact authority accepted a recovery generation gap")
-	}
 	report, err = InventoryAuthority(context.Background(), repo)
 	if err != nil || !hasAuthorityInventoryStatus(report.Entries, successor.LineageID, AuthorityStatusInvalid) ||
 		hasAuthorityInventoryStatus(report.Entries, predecessor.LineageID, AuthorityStatusSuperseded) {
@@ -347,30 +284,18 @@ func TestInventoryAuthorityReportsRecoveredSuccessorAndSupersededPredecessor(t *
 	}
 }
 
-func TestInventoryAuthorityReportsRecoveredInvalidatedSuccessorAndSupersededPredecessor(t *testing.T) {
+func TestInventoryAuthorityReportsRecoveredEscalatedSuccessorAndSupersededPredecessor(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	predecessor := newCompactTestState(t, repo, "invalidated-recovery-predecessor")
-	store, err := CompactAuthoritativeStore(context.Background(), repo, predecessor.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision, err := store.Replace("", "review/start", predecessor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := predecessor.Invalidate("candidate no longer applies"); err != nil {
-		t.Fatal(err)
-	}
-	revision, err = store.Replace(revision, "review/invalidate", predecessor)
-	if err != nil {
-		t.Fatal(err)
-	}
+	predecessor, _, record := escalatedCompactAuthorityFixture(t, repo, "escalated-recovery-predecessor")
+	writeSnapshotFile(t, repo, "tracked.txt", "changed recovery target\n")
 
-	successor := newCompactTestState(t, repo, "invalidated-recovery-successor")
-	successor.Generation = predecessor.Generation + 1
+	successor := recoveredEvidenceSuccessor(t, repo, predecessor, "escalated-recovery-successor")
+	const actor, reason = "maintainer@example.com", "recover escalated review"
+	authorization := compactRecoveryAuthorizationBinding(predecessor.LineageID, record.Revision, successor.InitialSnapshot.Identity, actor, reason)
 	if _, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
-		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: revision,
-		Successor: successor, Disposition: RecoveryInvalidated, Reason: "verification invalidated authority", Actor: "maintainer",
+		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: record.Revision,
+		Successor: successor, Disposition: RecoveryEscalated, Reason: reason, Actor: actor,
+		MaintainerAuthorization: authorization,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -381,95 +306,7 @@ func TestInventoryAuthorityReportsRecoveredInvalidatedSuccessorAndSupersededPred
 	}
 	if !report.Complete || !report.Authoritative || !hasAuthorityInventoryStatus(report.Entries, predecessor.LineageID, AuthorityStatusSuperseded) ||
 		!hasAuthorityInventoryStatus(report.Entries, successor.LineageID, AuthorityStatusRecovered) {
-		t.Fatalf("invalidated recovery report = %#v", report)
-	}
-}
-
-func TestInventoryAuthorityKeepsReceiptlessTerminalLegacyChainReadableAsHistorical(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	transaction, _, _ := nativeGateFixture(t, repo, "legacy-pre-receipt")
-	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	appendApprovedStoreChain(t, store, transaction)
-	root, _, err := reviewAuthorityRoot(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := authorityBytes(t, root)
-
-	report, err := InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !report.Complete || !report.Authoritative || report.Status != AuthorityStatusHistorical ||
-		!hasAuthorityInventoryStatus(report.Entries, "legacy-pre-receipt", AuthorityStatusHistorical) {
-		t.Fatalf("receiptless terminal legacy report = %#v", report)
-	}
-	for _, entry := range report.Entries {
-		if entry.LineageID == "legacy-pre-receipt" && len(entry.Problems) != 0 {
-			t.Fatalf("historical entry reported problems = %#v", entry.Problems)
-		}
-	}
-	if after := authorityBytes(t, root); !reflect.DeepEqual(before, after) {
-		t.Fatal("read-only authority inventory changed authority bytes")
-	}
-}
-
-func TestInventoryAuthorityKeepsPresentButMalformedLegacyReceiptInvalid(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	transaction, _, _ := nativeGateFixture(t, repo, "legacy-corrupt-receipt")
-	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	appendApprovedStoreChain(t, store, transaction)
-	receiptPath := filepath.Join(store.Dir, "artifacts", "receipt.json")
-	if err := os.MkdirAll(filepath.Dir(receiptPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(receiptPath, []byte("{broken\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err := InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasAuthorityInventoryStatus(report.Entries, "legacy-corrupt-receipt", AuthorityStatusInvalid) {
-		t.Fatalf("malformed present receipt report = %#v", report)
-	}
-}
-
-func TestInventoryAuthorityKeepsNonTerminalReceiptlessLegacyChainActive(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	transaction, _, _ := nativeGateFixture(t, repo, "legacy-open-review")
-	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reviewing := transaction
-	reviewing.LensResults = nil
-	for _, lens := range supportedLenses {
-		setLensCounter(&reviewing.Counters, lens, 0)
-	}
-	reviewing.State = StateReviewing
-	reviewing.LedgerHash = ""
-	reviewing.EvidenceHash = ""
-	reviewing.Release = nil
-	reviewing.Counters.FinalVerifications = 0
-	if _, err := store.Append("", Record{Operation: "review/start", Transaction: reviewing}); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err := InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !report.Complete || !report.Authoritative ||
-		!hasAuthorityInventoryStatus(report.Entries, "legacy-open-review", AuthorityStatusActive) {
-		t.Fatalf("non-terminal receiptless legacy report = %#v", report)
+		t.Fatalf("escalated recovery report = %#v", report)
 	}
 }
 

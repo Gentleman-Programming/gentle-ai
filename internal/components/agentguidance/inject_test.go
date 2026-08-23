@@ -59,6 +59,9 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 			if !strings.Contains(written, "<!-- /gentle-ai:"+RoutingSectionID+" -->") {
 				t.Fatalf("InjectRouting(%q) did not close the managed section:\n%s", agent.ID, written)
 			}
+			if !strings.Contains(written, "First establish whether the requested outcome explicitly authorizes a change.") {
+				t.Fatalf("InjectRouting(%q) did not deliver the outcome-authorization guard:\n%s", agent.ID, written)
+			}
 		})
 	}
 }

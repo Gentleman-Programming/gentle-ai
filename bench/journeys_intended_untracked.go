@@ -245,18 +245,23 @@ func intendedUntrackedJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j110-approved-unborn-intended-candidate-requires-staging",
+			ID:     "j110-untracked-terminal-burn-and-unmanaged-staged-validation",
 			Review: reviewOptedIn,
-			Title:  "Approved unborn intended candidate: empty staged STATUS stops until the exact candidate is staged",
-			Source: "issue #3307: read-only pre-commit applicability must classify an empty unborn staged projection as non-exact without rejecting STATUS",
+			Title:  "#3587: an untracked intended candidate terminal-burns and staged validation stays unmanaged",
+			Source: "#3587 preserves explicit intended-untracked START selection while removing staged receipt authorization",
 			Steps: []Step{
 				{Name: "fixture: unborn repository with one all-untracked candidate", Fixture: unbornIntendedDeliveryCandidate},
-				{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
-				{Name: "select every untracked path and execute printed START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
-				{Name: "approve the unborn intended candidate", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "empty real index stops without authority or index mutation", Requires: statusCapability, Composite: requireUnbornIntendedStagedDeliveryStop},
-				{Name: "fixture: stage the exact approved candidate", Fixture: stageUnbornIntendedDeliveryCandidate},
-				{Name: "exact staged STATUS returns and executes pre-commit validation", Requires: statusCapability, Composite: validateUnbornIntendedStagedDelivery},
+				{Name: "select every untracked path and execute printed zero-lens START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
+				{Name: "the zero-lens terminal event burns the unborn transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageBurned(r, r.sandbox.Lineage)
+				}},
+				{Name: "unstaged unborn pre-commit validation is informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireUnmanagedShippedGate(observation, "pre-commit")
+				}},
+				{Name: "fixture: stage the formerly reviewed candidate", Fixture: stageUnbornIntendedDeliveryCandidate},
+				{Name: "staged unborn pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireUnmanagedShippedGate(observation, "pre-commit")
+				}},
 			},
 		},
 	}

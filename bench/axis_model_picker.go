@@ -18,6 +18,7 @@ func init() {
 		Name:     modelPickerAxis,
 		Title:    "OpenCode custom-agent model-picker runtime proof",
 		BlackBox: false,
+		Review:   reviewUntouched,
 		Properties: []string{
 			"j97 drives the compiled TUI model-picker state through the public gentle-ai binary and checks the persisted opencode.json boundary.",
 			"The journey requires a product binary built with -tags bench_fixture; ordinary binaries report unsupported instead of fabricating a pass.",

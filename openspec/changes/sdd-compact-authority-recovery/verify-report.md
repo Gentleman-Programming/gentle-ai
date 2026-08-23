@@ -14,6 +14,8 @@ build_exit_code: 0
 build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
+> **Superseded historical review-routing claim:** This report's statements that review authority blocks verification or archive, including `resolve-review`, are retained only as historical evidence. The current #3417 policy is apply → independent verify → optional review offer → archive; review state is informational and cannot block verification, archive, or delivery.
+
 ## Verification Report
 
 **Change**: `sdd-compact-authority-recovery`

@@ -68,20 +68,26 @@ func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 	}
 }
 
-func TestRunSDDVerifyValidateHelpRendersAuthorityOnlyContract(t *testing.T) {
+func TestRunSDDVerifyValidateHelpExcludesMissingReviewSkipProtocol(t *testing.T) {
 	var output bytes.Buffer
 	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
 		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
 	}
 	contract := sddstatus.VerifyReportValidationContract()
-	for _, want := range append(append([]string{contract.Schema, contract.EmptyOutputHash}, contract.RequiredFields...), append(contract.Verdicts, contract.AuthorityOnlyFields...)...) {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("help missing contract value %q:\n%s", want, output.String())
-		}
+	if !strings.Contains(output.String(), contract.Schema) ||
+		!strings.Contains(output.String(), fmt.Sprintf("maximum report size: %d bytes (%s)", contract.MaxBytes, formatSDDVerifyValidateByteLimit(contract.MaxBytes))) {
+		t.Fatalf("help omits the verification contract:\n%s", output.String())
 	}
-	if !strings.Contains(output.String(), fmt.Sprintf("maximum report size: %d bytes (%s)", contract.MaxBytes, formatSDDVerifyValidateByteLimit(contract.MaxBytes))) ||
-		!strings.Contains(output.String(), "test_exit_code 125") || !strings.Contains(output.String(), "build_exit_code 125") {
-		t.Fatalf("help omits authority-only limits:\n%s", output.String())
+	for _, forbidden := range []string{
+		"Authority-only fail extension",
+		"missing_review_authority",
+		"authority_only_failure",
+		"test_exit_code 125",
+		"build_exit_code 125",
+	} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("help retains missing-review skip protocol %q:\n%s", forbidden, output.String())
+		}
 	}
 }
 
