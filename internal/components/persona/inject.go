@@ -568,7 +568,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
@@ -721,8 +721,8 @@ func removeJSONKeyIfValue(path, key, wantValue string) (bool, error) {
 		return false, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(raw, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
 		// Malformed settings — leave untouched to avoid data loss.
 		return false, nil
 	}
@@ -738,11 +738,10 @@ func removeJSONKeyIfValue(path, key, wantValue string) (bool, error) {
 
 	delete(root, key)
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	encoded, err := filemerge.RewriteJSONObjectForPath(path, raw, root)
 	if err != nil {
-		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
+		return false, fmt.Errorf("rewrite settings after cleanup: %w", err)
 	}
-	encoded = append(encoded, '\n')
 
 	if _, err := filemerge.WriteFileAtomic(path, encoded, 0o644); err != nil {
 		return false, err
@@ -763,8 +762,8 @@ func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
 		return false, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(raw, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
 		return false, nil
 	}
 
@@ -787,11 +786,10 @@ func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
 		root[parentKey] = parentMap
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	encoded, err := filemerge.RewriteJSONObjectForPath(path, raw, root)
 	if err != nil {
-		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
+		return false, fmt.Errorf("rewrite settings after cleanup: %w", err)
 	}
-	encoded = append(encoded, '\n')
 
 	if _, err := filemerge.WriteFileAtomic(path, encoded, 0o644); err != nil {
 		return false, err

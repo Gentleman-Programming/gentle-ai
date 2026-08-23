@@ -1950,7 +1950,7 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 		return mergeJSONResult{}, fmt.Errorf("migrate opencode command prompt field: %w", err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
@@ -1998,8 +1998,8 @@ func openCodeSettingsHasShare(settingsPath string) bool {
 		return false
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(content, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
 		return false
 	}
 	_, exists := root["share"]
@@ -2088,8 +2088,8 @@ func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
 }
 
 func hasOpenCodeAgentKey(settingsText, agentKey string) bool {
-	root := map[string]any{}
-	if err := json.Unmarshal([]byte(settingsText), &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject([]byte(settingsText))
+	if err != nil {
 		return false
 	}
 	agentsRaw, ok := root["agent"]

@@ -296,7 +296,7 @@ func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, ren
 		return Result{}, fmt.Errorf("encode routing guidance overlay for %q: %w", agent, err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
 		return Result{}, fmt.Errorf("merge routing guidance into %q: %w", settingsPath, err)
 	}

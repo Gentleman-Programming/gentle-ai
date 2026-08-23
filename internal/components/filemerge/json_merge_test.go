@@ -1,7 +1,9 @@
 package filemerge
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +65,72 @@ func TestMergeJSONObjectsSupportsJSONCBase(t *testing.T) {
 
 	if got["editor.fontSize"] != float64(14) {
 		t.Fatalf("editor.fontSize = %v", got["editor.fontSize"])
+	}
+}
+
+func TestMergeJSONObjectsForPathPreservesJSONC(t *testing.T) {
+	base := []byte(`{
+  // User-owned root comment.
+  "settings": {
+    // Preserve this nested setting.
+    "keep": true,
+    "conflict": "old",
+  },
+  "replace": {"old": true,},
+}`)
+	overlay := []byte(`{
+  "settings": {"added": 1, "conflict": "new"},
+  "replace": {"__replace__": {"new": true}}
+}`)
+
+	merged, err := MergeJSONObjectsForPath("opencode.jsonc", base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsForPath() error = %v", err)
+	}
+	for _, comment := range []string{"User-owned root comment.", "Preserve this nested setting."} {
+		if !strings.Contains(string(merged), comment) {
+			t.Fatalf("merged JSONC lost comment %q:\n%s", comment, merged)
+		}
+	}
+	if !strings.Contains(string(merged), ",\n}") {
+		t.Fatalf("merged JSONC lost trailing-comma syntax:\n%s", merged)
+	}
+
+	root, err := UnmarshalJSONObject(merged)
+	if err != nil {
+		t.Fatalf("UnmarshalJSONObject(merged) error = %v", err)
+	}
+	settings := root["settings"].(map[string]any)
+	if settings["keep"] != true || settings["conflict"] != "new" || settings["added"] != float64(1) {
+		t.Fatalf("merged settings = %#v", settings)
+	}
+	replacement := root["replace"].(map[string]any)
+	if replacement["new"] != true || len(replacement) != 1 {
+		t.Fatalf("replace sentinel result = %#v", replacement)
+	}
+
+	again, err := MergeJSONObjectsForPath("opencode.jsonc", merged, overlay)
+	if err != nil {
+		t.Fatalf("second MergeJSONObjectsForPath() error = %v", err)
+	}
+	if !bytes.Equal(merged, again) {
+		t.Fatalf("JSONC merge is not idempotent:\nfirst:\n%s\nsecond:\n%s", merged, again)
+	}
+}
+
+func TestMergeJSONObjectsForPathKeepsStrictJSONBehavior(t *testing.T) {
+	base := []byte(`{"settings":{"keep":true}}`)
+	overlay := []byte(`{"settings":{"added":true}}`)
+	want, err := MergeJSONObjects(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjects() error = %v", err)
+	}
+	got, err := MergeJSONObjectsForPath("opencode.jsonc", base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsForPath() error = %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("strict JSON changed:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
