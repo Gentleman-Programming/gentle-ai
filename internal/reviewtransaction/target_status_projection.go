@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -27,16 +26,10 @@ func loadTargetStatusAuthorityView(ctx context.Context, repo string, request Tar
 	if err != nil {
 		return targetStatusAuthorityView{}, fmt.Errorf("load compact target status authority: %w", err)
 	}
-	legacy, err := loadLegacyTargetStatusCandidates(ctx, repo, request.LineageID)
-	if err != nil {
-		return targetStatusAuthorityView{}, fmt.Errorf("load legacy target status authority: %w", err)
-	}
-	for lineage := range compact {
-		if _, mixed := legacy[lineage]; mixed {
-			return targetStatusAuthorityView{}, fmt.Errorf("lineage %q has mixed compact and legacy authority", lineage)
-		}
-	}
-	return targetStatusAuthorityView{compact: compact, legacy: legacy}, nil
+	// Ordinary STATUS is compact-only. Historical v1/v3 records remain
+	// inspectable through their explicit compatibility owners, but they never
+	// compete with, corrupt, or select an ordinary compact lifecycle.
+	return targetStatusAuthorityView{compact: compact, legacy: map[string]targetStatusCandidate{}}, nil
 }
 
 func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID string) (map[string]targetStatusCandidate, error) {
@@ -46,9 +39,11 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 	}
 	storeByLineage := make(map[string]CompactStore, len(stores))
 	for _, store := range stores {
+		if _, duplicate := storeByLineage[store.lineageID]; duplicate {
+			return nil, fmt.Errorf("multiple compact authority locations for lineage %q", store.lineageID) // refusal:by-design world-action: duplicate compact authority roots are an integrity failure that maintainers must repair before any lifecycle command can select one
+		}
 		storeByLineage[store.lineageID] = store
 	}
-
 	records := make(map[string]CompactRecord, len(stores))
 	selected := []CompactStore{}
 	if lineageID == "" {
@@ -135,7 +130,14 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 			}
 		}
 		if carrier, cause := compactAuthorityBlockingCause(records, violations, lineageID); cause != nil {
-			return nil, compactBlockedLineageError(lineageID, carrier, cause)
+			if carrier == lineageID {
+				return nil, fmt.Errorf(
+					"compact authority lineage %q cannot govern: %w. Every other lineage is unaffected; see this entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
+					lineageID, cause)
+			}
+			return nil, fmt.Errorf(
+				"compact authority lineage %q cannot govern because the entry %q it recovers from carries: %w. Every lineage that does not recover through %q is unaffected; see that entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
+				lineageID, carrier, cause, carrier)
 		}
 		if priorSchema[lineageID] {
 			// The named lineage ITSELF is prior-schema history, so it owns no
@@ -164,67 +166,21 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 
 func loadStableCompactTargetStatusCandidate(ctx context.Context, store CompactStore, initial CompactRecord) (targetStatusCandidate, error) {
 	record := initial
-	var lastSemanticError error
 	for attempt := 0; attempt < targetStatusCompactAuthorityReadAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return targetStatusCandidate{}, err
 		}
 		targetStatusCompactAuthorityReadHook(store.lineageID, "after-state", attempt)
-		if err := ctx.Err(); err != nil {
+		observed, err := store.LoadContext(ctx)
+		if err != nil {
 			return targetStatusCandidate{}, err
 		}
-
-		first, firstErr := inspectCompactTargetArtifacts(ctx, store, record.State, "first", attempt)
-		if err := ctx.Err(); err != nil {
-			return targetStatusCandidate{}, err
-		}
-		observed, loadErr := store.LoadContext(ctx)
-		if loadErr != nil {
-			return targetStatusCandidate{}, loadErr
-		}
-		if !compactTargetStatusRecordsEqual(record, observed) {
-			record = observed
-			lastSemanticError = nil
-			continue
-		}
-
-		if firstErr != nil && IsCompactAuthorityOperationalFailure(firstErr) {
-			return targetStatusCandidate{}, firstErr
-		}
-		second, secondErr := inspectCompactTargetArtifacts(ctx, store, observed.State, "second", attempt)
-		if err := ctx.Err(); err != nil {
-			return targetStatusCandidate{}, err
-		}
-		if secondErr != nil && IsCompactAuthorityOperationalFailure(secondErr) {
-			return targetStatusCandidate{}, secondErr
-		}
-		// The first receipt/journal pair precedes the second state observation,
-		// while the second pair follows it. Equal raw identities, canonical
-		// content, and existence therefore make that state observation the
-		// linearization point for the complete authority view.
-		if !compactTargetArtifactSetsEqual(first, second) {
-			record = observed
-			lastSemanticError = nil
-			continue
-		}
-
-		observationErr := errors.Join(firstErr, secondErr)
-		if observationErr != nil {
-			lastSemanticError = observationErr
+		if record.Revision != observed.Revision || !compactStateEqual(record.State, observed.State) {
 			record = observed
 			continue
 		}
-
 		copy := observed
-		return targetStatusCandidate{
-			version: AuthorityVersionCompact, lineage: observed.State.LineageID, compact: &copy,
-			receiptIdentity: second.receipt.artifact.identity, receiptPublished: second.receipt.published,
-			receiptCanonical:  bytes.Equal(second.receipt.artifact.content, second.receipt.artifact.canonical),
-			receiptReplayable: second.receipt.replayable, pendingFinalize: second.journal.pending,
-		}, nil
-	}
-	if lastSemanticError != nil {
-		return targetStatusCandidate{}, lastSemanticError
+		return targetStatusCandidate{version: AuthorityVersionCompact, lineage: observed.State.LineageID, compact: &copy}, nil
 	}
 	return targetStatusCandidate{}, fmt.Errorf(
 		"%w: compact target status authority %q did not stabilize after %d reads",
@@ -232,6 +188,7 @@ func loadStableCompactTargetStatusCandidate(ctx context.Context, store CompactSt
 	)
 }
 
+/*
 type compactTargetFinalizeJournalObservation struct {
 	artifact compactTargetArtifactObservation
 	pending  bool
@@ -301,29 +258,7 @@ func compactTargetStatusRecordsEqual(left, right CompactRecord) bool {
 		compactStateEqual(left.State, right.State)
 }
 
-func loadLegacyTargetStatusCandidates(ctx context.Context, repo, lineageID string) (map[string]targetStatusCandidate, error) {
-	stores, err := DiscoverAuthoritativeStores(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	candidates := make(map[string]targetStatusCandidate, len(stores))
-	for _, store := range stores {
-		if lineageID != "" && store.lineageID != lineageID {
-			continue
-		}
-		chain, loadErr := store.LoadChain()
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		transaction := chain.Records[len(chain.Records)-1].Transaction
-		copy := chain
-		storeCopy := store
-		candidates[transaction.LineageID] = targetStatusCandidate{
-			version: AuthorityVersionLegacy, lineage: transaction.LineageID, legacy: &copy, legacyStore: &storeCopy,
-		}
-	}
-	return candidates, nil
-}
+*/
 
 type compactTerminalHistoryProjection uint8
 

@@ -13,6 +13,7 @@ import (
 var skillLabels = map[model.SkillID]string{
 	model.SkillSDDInit:       "SDD Init",
 	model.SkillSDDExplore:    "SDD Explore",
+	model.SkillSDDResearch:   "SDD Research",
 	model.SkillSDDPropose:    "SDD Propose",
 	model.SkillSDDSpec:       "SDD Spec",
 	model.SkillSDDDesign:     "SDD Design",

@@ -13,6 +13,7 @@ func OpenCodeCommands() []OpenCodeCommand {
 		{Name: "sdd-continue", Description: "Continue next pending artifact", Body: "/sdd-continue ${change-name}"},
 		{Name: "sdd-status", Description: "Show SDD change status", Body: "/sdd-status ${change-name}"},
 		{Name: "sdd-explore", Description: "Explore an idea before committing", Body: "/sdd-explore ${topic}"},
+		{Name: "sdd-research", Description: "Research external evidence", Body: "/sdd-research ${change-name}"},
 		{Name: "sdd-ff", Description: "Generate all planning artifacts", Body: "/sdd-ff ${change-name}"},
 		{Name: "sdd-apply", Description: "Implement tasks", Body: "/sdd-apply ${change-name}"},
 		{Name: "sdd-verify", Description: "Verify implementation", Body: "/sdd-verify ${change-name}"},

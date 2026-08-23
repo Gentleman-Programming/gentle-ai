@@ -17,17 +17,24 @@ const (
 // TargetedValidationRequest is the complete provider-owned input for a scoped
 // validator. Consumers never need to inspect compact authority files.
 type TargetedValidationRequest struct {
-	Schema                   string     `json:"schema"`
-	RequestHash              string     `json:"request_hash"`
-	LineageID                string     `json:"lineage_id"`
-	ExpectedRevision         string     `json:"expected_revision"`
-	TargetIdentity           string     `json:"target_identity"`
-	FixFindingIDs            []string   `json:"fix_finding_ids"`
-	Projection               Projection `json:"projection"`
-	CorrectionCandidateTree  string     `json:"correction_candidate_tree"`
-	CorrectionTargetIdentity string     `json:"correction_target_identity"`
-	CorrectionPaths          []string   `json:"correction_paths"`
-	CorrectionPathsDigest    string     `json:"correction_paths_digest"`
+	Schema           string   `json:"schema"`
+	RequestHash      string   `json:"request_hash"`
+	LineageID        string   `json:"lineage_id"`
+	ExpectedRevision string   `json:"expected_revision"`
+	TargetIdentity   string   `json:"target_identity"`
+	FixFindingIDs    []string `json:"fix_finding_ids"`
+	// PolicyContent is the exact policy text frozen with the active compact
+	// authority. It may be empty, but is never reconstructed from a live file.
+	PolicyContent string `json:"policy_content"`
+	// FixFindings and FixClassifications carry only the causal evidence bound to
+	// FixFindingIDs, in that exact order, for the scoped validator prompt.
+	FixFindings              []Finding         `json:"fix_findings"`
+	FixClassifications       []FindingEvidence `json:"fix_classifications"`
+	Projection               Projection        `json:"projection"`
+	CorrectionCandidateTree  string            `json:"correction_candidate_tree"`
+	CorrectionTargetIdentity string            `json:"correction_target_identity"`
+	CorrectionPaths          []string          `json:"correction_paths"`
+	CorrectionPathsDigest    string            `json:"correction_paths_digest"`
 }
 
 // BuildTargetedValidationRequest derives a corrected target from live Git and
@@ -108,9 +115,18 @@ func targetedValidationRequestForCorrection(state CompactState, revision string,
 	if projection == "" {
 		projection = ProjectionWorkspace
 	}
+	policyContent, err := state.FrozenPolicyForTargetedValidation()
+	if err != nil {
+		return TargetedValidationRequest{}, err
+	}
+	findings, classifications, err := targetedValidationCausalEvidence(state)
+	if err != nil {
+		return TargetedValidationRequest{}, err
+	}
 	request := TargetedValidationRequest{
 		Schema: TargetedValidationRequestSchema, LineageID: state.LineageID, ExpectedRevision: revision,
 		TargetIdentity: state.InitialSnapshot.Identity, FixFindingIDs: append([]string(nil), state.FixFindingIDs...),
+		PolicyContent: policyContent, FixFindings: findings, FixClassifications: classifications,
 		Projection: projection, CorrectionCandidateTree: fix.CandidateTree,
 		CorrectionTargetIdentity: fix.Identity, CorrectionPaths: append([]string(nil), fix.Paths...),
 		CorrectionPathsDigest: fix.PathsDigest,
@@ -193,28 +209,72 @@ func ValidateTargetedValidationRequest(request TargetedValidationRequest) error 
 			return errors.New("targeted validation request correction path is not repository-relative")
 		}
 	}
+	legacySemanticShape := request.PolicyContent == "" && request.FixFindings == nil && request.FixClassifications == nil
+	if !legacySemanticShape {
+		if err := validateTargetedValidationCausalEvidence(request.FixFindingIDs, request.FixFindings, request.FixClassifications); err != nil {
+			return err
+		}
+	}
 	if targetedValidationRequestHash(request) != request.RequestHash {
 		return errors.New("targeted validation request hash does not match its binding")
 	}
 	return nil
 }
 
+func targetedValidationCausalEvidence(state CompactState) ([]Finding, []FindingEvidence, error) {
+	findings := make(map[string]Finding, len(state.Findings))
+	for _, finding := range state.Findings {
+		if _, exists := findings[finding.ID]; exists {
+			return nil, nil, errors.New("targeted validation causal evidence repeats a frozen finding") // refusal:by-design world-action: a duplicate frozen finding must be repaired in authority, not selected arbitrarily
+		}
+		findings[finding.ID] = finding
+	}
+	orderedFindings := make([]Finding, len(state.FixFindingIDs))
+	orderedClassifications := make([]FindingEvidence, len(state.FixFindingIDs))
+	for index, findingID := range state.FixFindingIDs {
+		finding, found := findings[findingID]
+		classification, classified := state.Classifications[findingID]
+		if !found || !classified || classification.FindingID != findingID {
+			return nil, nil, errors.New("targeted validation causal evidence does not match the frozen fix findings") // refusal:by-design world-action: validator semantics require the exact compact causal ledger
+		}
+		finding.ProofRefs = append([]string(nil), finding.ProofRefs...)
+		orderedFindings[index], orderedClassifications[index] = finding, classification
+	}
+	return orderedFindings, orderedClassifications, nil
+}
+
+func validateTargetedValidationCausalEvidence(ids []string, findings []Finding, classifications []FindingEvidence) error {
+	if len(findings) != len(ids) || len(classifications) != len(ids) {
+		return errors.New("targeted validation request causal evidence does not cover every fix finding") // refusal:by-design operator-knowledge: the validator must receive every frozen causal finding exactly once
+	}
+	for index, findingID := range ids {
+		if findings[index].ID != findingID || classifications[index].FindingID != findingID {
+			return errors.New("targeted validation request causal evidence is not ordered by fix finding IDs") // refusal:by-design world-action: request construction must preserve the compact causal order
+		}
+	}
+	return nil
+}
+
 func targetedValidationRequestHash(request TargetedValidationRequest) string {
 	preimage := struct {
-		Schema                   string     `json:"schema"`
-		LineageID                string     `json:"lineage_id"`
-		ExpectedRevision         string     `json:"expected_revision"`
-		TargetIdentity           string     `json:"target_identity"`
-		FixFindingIDs            []string   `json:"fix_finding_ids"`
-		Projection               Projection `json:"projection"`
-		CorrectionCandidateTree  string     `json:"correction_candidate_tree"`
-		CorrectionTargetIdentity string     `json:"correction_target_identity"`
-		CorrectionPaths          []string   `json:"correction_paths"`
-		CorrectionPathsDigest    string     `json:"correction_paths_digest"`
+		Schema                   string            `json:"schema"`
+		LineageID                string            `json:"lineage_id"`
+		ExpectedRevision         string            `json:"expected_revision"`
+		TargetIdentity           string            `json:"target_identity"`
+		FixFindingIDs            []string          `json:"fix_finding_ids"`
+		PolicyContent            string            `json:"policy_content,omitempty"`
+		FixFindings              []Finding         `json:"fix_findings,omitempty"`
+		FixClassifications       []FindingEvidence `json:"fix_classifications,omitempty"`
+		Projection               Projection        `json:"projection"`
+		CorrectionCandidateTree  string            `json:"correction_candidate_tree"`
+		CorrectionTargetIdentity string            `json:"correction_target_identity"`
+		CorrectionPaths          []string          `json:"correction_paths"`
+		CorrectionPathsDigest    string            `json:"correction_paths_digest"`
 	}{
 		Schema: request.Schema, LineageID: request.LineageID, ExpectedRevision: request.ExpectedRevision,
-		TargetIdentity: request.TargetIdentity, FixFindingIDs: request.FixFindingIDs, Projection: request.Projection,
-		CorrectionCandidateTree:  request.CorrectionCandidateTree,
+		TargetIdentity: request.TargetIdentity, FixFindingIDs: request.FixFindingIDs,
+		PolicyContent: request.PolicyContent, FixFindings: request.FixFindings, FixClassifications: request.FixClassifications,
+		Projection: request.Projection, CorrectionCandidateTree: request.CorrectionCandidateTree,
 		CorrectionTargetIdentity: request.CorrectionTargetIdentity, CorrectionPaths: request.CorrectionPaths,
 		CorrectionPathsDigest: request.CorrectionPathsDigest,
 	}

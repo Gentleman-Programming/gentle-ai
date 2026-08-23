@@ -29,13 +29,6 @@ func forgedRecoveryPair(t *testing.T, repo, suffix, target string, mutate ...fun
 		t.Fatal(err)
 	}
 	predecessor := writeCompactFixtureRecord(t, predecessorStore, state)
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteCompactReceiptAtomic(predecessorStore.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
 	writeSnapshotFile(t, repo, "tracked.txt", target)
 	successorState := newCompactTestState(t, repo, "forged-successor-"+suffix)
 	successorState.Generation = state.Generation + 1

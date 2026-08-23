@@ -50,10 +50,10 @@ func TestDisabledReviewAdmitsUnmanagedRemediationForAdmittedFailure(t *testing.T
 	}
 }
 
-// TestEnabledReviewStillRequiresItsBoundedTransaction is the converse: the gate
-// is scoped to the switch being off, and turning it on keeps the original
-// refusal exactly.
-func TestEnabledReviewStillRequiresItsBoundedTransaction(t *testing.T) {
+// TestEnabledReviewKeepsRemediationIndependent verifies that turning RDD on
+// cannot recreate the retired compact receipt prerequisite. SDD remediation
+// remains governed by failed verification evidence alone in either mode.
+func TestEnabledReviewKeepsRemediationIndependent(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 0, 0))
@@ -62,11 +62,11 @@ func TestEnabledReviewStillRequiresItsBoundedTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reasons := strings.Join(status.BlockedReasons, "\n"); !strings.Contains(reasons, "bounded review transaction is missing") {
-		t.Fatalf("enabled review stopped requiring its bounded transaction: %v", status.BlockedReasons)
+	if reasons := strings.Join(status.BlockedReasons, "\n"); strings.Contains(reasons, "bounded review transaction") {
+		t.Fatalf("enabled review restored a retired receipt prerequisite: %v", status.BlockedReasons)
 	}
-	if status.RemediationState.Required {
-		t.Fatalf("enabled review admitted remediation with no transaction: %#v", status.RemediationState)
+	if !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision == "" || status.NextRecommended != "remediate" {
+		t.Fatalf("enabled review did not preserve independent remediation: state=%#v next=%q", status.RemediationState, status.NextRecommended)
 	}
 }
 
