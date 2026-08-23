@@ -97,6 +97,7 @@ func TestNegotiatedEmptyCandidateRefusalNamesBaseRefWithoutDerivingIt(t *testing
 // --base-ref naming a real prior commit still builds a non-empty candidate
 // and proceeds normally.
 func TestNegotiatedStartWithExplicitBaseRefOverCommittedWorkStillStarts(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "second commit\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
@@ -118,6 +119,7 @@ func TestNegotiatedStartWithExplicitBaseRefOverCommittedWorkStillStarts(t *testi
 // TestNegotiatedStartWithPendingChangesIsUnaffected proves the guard never
 // fires when the worktree actually has pending changes.
 func TestNegotiatedStartWithPendingChangesIsUnaffected(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "pending change\n", 0o644)
 

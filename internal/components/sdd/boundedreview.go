@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -74,7 +75,7 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 // hand every runtime the same false identity and walk it straight through the
 // review transport admission check (issue #2440).
 func renderBoundedReviewAsset(agent model.AgentID, path string) string {
-	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(path), agent)
+	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(agent, path), agent)
 }
 
 // bindRuntimeAgentIdentity is the single substitution point every rendered
@@ -84,14 +85,19 @@ func bindRuntimeAgentIdentity(content string, agent model.AgentID) string {
 	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 }
 
-func renderBoundedReviewAssetBody(path string) string {
-	return renderBoundedReviewAssetBodyFromContent(path, assets.MustRead(path))
+func renderBoundedReviewAssetBody(agent model.AgentID, path string) string {
+	return renderBoundedReviewAssetBodyFromContent(agent, path, assets.MustRead(path))
 }
 
-func renderBoundedReviewAssetBodyFromContent(path, content string) string {
-	content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
+func renderBoundedReviewAssetBodyFromContent(agent model.AgentID, path, content string) string {
+	if rendersReviewLifecycle(agent) {
+		content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
+	}
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {
-		return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
+		if rendersReviewLifecycle(agent) {
+			return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
+		}
+		return removeBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
 	}
 	prompt, reviewer := reviewerPrompt(reviewerName(path))
 	if reviewer && strings.HasPrefix(path, "claude/agents/") {
@@ -110,6 +116,15 @@ func renderBoundedReviewAssetBodyFromContent(path, content string) string {
 		return replaceBoundedReviewSection(content, "## Review ledger contract", "")
 	}
 	return content
+}
+
+// rendersReviewLifecycle is deliberately derived from the canonical capability
+// manifest. An agent cannot receive the shared lifecycle prose unless it
+// advertises the review transport contract; generic SDD composition therefore
+// remains safe for runtimes outside the closed RDD set.
+func rendersReviewLifecycle(agent model.AgentID) bool {
+	manifest, err := capabilitymanifest.ForAgent(agent)
+	return err == nil && manifest.Advertises(capabilitymanifest.ContractReviewTransportV1)
 }
 
 func authorityFirstTerminalProcedure() string {
@@ -144,6 +159,24 @@ func replaceBoundedReviewSection(content, heading, nextHeading string, contracts
 	}
 	replacement := heading + "\n\n" + contract + "\n\n"
 	return strings.TrimRight(content[:start], "\n") + "\n\n" + replacement + strings.TrimLeft(content[end:], "\n")
+}
+
+func removeBoundedReviewSection(content, heading, nextHeading string) string {
+	start := strings.Index(content, heading)
+	if start < 0 {
+		return content
+	}
+	end := len(content)
+	if nextHeading != "" {
+		remainder := content[start+len(heading):]
+		for _, candidate := range []string{"\n#### " + nextHeading, "\n### " + nextHeading, "\n## " + nextHeading} {
+			if relative := strings.Index(remainder, candidate); relative >= 0 {
+				end = start + len(heading) + relative + 1
+				break
+			}
+		}
+	}
+	return strings.TrimRight(content[:start], "\n") + "\n\n" + strings.TrimLeft(content[end:], "\n")
 }
 
 func reviewerName(path string) string {

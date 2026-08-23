@@ -86,6 +86,7 @@ type sddRuntimeStatus struct {
 		ObjectiveGeneration        int    `json:"objective_generation"`
 		BeginCandidateTree         string `json:"begin_candidate_tree"`
 		FinishCandidateTree        string `json:"finish_candidate_tree"`
+		AttestedVerifyReportDigest string `json:"attested_verify_report_digest"`
 		Outcome                    string `json:"outcome"`
 		EvidenceRevision           string `json:"evidence_revision"`
 		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
@@ -133,6 +134,7 @@ type sddStatusV1 struct {
 	} `json:"reviewOffer"`
 	BlockedReasons    []string `json:"blockedReasons"`
 	PhaseInstructions struct {
+		Verify    []string `json:"verify"`
 		Remediate []string `json:"remediate"`
 	} `json:"phaseInstructions"`
 	TaskProgress struct {
@@ -810,25 +812,6 @@ func sddDenyPostApply(sandbox *Sandbox) error {
 	return nil
 }
 
-// sddInstallDiscoveryDriftFixture selects the build-tagged package-internal
-// seam that mutates this sandbox receipt between discovery's immutable reads.
-func sddInstallDiscoveryDriftFixture(sandbox *Sandbox) error {
-	receipt, err := sddReceiptPath(sandbox)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(receipt); err != nil {
-		return fmt.Errorf("fixture expected receipt before discovery drift: %w", err)
-	}
-	content, err := os.ReadFile(receipt)
-	if err != nil {
-		return fmt.Errorf("fixture reads receipt before discovery drift: %w", err)
-	}
-	sandbox.BenchReceiptMutationPath = receipt
-	sandbox.Scratch[sourceCoupledReceiptContentKey] = string(content)
-	return nil
-}
-
 // sddVerifyReport is the fenced envelope a completed independent verification
 // writes. Its exact shape matters: a report the product cannot parse routes as
 // "verification is missing", which is a different journey.
@@ -1179,8 +1162,9 @@ func sddNamesReviewRouter(observation Observation) bool {
 // the topology really is a leaf, and the refusal named a finish command.
 // sddBoundPassingFinishCloses is j37's assertion after #1993: a passing
 // implementation attempt closes even though the binding covers the bytes from
-// before the correction. Review acts after implementation and verification,
-// and the delivery gates enforce on the finished candidate.
+// before the correction. Review acts after implementation and verification;
+// any later review validation is informational and ordinary repository policy
+// owns delivery.
 func sddBoundPassingFinishCloses(r *journeyRun) error {
 	status, err := readRuntimeStatus(r)
 	if err != nil {
@@ -1200,8 +1184,8 @@ func sddBoundPassingFinishCloses(r *journeyRun) error {
 	if settled.ActiveAttempt != nil {
 		return errors.New("the finish ran but the attempt is still active")
 	}
-	// The binding stays recorded: review stops deciding, it does not stop
-	// being tracked, and the delivery gates read it from here.
+	// The binding stays recorded for informational review reporting. It does
+	// not decide delivery, which remains ordinary repository policy.
 	if settled.BindingRevision == "" {
 		return errors.New("the finish dropped the review binding; it must stay recorded on the ledger")
 	}
@@ -1216,22 +1200,16 @@ func sddDriftAfterApproval(sandbox *Sandbox) error {
 		"# attempt\n\nplain prose, no executable content.\nbytes the approved review never saw.\n")
 }
 
-// sddDecoyUnreviewedCandidateIsRefusedAtDelivery is the decoy for #2956.
+// sddDecoyUnreviewedCandidateIsReportedByReviewValidation is the decoy for #2956.
 //
-// Removing the bound-passing-finish gate rested on one argument: the delivery
-// gates re-derive their verdict from the candidate actually being delivered, so
-// an unreviewed candidate is still refused there, after SDD finishes. That is a
-// claim about a NEGATIVE. gateVerdict's 35-cell table already proves the
-// `changed` relation denies; what it cannot prove is REACHABILITY — that a
-// candidate settled past the removed gate actually arrives at that denial
-// instead of taking a branch where no receipt is evaluated at all.
-//
-// So this plants exactly what the removed guard caught, drift after approval,
-// and measures the live gate. If it ever allows, the justification for removing
-// that gate was wrong and this is where it says so.
-func sddDecoyUnreviewedCandidateIsRefusedAtDelivery(r *journeyRun) error {
+// Removing the bound-passing-finish gate rested on one argument: native review
+// validation would still report that a candidate the review never saw is not
+// the reviewed candidate. That result is informational, not a delivery gate.
+// The table still proves the `changed` relation; this journey proves that the
+// settled candidate reaches the informational mismatch report.
+func sddDecoyUnreviewedCandidateIsReportedByReviewValidation(r *journeyRun) error {
 	if provePostApplyAllows(r.sandbox) {
-		return errors.New("the post-apply gate ALLOWS a candidate the approved review never saw; #2956 removed the ledger-side guard on the argument that delivery still refuses this, and it does not")
+		return errors.New("post-apply review validation reported allow for a candidate the approved review never saw; #2956 requires an informational mismatch report")
 	}
 	return nil
 }
@@ -1632,6 +1610,32 @@ func sddApprovedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 	}
 }
 
+// sddBurnedAuthoritySteps is the #3417 counterpart for the three SDD journeys
+// that used to depend on a durable approved lineage. It keeps their real review
+// exercise but proves the terminal transaction is gone before SDD continues under
+// ordinary policy.
+func sddBurnedAuthoritySteps(fixture func(*Sandbox) error) []Step {
+	return []Step{
+		{Name: "fixture: exact active-lineage compact transaction", Fixture: fixture},
+		{Name: "capture every selected lens for the exact active lineage", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
+		{Name: "finalize exact active-lineage reviewer results", Requires: selectedFinalizeResultsCapability,
+			Args: selectedReviewArgs("review", "finalize", "--captured-results=true")},
+		{Name: "capture final evidence for the exact active lineage", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
+		{Name: "#3417 final evidence burns the exact active-lineage transaction", Requires: selectedFinalizeEvidenceCapability,
+			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true"), After: func(sandbox *Sandbox, observation Observation) error {
+				return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+			}},
+		{Name: "prove the terminal burn leaves no durable authority or receipt", Composite: sddProveSelectedBurned},
+	}
+}
+
+func sddProveSelectedBurned(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("#3417 SDD fixture has no exact lineage to prove burned")
+	}
+	return requireAtomicLineageBurned(r, r.sandbox.Lineage)
+}
+
 // ---------------------------------------------------------------------------
 // Capabilities
 // ---------------------------------------------------------------------------
@@ -1650,7 +1654,7 @@ var sddAttemptFinishCapability = &Capability{
 }
 var sddAttemptRemediationCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "finish"},
-	Probe: []string{"sdd-attempt", "finish", "--expected-binding-revision=probe", "--successor-lineage=probe", "--remediates-evidence-revision=probe"},
+	Probe: []string{"sdd-attempt", "finish", "--remediates-evidence-revision=probe"},
 }
 var sddAttemptResetCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "reset"},
@@ -1698,14 +1702,15 @@ func sddJourneys() []Journey {
 		// ------------------------------------------ remediation successor cycle
 		{
 			ID:     "j37-sdd-bound-passing-attempt-closes-over-a-corrected-candidate",
-			Title:  "Bound passing attempt over a corrected candidate closes; review enforces at delivery",
+			Review: reviewOptedIn,
+			Title:  "Bound passing attempt over a corrected candidate closes; review validation remains informational",
 			Source: "community deadlock report (#1993)",
 			// This journey used to prove the opposite: that the plain passing
 			// finish was REFUSED, and that the refusal named a self-successor
 			// finish which then ran. Review acts after implementation and
 			// verification, so there is no block here to name an exit for. The
-			// binding stays recorded and the delivery gates enforce on the
-			// finished candidate.
+			// binding stays recorded only for informational review reporting; ordinary
+			// repository policy decides delivery.
 			//
 			// j38 (the refusal routing to the review router) and j39 (the
 			// stranded-successor exit) are deleted with the refusal that was
@@ -1719,12 +1724,13 @@ func sddJourneys() []Journey {
 				{Name: "bind the approved review to the change", Requires: bindSDDCapability, Composite: sddBindApprovedReview},
 				{Name: "fixture: the candidate drifts AFTER the review approved it", Fixture: sddDriftAfterApproval},
 				{Name: "the plain passing finish closes over the changed candidate, and keeps the binding", Requires: sddAttemptFinishCapability, Composite: sddBoundPassingFinishCloses},
-				{Name: "decoy: delivery still refuses the unreviewed candidate", Composite: sddDecoyUnreviewedCandidateIsRefusedAtDelivery},
-				{Name: "decoy: delivery still refuses the unreviewed candidate", Composite: sddDecoyUnreviewedCandidateIsRefusedAtDelivery},
+				{Name: "decoy: review validation reports the unreviewed candidate", Composite: sddDecoyUnreviewedCandidateIsReportedByReviewValidation},
+				{Name: "decoy: repeated review validation keeps the mismatch informational", Composite: sddDecoyUnreviewedCandidateIsReportedByReviewValidation},
 			},
 		},
 		{
 			ID:     "j40-sdd-attempt-reset-after-drift",
+			Review: reviewOptedIn,
 			Title:  "Terminal attempt, drifted candidate: begin refuses and reset is the only way on",
 			Source: "shape 2 (a recoverable objective read as terminal) + shape 4",
 			// Expected: begin refuses because the objective's candidate moved, and
@@ -1745,6 +1751,7 @@ func sddJourneys() []Journey {
 		// -------------------------------------------------- kill switch and SDD
 		{
 			ID:     "j41-kill-switch-versus-sdd-pre-verify",
+			Review: reviewOptedIn,
 			Title:  "Pre-verify: RDD supervises nothing, on or off, before verify runs",
 			Source: "shape 5 (the kill switch and the pre-verify router) + Wave 4's own removal of pre-verify review supervision",
 			// Corrective verify cycle 3 (CRITICAL-C): this journey pinned a
@@ -1817,6 +1824,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j42-kill-switch-versus-sdd-archive",
+			Review: reviewOptedIn,
 			Title:  "The offer is an invitation, never a gate: archive proceeds with reviews on or off",
 			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1",
 			// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
@@ -1839,11 +1847,9 @@ func sddJourneys() []Journey {
 			// that still distinguishes them is exactly the offer itself, not
 			// whether archive proceeds.
 			//
-			// The shipped sdd-archive skill contract's residual reference to
-			// `reviewGate.result: allow` is a stale document this benchmark cannot
-			// execute; not re-asserted here since the product's own correct
-			// behavior no longer produces a `reviewGate` field at all in the
-			// no-receipt shape either path takes.
+			// The shipped sdd-archive skill now states the same non-gating rule.
+			// This journey executes the no-review shape: `reviewGate` stays absent
+			// and archive readiness remains ordinary-policy routing.
 			Steps: []Step{
 				{Name: "fixture: change complete with an independent verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
@@ -1880,14 +1886,15 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j63-disabled-failed-verification-unmanaged-remediation",
-			Title:  "Disabled failed verification admits one evidence-bound correction, then requires a fresh verification",
-			Source: "#2182 acceptance: disabled/unmanaged remediation successor",
+			Review: reviewOptedIn,
+			Title:  "Failed verification gets one evidence-bound correction; re-enabled review context remains informational",
+			Source: "#3417: failed, unknown, and pending review evidence remains visible but never gates completed SDD archive routing",
 			Steps: []Step{
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
-				{Name: "enabled mode still refuses missing review authority", Requires: sddStatusCapability,
+				{Name: "enabled failed verification records missing remediation authority", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("enabled remediation", func(status sddStatusV1) error {
 						if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "bounded review transaction is missing") {
-							return fmt.Errorf("enabled remediation lost its bounded review refusal: %v", status.BlockedReasons)
+							return fmt.Errorf("enabled remediation omitted its missing authority context: %v", status.BlockedReasons)
 						}
 						return nil
 					})},
@@ -1927,15 +1934,14 @@ func sddJourneys() []Journey {
 						return nil
 					})},
 				{Name: "mode enable after unmanaged correction", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
-				{Name: "enabled archive requires bounded review authority", Requires: sddStatusCapability,
+				{Name: "re-enabled review context is informational; archive proceeds", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("re-enabled unmanaged correction", func(status sddStatusV1) error {
-						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q; want all_done/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 						}
 						if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" ||
-							!strings.Contains(status.ReviewGate.Reason, "disabled/unmanaged correction") ||
-							!strings.Contains(status.ReviewGate.Reason, "gentle-ai review start") {
-							return fmt.Errorf("re-enabled archive omitted bounded review authority: %+v", status.ReviewGate)
+							!strings.Contains(status.ReviewGate.Reason, "disabled/unmanaged correction") {
+							return fmt.Errorf("re-enabled archive omitted informational review evidence: %+v", status.ReviewGate)
 						}
 						if status.ReviewOffer == nil || !status.ReviewOffer.Available || !strings.Contains(status.ReviewOffer.Invocation, "review start") {
 							return fmt.Errorf("re-enabled archive omitted executable review offer: %+v", status.ReviewOffer)
@@ -1946,6 +1952,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j52-sdd-stale-authority-does-not-shadow-approved-candidate",
+			Review: reviewOptedIn,
 			Title:  "Stale same-path review authority: SDD selects the newer approved candidate",
 			Source: "issue #1893: stale compact authority must not shadow an exact approved candidate",
 			Steps: []Step{
@@ -1972,6 +1979,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j53-sdd-ambiguous-authorities-fail-closed",
+			Review: reviewOptedIn,
 			Title:  "Two approved candidates for the same OpenSpec change: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddAmbiguousAuthorityFixture),
@@ -1982,6 +1990,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j54-sdd-missing-authority-receipt-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Approved compact authority without its receipt: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -1992,6 +2001,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j55-sdd-mismatched-authority-receipt-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Approved compact authority with a mismatched receipt: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -2002,6 +2012,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j56-sdd-non-allow-post-apply-gate-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Valid approved authority over changed bytes: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -2012,6 +2023,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j58-sdd-foreign-openspec-path-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Mixed OpenSpec authority path set: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddForeignAuthorityFixture),
@@ -2023,6 +2035,7 @@ func sddJourneys() []Journey {
 		// ------------------------------------------------ recovery guard rails
 		{
 			ID:     "j43-recovery-guard-rails-as-an-operator-meets-them",
+			Review: reviewOptedIn,
 			Title:  "Three correct refusals around healthy approved authority, and the one exit that works",
 			Source: "shape 4 (a correct refusal that names nothing runnable) + community deadlock report",
 			// These three refusals are RIGHT. `review recover` must not mint a
@@ -2071,6 +2084,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j44-sdd-historical-requirement-stale-pass",
+			Review: reviewOptedIn,
 			Title:  "Historical change-local requirement heading: stale PASS restarts verification instead of failed remediation",
 			Source: "issue #2137 (historical OpenSpec requirement compatibility and stale verification routing)",
 			Steps: []Step{

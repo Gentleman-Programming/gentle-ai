@@ -43,6 +43,7 @@ func compatExecuteUnboundRecovery(r *journeyRun) error {
 func compatibilityRuntimeIdentityJourneys() []Journey {
 	return []Journey{{
 		ID:     "cw04-unbound-recovery-executes-without-agent-guess",
+		Review: reviewOptedIn,
 		Title:  "An unbound direct-route refusal emits and executes a negotiated recovery without an agent guess",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2885",
 		Steps: []Step{

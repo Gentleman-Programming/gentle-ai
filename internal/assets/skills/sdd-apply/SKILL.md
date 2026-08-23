@@ -153,7 +153,7 @@ Every assigned work unit, including standard mode, MUST produce a **Work Unit Ev
 
 If design/tasks contain applicable threat-matrix cases, write and run each mapped RED test before the corresponding production change even in standard mode. Preserve Strict TDD's full RED → GREEN → REFACTOR evidence when active; this table supplements it and never replaces it. Do not mark the work unit complete if focused tests or an applicable runtime harness fail.
 
-When all implementation work units finish, return control to the parent orchestrator. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator. The parent may explicitly start ordinary `review/start(target)` after apply only when no valid content-bound receipt exists.
+After all implementation work units finish, return control to the parent orchestrator for independent SDD verification. Do not launch or recommend review directly after apply. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator. Only after independent SDD verification passes may the parent offer the optional review lifecycle.
 
 Focused remediation is the sole `applyState: all_done` exception. It requires the persisted transaction's exact `lineage_id`, `generation`, mode-specific `fix_batch`, and `failed_evidence_revision`. Record those values in both the `gentle-ai.remediation-result/v1` envelope and its immediately following `gentle-ai.remediation-evidence/v1` JSON. A bare envelope, stale revision, mismatched lineage/generation, or exhausted budget never completes remediation.
 

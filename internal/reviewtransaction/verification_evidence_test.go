@@ -179,6 +179,31 @@ func TestCompleteCorrectionVerificationIsAtomicAndCandidateBound(t *testing.T) {
 	}
 }
 
+func TestCompleteCorrectionVerificationEscalatesConclusiveFailedValidator(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state, fix := pendingCompactCorrection(t, repo, "failed-targeted-validator")
+	revision := hash("a")
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := bindTargetedValidationForTest(ScopedValidationResult{
+		LedgerIDs: append([]string(nil), state.FixFindingIDs...), FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: false},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
+	}, fix)
+	payload := []byte("repository verification passed\n")
+	evidence, err := NewVerificationEvidenceRecord(state.LineageID, revision, fix, payload, VerificationOutcomePassed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := state.CompleteCorrectionVerification(fix, 1, validation, evidence, payload); err != nil {
+		t.Fatalf("complete failed validator verification: %v", err)
+	}
+	if state.State != StateEscalated || len(state.CorrectionAttempts) != 1 || state.CorrectionAttempts[0].OriginalCriteria.Passed ||
+		state.CorrectionAttempts[0].CorrectionTargetIdentity != fix.Identity || state.EvidenceHash != "" {
+		t.Fatalf("failed validator state = %#v", state)
+	}
+}
+
 func TestCompleteCorrectionVerificationPreservesFullCandidateScope(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\nwrong\n")

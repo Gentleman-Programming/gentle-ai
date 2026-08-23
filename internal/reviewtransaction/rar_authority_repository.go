@@ -99,7 +99,8 @@ func (authority RARNativeReceiptAuthority) Validate() error {
 	if terminal != TerminalApproved {
 		return errors.New("RAR authority requires a terminal approved native receipt")
 	}
-	if authority.ReceiptRef != sha256Ref(payload) {
+	receiptDigest := sha256.Sum256(payload)
+	if authority.ReceiptRef != "sha256:"+hex.EncodeToString(receiptDigest[:]) {
 		return errors.New("RAR native receipt ref does not match its exact canonical preimage")
 	}
 	return nil
@@ -686,11 +687,6 @@ func canonicalRARReceiptPayload(receipt any) ([]byte, error) {
 		return nil, err
 	}
 	return append(payload, '\n'), nil
-}
-
-func sha256Ref(payload []byte) string {
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func hashPathComponent(ref string) string {

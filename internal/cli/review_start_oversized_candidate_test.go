@@ -26,6 +26,7 @@ func writeReviewStartLargeCandidate(t *testing.T, repo string, lines int) []byte
 }
 
 func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	fullDiff := writeReviewStartLargeCandidate(t, repo, 110000)
 	if len(fullDiff) <= 4<<20 {
@@ -51,7 +52,7 @@ func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) 
 
 	var status bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", start.LineageID, "--next-transition",
 	}, &status); err != nil {
 		t.Fatal(err)
 	}

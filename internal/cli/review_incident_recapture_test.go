@@ -71,6 +71,7 @@ func preserveEnvelopelessIncident(t *testing.T, repo string, started ReviewFacad
 // and the same lineage/lens must then accept a corrected well-formed capture,
 // because a slot whose admission was REJECTED was never consumed.
 func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	err := failEnvelopelessCapture(t, repo, started, record)
 	// Discoverability contract: the admission-incomplete rejection must name
@@ -137,6 +138,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 }
 
 func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	statusArgs := []string{
 		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
@@ -250,6 +252,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 // beside the authority root (incidents/<lineage>), not inside the store entry,
 // and it survives the quarantine as audit history.
 func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	failEnvelopelessCapture(t, repo, started, record)
 	incident := preserveEnvelopelessIncident(t, repo, started, record)

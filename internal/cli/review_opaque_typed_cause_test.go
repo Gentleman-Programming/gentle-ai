@@ -43,6 +43,7 @@ const gitObjectPermissionStderr = "fatal: cannot access the object database: Per
 // refusal, an absent authority record and an unparsable one all converge here.
 // Four genuinely different roots, one string.
 func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string)
@@ -113,6 +114,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 // thing that cannot work while the slot is occupied. So the code is asserted
 // per case; a cause that stops being distinguishable still fails here.
 func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string, binding []string)
@@ -167,6 +169,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 // gone and the rest of the cause intact. Forwarding an unscrubbed cause and
 // forwarding nothing are both failures.
 func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
+	reviewEnabledHome(t)
 	lineage := "opaque-scrub-cause"
 	args, _, repo := startedOpaqueCaptureBinding(t, lineage)
 	if err := os.Remove(reviewCLICompactStatePath(repo, lineage)); err != nil {
@@ -271,6 +274,7 @@ func admissibleOpaqueReviewerResult(t *testing.T, binding []string, evidence str
 // reporter whose lens results were all stranded as incidents (#2446) had no way
 // to say why.
 func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string)

@@ -18,6 +18,7 @@ func init() {
 		Name:     modelPickerAxis,
 		Title:    "OpenCode custom-agent model-picker runtime proof",
 		BlackBox: false,
+		Review:   reviewUntouched,
 		Properties: []string{
 			"j97 drives the compiled TUI model-picker state through the public gentle-ai binary and checks the persisted opencode.json boundary.",
 			"The journey requires a product binary built with -tags bench_fixture; ordinary binaries report unsupported instead of fabricating a pass.",
@@ -30,6 +31,7 @@ func init() {
 func modelPickerJourneys() []Journey {
 	return []Journey{{
 		ID:     "j97-opencode-custom-agent-model-picker-runtime",
+		Review: reviewUntouched,
 		Title:  "Runtime model picker discovers and persists a custom native agent assignment",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2098",
 		Steps: []Step{

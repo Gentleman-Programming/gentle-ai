@@ -122,7 +122,10 @@ func TestAccountingOnlyRecoveryFailsClosedOrStartsFreshWhenEvidenceDoesNotMatch(
 func accountingOnlyEscalatedState(t *testing.T, repo, lineage string) CompactState {
 	t.Helper()
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
+	frozenPolicy := "accounting-only recovery fixture policy\n"
 	state := newCompactTestState(t, repo, lineage)
+	state.PolicyHash = compactPolicyContentHash(frozenPolicy)
+	state.FrozenPolicyContent = &frozenPolicy
 	if state.CorrectionBudget < 2 || len(state.SelectedLenses) != 1 {
 		t.Fatalf("fixture risk/budget = %q/%d", state.RiskLevel, state.CorrectionBudget)
 	}
@@ -154,7 +157,17 @@ func accountingOnlyEscalatedState(t *testing.T, repo, lineage string) CompactSta
 		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
 	}, fix)
-	if err := state.CompleteCorrection(fix, state.CorrectionBudget+1, validation); err != nil {
+	if err := state.CompleteCorrection(fix, state.CorrectionBudget, validation); err != nil {
+		t.Fatal(err)
+	}
+	// Preserve the pre-remediation over-budget authority as historical evidence;
+	// new correction admission must refuse it before mutation.
+	historicalActual := state.CorrectionBudget + 1
+	state.CorrectionAttempts[0].ActualLines = historicalActual
+	state.CumulativeCorrectionLines = historicalActual
+	state.ActualCorrectionLines = &historicalActual
+	state.State = StateEscalated
+	if err := state.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if !compactAccountingOnlyEscalation(state) {
