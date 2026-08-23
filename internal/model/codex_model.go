@@ -166,16 +166,19 @@ const (
 var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
 		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
+		"sdd-spec":   {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
 		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
 		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetRecommended: {
 		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
+		"sdd-spec":   {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
 		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
 		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetPowerful: {
 		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
+		"sdd-spec":   {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
 		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
 		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
 	},
@@ -288,14 +291,11 @@ func CodexModelPresetLowCost() map[string]CodexEffort {
 // extension), the canonical default model id for that carril, the default
 // reasoning_effort tier, and the SDD phases covered.
 //
-// Phase groupings (Approach C — orthogonal carril axis). Sol reasons, Terra
-// writes, Luna transcribes:
-//   - sdd-strong (Razonamiento): explore, propose, design, verify, judge-a, judge-b, default
-//   - sdd-mid    (Código):       apply, fix-agent
-//   - sdd-cheap  (Liviano):      spec, tasks, archive, onboard
-//
-// codexTierGroups below is the single source of this grouping; the rendered
-// table derives its phase column from it via codexTierPhaseLabel.
+// Phase groupings:
+//   - sdd-strong (Razonamiento): propose, design, verify, judge-a, judge-b, default
+//   - sdd-spec   (Contratos):    spec
+//   - sdd-mid    (Código):       apply, tasks, fix-agent
+//   - sdd-cheap  (Liviano):      explore, archive, onboard
 type CodexTierGroup struct {
 	Profile       string
 	Model         string
@@ -303,7 +303,7 @@ type CodexTierGroup struct {
 	Phases        []string
 }
 
-// codexTierGroups defines the three CLI profile tiers and which phases they cover.
+// codexTierGroups defines the CLI profile tiers and which phases they cover.
 //
 // Invariant: within each carril, ALL phases carry the same effort value in every
 // preset constructor (CodexModelPresetLowCost, CodexModelPresetRecommended,
@@ -319,6 +319,7 @@ type CodexTierGroup struct {
 //
 //	Carril      LowCost  Recommended  Powerful
 //	sdd-strong  medium   medium       xhigh
+//	sdd-spec    medium   high         high
 //	sdd-mid     medium   high         high
 //	sdd-cheap   high     high         high
 var codexTierGroups = []CodexTierGroup{
@@ -326,19 +327,25 @@ var codexTierGroups = []CodexTierGroup{
 		Profile:       "sdd-strong",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Effort,
-		Phases:        []string{"sdd-explore", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
+		Phases:        []string{"sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
+	},
+	{
+		Profile:       "sdd-spec",
+		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-spec"].Model,
+		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-spec"].Effort,
+		Phases:        []string{"sdd-spec"},
 	},
 	{
 		Profile:       "sdd-mid",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-mid"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-mid"].Effort,
-		Phases:        []string{"sdd-apply", "jd-fix-agent"},
+		Phases:        []string{"sdd-apply", "sdd-tasks", "jd-fix-agent"},
 	},
 	{
 		Profile:       "sdd-cheap",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-cheap"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-cheap"].Effort,
-		Phases:        []string{"sdd-spec", "sdd-tasks", "sdd-archive", "sdd-onboard"},
+		Phases:        []string{"sdd-explore", "sdd-archive", "sdd-onboard"},
 	},
 }
 

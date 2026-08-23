@@ -499,8 +499,9 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 
 | Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |
 |---------------|-------|----------------------------------|------------|
-| `sdd-strong` | `gpt-5.6-sol` | `xhigh` | explore, propose, design, verify, judge |
-| `sdd-mid` | `gpt-5.6-sol` | `high` | apply, fix-agent |
-| `sdd-cheap` | `gpt-5.6-luna` | `high` | spec, tasks, archive, onboard |
+| `sdd-strong` | `gpt-5.6-sol` | `xhigh` | propose, design, verify, judge |
+| `sdd-spec` | `gpt-5.6-sol` | `high` | spec |
+| `sdd-mid` | `gpt-5.6-sol` | `high` | apply, tasks, fix-agent |
+| `sdd-cheap` | `gpt-5.6-luna` | `high` | explore, archive, onboard |
 
 <!-- /gentle-ai:sdd-orchestrator -->

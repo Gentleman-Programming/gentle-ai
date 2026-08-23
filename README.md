@@ -130,10 +130,12 @@ Run `gentle-ai doctor` at any time for a read-only health check of your ecosyste
 **Homebrew (macOS / Linux)**
 
 ```bash
-brew tap Gentleman-Programming/homebrew-tap
-brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebrew tap trust
+brew tap gentleman-programming/tap
+brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, if Homebrew requires trust
 brew install gentle-ai
 ```
+
+To install several tools from this tap, you can instead run `brew trust gentleman-programming/tap`. This broader option trusts all current and future formulas, casks, and external commands published in the tap.
 
 **Go install: stable channel (any platform with Go 1.25.10+)**
 
@@ -163,6 +165,29 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 # Windows (PowerShell)
 $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
+
+To update a beta installation later, preserve the beta channel:
+
+```bash
+# macOS / Linux
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
+```
+
+> [!NOTE]
+> **Beta upgrades & Go proxy caching**: On macOS, Linux, and Windows with Go on `PATH`, `gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools (Engram, plugins, etc.). If you re-run an installer instead, pass beta explicitly because both installers default to stable:
+>
+> ```bash
+> # macOS / Linux
+> curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+>
+> # Windows (PowerShell)
+> $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+> ```
+>
+> If a manual `go install ...@main` does not pick up recent commits because `proxy.golang.org` is stale, bypass it with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
 
 ### RDD version policy
 
