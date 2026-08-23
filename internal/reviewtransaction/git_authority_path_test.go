@@ -115,6 +115,79 @@ func TestReviewAuthorityRootRejectsLegacyOptionEchoWithoutMutation(t *testing.T)
 	}
 }
 
+func TestChangedLinesFallsBackToSHA1WhenLocalObjectFormatIsUnset(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed\n")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		switch {
+		case slicesContain(args, "config") && slicesContain(args, "--local") && slicesContain(args, "extensions.objectFormat"):
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitObjectFormatMissingHelperProcess$")
+		case slicesContain(args, "--show-object-format"):
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitObjectFormatEchoHelperProcess$")
+		default:
+			return original(ctx, name, args...)
+		}
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(t.Context(), snapshot)
+	if err != nil || lines != 2 {
+		t.Fatalf("ChangedLines() = %d, %v; want 2, nil", lines, err)
+	}
+}
+
+func TestParseRepositoryObjectFormatAcceptsOnlySupportedValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		want    string
+		wantErr string
+	}{
+		{name: "explicit SHA-1", output: "sha1\n", want: "sha1"},
+		{name: "explicit SHA-256", output: "sha256\n", want: "sha256"},
+		{name: "empty output", output: "\n", wantErr: `unsupported Git object format ""`},
+		{name: "multiple values", output: "sha1\nsha256\n", wantErr: "unsupported Git object format"},
+		{name: "malformed value", output: " sha1\n", wantErr: "unsupported Git object format"},
+		{name: "unknown value", output: "sha512\n", wantErr: `unsupported Git object format "sha512"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseRepositoryObjectFormat([]byte(tt.output))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseRepositoryObjectFormat() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("parseRepositoryObjectFormat() = %q, %v; want %q, nil", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRepositoryObjectFormatPreservesOtherGitCommandFailures(t *testing.T) {
+	original := gitCommandContext
+	t.Setenv("GENTLE_AI_TEST_GIT_PATH_FAIL", "1")
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitAuthorityPathHelperProcess$")
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	_, err := repositoryObjectFormat(t.Context(), t.TempDir())
+	var commandErr *GitCommandError
+	if !errors.As(err, &commandErr) || commandErr.ExitCode != 23 {
+		t.Fatalf("repositoryObjectFormat() error = %T %v, want GitCommandError exit 23", err, err)
+	}
+}
+
 func TestResolveRepositoryRootRejectsUnrelatedAbsoluteOutput(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
@@ -390,8 +463,12 @@ func TestGitAuthorityPathHelperProcess(t *testing.T) {
 		os.Exit(23)
 	}
 	encoded := os.Getenv("GENTLE_AI_TEST_GIT_PATH_OUTPUT")
-	if encoded == "" && len(os.Args) > 2 && os.Args[len(os.Args)-2] == "--" {
-		encoded = os.Args[len(os.Args)-1]
+	for index, arg := range os.Args {
+		if arg != "--" || index+1 >= len(os.Args) {
+			continue
+		}
+		encoded = os.Args[index+1]
+		break
 	}
 	if encoded == "" {
 		return
@@ -402,6 +479,30 @@ func TestGitAuthorityPathHelperProcess(t *testing.T) {
 	}
 	_, _ = os.Stdout.Write(payload)
 	os.Exit(0)
+}
+
+func TestGitObjectFormatMissingHelperProcess(t *testing.T) {
+	if !testHelperProcessRequested("TestGitObjectFormatMissingHelperProcess") {
+		return
+	}
+	os.Exit(1)
+}
+
+func TestGitObjectFormatEchoHelperProcess(t *testing.T) {
+	if !testHelperProcessRequested("TestGitObjectFormatEchoHelperProcess") {
+		return
+	}
+	_, _ = os.Stdout.WriteString("--show-object-format\n")
+	os.Exit(0)
+}
+
+func testHelperProcessRequested(name string) bool {
+	for _, arg := range os.Args {
+		if arg == "-test.run=^"+name+"$" {
+			return true
+		}
+	}
+	return false
 }
 
 func slicesContain(values []string, target string) bool {

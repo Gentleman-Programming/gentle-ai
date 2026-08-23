@@ -306,13 +306,9 @@ func isolatedImmutableTreeGitWithAttributesFile(ctx context.Context, repo string
 	if err != nil {
 		return nil, "", func() error { return nil }, err
 	}
-	objectFormatOutput, err := runGit(ctx, identity.RepositoryRoot, nil, nil, "rev-parse", "--show-object-format")
+	objectFormat, err := repositoryObjectFormat(ctx, identity.RepositoryRoot)
 	if err != nil {
 		return nil, "", func() error { return nil }, err
-	}
-	objectFormat := strings.TrimSpace(string(objectFormatOutput))
-	if objectFormat != "sha1" && objectFormat != "sha256" {
-		return nil, "", func() error { return nil }, fmt.Errorf("unsupported Git object format %q", objectFormat)
 	}
 	// The repository Git directory is the reliable writable location when a
 	// sandboxed caller does not expose an accessible process temp directory.
@@ -366,6 +362,27 @@ func isolatedImmutableTreeGitWithAttributesFile(ctx context.Context, repo string
 		"GIT_ATTR_NOSYSTEM=1",
 		"LANG=C",
 	}, emptyFiles[2], cleanup, nil
+}
+
+func repositoryObjectFormat(ctx context.Context, repo string) (string, error) {
+	output, err := runGit(ctx, repo, nil, nil, "config", "--local", "--get", "extensions.objectFormat")
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+			return "sha1", nil
+		}
+		return "", err
+	}
+	return parseRepositoryObjectFormat(output)
+}
+
+func parseRepositoryObjectFormat(output []byte) (string, error) {
+	objectFormat := strings.TrimSuffix(string(output), "\n")
+	if strings.Contains(objectFormat, "\n") || objectFormat != strings.TrimSpace(objectFormat) ||
+		(objectFormat != "sha1" && objectFormat != "sha256") {
+		return "", fmt.Errorf("unsupported Git object format %q", objectFormat)
+	}
+	return objectFormat, nil
 }
 
 func validateChangedPathManifestEntry(entry ChangedPathManifestEntry) error {
