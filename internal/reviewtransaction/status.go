@@ -217,10 +217,10 @@ func inventoryVersion(ctx context.Context, repo, root, directory string, version
 		}
 		entry, locks, quarantine := inventoryLineage(ctx, repo, version, path, item.Name())
 		if quarantine != nil {
-			// A TERMINAL lineage that fails semantic validation is quarantined
-			// out of the entries table alone (issue-1813): auditable via this
-			// diagnostic, never silently dropped, but never counted against
-			// report.Complete/Authoritative for every other healthy lineage.
+			// A semantically corrupt lineage is quarantined out of the entries
+			// table (issue-1813): auditable via this diagnostic, never silently
+			// dropped, but never counted against report.Complete/Authoritative
+			// for every other healthy lineage.
 			result.diagnostics = append(result.diagnostics, *quarantine)
 			continue
 		}
@@ -284,13 +284,12 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
 		record, err := store.LoadContext(ctx)
 		if err != nil {
-			// A TERMINAL lineage that fails semantic validation is quarantined
-			// (issue-1813): diagnostic-only, excluded from the entries table,
-			// never counted against report.Complete/Authoritative. Every other
-			// load failure (structural: JSON decode, schema, checksum) still
-			// fails this entry closed as AuthorityStatusInvalid.
+			// A semantic-validation failure is quarantined regardless of its
+			// lifecycle state (issue-1813): diagnostic-only and excluded from
+			// selector-free inventory. Structural failures (JSON decode, schema,
+			// checksum) still fail this entry closed as AuthorityStatusInvalid.
 			if _, quarantinable := compactLineageQuarantinable(err); quarantinable {
-				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-terminal-lineage: " + err.Error()}
+				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-semantic-lineage: " + err.Error()}
 			}
 			// This entry refuses for itself, and now it has to say how to
 			// leave: it is no longer accompanied by a repository-wide refusal
@@ -310,19 +309,6 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		entry.compact = &record
 		if entry.Status != AuthorityStatusInvalid {
 			entry.Status = authorityStatusForState(record.State.State)
-		}
-		if payload, err := os.ReadFile(store.ReceiptPath()); err == nil {
-			receipt, parseErr := ParseCompactReceipt(payload)
-			authoritative, authorityErr := record.State.Receipt()
-			if parseErr != nil {
-				entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"invalid compact receipt: " + parseErr.Error()}
-			} else if authorityErr != nil || !compactReceiptEqual(receipt, authoritative) {
-				entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"compact receipt does not match terminal authority"}
-			}
-		} else if os.IsNotExist(err) && (record.State.State == StateApproved || record.State.State == StateEscalated) {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"terminal compact authority is missing its receipt"}
-		} else if !os.IsNotExist(err) {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read compact receipt: " + err.Error()}
 		}
 		return entry, locks, nil
 	}

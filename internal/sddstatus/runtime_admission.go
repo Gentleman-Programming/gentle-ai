@@ -140,7 +140,7 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	// attempt or an exhausted budget does not make the chain owe less, and a
 	// surface that goes quiet under those states would disagree with acquire
 	// exactly when the operator is looking hardest.
-	status.SettleObligation = runtimeSettleObligation(status, store.ReviewDisabled)
+	status.SettleObligation = runtimeSettleObligation(status)
 
 	normalized, err := normalizeBeginAttemptRequest(request)
 	if err != nil {

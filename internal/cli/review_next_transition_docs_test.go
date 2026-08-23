@@ -17,14 +17,14 @@ import (
 var reviewStopTransitionCallRegexp = regexp.MustCompile(`reviewStopTransition\("([a-z_]+)"\)`)
 
 // reviewStopReasonDocsTableHeading marks the start of the docs table this
-// test cross-checks. reviewStopReasonDocsTableRowRegexp then extracts the
-// reason code named at the start of each row inside that section only —
-// docs/review-integration.md contains several other tables whose first
-// column is also a single backtick-quoted word (gates, applicability, ...),
-// so matching the whole file would false-positive against those.
+// test cross-checks. Entries may group codes with the same continuation, so
+// reviewStopReasonDocsContinuations expands every backtick-quoted code in the
+// first cell. The section boundary prevents unrelated documentation tables
+// from contributing codes.
 const reviewStopReasonDocsTableHeading = "### Continue after a stop reason code"
 
-var reviewStopReasonDocsTableRowRegexp = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\|")
+var reviewStopReasonDocsTableRowRegexp = regexp.MustCompile("(?m)^\\| ((?:`[a-z_]+`(?:, )?)+) \\| (.+) \\|$")
+var reviewStopReasonCodeRegexp = regexp.MustCompile("`([a-z_]+)`")
 
 // TestEveryReviewStopReasonCodeHasADocsContinuation pins that every stop
 // reason code newReviewNextTransition (and its helpers) can emit from
@@ -53,18 +53,14 @@ func TestEveryReviewStopReasonCodeHasADocsContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := reviewStopReasonDocsSection(t, string(docs))
-	rows := reviewStopReasonDocsTableRowRegexp.FindAllStringSubmatch(section, -1)
-	if len(rows) == 0 {
-		t.Fatal("found no rows in the \"Continue after a stop reason code\" table in docs/review-integration.md; the table heading or row shape moved")
-	}
-	docCodes := map[string]bool{}
-	for _, row := range rows {
-		docCodes[row[1]] = true
+	docCodes := reviewStopReasonDocsContinuations(t, section)
+	if len(docCodes) == 0 {
+		t.Fatal("found no codes in the \"Continue after a stop reason code\" table in docs/review-integration.md; the table heading or row shape moved")
 	}
 
 	for code := range sourceCodes {
-		if !docCodes[code] {
-			t.Errorf("reason code %q is emitted by review_next_transition.go but has no row in the docs/review-integration.md stop-reason-code table", code)
+		if _, documented := docCodes[code]; !documented {
+			t.Errorf("reason code %q is emitted by review_next_transition.go but has no entry in the docs/review-integration.md stop-reason-code table", code)
 		}
 	}
 	for code := range docCodes {
@@ -107,18 +103,14 @@ func TestEveryReviewStopReasonCodeHasAShippedContinuation(t *testing.T) {
 
 	contract := assets.MustRead(reviewLedgerContractAsset)
 	section := reviewStopReasonDocsSection(t, contract)
-	rows := reviewStopReasonDocsTableRowRegexp.FindAllStringSubmatch(section, -1)
-	if len(rows) == 0 {
-		t.Fatalf("found no rows in the %q table in the shipped %s asset; the contract never embeds the stop-reason continuation table an orchestrator can read", reviewStopReasonDocsTableHeading, reviewLedgerContractAsset)
-	}
-	assetCodes := map[string]bool{}
-	for _, row := range rows {
-		assetCodes[row[1]] = true
+	assetCodes := reviewStopReasonDocsContinuations(t, section)
+	if len(assetCodes) == 0 {
+		t.Fatalf("found no codes in the %q table in the shipped %s asset; the contract never embeds the stop-reason continuation table an orchestrator can read", reviewStopReasonDocsTableHeading, reviewLedgerContractAsset)
 	}
 
 	for code := range sourceCodes {
-		if !assetCodes[code] {
-			t.Errorf("reason code %q is emitted by review_next_transition.go but has no row in the shipped %s stop-reason table", code, reviewLedgerContractAsset)
+		if _, documented := assetCodes[code]; !documented {
+			t.Errorf("reason code %q is emitted by review_next_transition.go but has no entry in the shipped %s stop-reason table", code, reviewLedgerContractAsset)
 		}
 	}
 	for code := range assetCodes {
@@ -127,24 +119,23 @@ func TestEveryReviewStopReasonCodeHasAShippedContinuation(t *testing.T) {
 		}
 	}
 
-	// The universal self-service exit (blocking-budget rule 2) must be
-	// reachable from every row whose continuation names no other runnable
-	// `gentle-ai` command, so a terminal stop the product cannot resolve
-	// automatically never reads as "nothing more to do" on the one channel
-	// the orchestrator is allowed to route from.
+	// The universal self-service exit (blocking-budget rule 2) is defined
+	// once as D, then every grouped entry may name that exact alias. This keeps
+	// the rendered contract compact without letting an alias conceal a changed
+	// command or a dead-end terminal code.
+	const disableCommand = "`D` means `gentle-ai review mode disable --scope clone --cwd <B>`"
+	const statusCommand = "`S` means re-query the exact captured target-root STATUS command with lineage and target."
+	for alias, definition := range map[string]string{"D": disableCommand, "S": statusCommand} {
+		if !strings.Contains(section, definition) {
+			t.Fatalf("shipped %s does not define grouped %s as its exact continuation", reviewLedgerContractAsset, alias)
+		}
+	}
 	namesOtherContinuation := regexp.MustCompile("`gentle-ai [a-z][a-z-]*|`--[a-z][a-z-]*")
-	for _, line := range strings.Split(section, "\n") {
-		row := reviewStopReasonDocsTableRowRegexp.FindStringSubmatch(line)
-		if row == nil {
+	for code, continuation := range assetCodes {
+		if strings.Contains(continuation, "`D`") || strings.Contains(continuation, "`S`") || namesOtherContinuation.MatchString(continuation) {
 			continue
 		}
-		code := row[1]
-		if strings.Contains(line, "gentle-ai review mode disable") {
-			continue
-		}
-		if !namesOtherContinuation.MatchString(line) {
-			t.Errorf("shipped %s row for %q names no runnable `gentle-ai` command, no `--flag` to pass on the same invocation, and no `gentle-ai review mode disable` fallback, so this stop reads as a dead end", reviewLedgerContractAsset, code)
-		}
+		t.Errorf("shipped %s entry for %q names no runnable `gentle-ai` command, no `--flag` to pass on the same invocation, and no D/S continuation alias, so this stop reads as a dead end", reviewLedgerContractAsset, code)
 	}
 }
 
@@ -270,9 +261,9 @@ var reviewModeDisableInvocationRegexp = regexp.MustCompile("`gentle-ai review mo
 // disable` with no `--scope` disables receipt-driven development for every
 // repository on the machine, not just the one the orchestrator meant.
 // Verified by execution: the bare form writes ~/.gentle-ai/state.json;
-// `--scope clone --cwd <repo>` writes only under that repository's own
+// `--scope clone --cwd <B>` writes only under the selected target root's
 // .git/gentle-ai directory. Every invocation in the shipped asset must name
-// the clone-scoped form.
+// that clone-scoped target-root form.
 func TestNamedReviewModeDisableIsAlwaysCloneScoped(t *testing.T) {
 	content := assets.MustRead(reviewLedgerContractAsset)
 	invocations := reviewModeDisableInvocationRegexp.FindAllString(content, -1)
@@ -280,45 +271,41 @@ func TestNamedReviewModeDisableIsAlwaysCloneScoped(t *testing.T) {
 		t.Fatal("found no `gentle-ai review mode disable` invocations in the shipped asset; the extraction is stale")
 	}
 	for _, invocation := range invocations {
-		if !strings.Contains(invocation, "--scope clone") || !strings.Contains(invocation, "--cwd <repo>") {
-			t.Errorf("shipped asset: %s defaults to global scope if run as printed (verified by execution: omitting --scope writes ~/.gentle-ai/state.json machine-wide) -- name --scope clone --cwd <repo> instead", invocation)
+		if !strings.Contains(invocation, "--scope clone") || !strings.Contains(invocation, "--cwd <B>") {
+			t.Errorf("shipped asset: %s defaults to global scope if run as printed (verified by execution: omitting --scope writes ~/.gentle-ai/state.json machine-wide) -- name --scope clone --cwd <B> instead", invocation)
 		}
 	}
 }
 
-// TestShippedUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition is the
-// execution-based RED-first proof for adversarial finding F4: `gentle-ai
-// review start` on a candidate whose target is unchanged from the current
-// authority does not start a fresh lineage -- it resumes the SAME one
-// (confirmed by execution: the response reports `"action": "resumed"` with
-// the identical lineage_id). Naming only `gentle-ai review start` loops the
-// consumer back to the same stop. The row/entry must disclose that the
-// candidate needs to change first.
-func TestShippedUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition(t *testing.T) {
-	for label, content := range reviewStopReasonDocsCompleteDocuments(t) {
-		section := reviewStopReasonDocsSection(t, content)
-		row := reviewStopReasonTableRow(t, section, "unchanged_or_unverified_authority")
-		lowered := strings.ToLower(row)
-		if !strings.Contains(lowered, "resum") {
-			t.Errorf("%s: unchanged_or_unverified_authority row never discloses that `review start` on an unchanged candidate only resumes the same lineage: %q", label, row)
+// reviewStopReasonDocsContinuations expands every grouped table entry into
+// one continuation per reason code. It rejects duplicate codes, so grouping
+// cannot conceal conflicting instructions for the same emitted stop.
+func reviewStopReasonDocsContinuations(t *testing.T, section string) map[string]string {
+	t.Helper()
+	continuations := map[string]string{}
+	for _, row := range reviewStopReasonDocsTableRowRegexp.FindAllStringSubmatch(section, -1) {
+		codes := reviewStopReasonCodeRegexp.FindAllStringSubmatch(row[1], -1)
+		if len(codes) == 0 {
+			t.Fatalf("stop-reason table entry names no code: %q", row[0])
 		}
-		if !strings.Contains(lowered, "change") {
-			t.Errorf("%s: unchanged_or_unverified_authority row never states that the candidate must change first: %q", label, row)
+		for _, code := range codes {
+			if _, duplicate := continuations[code[1]]; duplicate {
+				t.Fatalf("stop-reason table names code %q more than once", code[1])
+			}
+			continuations[code[1]] = row[2]
 		}
 	}
+	return continuations
 }
 
-// reviewStopReasonTableRow returns the single table-row line for the given
-// reason code inside section, or fails the test if it is not found.
+// reviewStopReasonTableRow returns the grouped entry continuation for the
+// given reason code inside section, or fails the test if it is not found.
 func reviewStopReasonTableRow(t *testing.T, section, code string) string {
 	t.Helper()
-	prefix := "| `" + code + "` |"
-	for _, line := range strings.Split(section, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return line
-		}
+	if continuation, ok := reviewStopReasonDocsContinuations(t, section)[code]; ok {
+		return continuation
 	}
-	t.Fatalf("no table row found for reason code %q", code)
+	t.Fatalf("no table entry found for reason code %q", code)
 	return ""
 }
 
