@@ -345,6 +345,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/judgment-day/references/prompts-and-formats.md",
 		"skills/_shared/persistence-contract.md",
 		"skills/_shared/engram-convention.md",
+		"skills/_shared/engram-project-identity.md",
 		"skills/_shared/openspec-convention.md",
 		"skills/_shared/sdd-phase-common.md",
 		"skills/_shared/sdd-status-contract.md",

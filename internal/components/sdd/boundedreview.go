@@ -75,7 +75,20 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 // hand every runtime the same false identity and walk it straight through the
 // review transport admission check (issue #2440).
 func renderBoundedReviewAsset(agent model.AgentID, path string) string {
-	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(agent, path), agent)
+	content := bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(agent, path), agent)
+	if isSDDCommandAsset(path) {
+		return injectEngramProjectIdentityContract(content)
+	}
+	return content
+}
+
+func isSDDCommandAsset(path string) bool {
+	for _, commandDir := range []string{"claude/commands", "opencode/commands"} {
+		if strings.HasPrefix(path, commandDir+"/sdd-") && strings.HasSuffix(path, ".md") {
+			return true
+		}
+	}
+	return false
 }
 
 // bindRuntimeAgentIdentity is the single substitution point every rendered

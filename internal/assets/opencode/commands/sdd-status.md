@@ -12,7 +12,7 @@ SDD Session Preflight must already be complete for this session. It must include
 CONTEXT:
 
 - Working directory: before doing anything else, run `git rev-parse --show-toplevel 2>/dev/null || pwd` with your bash tool and use the returned path as the authoritative workspace.
-- Current project: the `basename` of the detected workspace above.
+- Logical Engram identity: use the canonical project returned by `mem_current_project`, not the active workspace basename. The injected Engram Project Identity Contract defines caching and fallback behavior.
 - Change name: $ARGUMENTS
 
 TASK:

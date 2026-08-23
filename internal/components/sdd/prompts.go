@@ -102,6 +102,7 @@ func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string,
 		// indirection, which the in-settings injection deliberately skips —
 		// the contract must land here or those executors would miss it.
 		content = injectLanguageContractIntoPrompt(content)
+		content = injectEngramProjectIdentityContract(content)
 
 		path := filepath.Join(promptDir, phase+".md")
 		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
@@ -214,7 +215,7 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 // Primary-mode agents keep the persona channel's own rules; {file:...}
 // indirections are resolved elsewhere and stay untouched.
 func injectLanguageContractIntoOpenCodeSubagentPrompts(agentMap map[string]any) {
-	for _, agentRaw := range agentMap {
+	for name, agentRaw := range agentMap {
 		agent, ok := agentRaw.(map[string]any)
 		if !ok {
 			continue
@@ -226,6 +227,10 @@ func injectLanguageContractIntoOpenCodeSubagentPrompts(agentMap map[string]any) 
 		if !ok || strings.HasPrefix(prompt, "{file:") {
 			continue
 		}
-		agent["prompt"] = injectLanguageContractIntoPrompt(prompt)
+		prompt = injectLanguageContractIntoPrompt(prompt)
+		if strings.HasPrefix(name, "sdd-") {
+			prompt = injectEngramProjectIdentityContract(prompt)
+		}
+		agent["prompt"] = prompt
 	}
 }

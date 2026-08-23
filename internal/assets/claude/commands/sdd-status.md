@@ -11,7 +11,7 @@ SDD Session Preflight must already be complete for this session. It must include
 CONTEXT:
 
 - Working directory: Detect agent-side before proceeding by running `git rev-parse --show-toplevel` with the Bash tool; if that fails, run `pwd` with the Bash tool.
-- Current project: Derive agent-side from the detected working directory basename. Do not use slash-command shell interpolation for this value.
+- Logical Engram identity: use the canonical project returned by `mem_current_project`, not the active workspace basename. The injected Engram Project Identity Contract defines caching and fallback behavior.
 - Change name: $ARGUMENTS
 
 TASK:
