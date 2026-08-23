@@ -1243,12 +1243,11 @@ func edgeJourneys() []Journey {
 			// authority for the new one.
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: stage docs", Fixture: stageProse("", "abandoned")},
+				{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "abandon a non-terminal lineage with its V2 discarded-work binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 				{Name: "review start again after the abandonment", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+				{Name: "fresh active lineage remains abandonable instead of reusing the quarantined authority", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 			},
 		},
 		{
