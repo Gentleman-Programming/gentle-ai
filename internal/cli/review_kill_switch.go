@@ -35,11 +35,6 @@ import (
 // reporting `disabled/unmanaged` at exit 0 is exactly what lets ordinary
 // commit, push, and PR delivery proceed unmanaged.
 //
-// FINALIZE authorizes itself separately (see runReviewFacadeFinalize) because
-// only it can be either half: against an in-flight lineage it advances the
-// review, and against an already-terminal one it is the exact replay that
-// RDDOperationRead covers, which re-emits the frozen receipt and writes nothing.
-//
 // `review abandon` passes RDDOperationAbandon through the same mode
 // resolver. Its expected revision, authorization binding, persisted
 // pristineness proof, and quarantine audit record remain its own gates. Other

@@ -19,7 +19,9 @@ func invalidatedRecoverySelfDerivationPredecessor(t *testing.T, lineage string) 
 	t.Helper()
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/predecessor.md", "# predecessor\n\nplain prose, no executable content.\n", 0o644)
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+	// The invalidated compact predecessor is fixture setup for RECOVER. Construct
+	// it through the test-only legacy seam so the subject recovery remains real.
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
@@ -187,7 +189,9 @@ func TestReviewRecoverSelfDerivationActiveAttemptNeverAutoResets(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	lineage := "self-derive-active-attempt"
 	writeReviewStartCandidate(t, repo, "docs/active-attempt.md", "# active attempt\n\nplain prose, no executable content.\n", 0o644)
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+	// The reviewing compact predecessor is fixture setup for the active-attempt
+	// recovery refusal below, not a production START assertion.
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
