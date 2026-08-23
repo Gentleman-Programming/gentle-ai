@@ -20,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
@@ -573,6 +574,52 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectOpenCodeUsesExistingJSONCSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	mockNoPackageManager(t)
+
+	jsoncPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.MkdirAll(filepath.Dir(jsoncPath), 0o755); err != nil {
+		t.Fatalf("create OpenCode config directory: %v", err)
+	}
+	if err := os.WriteFile(jsoncPath, []byte(`{
+		// User-managed JSONC settings.
+		"provider": {"local": {"models": {"model": {"name": "Local", "tool_call": true},},},},
+	}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{{Name: "review"}}}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(jsoncPath), "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("opencode.json exists after JSONC injection: %v", err)
+	}
+	settings, err := os.ReadFile(jsoncPath)
+	if err != nil {
+		t.Fatalf("read JSONC settings: %v", err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(settings)
+	if err != nil {
+		t.Fatalf("parse injected JSONC settings: %v", err)
+	}
+	if _, ok := root["provider"].(map[string]any)["local"]; !ok {
+		t.Fatalf("injected settings lost user provider: %#v", root)
+	}
+	if !strings.Contains(string(settings), "User-managed JSONC settings.") {
+		t.Fatalf("injected settings lost user comment:\n%s", settings)
+	}
+	if _, ok := root["agent"].(map[string]any)["gentle-orchestrator"]; !ok {
+		t.Fatalf("injected settings missing SDD agent: %#v", root)
+	}
+	if _, ok := root["agent"].(map[string]any)["sdd-orchestrator-review"]; !ok {
+		t.Fatalf("injected settings missing named profile agent: %#v", root)
 	}
 }
 
