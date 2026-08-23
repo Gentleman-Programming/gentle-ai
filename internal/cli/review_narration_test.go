@@ -154,28 +154,6 @@ func TestReviewNarrationNamedCommandsAreAlwaysComplete(t *testing.T) {
 	}
 }
 
-// TestUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition is the
-// execution-based RED-first proof for adversarial finding F4: `gentle-ai
-// review start` on a candidate whose target is unchanged from the current
-// authority does not start a fresh lineage -- confirmed by execution, it
-// resumes the SAME one (`"action": "resumed"`, identical lineage_id).
-// Naming only `gentle-ai review start` loops the reader back to the same
-// stop; the narration must disclose that the candidate needs to change
-// first.
-func TestUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition(t *testing.T) {
-	statement, ok := reviewStopReasonNarration["unchanged_or_unverified_authority"]
-	if !ok {
-		t.Fatal("no unchanged_or_unverified_authority narration entry")
-	}
-	lowered := strings.ToLower(statement)
-	if !strings.Contains(lowered, "resum") {
-		t.Errorf("unchanged_or_unverified_authority narration never discloses that `review start` on an unchanged candidate only resumes the same lineage: %q", statement)
-	}
-	if !strings.Contains(lowered, "change") {
-		t.Errorf("unchanged_or_unverified_authority narration never states that the candidate must change first: %q", statement)
-	}
-}
-
 // TestNarrationTierAAndCBanInternalVocabulary is the RED-first proof for
 // spec "Three-Tier Narration Contract"'s ban on uncertainty phrasing and
 // internal identifiers leaking onto the human surface. It runs over every

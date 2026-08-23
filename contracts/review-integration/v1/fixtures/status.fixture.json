@@ -13,7 +13,7 @@
   "receipt": {
     "status": "expected_missing"
   },
-  "action": "finalize",
+  "action": "stop",
   "replayability": "not_replayable",
   "frozen": {
     "tier": "medium",
@@ -49,10 +49,6 @@
     "forbidden_actions": [
       {
         "action": "review.abandon",
-        "reason_code": "forbidden_required_inputs_unavailable"
-      },
-      {
-        "action": "review.finalize",
         "reason_code": "forbidden_required_inputs_unavailable"
       },
       {
