@@ -116,6 +116,8 @@ internal/agents/pi/model_routing_operation_envelope.go	ModelRoutingResponseError
 internal/agents/pi/model_routing_operation_envelope.go	ModelRoutingResponseError.Unwrap
 internal/agents/pi/model_routing_operation_envelope.go	decodeModelRoutingOperationEnvelope
 internal/agents/pi/model_routing_operation_envelope.go	modelRoutingResponseError
+internal/agents/pi/model_routing_validate_parser.go	ParseModelRoutingValidateResponse
+internal/agents/pi/model_routing_validate_parser.go	decodeModelRoutingValidationResult
 internal/agents/pi/package_root.go	ResolvePackageRoot
 internal/agents/pi/package_source.go	NotConfiguredError.Error
 internal/agents/pi/package_source.go	NotConfiguredError.Unwrap
