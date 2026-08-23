@@ -195,7 +195,7 @@ func (b *battery) runOpenCodeLane() {
 			return
 		default:
 			manifest := b.record("result-artifact", []byte(controlResult.Output))
-			if getString(manifest, "schema") != "gentle-ai.review-result-artifact/v2" || getString(manifest, "admission_decision") != "completed" {
+			if !admittedCapture(manifest) {
 				b.fail(openCodeLane, "lens frame: Go-typed control", "completion did not round-trip a completed result artifact")
 				return
 			}
@@ -317,6 +317,7 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 	validatorCaptured := false
+	var validationClosure map[string]any
 	hostRole, err := b.runHookCase(node, harnessCase{
 		Name:       "validator-host-serialized",
 		Subagent:   "review-validator",
@@ -328,6 +329,11 @@ func (b *battery) runOpenCodeLane() {
 		b.fail(openCodeLane, "validator frame: host-serialized", err.Error())
 	case hostRole.AfterOK:
 		validatorCaptured = true
+		validationClosure = b.record("provider-role", []byte(hostRole.Output))
+		if !admittedCapture(validationClosure) {
+			b.fail(openCodeLane, "validator frame: host-serialized", "role completion did not report an admitted validator capture")
+			return
+		}
 		b.pass(openCodeLane, "validator frame: host-serialized", "host-serialized role binding accepted end to end (fix merged)")
 		b.skip(openCodeLane, "validator frame: exact relay control", "host frame already captured the slot; control unnecessary")
 	case strings.Contains(hostRole.Error, bindingInvalid):
@@ -352,51 +358,31 @@ func (b *battery) runOpenCodeLane() {
 			b.fail(openCodeLane, "validator frame: exact relay control", firstLine(exact.Error))
 			return
 		default:
-			roleResult := b.record("provider-role", []byte(exact.Output))
-			if captured, _ := roleResult["captured"].(bool); !captured {
-				b.fail(openCodeLane, "validator frame: exact relay control", "role completion did not report captured=true")
+			validationClosure = b.record("provider-role", []byte(exact.Output))
+			if !admittedCapture(validationClosure) {
+				b.fail(openCodeLane, "validator frame: exact relay control", "role completion did not report an admitted validator capture")
 				return
 			}
 			b.pass(openCodeLane, "validator frame: exact relay control", "exact Go-issued role prompt round-tripped and captured")
 		}
 	}
 
-	// Terminal: finalize the captured validation to the approved receipt.
-	statusDoc, stderr, _ = b.status(repo, "opencode")
-	command := getString(statusDoc, "next_transition", "execute", "command")
-	if getString(statusDoc, "next_transition", "execute", "operation") != "review.finalize" || command == "" {
-		b.fail(openCodeLane, "correction lifecycle approved", fmt.Sprintf("expected finalize transition, got %s/%s %s",
-			getString(statusDoc, "next_transition", "kind"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+	if operationState(validationClosure) != "approved" {
+		b.fail(openCodeLane, "correction lifecycle approved", fmt.Sprintf("terminal state = %q, want approved", operationState(validationClosure)))
 		return
 	}
-	finalize, stderr, code := b.runCommandLine("operation", repo, command)
-	if code != 0 || operationState(finalize) != "approved" {
-		b.fail(openCodeLane, "correction lifecycle approved", fmt.Sprintf("exit=%d state=%q %s", code, operationState(finalize), firstLine(stderr)))
-		return
-	}
-	b.burnApproved(openCodeLane, "correction lifecycle burned", repo, "opencode", nil, finalize)
+	b.burnApproved(openCodeLane, "correction lifecycle burned", repo, "opencode", nil, validationClosure)
 }
 
-// driveCorrectionToValidation walks finalize -> correction plan -> fix edit ->
-// evidence capture, leaving the lineage waiting on targeted validation.
+// driveCorrectionToValidation follows the final reviewer capture directly to
+// the correction plan, then captures targeted validator evidence after editing.
 func (b *battery) driveCorrectionToValidation(repo, fixedBase string) bool {
+	// The final reviewer capture already produced correction_required; STATUS
+	// now offers only the narrow correction-plan capture before any edit.
 	statusDoc, stderr, _ := b.status(repo, "opencode")
-	command := getString(statusDoc, "next_transition", "execute", "command")
-	if getString(statusDoc, "next_transition", "execute", "operation") != "review.finalize" || command == "" {
-		b.fail(openCodeLane, "correction: finalize captured results", fmt.Sprintf("expected finalize transition; %s", firstLine(stderr)))
-		return false
-	}
-	finalize, stderr, code := b.runCommandLine("operation", repo, command)
-	if code != 0 || operationState(finalize) != "correction_required" {
-		b.fail(openCodeLane, "correction: finalize captured results", fmt.Sprintf("exit=%d state=%q %s", code, operationState(finalize), firstLine(stderr)))
-		return false
-	}
-
-	// Correction plan forecast is submitted BEFORE editing.
-	statusDoc, stderr, _ = b.status(repo, "opencode")
 	input := collectInput(statusDoc)
-	if input == nil || input["capture_operation"] != "external.plan_correction" {
-		b.fail(openCodeLane, "correction: plan forecast", fmt.Sprintf("no plan_correction collect input; %s", firstLine(stderr)))
+	if input == nil || input["capture_operation"] != "review.capture-correction-plan" {
+		b.fail(openCodeLane, "correction: plan forecast", fmt.Sprintf("no capture-correction-plan collect input; %s", firstLine(stderr)))
 		return false
 	}
 	tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"value": "2"})
@@ -414,27 +400,7 @@ func (b *battery) driveCorrectionToValidation(repo, fixedBase string) bool {
 		return false
 	}
 
-	// Correction verification evidence.
-	statusDoc, stderr, _ = b.status(repo, "opencode")
-	input = collectInput(statusDoc)
-	if input == nil || input["capture_operation"] != "review.capture-evidence" {
-		b.fail(openCodeLane, "correction: evidence capture", fmt.Sprintf("no capture-evidence collect input; %s", firstLine(stderr)))
-		return false
-	}
-	evidencePath := filepath.Join(b.workRoot, "opencode-evidence.txt")
-	evidence := fmt.Sprintf("crosslane battery %s: node --check src/greet.js passed; shout(null) now returns \"!\" instead of throwing\n", timestamp())
-	if err := os.WriteFile(evidencePath, []byte(evidence), 0o644); err != nil {
-		b.fail(openCodeLane, "correction: evidence capture", err.Error())
-		return false
-	}
-	tokens = substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
-	captureArgs := append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)
-	record, stderr, code := b.runJSON("verification-evidence", b.workRoot, captureArgs...)
-	if code != 0 || getString(record, "outcome") != "passed" {
-		b.fail(openCodeLane, "correction: evidence capture", fmt.Sprintf("exit=%d outcome=%q %s", code, getString(record, "outcome"), firstLine(stderr)))
-		return false
-	}
-	b.pass(openCodeLane, "correction: plan, fix, evidence", "forecast before edit, bounded fix, and passed evidence captured")
+	b.pass(openCodeLane, "correction: plan and fix", "forecast captured before the bounded edit; STATUS now owns the targeted-validator role route")
 	return true
 }
 

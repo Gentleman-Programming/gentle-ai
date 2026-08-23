@@ -33,13 +33,13 @@
     "schema": {"const": "gentle-ai.review-integration.start/v3"},
     "contract": {"const": "gentle-ai.review-integration/v2"},
     "operation": {"const": "review.start"},
-    "action": {"enum": ["created", "replayed"]},
+    "action": {"enum": ["created", "replayed", "closed"]},
     "lenses_required": {"type": "boolean"},
     "lineage_id": {"type": "string", "minLength": 1},
     "state": {
       "enum": [
         "unreviewed", "reviewing", "judges_confirmed", "findings_frozen", "evidence_classified", "fix_required",
-        "fixing", "fix_validating", "correction_required", "validating", "ready_final_verification", "final_verifying",
+        "fixing", "fix_validating", "correction_required", "validating",
         "approved", "escalated", "invalidated"
       ]
     },

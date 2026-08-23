@@ -189,9 +189,8 @@ func TestTargetedValidationRequestFromSnapshotIgnoresLaterWorkspaceChanges(t *te
 	}
 }
 
-func TestResolveCorrectedCandidateInspectionUsesCapturedEvidenceAfterLiveDrift(t *testing.T) {
-	passed := VerificationOutcomePassed
-	repo, request, correction, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-immutable", &passed)
+func TestResolveCorrectedCandidateInspectionUsesFrozenRequestAfterLiveDrift(t *testing.T) {
+	repo, request, correction, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-immutable", nil)
 	ctx := context.Background()
 	before, err := store.Load()
 	if err != nil {
@@ -222,7 +221,7 @@ func TestResolveCorrectedCandidateInspectionUsesCapturedEvidenceAfterLiveDrift(t
 }
 
 func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
-	passed := VerificationOutcomePassed
+	passed := struct{}{}
 	t.Run("forged request hash", func(t *testing.T) {
 		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-forged-hash", &passed)
 		request.RequestHash = hash("forged-request")
@@ -271,10 +270,11 @@ func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 			t.Fatalf("binding load error = %v, want %v", err, os.ErrNotExist)
 		}
 	})
-	t.Run("missing evidence", func(t *testing.T) {
-		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-missing-evidence", nil)
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
-			t.Fatal("missing repository evidence resolved")
+	t.Run("no verification evidence prerequisite", func(t *testing.T) {
+		_, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-no-evidence", nil)
+		resolved, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request)
+		if err != nil || !snapshotsEqual(resolved, correction) {
+			t.Fatalf("targeted inspection without verification evidence = %#v, %v", resolved, err)
 		}
 	})
 	t.Run("stale authority", func(t *testing.T) {
@@ -290,12 +290,7 @@ func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 			OriginalCriteria:     ValidationCheck{Passed: true, EvidenceHash: hash("1"), FixDeltaHash: fixHash},
 			CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash},
 		}, correction)
-		payload := []byte("repository verification passed\n")
-		evidence, err := NewVerificationEvidenceRecord(next.LineageID, current.Revision, correction, payload, passed)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := next.CompleteCorrectionVerification(correction, 2, validation, evidence, payload); err != nil {
+		if err := next.CompleteCorrectionVerification(correction, 2, validation); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.Replace(current.Revision, "review/complete-correction-verification", next); err != nil {
@@ -319,12 +314,12 @@ func TestTargetedValidationRequestCountsOnlyPartialCorrectionAcrossIntendedUntra
 
 	state := newCompactTestStateWithIntended(t, repo, "targeted-validation-partial-intended", []string{"intended.go"})
 	policy := "targeted validation frozen policy\n"
-	state.PolicyHash = hashArtifactPayload([]byte(policy))
+	state.PolicyHash = compactPolicyContentHash(policy)
 	state.FrozenPolicyContent = &policy
 	if state.OriginalChangedLines <= 200 || state.RiskLevel != RiskMedium || len(state.SelectedLenses) != 1 {
 		t.Fatalf("original review scope = lines:%d risk:%q lenses:%v", state.OriginalChangedLines, state.RiskLevel, state.SelectedLenses)
 	}
-	store := storeCompactStartAuthority(t, repo, state)
+	state, store := startReviewingCompactAuthority(t, repo, state)
 	record, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -399,10 +394,10 @@ func targetedValidationRequestFixtureWithFrozenPolicy(t *testing.T, lineage stri
 	state := newCompactTestState(t, repo, lineage)
 	if freezePolicy {
 		policy := "targeted validation frozen policy\n"
-		state.PolicyHash = hashArtifactPayload([]byte(policy))
+		state.PolicyHash = compactPolicyContentHash(policy)
 		state.FrozenPolicyContent = &policy
 	}
-	store := storeCompactStartAuthority(t, repo, state)
+	state, store := startReviewingCompactAuthority(t, repo, state)
 	record, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +432,7 @@ func targetedValidationRequestFixtureWithFrozenPolicy(t *testing.T, lineage stri
 	return repo, state, revision, store
 }
 
-func correctedInspectionFixture(t *testing.T, lineage string, outcome *VerificationOutcome) (string, TargetedValidationRequest, Snapshot, string, ReviewRepositoryContextBinding, CompactStore) {
+func correctedInspectionFixture(t *testing.T, lineage string, outcome any) (string, TargetedValidationRequest, Snapshot, string, ReviewRepositoryContextBinding, CompactStore) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -459,17 +454,10 @@ func correctedInspectionFixture(t *testing.T, lineage string, outcome *Verificat
 		t.Fatalf("correction identity = %s, want request target %s", correction.Identity, request.CorrectionTargetIdentity)
 	}
 	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: revision}
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
+	handle, err := PublishTargetedValidationReviewRepositoryContext(context.Background(), repo, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != nil {
-		if _, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{
-			StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: revision,
-			Target: correction, Payload: []byte("repository verification passed\n"), Outcome: *outcome,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	_ = outcome
 	return repo, request, correction, handle, binding, store
 }

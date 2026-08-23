@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,90 +18,35 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) {
+func TestCorrectionPlanStatusIsStableAcrossRestart(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, started, _, record, _ := capturedArtifact(t)
-	finalize := []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-results"}
-	var first bytes.Buffer
-	if err := RunReviewFacadeFinalize(finalize, &first); err != nil {
-		t.Fatal(err)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, repo, "correction-routing")
+	legacy := ReviewFacadeStartResult{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
+		SelectedLenses: started.SelectedLenses,
 	}
-	var repeated bytes.Buffer
-	if err := RunReviewFacadeFinalize(finalize, &repeated); err != nil {
-		t.Fatal(err)
-	}
-	var repeatedResult ReviewIntegrationFinalizeResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, repeated.Bytes()).Result, &repeatedResult)
-	if repeatedResult.State != reviewtransaction.StateValidating || repeatedResult.NextTransition == nil || repeatedResult.NextTransition.Kind != reviewNextTransitionCollect || repeatedResult.NextTransition.ReasonCode != "verification_evidence_required" {
-		t.Fatalf("repeated finalize made no-progress recommendation = %#v", repeatedResult)
-	}
-
-	statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}
-	var waiting bytes.Buffer
-	if err := RunReview(statusArgs, &waiting); err != nil {
-		t.Fatal(err)
-	}
-	var status ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, waiting.Bytes(), &status)
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-evidence" {
-		t.Fatalf("validating status = %#v", status.NextTransition)
-	}
-	evidence := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", status.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	var ready bytes.Buffer
-	if err := RunReview(statusArgs, &ready); err != nil {
-		t.Fatal(err)
-	}
-	decodeStrictReviewJSON(t, ready.Bytes(), &status)
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.finalize" {
-		t.Fatalf("evidence-ready status = %#v", status.NextTransition)
-	}
-	var terminal bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-evidence"}, &terminal); err != nil {
-		t.Fatal(err)
-	}
-	var finalized ReviewIntegrationFinalizeResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, terminal.Bytes()).Result, &finalized)
-	if finalized.State != reviewtransaction.StateApproved || finalized.NextTransition != nil {
-		t.Fatalf("captured evidence finalize result = %#v, want approved terminal result without next transition", finalized)
+	for order := range legacy.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == len(legacy.SelectedLenses)-1 {
+			findings = []facadeFinding{{
+				Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+				ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, legacy, order, findings, &bytes.Buffer{})
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
-}
-
-func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
-	t.Parallel()
-
-	initialTarget := strings.Repeat("a", 64)
-	currentTarget := strings.Repeat("b", 64)
-	transition := reviewFinalizeNextTransition(reviewtransaction.CompactState{
-		LineageID:       "corrected-validating-lineage",
-		State:           reviewtransaction.StateValidating,
-		RiskLevel:       reviewtransaction.RiskMedium,
-		InitialSnapshot: reviewtransaction.Snapshot{Identity: initialTarget},
-		CurrentSnapshot: reviewtransaction.Snapshot{Identity: currentTarget},
-	}, strings.Repeat("c", 64), nil, nil)
-	if transition.Kind != reviewNextTransitionCollect || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
-		t.Fatalf("corrected validating transition = %#v", transition)
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
 	}
-	arguments := transition.Collect.Inputs[0].Arguments
-	if len(arguments) != 3 || arguments[2].Name != "target" || arguments[2].Value != currentTarget {
-		t.Fatalf("corrected validating target arguments = %#v, want current snapshot %q", arguments, currentTarget)
-	}
-}
-
-func TestNegotiatedNextTransitionDiscoversCapturedArtifactsAndAdvances(t *testing.T) {
-	reviewEnabledHome(t)
-	repo, started, _, record, _ := capturedArtifact(t)
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}
+	args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--lineage", started.LineageID}
 	var first, replay bytes.Buffer
 	if err := RunReview(args, &first); err != nil {
 		t.Fatal(err)
@@ -111,273 +55,20 @@ func TestNegotiatedNextTransitionDiscoversCapturedArtifactsAndAdvances(t *testin
 		t.Fatal(err)
 	}
 	if first.String() != replay.String() {
-		t.Fatalf("next transition changed after restart:\n%s\n%s", first.String(), replay.String())
+		t.Fatalf("correction-plan STATUS changed after restart:\n%s\n%s", first.String(), replay.String())
 	}
 	var status ReviewTargetStatusResult
-	if err := json.Unmarshal(first.Bytes(), &status); err != nil {
-		t.Fatal(err)
+	decodeStrictReviewJSON(t, first.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "correction_plan_required" || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 ||
+		status.NextTransition.Collect.Inputs[0].CaptureOperation != reviewCaptureCorrectionPlanOperation {
+		t.Fatalf("correction-plan STATUS = %#v", status.NextTransition)
 	}
-	if err := status.Validate(); err != nil {
-		t.Fatal(err)
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("read-only correction-plan STATUS mutated authority: %v", err)
 	}
-	transition := status.NextTransition
-	if transition == nil || transition.Kind != reviewNextTransitionExecute || transition.Execute == nil || transition.Execute.Operation != "review.finalize" ||
-		len(transition.Execute.Artifacts) != len(record.State.SelectedLenses) || strings.Contains(first.String(), "reviewer-results") || strings.Contains(first.String(), repo) {
-		t.Fatalf("captured result transition = %#v\n%s", transition, first.String())
-	}
-	var finalized bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, &finalized); err != nil {
-		t.Fatal(err)
-	}
-	result := decodeReviewOperationEnvelope(t, finalized.Bytes())
-	var public ReviewIntegrationFinalizeResult
-	decodeStrictReviewJSON(t, result.Result, &public)
-	if public.NextTransition == nil || public.NextTransition.Kind != reviewNextTransitionCollect || public.NextTransition.ReasonCode != "verification_evidence_required" {
-		t.Fatalf("finalize transition = %#v\n%s", public.NextTransition, finalized.String())
-	}
-}
-
-func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testing.T) {
-	reviewEnabledHome(t)
-	for _, tt := range []struct {
-		name, reason          string
-		forecast              bool
-		change                bool
-		capturePassedEvidence bool
-		kind                  string
-	}{
-		{name: "forecast absent", reason: "correction_plan_required", kind: reviewNextTransitionCollect},
-		{name: "forecast present candidate unchanged", reason: "corrected_candidate_unavailable", forecast: true, kind: reviewNextTransitionStop},
-		{name: "forecast present candidate changed", reason: "correction_repository_verification_required", forecast: true, change: true, kind: reviewNextTransitionCollect},
-		{name: "forecast present candidate changed evidence passed", reason: "targeted_validation_required", forecast: true, change: true, capturePassedEvidence: true, kind: reviewNextTransitionCollect},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := initReviewCLIRepo(t)
-			candidatePath := filepath.Join(repo, "candidate.go")
-			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
-			started := runNegotiatedReviewStart(t, repo, "correction-routing-"+strings.ReplaceAll(tt.name, " ", "-"))
-			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
-			writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-				Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-					Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
-					ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
-					CausalDisposition: reviewtransaction.CausalIntroduced,
-				}}, Evidence: []string{"inspected exact candidate"},
-			})
-			if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
-				t.Fatal(err)
-			}
-			if tt.forecast {
-				if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, &bytes.Buffer{}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tt.change {
-				if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tt.capturePassedEvidence {
-				capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
-			}
-			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			before, err := os.ReadFile(store.StatePath())
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var directOutput bytes.Buffer
-			if err := RunReviewFacadeFinalize([]string{
-				"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
-			}, &directOutput); err != nil {
-				t.Fatalf("direct FINALIZE: %v\n%s", err, directOutput.String())
-			}
-			var direct ReviewIntegrationFinalizeResult
-			decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, directOutput.Bytes()).Result, &direct)
-
-			var statusOutput bytes.Buffer
-			if err := RunReview([]string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
-			}, &statusOutput); err != nil {
-				t.Fatalf("restarted STATUS: %v\n%s", err, statusOutput.String())
-			}
-			var status ReviewTargetStatusResult
-			decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
-			directTransition, _ := json.Marshal(direct.NextTransition)
-			statusTransition, _ := json.Marshal(status.NextTransition)
-			directRequest, _ := json.Marshal(direct.ValidationRequest)
-			statusRequest, _ := json.Marshal(status.ValidationRequest)
-			if direct.NextTransition == nil || status.NextTransition == nil || direct.NextTransition.Kind != tt.kind ||
-				direct.NextTransition.ReasonCode != tt.reason || !bytes.Equal(directTransition, statusTransition) ||
-				!bytes.Equal(directRequest, statusRequest) {
-				t.Fatalf("FINALIZE/STATUS routing mismatch:\ndirect=%s request=%#v\nstatus=%s request=%#v", directTransition, direct.ValidationRequest, statusTransition, status.ValidationRequest)
-			}
-			after, err := os.ReadFile(store.StatePath())
-			if err != nil || !bytes.Equal(before, after) {
-				t.Fatalf("read-only FINALIZE/STATUS routing mutated authority: %v", err)
-			}
-		})
-	}
-}
-
-func TestConsumedHistoricalCorrectionRoutesToRecoveryOrStop(t *testing.T) {
-	// Not parallel: opting in writes the user's global mode through t.Setenv,
-	// which Go forbids in a test that also calls t.Parallel.
-	reviewEnabledHome(t)
-
-	forecast := 1
-	for _, proposed := range []*int{nil, &forecast} {
-		for _, changed := range []bool{false, true} {
-			t.Run(fmt.Sprintf("forecasted=%t/changed=%t", proposed != nil, changed), func(t *testing.T) {
-				repo, lineage, store, before := historicalConsumedCorrectionRoutingFixture(t, proposed)
-				if changed {
-					writeReviewStartCandidate(t, repo, "candidate.go", historicalRoutingCandidate(3), 0o644)
-				}
-				statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", lineage}
-				var first, restarted bytes.Buffer
-				if err := RunReview(statusArgs, &first); err != nil {
-					t.Fatal(err)
-				}
-				var status ReviewTargetStatusResult
-				decodeStrictReviewJSON(t, first.Bytes(), &status)
-				wantAction, wantKind, wantReason := reviewtransaction.TargetStatusActionStop, reviewNextTransitionStop, "unchanged_or_unverified_authority"
-				if changed {
-					wantAction, wantKind, wantReason = reviewtransaction.TargetStatusActionRecover, reviewNextTransitionCollect, "recovery_authorization_required"
-				}
-				if status.Action != wantAction || status.ValidationRequest != nil || status.NextTransition == nil || status.NextTransition.Kind != wantKind || status.NextTransition.ReasonCode != wantReason {
-					t.Fatalf("historical status = action %q request %#v transition %#v", status.Action, status.ValidationRequest, status.NextTransition)
-				}
-				var directOutput bytes.Buffer
-				if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", lineage}, &directOutput); err != nil {
-					t.Fatal(err)
-				}
-				var direct ReviewIntegrationFinalizeResult
-				decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, directOutput.Bytes()).Result, &direct)
-				if direct.ValidationRequest != nil || direct.NextTransition == nil || direct.NextTransition.Kind != reviewNextTransitionStop || direct.NextTransition.ReasonCode != "unchanged_or_unverified_authority" {
-					t.Fatalf("historical direct FINALIZE = request %#v transition %#v", direct.ValidationRequest, direct.NextTransition)
-				}
-				if err := RunReview(statusArgs, &restarted); err != nil || restarted.String() != first.String() {
-					t.Fatalf("restarted STATUS changed: %v\nfirst=%s\nrestarted=%s", err, first.String(), restarted.String())
-				}
-				after, _ := os.ReadFile(store.StatePath())
-				if !bytes.Equal(before, after) {
-					t.Fatal("routing mutated historical predecessor authority")
-				}
-			})
-		}
-	}
-}
-
-func historicalConsumedCorrectionRoutingFixture(t *testing.T, proposed *int) (string, string, reviewtransaction.CompactStore, []byte) {
-	t.Helper()
-	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "candidate.go", historicalRoutingCandidate(1), 0o644)
-	var startOutput bytes.Buffer
-	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "historical-consumed-routing"}, &startOutput); err != nil {
-		t.Fatal(err)
-	}
-	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startOutput.Bytes(), &started)
-	if started.LineageID != "historical-consumed-routing" || started.State != reviewtransaction.StateReviewing || len(started.SelectedLenses) != 1 {
-		t.Fatalf("historical start = %#v", started)
-	}
-	result := filepath.Join(t.TempDir(), "blocking-result.json")
-	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong", ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed exact candidate"}})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	writeReviewStartCandidate(t, repo, "candidate.go", historicalRoutingCandidate(2), 0o644)
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	correctionRequiredRevision, err := reviewtransaction.CompactRevisionForState(record.State)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.State.State != reviewtransaction.StateCorrectionRequired || record.State.ProposedCorrectionLines == nil || *record.State.ProposedCorrectionLines != 2 || record.Revision != correctionRequiredRevision {
-		t.Fatalf("correction-required authority = %#v", record)
-	}
-	correction, err := facadeVerificationEvidenceTarget(context.Background(), repo, record.State, record.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, record.State, record.Revision, correction)
-	if err != nil {
-		t.Fatal(err)
-	}
-	validation, err := (facadeValidationResult{
-		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
-		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
-		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
-		FollowUps:            []reviewtransaction.FollowUp{},
-	}).compact(reviewtransaction.FixDeltaHashForSnapshot(correction), record.State.FixFindingIDs, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), correction)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := record.State.CompleteCorrection(correction, actual, validation); err != nil {
-		t.Fatal(err)
-	}
-	completedRevision, err := store.Replace(record.Revision, "review/complete-fix", record.State)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.Revision != completedRevision || record.State.State != reviewtransaction.StateValidating {
-		t.Fatalf("historical completed correction = %#v", record)
-	}
-	if len(record.State.CorrectionAttempts) != 1 {
-		t.Fatalf("historical correction attempts = %d, want exactly one", len(record.State.CorrectionAttempts))
-	}
-	record.State.State, record.State.ProposedCorrectionLines, record.State.ActualCorrectionLines = reviewtransaction.StateCorrectionRequired, proposed, nil
-	record.State.FixDeltaHash, record.State.OriginalCriteria, record.State.CorrectionRegression = reviewtransaction.EmptyFixDeltaHash, nil, nil
-	record.State.EvidenceHash, record.State.EvidenceRecordDigest = "", ""
-	record.State.EvidenceOutcome, record.State.EvidenceTargetIdentity, record.State.EvidenceAuthorityRevision = "", "", ""
-	record.State.CorrectionVerificationTarget = nil
-	lastAttempt := 0
-	record.State.CorrectionAttempts[lastAttempt].OriginalCriteria.Passed = false
-	record.State.CorrectionAttempts[lastAttempt].CorrectionRegression.Passed = false
-	if err := record.State.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	record.Revision, err = reviewtransaction.CompactRevisionForState(record.State)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Schema = "gentle-ai.review-state-record/v2"
-	payload, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload = append(payload, '\n')
-	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(store.ReceiptPath()); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(store.Dir, "finalize-attempt-journal.json")); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	return repo, started.LineageID, store, payload
-}
-
-func historicalRoutingCandidate(value int) string {
-	return fmt.Sprintf("package candidate\n\nfunc value() int { return %d }\nfunc spare1() int { return 0 }\nfunc spare2() int { return 0 }\nfunc spare3() int { return 0 }\n", value)
 }
 
 func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *testing.T) {
@@ -444,7 +135,6 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 			Projection: ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 		}
 	}
-	all := []ReviewTransitionArtifact{{Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: "sha256:" + strings.Repeat("c", 64), LineageID: "review-next-transition", TargetIdentity: "sha256:" + strings.Repeat("b", 64), Lens: reviewtransaction.LensReliability, SelectedOrder: 0}}
 	for _, tt := range []struct {
 		name          string
 		status        ReviewTargetStatusResult
@@ -457,14 +147,14 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 		{"unreviewed staged", status(reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionExecute, "review.start"},
 		{"unreviewed base ref", status(reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionExecute, "review.start"},
 		{"unreviewed overlay", status(reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionExecute, "review.start"},
-		{"reviewing low partial", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, nil, reviewNextTransitionCollect, ""},
-		{"reviewing medium all captured", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, all, reviewNextTransitionExecute, "review.finalize"},
-		{"reviewing high partial", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, nil, reviewNextTransitionCollect, ""},
-		{"correction required without provider request", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionStop, ""},
+		{"reviewing low partial", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, "", reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, nil, reviewNextTransitionCollect, ""},
+		{"reviewing all captured", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, "", reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, []ReviewTransitionArtifact{{}}, reviewNextTransitionStop, ""},
+		{"reviewing high partial", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, "", reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, nil, reviewNextTransitionCollect, ""},
+		{"correction required without provider request", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, "", reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionStop, ""},
 		{"unchanged corrected authority", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionStop, ""},
-		{"validating", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionCollect, ""},
-		{"pending finalize journal", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionReconcileFinalize, reviewtransaction.ReplayabilityStatusRequired), nil, nil, reviewNextTransitionStop, ""},
-		{"approved receipt requires exact burn retry", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionExecute, "review.finalize"},
+		{"validating", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, "", reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionStop, ""},
+		{"reviewing without selected lenses is terminal", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, "", reviewtransaction.ReplayabilityStatusRequired), nil, nil, reviewNextTransitionStop, ""},
+		{"approved authority is terminal", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionStop, ""},
 		{"invalidated", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateInvalidated, reviewtransaction.TargetStatusActionRecover, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionExecute, "review.recover"},
 		{"escalated unchanged", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateEscalated, reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionStop, ""},
 		{"ambiguous", status(reviewtransaction.TargetApplicabilityAmbiguous, "", reviewtransaction.TargetStatusActionSelectLineage, reviewtransaction.ReplayabilityStatusRequired), nil, nil, reviewNextTransitionCollect, ""},
@@ -476,14 +166,11 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 				input.RepositoryContext = "rctx1_" + strings.Repeat("d", 64)
 				input.CaptureContext = nextTransitionTestCaptureContext(t, tt.status, tt.lenses)
 			}
-			if tt.status.Authority.State == reviewtransaction.StateApproved {
-				tt.status.Receipt.Status = ReviewReceiptPresent
-			}
 			if tt.status.Action == reviewtransaction.TargetStatusActionRecover {
 				input = reviewNextTransitionInput{Successor: "review-next-successor", Reason: "authorized recovery", Actor: "maintainer"}
 				input.Authorization = "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + tt.status.Authority.LineageID + "\npredecessor_revision=" + tt.status.Authority.Revision + "\ntarget_identity=" + tt.status.TargetIdentity + "\nactor=" + input.Actor + "\nreason=" + input.Reason
 			}
-			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, nil, nil, input)
+			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, nil, input)
 			if tt.wantKind == "" {
 				if got != (ReviewNextTransition{}) {
 					t.Fatalf("approved status transition = %#v, want omitted", got)
@@ -503,40 +190,37 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 	}
 }
 
-// TestReviewTransitionArgumentToken is the RED-first proof for 1745: every
-// emitted Execute.Arguments entry must carry the exact, literally executable
-// argv token, and Preconditions (assertions, not argv) must never carry one.
+// TestReviewTransitionArgumentToken verifies that executable transition
+// arguments remain literal argv tokens while preconditions remain assertions.
 func TestReviewTransitionArgumentToken(t *testing.T) {
 	t.Parallel()
 
-	status := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
-		return ReviewTargetStatusResult{
-			Applicability: applicability, Action: action, Replayability: replayability,
-			TargetIdentity: "sha256:" + strings.Repeat("b", 64), Candidates: []string{"first", "second"},
-			Authority:  &ReviewTargetStatusAuthority{LineageID: "review-token", Revision: "sha256:" + strings.Repeat("a", 64), State: state},
-			Frozen:     &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
-			Projection: ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
-		}
-	}
-	all := []ReviewTransitionArtifact{{Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: "sha256:" + strings.Repeat("c", 64), LineageID: "review-token", TargetIdentity: "sha256:" + strings.Repeat("b", 64), Lens: reviewtransaction.LensReliability, SelectedOrder: 0}}
 	for _, tt := range []struct {
 		name       string
 		status     ReviewTargetStatusResult
-		lenses     []string
-		artifacts  []ReviewTransitionArtifact
 		input      reviewNextTransitionInput
 		wantTokens map[string]string
 	}{
 		{
-			name:   "captured results uses the real hyphenated flag",
-			status: status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable),
-			lenses: []string{reviewtransaction.LensReliability}, artifacts: all,
-			input:      reviewNextTransitionInput{RepositoryContext: "rctx1_" + strings.Repeat("d", 64)},
-			wantTokens: map[string]string{"lineage": "--lineage=review-token", "captured_results": "--captured-results=true"},
+			name: "fresh start token",
+			status: ReviewTargetStatusResult{
+				Applicability:  reviewtransaction.TargetApplicabilityUnrelated,
+				TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+				Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
+			},
+			input:      reviewNextTransitionInput{StartLineage: "review-token-start"},
+			wantTokens: map[string]string{"target": "--target=sha256:" + strings.Repeat("b", 64), "lineage": "--lineage=review-token-start"},
 		},
 		{
-			name:   "recovery authorized token",
-			status: status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateInvalidated, reviewtransaction.TargetStatusActionRecover, reviewtransaction.ReplayabilityManualActionRequired),
+			name: "recovery token",
+			status: ReviewTargetStatusResult{
+				Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+				Action:         reviewtransaction.TargetStatusActionRecover,
+				TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+				Authority:      &ReviewTargetStatusAuthority{LineageID: "review-token", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateInvalidated},
+				Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+				Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
+			},
 			input: reviewNextTransitionInput{
 				Successor: "review-token-successor", Reason: "authorized recovery", Actor: "maintainer",
 				Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-token\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=sha256:" + strings.Repeat("b", 64) + "\nactor=maintainer\nreason=authorized recovery",
@@ -545,20 +229,13 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.status.Authority.State == reviewtransaction.StateApproved {
-				tt.status.Receipt.Status = ReviewReceiptPresent
-			}
-			if tt.status.Authority.State == reviewtransaction.StateReviewing {
-				tt.input.CaptureContext = nextTransitionTestCaptureContext(t, tt.status, tt.lenses)
-			}
-			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, nil, nil, tt.input)
+			got := newReviewNextTransition(tt.status, nil, nil, nil, tt.input)
 			if got.Kind != reviewNextTransitionExecute || got.Execute == nil {
 				t.Fatalf("next transition = %#v, want an execute transition", got)
 			}
 			seen := map[string]bool{}
 			for _, argument := range got.Execute.Arguments {
-				want, checked := tt.wantTokens[argument.Name]
-				if checked {
+				if want, checked := tt.wantTokens[argument.Name]; checked {
 					if argument.Token != want {
 						t.Fatalf("argument %q token = %q, want %q", argument.Name, argument.Token, want)
 					}
@@ -570,15 +247,39 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 			}
 			for name := range tt.wantTokens {
 				if !seen[name] {
-					t.Fatalf("expected argument %q was not present in Execute.Arguments", name)
+					t.Fatalf("expected argument %q was not present in execute arguments", name)
 				}
 			}
 			for _, precondition := range got.Execute.Preconditions {
 				if precondition.Token != "" {
-					t.Fatalf("precondition %q carries a Token; preconditions are assertions, not argv", precondition.Name)
+					t.Fatalf("precondition %q carries an argv token", precondition.Name)
 				}
 			}
 		})
+	}
+}
+
+func TestReviewCaptureTransitionArgumentToken(t *testing.T) {
+	t.Parallel()
+
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-capture", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
+	}
+	lenses := []string{reviewtransaction.LensReliability}
+	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
+		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
+	})
+	if got.Kind != reviewNextTransitionCollect || got.Collect == nil || len(got.Collect.Inputs) != 1 {
+		t.Fatalf("next transition = %#v, want one capture input", got)
+	}
+	for _, argument := range got.Collect.Inputs[0].Arguments {
+		if strings.TrimSpace(argument.Token) == "" {
+			t.Fatalf("capture argument %q carries no literal argv token", argument.Name)
+		}
 	}
 }
 
@@ -589,7 +290,7 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 // left unsoftened: native STATUS (target_status.go:176-199) only ever sets
 // Action == TargetStatusActionRecover for StateEscalated when either the
 // target changed OR the authority is an accounting-only escalation eligible
-// for RecoverCompactAuthority's evidence-derived edge (issue found while
+// for RecoverCompactAuthority's record-derived edge (issue found while
 // investigating "escalated_recovery_requires_changed_target" as a Phase 3
 // SUSPECT stop code) — TargetStatusActionStop is the only other outcome, and
 // it is routed away to native_stop_required before this switch is ever
@@ -624,7 +325,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
 			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + changedTarget + "\nactor=maintainer\nreason=authorized recovery",
 		}
-		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
 			t.Fatalf("escalated changed-target transition = %#v, want an execute review.recover transition", got)
 		}
@@ -646,7 +347,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
 			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + unchangedTarget + "\nactor=maintainer\nreason=authorized recovery",
 		}
-		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
 			t.Fatalf("escalated unchanged-target transition (no selector) = %#v, want an execute review.recover transition — status.Action already vetted this as legal (accounting-only escalation), so this switch must not re-derive a target-changed requirement", got)
 		}
@@ -662,7 +363,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 	t.Run("unchanged target with a selector still stops via the generic recovery_scope_unchanged guard", func(t *testing.T) {
 		status := baseStatus(unchangedTarget, unchangedTarget)
 		input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}}}
-		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
 			t.Fatalf("escalated unchanged-target transition (selector) = %#v, want a bare stop", got)
 		}
@@ -672,88 +373,60 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 	})
 }
 
-// TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema is
-// the RED-first proof for the 1745 follow-up: the "token" field 1745 added to
-// ReviewTransitionArgument for execution arguments must be admissible under
-// the published, byte-pinned review-integration/v1 status.schema.json
-// contract. Before the schema fix, $defs/transition_argument declared
-// "additionalProperties": false with only name/value, so this real
-// "--captured-results=true" execute payload was schema-illegal even though
-// the CLI has emitted it since 1745.
-func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema(t *testing.T) {
+// TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedSchema
+// keeps native reviewer-capture argv tokens valid under the published v1
+// transition schema.
+func TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedSchema(t *testing.T) {
 	status := ReviewTargetStatusResult{
 		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
-		Action:         reviewtransaction.TargetStatusActionFinalize,
 		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
 		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
 		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
-	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" {
-		t.Fatalf("next transition = %#v, want an execute review.finalize transition", got)
-	}
-	found := false
-	for _, argument := range got.Execute.Arguments {
-		if argument.Name == "captured_results" {
-			found = true
-			if argument.Token != "--captured-results=true" {
-				t.Fatalf("captured_results token = %q, want --captured-results=true", argument.Token)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("captured_results argument missing from execute transition")
+	lenses := []string{reviewtransaction.LensReliability}
+	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
+		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
+	})
+	if got.Kind != reviewNextTransitionCollect || got.Collect == nil || len(got.Collect.Inputs) != 1 ||
+		got.Collect.Inputs[0].CaptureOperation != reviewCaptureResultCaptureOperation {
+		t.Fatalf("next transition = %#v, want one reviewer capture", got)
 	}
 	payload, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateAgainstPublishedNextTransitionSchema(t, payload)
+	validateAgainstPublishedNextTransitionSchemaV5(t, payload)
 }
 
-// TestReviewNextTransitionExecuteArtifactsValidateAgainstPublishedSchema is
-// the RED-first proof that a real "captured results" execute transition
-// carrying artifacts is admissible under the published, byte-pinned
-// review-integration/v1 status.schema.json contract. discoverCapturedReviewer
-// Artifacts (internal/cli/review_artifact.go) always populates SubjectHash and
-// AdmissionDecision on every ReviewTransitionArtifact it returns (no
-// omitempty on either field), but $defs/transition_artifact never declared
-// either property, so every execute transition carrying artifacts was
-// schema-illegal under "additionalProperties": false.
-func TestReviewNextTransitionExecuteArtifactsValidateAgainstPublishedSchema(t *testing.T) {
+func TestReviewNextTransitionCollectContextValidatesAgainstPublishedSchema(t *testing.T) {
 	status := ReviewTargetStatusResult{
 		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
-		Action:         reviewtransaction.TargetStatusActionFinalize,
 		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
-		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-artifact-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-context-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
 		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
-	artifacts := []ReviewTransitionArtifact{{
-		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability,
-		SHA256: "sha256:" + strings.Repeat("e", 64), LineageID: "review-artifact-schema",
-		TargetIdentity: status.TargetIdentity, Lens: reviewtransaction.LensReliability, SelectedOrder: 0,
-		SubjectHash: "sha256:" + strings.Repeat("f", 64), AdmissionDecision: reviewtransaction.ArtifactAdmissionCompleted,
-	}}
-	got := newReviewNextTransition(status, []string{reviewtransaction.LensReliability}, artifacts, nil, nil, reviewNextTransitionInput{})
-	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" || len(got.Execute.Artifacts) != 1 {
-		t.Fatalf("next transition = %#v, want an execute review.finalize transition carrying one artifact", got)
+	lenses := []string{reviewtransaction.LensReliability}
+	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
+		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
+	})
+	if got.Collect == nil || len(got.Collect.Inputs) != 1 || got.Collect.Inputs[0].ArtifactSubject == nil ||
+		got.Collect.Inputs[0].ChangedPathManifest == nil {
+		t.Fatalf("capture context = %#v", got)
 	}
 	payload, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateAgainstPublishedNextTransitionSchema(t, payload)
+	validateAgainstPublishedNextTransitionSchemaV5(t, payload)
 }
 
-// TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSchema
-// keeps the published schema bound to an executable, authorized selector
-// transition. Approved historical delivery status is intentionally terminal and
-// omits next_transition; it must not be misrepresented as an execute route.
-func TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSchema(t *testing.T) {
+// TestReviewNextTransitionRecoverySelectorArgumentsValidateAgainstPublishedSchema
+// keeps the published schema bound to an executable authorized recovery.
+func TestReviewNextTransitionRecoverySelectorArgumentsValidateAgainstPublishedSchema(t *testing.T) {
 	t.Run("authorized recovery selector executes and validates", func(t *testing.T) {
 		status := ReviewTargetStatusResult{
 			Applicability:           reviewtransaction.TargetApplicabilityCurrent,
@@ -764,7 +437,6 @@ func TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSch
 			AuthorityTargetIdentity: "sha256:" + strings.Repeat("c", 64),
 			Authority:               &ReviewTargetStatusAuthority{LineageID: "review-selector-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateApproved},
 			Frozen:                  &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
-			Receipt:                 ReviewTargetStatusReceipt{Status: ReviewReceiptPresent},
 			Projection:              ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, Kind: reviewtransaction.TargetBaseDiff, BaseTree: strings.Repeat("d", 40), CurrentCandidateTree: strings.Repeat("e", 40)},
 		}
 		input := reviewNextTransitionInput{
@@ -779,7 +451,7 @@ func TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSch
 		}
 		binding := reviewTransitionBinding(status.Authority, status.TargetIdentity, "")
 		input.Authorization = reviewTransitionRecoveryAuthorization(binding, input.Successor, input.Actor, input.Reason)
-		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, input)
 		wantSelectors := []ReviewTransitionArgument{{Name: "base-ref", Value: "main"}, {Name: "committed-only", Value: "true"}}
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" ||
 			got.Execute.SelectorArguments == nil || !reflect.DeepEqual(*got.Execute.SelectorArguments, wantSelectors) {
@@ -791,71 +463,32 @@ func TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSch
 		}
 		validateAgainstPublishedNextTransitionSchema(t, payload)
 	})
-
-	t.Run("approved compact authority routes exact burn retry", func(t *testing.T) {
-		status := ReviewTargetStatusResult{
-			Applicability:  reviewtransaction.TargetApplicabilityCurrent,
-			Action:         reviewtransaction.TargetStatusActionValidate,
-			TargetIdentity: "sha256:" + strings.Repeat("b", 64),
-			Authority:      &ReviewTargetStatusAuthority{LineageID: "review-selector-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateApproved},
-			Receipt:        ReviewTargetStatusReceipt{Status: ReviewReceiptPresent},
-			Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, Kind: reviewtransaction.TargetBaseDiff},
-		}
-		got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{
-			Gate: reviewtransaction.GatePrePR,
-			Selector: &reviewTransitionSelector{
-				Kind: reviewtransaction.TargetBaseDiff, BaseRef: "main", PrePRRepresentable: true,
-			},
-		})
-		if got.Kind != reviewNextTransitionExecute || got.ReasonCode != "approved_compact_burn_required" ||
-			got.Execute == nil || got.Execute.Operation != "review.finalize" || got.Execute.Binding.LineageID != status.Authority.LineageID {
-			t.Fatalf("approved compact authority transition = %#v, want exact FINALIZE burn retry", got)
-		}
-		payload, err := json.Marshal(got)
-		if err != nil {
-			t.Fatal(err)
-		}
-		validateAgainstPublishedNextTransitionSchema(t, payload)
-	})
 }
 
-// TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema is
-// the v2 sibling of TestReviewNextTransitionExecuteArgumentValidatesAgainst
-// PublishedSchema: the same "token" field is emitted on every Execute
-// .Arguments entry regardless of which status schema version renders it, but
-// status-v2.schema.json's own $defs/transition_argument had the identical
-// "additionalProperties": false gap the v1 file just had fixed.
-func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema(t *testing.T) {
+// TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedV2Schema
+// pins native reviewer-capture arguments to the v2 transition schema.
+func TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedV2Schema(t *testing.T) {
 	status := ReviewTargetStatusResult{
+		Contract:       ReviewIntegrationContractV2,
 		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
-		Action:         reviewtransaction.TargetStatusActionFinalize,
 		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
 		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-schema-v2", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
 		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
-	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" {
-		t.Fatalf("next transition = %#v, want an execute review.finalize transition", got)
-	}
-	found := false
-	for _, argument := range got.Execute.Arguments {
-		if argument.Name == "captured_results" {
-			found = true
-			if argument.Token != "--captured-results=true" {
-				t.Fatalf("captured_results token = %q, want --captured-results=true", argument.Token)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("captured_results argument missing from execute transition")
+	lenses := []string{reviewtransaction.LensReliability}
+	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
+		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
+	})
+	if got.Kind != reviewNextTransitionCollect || got.Collect == nil || len(got.Collect.Inputs) != 1 {
+		t.Fatalf("next transition = %#v, want one reviewer capture", got)
 	}
 	payload, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateAgainstPublishedNextTransitionSchemaV2(t, payload)
+	validateAgainstPublishedNextTransitionSchemaV5(t, payload)
 }
 
 // validateAgainstPublishedNextTransitionSchema validates payload against the
@@ -1002,11 +635,11 @@ func nextTransitionTestCaptureContext(t *testing.T, status ReviewTargetStatusRes
 
 func TestReviewNextTransitionRefusesTargetDriftAndUnverifiableCaptures(t *testing.T) {
 	status := ReviewTargetStatusResult{
-		Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionFinalize,
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
 		Authority:      &ReviewTargetStatusAuthority{LineageID: "target-drift", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64), Frozen: &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskHigh},
 	}
-	got := newReviewNextTransition(status, []string{reviewtransaction.LensRisk}, nil, nil, errors.New("tampered capture"), reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, []string{reviewtransaction.LensRisk}, nil, errors.New("tampered capture"), reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionStop || got.ReasonCode != "captured_artifacts_unverifiable" || got.Execute != nil || got.Collect != nil {
 		t.Fatalf("target drift transition = %#v", got)
 	}
@@ -1022,7 +655,7 @@ func TestReviewForecastMirrorsExactlyOneNextTransition(t *testing.T) {
 		{name: "execute", status: ReviewTargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityUnrelated, TargetIdentity: "sha256:" + strings.Repeat("a", 64)}, horizon: ForecastHorizonPartial},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			head := newReviewNextTransition(tt.status, nil, nil, nil, nil, reviewNextTransitionInput{})
+			head := newReviewNextTransition(tt.status, nil, nil, nil, reviewNextTransitionInput{})
 			forecast := newReviewForecast(head)
 			if forecast.Horizon != tt.horizon || len(forecast.Steps) != 1 {
 				t.Fatalf("forecast = %#v, want one %s step", forecast, tt.horizon)
@@ -1130,6 +763,9 @@ func TestNativeStatusSchemasValidateWholeForecastEnvelope(t *testing.T) {
 				t.Fatal(err)
 			}
 			document["schema"] = "gentle-ai.review-integration.status/v" + strings.TrimSuffix(strings.TrimPrefix(name, "status-v"), ".schema.json")
+			if name == "status-v4.schema.json" {
+				document["receipt"] = map[string]any{"status": "expected_missing"}
+			}
 			schema := compileWholeNativeStatusSchema(t, name)
 			if err := schema.Validate(document); err != nil {
 				t.Fatalf("whole %s envelope rejected fixture: %v", name, err)

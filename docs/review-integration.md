@@ -12,7 +12,7 @@ RDD is opt-in. Until a user enables it with `gentle-ai review mode enable --scop
 
 1. Preflight only the current worktree with selectorless negotiated STATUS.
 2. Execute its exact START, then retain the returned lineage, revision, and target tokens.
-3. Use those exact tokens for every STATUS, capture, and FINALIZE call until native approval burns the transaction.
+3. Use those exact tokens for every STATUS and capture call until native approval burns the transaction.
 4. Follow ordinary repository policy for commit, push, PR, release, and archive.
 
 ```bash
@@ -29,7 +29,7 @@ A session in repository A may review a nested target in unrelated repository B o
 
 | Rule | Contract |
 | --- | --- |
-| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, validation, FINALIZE, and burn. A is never a fallback. |
+| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, targeted validation, and burn. A is never a fallback. |
 | Commands | Run provider-issued tokens unchanged. If a command omits `--cwd`, run it with process cwd B. |
 | Opaque capture | `repository_context` can materialize or capture from another process cwd, but remains B-bound. |
 | Isolation | Equal lineage text in A and B names independent transactions. Approval burns B only; A remains untouched. |
@@ -51,7 +51,7 @@ An exact replay of an active START can return `replayed`. A genuinely new START 
 
 ### 3. Bound calls drive the transaction
 
-Every later STATUS, `review capture-result`, and FINALIZE call for this transaction carries the exact captured lineage, revision, and target tokens. The parent routes only from that transaction's returned `next_transition`:
+Every later STATUS and bound capture call for this transaction carries the exact captured lineage, revision, and target tokens. The parent routes only from that transaction's returned `next_transition`:
 
 | Transition | Parent action |
 | --- | --- |
@@ -65,7 +65,7 @@ A forecast is descriptive, not a route. Relay every forecast step and horizon lo
 
 Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. On success it reads back terminal approval, then burns the exact lineage and its artifacts before returning `approved`.
 
-No terminal receipt, tombstone, witness, mirror, or delivery authority survives the burn. Other lineages and worktrees are unaffected. After any non-clean FINALIZE outcome—including malformed or empty output, transport failure, post-mutation ambiguity, or an authority that may already be terminally committed—do not replay FINALIZE directly. Retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only that returned action.
+No terminal receipt, tombstone, witness, mirror, or delivery authority survives the burn. Other lineages and worktrees are unaffected. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
 
 ## Reviewer transport
 
@@ -104,31 +104,26 @@ A `stop` carries one reason code and no executable transition. The table below i
 
 | Reason code | Continuation |
 | --- | --- |
-| `captured_verification_evidence_invalid` | Terminal — captured verification evidence failed integrity checks. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to return delivery to ordinary policy. |
 | `captured_artifacts_unverifiable` | Terminal — a captured reviewer artifact failed local verification. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `captured_result_selection_unavailable` | Terminal — an internal result-selection invariant failed. Ask a maintainer to inspect the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `corrected_candidate_unavailable` | Change the correction candidate in B, then re-query `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition` with the captured lineage and target. Do not reuse the pre-correction target. |
 | `empty_base_diff_bootstrap_required` | Terminal — the committed base has no reviewable paths. Use the separately authorized empty-root bootstrap for a new target, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `lens_context_budget_exceeded` | Terminal — immutable reviewer context cannot be truncated. Reduce the B candidate scope and start a new transaction, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `correction_repository_verification_failed` | Change the open correction candidate in B, then re-query `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition` with the captured lineage and target for new repository evidence. |
 | `corrupted_or_unverifiable_authority` | Terminal — the authority is unreadable or unsupported. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `final_verification_retry_unavailable` | Terminal — final-verification retry eligibility violated an internal invariant. Ask a maintainer to inspect the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `manual_intervention_required` | Terminal — the authority state is outside the negotiated lifecycle. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `missing_authority_binding` | Terminal — a current target had no authority binding. File a bounded defect with the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `native_stop_required` | Terminal — the lineage is escalated but has no native continuation. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `original_finalize_request_required` | Re-run `gentle-ai review finalize --lineage <id>` with the exact original content-bound payload. |
 | `recovery_scope_unchanged` | Change B so its target identity differs, then retry the exact returned `gentle-ai review recover` invocation. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and start a fresh target; otherwise run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `unchanged_or_unverified_authority` | Terminal — `gentle-ai review start` on an unchanged candidate only resumes the same lineage. Change B first, then start a new transaction, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered by STATUS, then re-run its exact repository-bound STATUS command. |
 
 ## Published v1 compatibility reference
 
-The published v1 directory contains 24 strict JSON Schemas and 27 deterministic conformance fixtures. These are read-only compatibility inventory, not durable v2 receipt, gate-allow, or mirror state.
+The published v1 directory contains 22 strict JSON Schemas and 24 deterministic conformance fixtures. These are read-only compatibility inventory, not durable v2 receipt, gate-allow, or mirror state.
 
 - `legacy_v1_read_only` failures retain `mutation_outcome` values `not_started`, `unknown`, and `committed`; Legacy-v1 never reports `publication_pending`, with retry and replay disabled where its historical operation requires a new compact lineage.
-- Historical `ordinary_4r` legacy status omits `frozen`. START, finalize, BIND-SDD, invalidation, and direct append are compatibility names only and never re-enter the atomic lifecycle.
-- Published vocabulary remains readable: `native_frozen_candidate_context`, `base_tree`, `candidate_tree`, `changed_path_manifest`, `opaque_repository_context`, `provider_targeted_validation_request`, `provider_artifact_admission`, `validating_result_reopen`, `recovered_correction_evidence`, `one_shot_final_verification_retry`, `outcome_bound_verification_evidence`, `review.retry_final_verification`, and `procedural_tooling_failure`.
+- Historical `ordinary_4r` legacy status omits `frozen`. START, BIND-SDD, invalidation, and direct append are compatibility names only and never re-enter the atomic lifecycle.
+- Published vocabulary remains readable: `native_frozen_candidate_context`, `base_tree`, `candidate_tree`, `changed_path_manifest`, `opaque_repository_context`, `provider_targeted_validation_request`, `provider_artifact_admission`, `validating_result_reopen`, and `recovered_correction_evidence`.
 - Artifact compatibility names remain `artifact_subjects`, `subject_hash`, and `admission_decision: completed`; low-risk compatibility names remain `native_low_risk_verification`, `selected_lenses: []`, and `receipt_scope_changed`. They describe historical data only and do not restore a receipt after an atomic approval burn.
 - Operational bounds remain a 25-second aggregate budget, 120-second budget, 180-second budget, and one-second wait delay. Persistent compact `LOCK` JSON is advisory diagnostics. `context.scope_change` and `review.recover` are explicit compatibility/recovery vocabulary, not ambient lifecycle discovery.
 

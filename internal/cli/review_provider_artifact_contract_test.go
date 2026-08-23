@@ -21,8 +21,8 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		// and the purified identity domain legitimately changed that hash for
 		// every new snapshot. Deliberate, not drift.
 		"fixtures/start-v2.fixture.json":         "2699660832c0d944184d5d314f08774ab9a02f5b8a7a4c2a07983440e0e346ad",
-		"fixtures/status.fixture.json":           "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
-		"fixtures/status-v2.fixture.json":        "33c5032dcd5d916b4bff73781495640da83893b2f2b334465cbb40c18e1b85f4",
+		"fixtures/status.fixture.json":           "a1f28b7d5351e000aca5238ed6348a0838fe2c0e64ce894ebcd8b43851063ff6",
+		"fixtures/status-v2.fixture.json":        "ff3690a9e716c9fa48e3c26a67047f9b4ce4c3cce8391a240dbe9834bd4e13ee",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
 		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
@@ -35,8 +35,8 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
 		"schemas/start-v2.schema.json":  "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":    "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
-		"schemas/status-v2.schema.json": "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
+		"schemas/status.schema.json":    "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
+		"schemas/status-v2.schema.json": "83e9d178cedde84d975e12c0fd157ac6f0e0a1c10173e6e6b7cb65c276109f91",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -53,12 +53,12 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"fixtures/capabilities.fixture.json": "17c150d851c15b3f0c20d18c2e2741eb2232ffa24f35aa71d6d30e90a85e42b7",
+		"fixtures/capabilities.fixture.json": "8d5e1a8491db1a5a2f6329e8c1d5cd210dd175e0525ff4d51fa914351d2fcf08",
 		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
-		"fixtures/status.fixture.json":       "4cd77906bacdca35d8f99773de147211d2b05fe34dd1b999011ead09e84be7a5",
-		"schemas/capabilities.schema.json":   "7ab061ed27bd3b929d6033cc20f56097e851f4454ca14a815255748b50191248",
+		"fixtures/status.fixture.json":       "846377e06df2cae3587c4258ea75fe1ec1b51f08d01f1d498378c3bf13e93921",
+		"schemas/capabilities.schema.json":   "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		"schemas/status.schema.json":         "ce997e14c26d3ad25420622a5c2a93feb40732f68025cbe781bedcfec2112327",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -75,12 +75,12 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"fixtures/capabilities-v2.1.fixture.json": "4bbcbaed1b20e6ea8f9c615f35ff17b13ee69b4648784a4906191880751c668d",
+		"fixtures/capabilities-v2.1.fixture.json": "96d157898c2bed6d028203999c081fcbb7992fb91a61f27b7eaab80c95245bd6",
 		// issue #2659: consent-v3 embeds a freshly minted target_identity;
 		// the purified identity domain legitimately changed that hash.
 		// Deliberate, not drift.
 		"fixtures/consent-v3.fixture.json":      "feb1dc7705f7da6490698ef48021bb7730de154ae23ec73d033d8d96fa996a21",
-		"schemas/capabilities-v2.1.schema.json": "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
+		"schemas/capabilities-v2.1.schema.json": "95d2b8b46e9be6e6fbc874fc763029cb7994951336c8974dc1694834d64bf06e",
 		// Cross-lane battery conformance fix: the schema pinned the choice
 		// invocations to `--agent claude-code`, but the live emitter omits the
 		// agent token when the caller declared no runtime (the pinned fixture
@@ -91,7 +91,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// the emitter legitimately publishes once the relay handshake is
 		// declared. Deliberate, not drift.
 		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
-		"schemas/status.schema.json":     "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		"schemas/status.schema.json":     "ce997e14c26d3ad25420622a5c2a93feb40732f68025cbe781bedcfec2112327",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -108,7 +108,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
+		"fixtures/status-v5.fixture.json": "da401836833192a400493787b256b5f19b3a5ec5fd325ad45d8dcaeadfeea81e",
 		// Cross-lane battery conformance fix: live negotiated STATUS publishes
 		// the top-level repository_context reference (review_status_contract.go's
 		// ReviewTargetStatusResult, populated since the recovered-units merges),
@@ -122,7 +122,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
-		"schemas/status-v5.schema.json": "4dd17e863725edb20e9cbb85d9614dfdc07ef6c9257aa789f4c9e8835400483e",
+		"schemas/status-v5.schema.json": "28ef37a2af0b78be9435c2adecd3a3c3446e3db8a6df7b8fcc35bf3b01c0ecda",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

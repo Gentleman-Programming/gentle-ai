@@ -26,7 +26,6 @@ expected_contract = [
 	contract_root / "fixtures/capabilities-v1.5.fixture.json",
     contract_root / "fixtures/capabilities.fixture.json",
 	contract_root / "fixtures/consent.fixture.json",
-	contract_root / "fixtures/final-verification-incident.fixture.json",
     contract_root / "fixtures/failure.fixture.json",
     contract_root / "fixtures/operation.fixture.json",
 	contract_root / "fixtures/repair-preflight.fixture.json",
@@ -38,13 +37,11 @@ expected_contract = [
     contract_root / "fixtures/status-unrelated.fixture.json",
     contract_root / "fixtures/status-v2-ambiguous.fixture.json",
 	contract_root / "fixtures/status-v2-corrupted.fixture.json",
-	contract_root / "fixtures/status-v2-final-verification-retry.fixture.json",
     contract_root / "fixtures/status-v2-recover.fixture.json",
 	contract_root / "fixtures/status-v2-repair.fixture.json",
     contract_root / "fixtures/status-v2-unrelated.fixture.json",
     contract_root / "fixtures/status-v2.fixture.json",
     contract_root / "fixtures/status.fixture.json",
-	contract_root / "fixtures/verification-evidence.fixture.json",
 	contract_root / "schemas/admitted-result.schema.json",
 	contract_root / "schemas/artifact-subject.schema.json",
 	contract_root / "schemas/authority-repair-assessment.schema.json",
@@ -57,7 +54,6 @@ expected_contract = [
 	contract_root / "schemas/consent.schema.json",
 	contract_root / "schemas/correction-plan-request.schema.json",
     contract_root / "schemas/failure.schema.json",
-	contract_root / "schemas/final-verification-incident.schema.json",
     contract_root / "schemas/operation.schema.json",
     contract_root / "schemas/projection.schema.json",
 	contract_root / "schemas/repair.schema.json",
@@ -68,7 +64,6 @@ expected_contract = [
     contract_root / "schemas/status-v2.schema.json",
     contract_root / "schemas/status.schema.json",
     contract_root / "schemas/targeted-validation-request.schema.json",
-	contract_root / "schemas/verification-evidence.schema.json",
 	current_contract_root / "fixtures/capabilities-v2.1.fixture.json",
 	current_contract_root / "fixtures/capabilities-v2.2.fixture.json",
 	current_contract_root / "fixtures/capabilities.fixture.json",
@@ -88,6 +83,7 @@ expected_contract = [
 	current_contract_root / "schemas/consent.schema.json",
 	current_contract_root / "schemas/failure.schema.json",
 	current_contract_root / "schemas/gate-result.schema.json",
+	current_contract_root / "schemas/last-event-closure.schema.json",
 	current_contract_root / "schemas/opencode-provider-role.schema.json",
 	current_contract_root / "schemas/operation.schema.json",
 	current_contract_root / "schemas/repair.schema.json",
@@ -106,6 +102,36 @@ source_names = sorted(
 )
 assert source_names == expected_names, (
     f"review contract inventory mismatch\ngot={source_names}\nwant={expected_names}"
+)
+
+for relative in (
+    current_contract_root / "fixtures/capabilities.fixture.json",
+    current_contract_root / "fixtures/capabilities-v2.1.fixture.json",
+    current_contract_root / "schemas/capabilities.schema.json",
+    current_contract_root / "schemas/capabilities-v2.1.schema.json",
+):
+    document = json.loads((repo / relative).read_text(encoding="utf-8"))
+    payload = json.dumps(document, sort_keys=True)
+    for retired in (
+        "review.bind_sdd",
+        "review.finalize",
+        "review.retry_final_verification",
+        "review-final-verification-incident",
+        "review-verification-evidence",
+        "one_shot_final_verification_retry",
+        "outcome_bound_verification_evidence",
+        "sdd_receipt_binding",
+    ):
+        assert retired not in payload, f"{relative} retains retired capability vocabulary {retired}"
+
+v22 = json.loads((repo / current_contract_root / "schemas/capabilities-v2.2.schema.json").read_text(encoding="utf-8"))
+v22_payload = json.dumps(v22, sort_keys=True)
+for retired in ("gentle-ai.review-receipt/v2", "sdd_receipt_binding"):
+    assert retired not in v22_payload, f"v2.2 capabilities retains retired vocabulary {retired}"
+
+status_v5 = json.loads((repo / current_contract_root / "schemas/status-v5.schema.json").read_text(encoding="utf-8"))
+assert "receipt" not in status_v5["required"] and "receipt" not in status_v5["properties"], (
+    "status-v5 must accept receiptless runtime STATUS envelopes"
 )
 source_hashes = {
     name: hashlib.sha256((repo / name).read_bytes()).hexdigest()

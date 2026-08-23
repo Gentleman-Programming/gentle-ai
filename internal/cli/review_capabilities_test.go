@@ -236,14 +236,14 @@ func TestReviewCapabilitiesAdvertisesOnlyNativeSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantOperations := []string{
-		"review.bind_sdd", "review.capabilities", "review.finalize", "review.repair", "review.retry_final_verification", "review.start", "review.status", "review.validate",
+		"review.capabilities", "review.repair", "review.start", "review.status", "review.validate",
 	}
 	wantGates := []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"}
 	wantProjections := []string{"staged", "workspace"}
 	if !slices.Equal(result.Operations, wantOperations) || !slices.Equal(result.Gates, wantGates) || !slices.Equal(result.Projections, wantProjections) {
 		t.Fatalf("capability surface = operations %v gates %v projections %v", result.Operations, result.Gates, result.Projections)
 	}
-	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) || !slices.Contains(result.Schemas, reviewtransaction.FinalVerificationIncidentSchema) {
+	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) {
 		t.Fatalf("capability schemas do not advertise the negotiated provider surface: %v", result.Schemas)
 	}
 	if result.Bootstrap == nil || result.Bootstrap.Command != "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition" ||
@@ -284,7 +284,7 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateFinalVerificationContractSchema(t, "capabilities-v1.5.schema.json", fixture)
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "capabilities-v1.5.schema.json"), fixture)
 	decoder := json.NewDecoder(bytes.NewReader(fixture))
 	decoder.DisallowUnknownFields()
 	var result ReviewCapabilitiesResult
@@ -600,13 +600,10 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 	}
 	wantMandatory := []ReviewCapabilityFeature{
 		{Name: "compact_v2_authority", Supported: true, Requires: []string{}},
-		{Name: "exact_receipt_replay", Supported: true, Requires: []string{"compact_v2_authority"}},
-		{Name: "five_delivery_gates", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "immutable_snapshot", Supported: true, Requires: []string{}},
 		{Name: "legacy_v1_target_scoped_read_only", Supported: true, Requires: []string{"target_scoped_status"}},
 		{Name: "repository_independent_capabilities", Supported: true, Requires: []string{}},
 		{Name: "restart_safe_projection", Supported: true, Requires: []string{"target_scoped_status"}},
-		{Name: "sdd_receipt_binding", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "target_scoped_status", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 		{Name: "uniform_failure_envelope", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 	}
@@ -614,13 +611,10 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "base_ref_workspace_overlay", Supported: true, Requires: []string{"immutable_snapshot", "restart_safe_projection"}},
 		{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 		{Name: "classified_authority_repair", Supported: true, Requires: []string{"native_next_transition", "uniform_failure_envelope"}},
-		{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
 		{Name: "native_frozen_candidate_context", Supported: true, Requires: []string{"immutable_snapshot"}},
 		{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "native_next_transition", Supported: true, Requires: []string{"target_scoped_status"}},
-		{Name: "one_shot_final_verification_retry", Supported: true, Requires: []string{"compact_v2_authority", "exact_receipt_replay", "native_next_transition"}},
 		{Name: "opaque_repository_context", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
-		{Name: "outcome_bound_verification_evidence", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "provider_artifact_admission", Supported: true, Requires: []string{"compact_v2_authority", "native_frozen_candidate_context", "opaque_repository_context"}},
 		{Name: "provider_targeted_validation_request", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
@@ -665,12 +659,11 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 	document := string(payload)
 	for _, required := range []string{
 		"`stop`", "`legacy_v1_read_only`", "`mutation_outcome`", "`not_started`", "`unknown`", "`committed`",
-		"Legacy-v1 never reports `publication_pending`", "retry and replay disabled",
-		"Historical `ordinary_4r` legacy status omits `frozen`", "START, finalize, BIND-SDD, invalidation, and direct append",
+		"retry and replay disabled", "Historical `ordinary_4r` legacy status omits `frozen`",
+		"START, BIND-SDD, invalidation, and direct append",
 		"`native_frozen_candidate_context`", "`base_tree`", "`candidate_tree`", "`changed_path_manifest`",
 		"`opaque_repository_context`", "`provider_targeted_validation_request`",
 		"`provider_artifact_admission`", "`validating_result_reopen`", "`recovered_correction_evidence`",
-		"`one_shot_final_verification_retry`", "`outcome_bound_verification_evidence`", "`review.retry_final_verification`", "`procedural_tooling_failure`",
 		"`artifact_subjects`", "`subject_hash`", "`admission_decision: completed`",
 		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
 		"25-second aggregate budget", "120-second budget", "180-second budget", "one-second wait delay",

@@ -332,7 +332,7 @@ func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *t
 		t.Fatalf("STATUS reoffered a deterministically impossible reviewer slot: %#v", status)
 	}
 	if status.Authority == nil || status.Authority.Revision != record.Revision ||
-		status.Authority.State != reviewtransaction.StateReviewing || status.Receipt.Status != ReviewReceiptExpectedMissing ||
+		status.Authority.State != reviewtransaction.StateReviewing ||
 		status.Frozen == nil || status.Frozen.CorrectionBudget != record.State.CorrectionBudget {
 		t.Fatalf("terminal STATUS changed frozen review truth: %#v", status)
 	}
@@ -505,7 +505,7 @@ func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
 
 // TestReviewLensContextRecordsProviderEmissionForTheReceipt proves the level a
 // receipt will carry is observed from what the provider actually produced, not
-// declared by whoever finalizes. Absence stays absence when nothing produced a
+// declared by whoever closes the review. Absence stays absence when nothing produced a
 // context.
 func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
 	reviewEnabledHome(t)
@@ -580,56 +580,6 @@ func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatalf("conflicting delivery emitted %d bytes", output.Len())
-	}
-}
-
-// TestReviewReceiptRecordsLensContextLevel is the end of the chain: a review
-// whose every lens context came from the provider command carries that fact on
-// its terminal receipt, and a review that never used the surface carries no
-// level at all rather than a guessed one.
-func TestReviewReceiptRecordsLensContextLevel(t *testing.T) {
-	reviewEnabledHome(t)
-	for _, test := range []struct {
-		name           string
-		produceContext bool
-		want           reviewtransaction.ReviewerContextLevel
-	}{
-		{name: "provider produced every lens context", produceContext: true, want: reviewtransaction.ReviewerContextLevelProviderCommand},
-		{name: "nothing produced a lens context", produceContext: false, want: ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-			handle := args[slices.Index(args, "--repository-context")+1]
-			state := record.State
-			if test.produceContext {
-				for _, lens := range state.SelectedLenses {
-					lensContextBlock(t, handle, lens)
-				}
-			}
-			resultPaths := make([]string, len(state.SelectedLenses))
-			for order := range state.SelectedLenses {
-				resultPath := filepath.Join(t.TempDir(), "review.json")
-				writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-					Findings: []facadeFinding{}, Evidence: []string{"reviewed the complete candidate scope"},
-				})
-				resultPaths[order] = resultPath
-			}
-			if err := captureReviewCLIResultFiles(t, repo, state.LineageID, resultPaths); err != nil {
-				t.Fatal(err)
-			}
-			fixture := finalizeHistoricalCapturedFacadeReviewForLineage(t, repo, state.LineageID)
-			payload, err := os.ReadFile(fixture.Store.ReceiptPath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			receipt, err := reviewtransaction.ParseCompactReceipt(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if receipt.ReviewerContextLevel != test.want {
-				t.Fatalf("receipt reviewer context level = %q, want %q", receipt.ReviewerContextLevel, test.want)
-			}
-		})
 	}
 }
 

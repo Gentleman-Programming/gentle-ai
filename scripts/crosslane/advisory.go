@@ -14,13 +14,13 @@ const advisoryLane = "advisory"
 // The opencode lane covers the blocker path (candidate-causal severe finding
 // -> correction -> approved) and the claude lane covers the clean path (no
 // findings at all -> approved). Neither covers a review that reaches an
-// approved receipt WHILE carrying findings that do not block. That gap is not
-// theoretical: in the field a host read a WARNING off an approved receipt,
+// approved terminal result while carrying findings that do not block. That gap is not
+// theoretical: in the field a host read a WARNING off an approved review result,
 // inferred from the bare severity string that it had to act, "fixed" it, and
 // re-ran a whole review on an already-approved candidate.
 //
 // So this lane freezes exactly that shape -- a medium candidate reviewed into
-// one WARNING and one SUGGESTION -- and requires the approved payload to
+// one WARNING and one SUGGESTION -- and requires the terminal payload to
 // declare both non-blocking out loud and to offer no way back into review.
 // It is fully deterministic: the reviewer result is supplied through
 // `review capture-result --input`, so the lane costs no model or host spend
@@ -110,72 +110,14 @@ func (b *battery) runAdvisoryLane() {
 		"--target", args["target"], "--repository-context", args["repository-context"],
 		"--lens", args["lens"], "--order", args["order"], "--subject-hash", args["subject-hash"],
 		"--input", reviewerPath)
-	if code != 0 || getString(capture, "admission_decision") != "completed" {
-		b.fail(advisoryLane, "non-blocking reviewer result captured", fmt.Sprintf("exit=%d %s", code, firstLine(stderr)))
+	if code != 0 || !admittedCapture(capture) {
+		b.fail(advisoryLane, "non-blocking reviewer result captured", fmt.Sprintf("exit=%d state=%q %s", code, operationState(capture), firstLine(stderr)))
 		return
 	}
-
-	// Native admission must retain these non-blocking findings without opening a
-	// correction, refuter, or validator route; the final evidence then burns.
-	statusDoc, stderr, _ = b.status(repo, "claude-code")
-	if getString(statusDoc, "next_transition", "execute", "operation") != "review.finalize" {
-		b.fail(advisoryLane, "WARNING + SUGGESTION admitted", fmt.Sprintf("next route = %s/%s %s",
-			getString(statusDoc, "next_transition", "kind"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+	if operationState(capture) != "approved" {
+		b.fail(advisoryLane, "WARNING + SUGGESTION admitted", fmt.Sprintf("terminal state = %q, want approved", operationState(capture)))
 		return
 	}
-	b.pass(advisoryLane, "WARNING + SUGGESTION admitted", "both non-blocking findings completed admission; no correction or validator route opened")
-	b.driveAdvisoryToApproval(repo)
-}
-
-// driveAdvisoryToApproval follows the native transitions from a captured
-// non-blocking reviewer result through final evidence to the terminal burn.
-func (b *battery) driveAdvisoryToApproval(repo string) map[string]any {
-	evidencePath := filepath.Join(b.workRoot, "advisory-evidence.txt")
-	evidence := fmt.Sprintf("crosslane battery %s: node --check src/mul.js passed on the frozen candidate\n", timestamp())
-	if err := os.WriteFile(evidencePath, []byte(evidence), 0o644); err != nil {
-		b.fail(advisoryLane, "lifecycle to approved receipt", err.Error())
-		return nil
-	}
-	for step := 0; step < 8; step++ {
-		statusDoc, stderr, _ := b.status(repo, "claude-code")
-		switch getString(statusDoc, "next_transition", "kind") {
-		case "execute":
-			doc, execStderr, code := b.runCommandLine("operation", repo, getString(statusDoc, "next_transition", "execute", "command"))
-			if code != 0 {
-				b.fail(advisoryLane, "lifecycle to approved receipt",
-					fmt.Sprintf("%s exit=%d %s", getString(statusDoc, "next_transition", "execute", "operation"), code, firstLine(execStderr)))
-				return nil
-			}
-			switch operationState(doc) {
-			case "approved":
-				b.burnApproved(advisoryLane, "final evidence and burned", repo, "claude-code", nil, doc)
-				return doc
-			case "correction_required", "escalated":
-				b.fail(advisoryLane, "lifecycle to approved receipt",
-					fmt.Sprintf("non-blocking findings changed the outcome to %q; only candidate-caused severe findings may block", operationState(doc)))
-				return nil
-			}
-		case "collect":
-			input := collectInput(statusDoc)
-			if input == nil || input["capture_operation"] != "review.capture-evidence" {
-				b.fail(advisoryLane, "lifecycle to approved receipt",
-					fmt.Sprintf("unsupported collect input %v", input["capture_operation"]))
-				return nil
-			}
-			tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
-			captureArgs := append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)
-			if record, captureStderr, code := b.runJSON("verification-evidence", b.workRoot, captureArgs...); code != 0 || getString(record, "outcome") != "passed" {
-				b.fail(advisoryLane, "lifecycle to approved receipt",
-					fmt.Sprintf("evidence capture exit=%d %s", code, firstLine(captureStderr)))
-				return nil
-			}
-		default:
-			b.fail(advisoryLane, "lifecycle to approved receipt",
-				fmt.Sprintf("unexpected transition %s/%s %s", getString(statusDoc, "next_transition", "kind"),
-					getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
-			return nil
-		}
-	}
-	b.fail(advisoryLane, "lifecycle to approved receipt", "did not reach a terminal state within the step budget")
-	return nil
+	b.pass(advisoryLane, "WARNING + SUGGESTION admitted", "both non-blocking findings closed on the final capture; no correction or validator route opened")
+	b.burnApproved(advisoryLane, "final capture and burned", repo, "claude-code", nil, capture)
 }

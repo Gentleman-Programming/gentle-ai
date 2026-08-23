@@ -223,20 +223,20 @@ func TestReviewBundleExportRefusesHistoricalZeroEditEscalationClearly(t *testing
 	}
 }
 
-func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRecord(t *testing.T) {
+func TestCurrentCaptureCompletionLeavesHistoricalSiblingBytePreserved(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("historical candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	historical := finalizeHistoricalFacadeReviewForRepo(t, repo, "historical-zero-edit-escalation")
+	historical := seedHistoricalApprovalForRepo(t, repo, "historical-zero-edit-escalation")
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "historical candidate")
 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("current candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	current := startFacadeReview(t, repo)
+	current := startHighRiskCLIReview(t, repo)
 	if current.LineageID == historical.Record.State.LineageID {
 		t.Fatalf("current review reused historical lineage %q", current.LineageID)
 	}
@@ -247,32 +247,15 @@ func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRe
 		t.Fatal(err)
 	}
 
-	currentEvidence := filepath.Join(t.TempDir(), "current-evidence.txt")
-	if err := os.WriteFile(currentEvidence, []byte("go test ./...: pass\n"), 0o644); err != nil {
-		t.Fatal(err)
+	for order := range current.SelectedLenses {
+		captureCLIReviewerResult(t, repo, current, order)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", current.LineageID}, facadeReviewerResultArgs(t, repo, current)...)
-	var output bytes.Buffer
-	if err := RunReviewFacadeFinalize(append(finalizeArgs, "--evidence", currentEvidence), &output); err != nil {
-		t.Fatalf("explicit-lineage finalize with unrelated historical record: %v", err)
-	}
-	finalized := decodeFacadeFinalize(t, output.Bytes())
-	if finalized.State != reviewtransaction.StateApproved || finalized.LineageID != current.LineageID {
-		t.Fatalf("finalize result = %#v", finalized)
-	}
-	report, err := reviewtransaction.InventoryAuthority(context.Background(), repo)
+	currentStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, current.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Complete {
-		t.Fatalf("historical record left status incomplete: %#v", report)
-	}
-	for _, entry := range report.Entries {
-		if entry.LineageID == historical.Record.State.LineageID && entry.Status == reviewtransaction.AuthorityStatusInvalid {
-			t.Fatalf("historical entry reported invalid: %#v", entry)
-		}
-	}
+	assertApprovedCompactAuthorityBurned(t, currentStore, current.LineageID)
 	if after, err := os.ReadFile(historicalStore.StatePath()); err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("finalize rewrote historical authority bytes: %v", err)
+		t.Fatalf("current capture completion rewrote historical authority bytes: %v", err)
 	}
 }

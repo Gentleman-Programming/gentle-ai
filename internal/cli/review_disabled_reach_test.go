@@ -124,7 +124,6 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeFacadeReviewForRepo(t, repo)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
 
@@ -199,34 +198,6 @@ func TestReviewValidateNegotiatedContractUsesUnmanagedDeliveryWhileEnabled(t *te
 		result.Context.Denial != nil || result.Context.LineageID != "" {
 		t.Fatalf("negotiated enabled gate result = %#v", result)
 	}
-}
-
-// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority
-// covers the last untyped blocker: a compact v2 receipt that exactly governs,
-// contested by a terminal legacy v1 chain that also exactly governs. It stayed
-// outside the disposition machinery on the argument that reclassifying would
-// mean "silently picking one authority system over the other". While disabled
-// neither is picked — the gate reports that it is not governing at all.
-//
-// Wave 5 Slice 2 supersession (design decision 4): the switch is consulted
-// BEFORE any authority read, so this disabled report no longer discovers the
-// contest at all, and the "compact v2 and legacy v1" detail it used to name
-// moved to review_receipt_discovery_test.go's
-// TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch,
-// whose enabled half asserts the same message (errReviewMixedCompactLegacyAuthority
-// is returned directly while enabled, since discovery genuinely still runs).
-func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority(t *testing.T) {
-	reviewEnabledHome(t)
-	fixture := newLegacyCLIFixture(t, "review-disabled-reach-mixed-legacy")
-	finalizeFacadeReviewForRepo(t, fixture.repo)
-
-	disableReviewForClone(t, fixture.repo)
-
-	var output bytes.Buffer
-	runErr := RunReviewFacadeValidate([]string{
-		"--cwd", fixture.repo, "--gate", string(reviewtransaction.GatePostApply),
-	}, &output)
-	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 }
 
 // TestReviewValidateReValidatesFromScratchAfterReEnabling keeps delivery
@@ -349,14 +320,8 @@ func startFacadeReviewResult(t *testing.T, repo, lineage string) ReviewFacadeSta
 }
 
 // liveFacadeSnapshotIdentity computes the current workspace candidate's
-// snapshot identity WITHOUT persisting any authority (legacy or v3) for it.
-// Some fixtures need this identity purely as a later comparison value
-// (proving a successor candidate is NOT the same target), and calling it
-// where a subsequent finalizeApprovedFacadeReview also creates LEGACY
-// authority for the identical lineage id would otherwise leave both a v3
-// record (from an ordinary `review start`) and a v2 one (from
-// finalizeApprovedFacadeReview's direct construction) for the same lineage
-// -- a collision this helper avoids by never persisting anything.
+// snapshot identity without persisting review authority. Fixtures use it only
+// as a comparison value when proving a successor has a distinct target.
 func liveFacadeSnapshotIdentity(t *testing.T, repo string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -373,18 +338,6 @@ func liveFacadeSnapshotIdentity(t *testing.T, repo string) string {
 		t.Fatalf("build live snapshot identity: %v", err)
 	}
 	return snapshot.Identity
-}
-
-// finalizeApprovedFacadeReview retains its historical call-site name while
-// seeding a historical compatibility (compact-v2) approved receipt directly
-// through reviewtransaction seams. It never dispatches production FINALIZE:
-// the fixture represents approval minted before v3 started burning approved
-// predecessor records.
-func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
-	t.Helper()
-	seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, lineage, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	})
 }
 
 // TestDisabledGateNeverEmitsAllowOrCreatesReceipt sweeps every reclassified
@@ -526,21 +479,11 @@ func TestSDDAttemptFinishImposesNoRemediationObligationEitherWay(t *testing.T) {
 			runReviewCLIGit(t, repo, "add", ".")
 			runReviewCLIGit(t, repo, "commit", "-qm", "seed change")
 
-			runSDDAttemptStatus(t, []string{
+			bound := runSDDAttemptStatus(t, []string{
 				"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "switch-begin-1",
 				"--work-unit", "cli-kill-switch", "--evidence-goal", "close a bound attempt",
 				"--max-attempts", "3", "--max-changed-lines", "40",
 			})
-
-			lineage := "cli-kill-switch-lineage"
-			writeCLIApprovedCompactAuthority(t, repo, lineage)
-			if _, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, ""); err != nil {
-				t.Fatal(err)
-			}
-			bound := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
-			if bound.Binding == nil {
-				t.Fatalf("bound CLI status = %#v", bound)
-			}
 
 			// Work that changes the candidate tree during the attempt: this is
 			// exactly what arms the implicit successor demand.
@@ -564,9 +507,6 @@ func TestSDDAttemptFinishImposesNoRemediationObligationEitherWay(t *testing.T) {
 			decodeStrictReviewJSON(t, output.Bytes(), &status)
 			if status.ActiveAttempt != nil {
 				t.Fatalf("disabled bound finish left the attempt open: %#v", status.ActiveAttempt)
-			}
-			if status.Binding == nil || status.Binding.Revision != bound.Binding.Revision {
-				t.Fatalf("disabled bound finish mutated the review binding: %#v", status.Binding)
 			}
 		})
 	}
