@@ -381,7 +381,7 @@ func TestRefusalRatchetClassifiesSyntheticSites(t *testing.T) {
 		analysis := refusalRatchetMustAnalyze(t, header+
 			"func f() error {\n"+
 			"\t// refusal:by-design human-authority: a maintainer must decide\n"+
-			"\treturn errors.New(\"blocked: run gentle-ai review finalize\")\n"+
+			"\treturn errors.New(\"blocked: run gentle-ai review status --next-transition\")\n"+
 			"}\n")
 		if len(analysis.problems) != 1 || !strings.Contains(analysis.problems[0], "contradictory") {
 			t.Fatalf("want one contradictory-claims error, got %+v", analysis.problems)
@@ -575,7 +575,7 @@ func TestRefusalRatchetAnalyzesGuidanceComposedFromHelpers(t *testing.T) {
 		analysis := refusalRatchetMustAnalyze(t, header+
 			"func f() error {\n"+
 			"\t// refusal:by-design human-authority: a maintainer must decide\n"+
-			"\treturn errors.New(\"blocked: run gentle-ai review finalize\")\n"+
+			"\treturn errors.New(\"blocked: run gentle-ai review status --next-transition\")\n"+
 			"}\n")
 		if len(analysis.problems) != 1 || !strings.Contains(analysis.problems[0], "contradictory") {
 			t.Fatalf("want one contradictory-claims error, got %+v", analysis.problems)
