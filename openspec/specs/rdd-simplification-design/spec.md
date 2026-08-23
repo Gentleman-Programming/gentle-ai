@@ -26,11 +26,11 @@ The design MUST state decisions 1–5 from the proposal's unresolved-decisions t
 - WHEN decision 1 is inspected
 - THEN it states the five-state model and two-active-artifact rule are adopted as specified
 
-#### Scenario: Decision 2 — relation algebra and gates
+#### Scenario: Decision 2 — relation algebra and review context
 
 - GIVEN the design's decision list
 - WHEN decision 2 is inspected
-- THEN it states the shared relation algebra and read-only gates are adopted, and gates never mutate authority
+- THEN it states the shared relation algebra and read-only review-context evaluation are adopted, review evaluation never mutates authority, and its result never governs delivery
 
 #### Scenario: Decision 3 — declined review / unsupported runtime
 
@@ -70,15 +70,16 @@ The design's `provable_contraction` definition MUST validate only when admitted 
 - WHEN the design's soundness rule is applied
 - THEN the state degrades to `changed` rather than validating as `provable_contraction`
 
-### Requirement: Amendment C / Decision 7 — Legacy/New Lineage Precedence
+### Requirement: Amendment C / Decision 7 — Legacy/New Lineage Review-Evidence Isolation
 
-The design's Wave 3 coexistence section MUST state that legacy readable authority never authorizes delivery of a candidate that has a new lineage.
+The design's Wave 3 coexistence section MUST state that legacy readable authority is never treated as matching review evidence for a candidate that has a new lineage. A missing or mismatched new-lineage receipt remains visible for review repair only and never controls delivery.
 
 #### Scenario: Legacy authority faces a new-lineage candidate
 
-- GIVEN a candidate with a new lineage evaluated under legacy readable authority
-- WHEN delivery authorization is attempted
-- THEN legacy authority does not authorize delivery of that candidate
+- GIVEN a candidate with a new lineage evaluated against legacy readable authority
+- WHEN review context is resolved
+- THEN legacy authority is not treated as matching new-lineage evidence
+- AND ordinary repository policy, not review context, decides delivery
 
 ### Requirement: Amendment D / Decisions 8–9 — Unresolved Table Expansion
 

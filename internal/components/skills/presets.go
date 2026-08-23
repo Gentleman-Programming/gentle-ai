@@ -6,6 +6,7 @@ import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
 var sddSkills = []model.SkillID{
 	model.SkillSDDInit,
 	model.SkillSDDExplore,
+	model.SkillSDDResearch,
 	model.SkillSDDPropose,
 	model.SkillSDDSpec,
 	model.SkillSDDDesign,

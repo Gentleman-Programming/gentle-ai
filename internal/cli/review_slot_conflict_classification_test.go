@@ -22,7 +22,17 @@ func TestOccupiedSlotUsesStatusContinuationForOpaqueCapture(t *testing.T) {
 	if err := RunReviewCaptureResult(append(append([]string{}, binding...), "--input", first), &captured); err != nil {
 		t.Fatalf("first capture failed: %v", err)
 	}
-	path := filepath.Join(reviewCLICompactStoreDir(repo, lineage), reviewtransaction.CompactReviewerResultsDir, "00-review-reliability.json")
+	lens := ""
+	for index := range binding[:len(binding)-1] {
+		if binding[index] == "--lens" {
+			lens = binding[index+1]
+			break
+		}
+	}
+	if lens == "" {
+		t.Fatal("opaque capture binding omits --lens")
+	}
+	path := filepath.Join(reviewCLICompactStoreDir(repo, lineage), reviewtransaction.CompactReviewerResultsDir, "00-"+lens+".json")
 	beforeArtifact, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +58,7 @@ func TestOccupiedSlotUsesStatusContinuationForOpaqueCapture(t *testing.T) {
 
 func TestOccupiedSlotUsesStatusContinuationForDirectCapture(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, started, store, record := newArtifactReview(t, false)
+	repo, started, store, record := newArtifactReview(t, true)
 	input := filepath.Join(t.TempDir(), "reviewer-result.json")
 	args := []string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}
 	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
@@ -104,7 +114,7 @@ func assertOccupiedReviewerSlotStatusContinuation(t *testing.T, err error, repo,
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.ReasonCode != "captured_results_ready" {
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "reviewer_results_required" {
 		t.Fatalf("STATUS continuation = %#v", status.NextTransition)
 	}
 }
