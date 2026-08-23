@@ -87,7 +87,7 @@ type CompactAcquireRequest struct {
 	// RemediatesEvidenceRevision declares at acquire the same correction
 	// intent Settle expresses through --remediates-evidence-revision (#2564).
 	// Before this, remediation intent was settle-only: an acquire whose
-	// eventual unmanaged settlement was already structurally unsatisfiable
+	// eventual failed-evidence settlement was already structurally unsatisfiable
 	// (no unremediated failed evidence in the immutable attempt chain, or a
 	// different revision declared) still returned proceed, and the refusal
 	// only arrived after the correction work was done. Empty leaves every
@@ -104,7 +104,6 @@ type CompactSettleRequest struct {
 	HarnessDisposition HarnessDisposition
 	CleanupEvidence    string
 	ProcessEvidence    string
-	SuccessorLineageID string
 
 	RemediatesEvidenceRevision string
 }
@@ -224,22 +223,16 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		Request: begin, PresentedToken: request.Token,
 	}); terminal {
 		if result.State == CompactStateProceed {
-			result.SettleObligation = runtimeSettleObligation(replay.Status, store.ReviewDisabled)
+			result.SettleObligation = runtimeSettleObligation(replay.Status)
 		}
 		return result, nil
 	}
-	// #2564 fail-fast: a declared unmanaged correction whose settlement is
-	// already structurally unsatisfiable earns its typed refusal HERE, before
-	// any token is issued and before any correction work runs. Satisfiability
-	// follows the chain-derived binding (#2565): the refusal fires only when
-	// the immutable attempt chain holds no unremediated failed evidence
-	// matching the declaration, so an acquire after an audited reset stays
-	// legitimate while the chain still binds. Scoped to the unmanaged regime
-	// (review disabled, no binding): with review enabled or a binding present
-	// the settle routes through managed remediation, whose authority can
-	// still materialize during the attempt.
-	if request.RemediatesEvidenceRevision != "" && store.ReviewDisabled && replay.Status.Binding == nil &&
-		!unmanagedRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
+	// A declared correction must be structurally settleable before it spends an
+	// attempt. Satisfiability is derived only from the immutable failed-evidence
+	// chain, so an audited reset remains a legitimate predecessor and review mode
+	// or binding metadata cannot change admission.
+	if request.RemediatesEvidenceRevision != "" &&
+		!failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
 		return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
 	}
 	begin.ExpectedRevision = replay.Status.Revision
@@ -251,14 +244,13 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		State: CompactStateProceed, Token: started.Revision,
 		// Derived from the PRE-mutation chain: the obligation this attempt
 		// inherits is the one that existed when it was opened.
-		SettleObligation: runtimeSettleObligation(replay.Status, store.ReviewDisabled),
+		SettleObligation: runtimeSettleObligation(replay.Status),
 	}, nil
 }
 
 // Settle closes the attempt selected by Token through the ordinary Finish
-// transition. Current binding and failed-evidence revisions are derived inside
-// the authority; callers name a successor only when review approved a distinct
-// lineage.
+// transition. Its only remediation authority is the immutable SDD failed-
+// evidence chain; review bindings and successors do not participate.
 func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleRequest) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
@@ -269,9 +261,12 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		if loadErr != nil {
 			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
-		finish, ok := compactSettleReplayRequest(replay, record, request)
+		finish, historical, ok := compactSettleReplayRequest(replay, record, request)
 		if !ok {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		}
+		if historical {
+			return store.compactSettleResult()
 		}
 		if _, err := store.Finish(ctx, finish); err != nil {
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
@@ -303,23 +298,14 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
 		ProcessEvidence: request.ProcessEvidence,
 	}
-	explicitSuccessor := request.SuccessorLineageID != ""
-	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
-	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
+	failedEvidence, hasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
+	if request.RemediatesEvidenceRevision != "" && (!hasFailedEvidence || failedEvidence != request.RemediatesEvidenceRevision) {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
-	if request.Outcome == AttemptPassed && status.Binding != nil && failedEvidence != "" && (!store.ReviewDisabled || explicitSuccessor || request.RemediatesEvidenceRevision != "") {
-		finish.ExpectedBindingRevision = status.Binding.Revision
-		finish.SuccessorLineageID = request.SuccessorLineageID
-		if finish.SuccessorLineageID == "" {
-			finish.SuccessorLineageID = status.Binding.Lineage
-		}
-		finish.RemediatesEvidenceRevision = failedEvidence
-	} else if store.ReviewDisabled && !explicitSuccessor && request.RemediatesEvidenceRevision != "" {
-		finish.RemediatesEvidenceRevision = request.RemediatesEvidenceRevision
-	} else if explicitSuccessor || request.RemediatesEvidenceRevision != "" {
+	if request.Outcome == AttemptPassed && hasFailedEvidence && request.RemediatesEvidenceRevision == "" {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
+	finish.RemediatesEvidenceRevision = request.RemediatesEvidenceRevision
 	if _, err := store.Finish(ctx, finish); err != nil {
 		return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 	}
@@ -338,16 +324,14 @@ func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHan
 	return store.compactMutationFailure(err, false, BeginAttemptRequest{}), nil
 }
 
-// unmanagedRemediationSettleable reports whether a settle carrying
-// --remediates-evidence-revision failedEvidence can structurally succeed
-// against this ledger state: the immutable attempt chain must still hold that
-// exact failed evidence unremediated, per runtimeChainFailedEvidence, the
-// same chain-derived binding Finish's unmanaged guard enforces (#1974 slice
-// 2). A changed candidate and fresh distinct evidence remain settle-time
-// facts and are not judged here; nor is "may this work proceed?", which
-// stays runtimeReadiness's question alone -- this reads only the immutable
-// attempt chain.
-func unmanagedRemediationSettleable(status RuntimeStatus, failedEvidence string) bool {
+// failedEvidenceRemediationSettleable reports whether a settle carrying
+// --remediates-evidence-revision can structurally succeed against this ledger
+// state. The immutable attempt chain must still hold that exact failed evidence
+// unremediated. A changed candidate and fresh distinct evidence remain
+// settle-time facts and are not judged here; nor is "may this work proceed?",
+// which stays runtimeReadiness's question alone -- this reads only the
+// immutable attempt chain.
+func failedEvidenceRemediationSettleable(status RuntimeStatus, failedEvidence string) bool {
 	chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
 	return chainHasFailedEvidence && failedEvidence != "" && chainEvidence == failedEvidence
 }
@@ -364,9 +348,6 @@ func normalizeCompactSettleRequest(request CompactSettleRequest) error {
 	})
 	if err != nil {
 		return err
-	}
-	if request.SuccessorLineageID != "" && !validReviewBindingLineage(request.SuccessorLineageID) {
-		return errors.New("successor_lineage_id must be a canonical lowercase lineage; rerun `gentle-ai sdd-attempt settle` with a lowercase --successor-lineage")
 	}
 	if request.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
 		return errors.New("remediates_evidence_revision must be sha256; rerun `gentle-ai sdd-attempt settle` with --remediates-evidence-revision sha256:<64-lowercase-hex>")
@@ -385,32 +366,28 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 	})
 }
 
-func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {
+func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool, bool) {
 	if record.Finish == nil || (record.Operation != runtimeOperationFinish && record.Operation != runtimeOperationFinishRemediation) {
-		return FinishAttemptRequest{}, false
+		return FinishAttemptRequest{}, false, false
 	}
 	event := record.Finish
-	finish := FinishAttemptRequest{
+	matches := request.Token == replay.AttemptTokens[event.Ordinal] && request.RequestID == record.RequestID &&
+		request.Outcome == event.Outcome && request.EvidenceRevision == event.EvidenceRevision &&
+		request.Diagnosis == event.Diagnosis && request.HarnessDisposition == event.HarnessDisposition &&
+		request.CleanupEvidence == event.CleanupEvidence && request.ProcessEvidence == event.ProcessEvidence &&
+		request.RemediatesEvidenceRevision == event.RemediatesEvidenceRevision
+	if record.Operation == runtimeOperationFinishRemediation {
+		// A historical record is already immutable and decodable. Its review
+		// metadata stays forensic only: replay returns its settlement projection
+		// without reintroducing that metadata into current attempt authority.
+		return FinishAttemptRequest{}, true, matches
+	}
+	return FinishAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 		EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis,
 		HarnessDisposition: event.HarnessDisposition, CleanupEvidence: event.CleanupEvidence,
-		ProcessEvidence: event.ProcessEvidence,
-	}
-	if record.Operation == runtimeOperationFinishRemediation {
-		finish.ExpectedBindingRevision = record.Binding.ExpectedRevision
-		finish.SuccessorLineageID = record.Binding.Current.Lineage
-		finish.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
-	}
-	effectiveSuccessor := request.SuccessorLineageID
-	if effectiveSuccessor == "" && record.Operation == runtimeOperationFinishRemediation {
-		effectiveSuccessor = replay.Requests[record.RequestID].RemediationPredecessorLineage
-	}
-	matches := request.Token == replay.AttemptTokens[event.Ordinal] && request.RequestID == finish.RequestID &&
-		request.Outcome == finish.Outcome && request.EvidenceRevision == finish.EvidenceRevision &&
-		request.Diagnosis == finish.Diagnosis && request.HarnessDisposition == finish.HarnessDisposition &&
-		request.CleanupEvidence == finish.CleanupEvidence && request.ProcessEvidence == finish.ProcessEvidence &&
-		effectiveSuccessor == finish.SuccessorLineageID && request.RemediatesEvidenceRevision == finish.RemediatesEvidenceRevision
-	return finish, matches
+		ProcessEvidence: event.ProcessEvidence, RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
+	}, false, matches
 }
 
 // compactAcquireResult reconciles a committed begin whose publication the
@@ -603,10 +580,7 @@ func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 // (runtimeChainFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
 // promise something the settle will not demand, or stay silent about
 // something it will.
-func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
-	if !reviewDisabled || status.Binding != nil {
-		return ""
-	}
+func runtimeSettleObligation(status RuntimeStatus) string {
 	failed, ok := runtimeChainFailedAttempt(status.Attempts)
 	if !ok || failed.EvidenceRevision == "" {
 		return ""

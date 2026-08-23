@@ -16,7 +16,8 @@ import (
 // in this package already keys off.
 func TestCompactRevisionConflictIsTypedAndProvesNonMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	state, store, revision := persistedCompactCorrectionRequired(t, repo, "compact-revision-conflict")
+	state, store, record := correctionRequiredCompactAuthority(t, repo, "compact-revision-conflict")
+	revision := record.Revision
 
 	winner := state
 	if err := winner.BeginCorrection(1); err != nil {

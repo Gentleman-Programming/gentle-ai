@@ -113,12 +113,17 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 		return
 	}
 	manifest := b.record("result-artifact", []byte(replay.Output))
-	if getString(manifest, "schema") != "gentle-ai.review-result-artifact/v2" || getString(manifest, "admission_decision") != "completed" {
+	if !admittedCapture(manifest) {
 		b.fail(openCodeLane, openCodeEchoStep, "host echo did not round-trip a completed result artifact")
 		return
 	}
 	b.pass(openCodeLane, openCodeEchoStep,
 		"drifted host echo was rebuilt into Go-canonical bytes and captured; only the exact bytes stay a pass-through")
+	if operationState(manifest) != "approved" {
+		b.fail(openCodeLane, "host-echo lifecycle burned", fmt.Sprintf("terminal state = %q, want approved", operationState(manifest)))
+		return
+	}
+	b.burnApproved(openCodeLane, "host-echo lifecycle burned", repo, "opencode", nil, manifest)
 }
 
 // hostEchoedMaterialization reproduces the drift a re-typed materialization
@@ -158,6 +163,10 @@ func (b *battery) openCodeMediumLensSlot(repo string) (map[string]string, bool) 
 	if code != 0 || getString(startDoc, "state") != "reviewing" {
 		b.fail(openCodeLane, openCodeEchoStep, fmt.Sprintf("consent granted start exit=%d state=%q %s",
 			code, getString(startDoc, "state"), firstLine(stderr)))
+		return nil, false
+	}
+	if err := b.rememberStarted(repo, target, startDoc); err != nil {
+		b.fail(openCodeLane, openCodeEchoStep, err.Error())
 		return nil, false
 	}
 	statusDoc, stderr, _ = b.status(repo, "opencode")
