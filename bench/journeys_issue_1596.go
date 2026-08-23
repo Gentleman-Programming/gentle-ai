@@ -51,6 +51,61 @@ func selectorFreeFrozenOverlayStatus(r *journeyRun) error {
 	return nil
 }
 
+func issue1596PredecessorStatus(r *journeyRun) (statusEnvelope, error) {
+	observation := r.run([]string{
+		"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContractV2, "--next-transition",
+		"--lineage", stagedRecoveryLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"], "--committed-only",
+	}, false)
+	if observation.ExitCode != 0 {
+		return statusEnvelope{}, fmt.Errorf("issue #1596 predecessor STATUS exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+	var status statusEnvelope
+	if err := json.Unmarshal([]byte(observation.Stdout), &status); err != nil {
+		return statusEnvelope{}, fmt.Errorf("parse issue #1596 predecessor STATUS: %w", err)
+	}
+	return status, nil
+}
+
+func captureIssue1596CorrectionPlan(r *journeyRun) error {
+	status, err := issue1596PredecessorStatus(r)
+	if err != nil {
+		return err
+	}
+	if status.Authority.LineageID != stagedRecoveryLineage || status.Authority.State != "correction_required" ||
+		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "correction_plan_required" ||
+		len(status.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("issue #1596 correction-plan STATUS = authority=%+v transition=%+v", status.Authority, status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Name != "correction_lines" || input.CaptureOperation != "review.capture-correction-plan" ||
+		status.argument("lineage") != stagedRecoveryLineage || status.argument("target") == "" ||
+		status.argument("expected-revision") == "" || status.argument("request-hash") == "" ||
+		status.argument("repository-context") == "" {
+		return fmt.Errorf("issue #1596 correction-plan binding = %+v", input)
+	}
+	args := []string{"review", "capture-correction-plan"}
+	for _, argument := range input.Arguments {
+		args = append(args, "--"+argument.Name+"="+argument.Value)
+	}
+	args = append(args, "--correction-lines=3")
+	observation := r.runAt(r.sandbox.Root, args, false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("capture issue #1596 correction plan: %s", firstLine(observation.Stderr))
+	}
+	var captured struct {
+		Schema    string `json:"schema"`
+		Operation string `json:"operation"`
+		LineageID string `json:"lineage_id"`
+		State     string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &captured); err != nil ||
+		captured.Schema != "gentle-ai.review-last-event-closure/v1" || captured.Operation != "review.capture-correction-plan" ||
+		captured.LineageID != stagedRecoveryLineage || captured.State != "correction_required" {
+		return fmt.Errorf("issue #1596 correction-plan capture = %+v, %v", captured, err)
+	}
+	return nil
+}
+
 func issue1596Journeys() []Journey {
 	return []Journey{{
 		ID:     "j115-selectorless-frozen-workspace-overlay-resumes-after-restart",
@@ -71,11 +126,12 @@ func issue1596Journeys() []Journey {
 				}
 				return nil
 			}},
-			{Name: "capture the predecessor blocker", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+			{Name: "capture the predecessor blocker and enter correction-required on the final reviewer result", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 				return captureCorrectableFindingFor(r, stagedPredecessorSelectors(r.sandbox)...)
 			}},
-			{Name: "enter correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", stagedRecoveryLineage, "--captured-results=true")},
-			{Name: "forecast the predecessor correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", stagedRecoveryLineage, "--correction-lines", "3")},
+			{Name: "capture the predecessor correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+				return captureIssue1596CorrectionPlan(r)
+			}},
 			{Name: "fixture: stage the recovered workspace-overlay candidate", Fixture: stageExpandedCorrection},
 			{Name: "recover the staged authority into its frozen reviewing successor", Requires: statusCapability, Composite: recoverStagedCorrection},
 			{Name: "fresh-process selector-free STATUS rediscovers the frozen reviewer collect slot without mutation", Requires: issue1596StatusCapability, Composite: selectorFreeFrozenOverlayStatus},

@@ -97,7 +97,7 @@ func TestSelectorFreeFrozenReviewingStatusRediscoversFrozenAuthority(t *testing.
 		{
 			name: "recovered workspace overlay",
 			fixture: func(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
-				return frozenStagedReviewingStatusFixture(t)
+				return frozenStagedReviewingStatusFixture(t, false)
 			},
 			wantKind:  reviewtransaction.TargetBaseWorkspaceOverlay,
 			wantScope: []string{},
@@ -123,7 +123,7 @@ func TestSelectorFreeFrozenReviewingStatusRediscoversFrozenAuthority(t *testing.
 			if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
 				status.Authority.LineageID != record.State.LineageID || status.Authority.Revision != record.Revision ||
 				status.TargetIdentity != record.State.InitialSnapshot.Identity ||
-				status.Action != reviewtransaction.TargetStatusActionFinalize || status.NextTransition == nil ||
+				status.Action != reviewtransaction.TargetStatusActionStop || status.NextTransition == nil ||
 				status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "reviewer_results_required" ||
 				status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != len(record.State.SelectedLenses) {
 				t.Fatalf("selector-free frozen status = %#v", status)
@@ -254,7 +254,7 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 		if len(intended) != 0 {
 			t.Fatal("staged frozen fixture does not support intended untracked paths")
 		}
-		return frozenStagedReviewingStatusFixture(t)
+		return frozenStagedReviewingStatusFixture(t, true)
 	}
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -275,21 +275,23 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 	return repo, store, record
 }
 
-func frozenStagedReviewingStatusFixture(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
+func frozenStagedReviewingStatusFixture(t *testing.T, includeUnrelated bool) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
 	t.Helper()
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
-	// Keep a legal, unrelated open lineage in the authority inventory. The
-	// explicit frozen selector below must resume only its own pending review.
-	writeReviewStartCandidate(t, repo, "unrelated-token.ts", "export const unrelated = 'open'\n", 0o644)
-	_, unrelated := createFrozenReviewingStatusRecord(t, repo, "frozen-staged-unrelated", reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
-	})
-	if unrelated.State.State != reviewtransaction.StateReviewing || len(unrelated.State.SelectedLenses) == 0 {
-		t.Fatalf("unrelated open frozen authority = %#v", unrelated)
+	if includeUnrelated {
+		// Keep a legal, unrelated open lineage in the authority inventory. The
+		// explicit frozen selector below must resume only its own pending review.
+		writeReviewStartCandidate(t, repo, "unrelated-token.ts", "export const unrelated = 'open'\n", 0o644)
+		_, unrelated := createFrozenReviewingStatusRecord(t, repo, "frozen-staged-unrelated", reviewtransaction.Target{
+			Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+		})
+		if unrelated.State.State != reviewtransaction.StateReviewing || len(unrelated.State.SelectedLenses) == 0 {
+			t.Fatalf("unrelated open frozen authority = %#v", unrelated)
+		}
+		runReviewCLIGit(t, repo, "commit", "-qm", "commit unrelated authority subject")
 	}
-	runReviewCLIGit(t, repo, "commit", "-qm", "commit unrelated authority subject")
 
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'frozen'\n", 0o644)
