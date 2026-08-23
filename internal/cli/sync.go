@@ -1658,8 +1658,14 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
-		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
+
+	// Atomic-commit the gentle-ai.managed-assets/v1 manifest alongside the
+	// sync state (#1884, AC1, AC8). The helper owns the journal-then-write
+	// protocol so that a crash between the state write and the manifest
+	// publish leaves doctor reporting "interrupted" rather than "aligned".
+	syncRunID := fmt.Sprintf("sync-%d", time.Now().UTC().UnixNano())
+	if err := PublishSyncManagedAssetsManifestWithBackground(homeDir, selection, writer, syncRunID, background.Persist, piBackground.Persist); err != nil {
+		persistErr := fmt.Errorf("publish sync managed assets state and manifest: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
 			persistErr = errors.Join(persistErr, rollback.Err)
