@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -124,7 +123,7 @@ func TestNegotiatedStartUndeclaredConsentIsByteSilentOnStderr(t *testing.T) {
 		"--lineage", "review-negotiated-silent",
 	}))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || len(started.SelectedLenses) != 4 {
+	if started.Action != "created" || len(started.SelectedLenses) != 4 {
 		t.Fatalf("undeclared negotiated START stopped reviewing: %#v", started)
 	}
 	if console.Len() != 0 {
@@ -165,7 +164,7 @@ func TestNegotiatedStartConsentAnswersStayByteSilentOnStderr(t *testing.T) {
 		"--lineage", "review-negotiated-consents", "--consent", "granted",
 	}))
 	started := decodeNegotiatedReviewStart(t, granted.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) {
+	if started.Action != "created" {
 		t.Fatalf("granted START = %#v", started)
 	}
 
@@ -178,12 +177,15 @@ func TestNegotiatedStartConsentAnswersStayByteSilentOnStderr(t *testing.T) {
 }
 
 // TestNegotiatedLifecycleOperationsAreByteSilentOnStderr walks a complete
-// low-risk negotiated lifecycle — STATUS, START, FINALIZE, staged VALIDATE —
+// low-risk negotiated lifecycle — STATUS, terminal START, unmanaged VALIDATE —
 // and requires zero stderr bytes from every successful operation, the exact
 // sequence gentle-pi drives fail-closed.
 func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"enable", "--scope", "global", "--cwd", repo}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "lifecycle\n", 0o644)
 	stderr := captureReviewProcessStderr(t)
@@ -194,27 +196,8 @@ func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
 		t.Fatalf("low-risk negotiated START = %#v", started)
 	}
 
-	var finalizeStatus bytes.Buffer
-	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
-		"--agent", "claude-code", "--next-transition",
-	}, &finalizeStatus); err != nil {
-		t.Fatalf("post-start STATUS: %v", err)
-	}
-	var ready ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, finalizeStatus.Bytes(), &ready)
-	if ready.NextTransition == nil || ready.NextTransition.Execute == nil ||
-		ready.NextTransition.Execute.Operation != "review.finalize" {
-		t.Fatalf("post-start transition = %#v", ready.NextTransition)
-	}
-
-	var finalized bytes.Buffer
-	if err := RunReview([]string{
-		"finalize", "--cwd", repo, "--lineage", started.LineageID,
-		"--captured-results=true", "--contract", ReviewIntegrationContractV2,
-		"--agent", "claude-code",
-	}, &finalized); err != nil {
-		t.Fatalf("negotiated FINALIZE: %v\n%s", err, finalized.String())
+	if started.State != reviewtransaction.StateApproved || started.Action != "closed" {
+		t.Fatalf("low-risk terminal START = %#v", started)
 	}
 
 	runReviewCLIGit(t, repo, "add", "--", "docs/notes.md")
@@ -224,9 +207,13 @@ func TestNegotiatedLifecycleOperationsAreByteSilentOnStderr(t *testing.T) {
 	}, &validated); err != nil {
 		t.Fatalf("negotiated VALIDATE: %v\n%s", err, validated.String())
 	}
-	if !strings.Contains(validated.String(), `"result": "allow"`) &&
-		!strings.Contains(validated.String(), `"result":"allow"`) {
-		t.Fatalf("pre-commit gate did not allow: %s", validated.String())
+	var envelope ReviewIntegrationOperationResult
+	decodeStrictReviewJSON(t, validated.Bytes(), &envelope)
+	var validation ReviewValidateResult
+	decodeStrictReviewJSON(t, envelope.Result, &validation)
+	if validation.Result != reviewtransaction.GateInvalidated || validation.Allowed ||
+		validation.Delivery != reviewtransaction.RDDDeliveryUnmanaged {
+		t.Fatalf("pre-commit gate was not successful unmanaged delivery: %#v", validation)
 	}
 
 	if got := stderr(); got != "" {
@@ -277,7 +264,7 @@ func TestNegotiatedStartUndeclaredAskedLatchProceedsSilently(t *testing.T) {
 		"--lineage", "review-negotiated-asked-latch",
 	}))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) {
+	if started.Action != "created" {
 		t.Fatalf("asked-latch negotiated START = %#v", started)
 	}
 	if console.Len() != 0 {

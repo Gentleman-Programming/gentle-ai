@@ -153,8 +153,8 @@ func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.
 		t.Fatalf("selected transition = %#v, want executable START", selected.NextTransition)
 	}
 	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command))
-	if negotiatedStartTarget(started) != selected.TargetIdentity {
-		t.Fatalf("printed START target = %s, negotiated target = %s", negotiatedStartTarget(started), selected.TargetIdentity)
+	if started.State != reviewtransaction.StateApproved || started.Action != "closed" {
+		t.Fatalf("printed zero-lens START = %#v", started)
 	}
 }
 

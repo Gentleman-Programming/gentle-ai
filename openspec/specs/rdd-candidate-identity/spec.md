@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the canonical candidate identity that Wave 1's read-only resolver computes from any of the four selector variants (staged, workspace, committed-range, workspace-overlay). This identity is the shared input to the relation algebra (`rdd-candidate-relation-algebra`) and the shadow harness (`rdd-shadow-evaluation`). This spec covers Wave 1 read-only resolution only; it does not authorize any live authority mutation.
+Define the canonical candidate identity that Wave 1's read-only resolver computes from any of the four selector variants (staged, workspace, committed-range, workspace-overlay). This identity is the shared input to the relation algebra (`rdd-candidate-relation-algebra`) and the shadow harness (`rdd-shadow-evaluation`). This spec covers Wave 1 read-only resolution only; it does not authorize any live authority mutation, ordinary delivery, or SDD archive.
 
 ## Requirements
 
@@ -36,7 +36,7 @@ The resolver MUST accept staged, workspace, committed-range, and workspace-overl
 
 ### Requirement: Read-Only Resolution, Persisted as Frozen Authority When Consumed by a New Lineage
 
-The resolver itself MUST NOT mutate authority state, write a persisted artifact, or introduce a new public operation or contract version — resolution stays pure. When `ReviewCore.start` consumes a resolver's output for a new lineage, that `CandidateIdentity` MUST be written into the authority store as frozen authority; subsequent `finalize`, `validate`, and gate decisions for that lineage MUST compare against the persisted identity, not by re-resolving.
+The resolver itself MUST NOT mutate authority state, write a persisted artifact, or introduce a new public operation or contract version — resolution stays pure. When `ReviewCore.start` consumes a resolver's output for a new lineage, that `CandidateIdentity` MUST be written into the authority store as frozen review authority; subsequent review-lifecycle `finalize`, `validate`, and review-context decisions for that lineage MUST compare against the persisted identity, not by re-resolving. Persisted identity is review-context evidence only and MUST NOT authorize, deny, block, or route ordinary delivery or SDD archive.
 (Previously: stated resolution has no side effect anywhere, with no notion of a downstream persisted consumer; Wave 3 introduces the first such consumer, `ReviewCore`, so the boundary between pure resolution and persisted freeze is now explicit.)
 
 #### Scenario: Resolution has no side effect
@@ -50,8 +50,9 @@ The resolver itself MUST NOT mutate authority state, write a persisted artifact,
 
 - GIVEN a new-lineage `start` with the activation switch on
 - WHEN the resolver's output is accepted by `ReviewCore`
-- THEN the `CandidateIdentity` is written into `review-state.json` as frozen authority
-- AND later transitions in that lineage compare against the persisted identity rather than re-resolving the selector
+- THEN the `CandidateIdentity` is written into `review-state.json` as frozen review authority
+- AND later review-lifecycle transitions in that lineage compare against the persisted identity rather than re-resolving the selector
+- AND that identity cannot control ordinary delivery or SDD archive
 
 ### Requirement: Deterministic Ambiguity and Failure Reporting
 

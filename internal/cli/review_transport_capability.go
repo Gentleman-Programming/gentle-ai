@@ -65,8 +65,6 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Eligible = true
 	case model.AgentCodex:
 		policy.Eligible = true
-	case model.AgentKilocode:
-		policy.Eligible = true
 	case model.AgentOpenCode:
 		policy.Eligible = true
 	case model.AgentPi:

@@ -18,7 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func TestOpenCodeReviewTransportRelaysOneLiveTaskAndCapturesHostOutput(t *testing.T) {
+func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
@@ -38,19 +38,13 @@ func TestOpenCodeReviewTransportRelaysOneLiveTaskAndCapturesHostOutput(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, []byte(*completed.Output), &artifact)
-	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted || artifact.Reference == "" || artifact.Path != "" {
-		t.Fatalf("transport artifact = %#v", artifact)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved ||
+		!strings.Contains(terminal.Action, "burned") {
+		t.Fatalf("transport terminal closure = %#v", terminal)
 	}
-	if _, found := reviewtransaction.ReadLensContextEmission(store.Dir, record.State.LineageID, record.State.InitialSnapshot.Identity,
-		record.Revision, lens, 0, artifact.SubjectHash); !found {
-		t.Fatal("provider-contract context emission was not recorded after live Go relay capture")
-	}
-	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision, record.State.InitialSnapshot.Identity,
-		mustFrozenContext(t, repo, record), mustArtifactSubject(t, repo, record, lens, 0)); err != nil || !found {
-		t.Fatalf("captured provider result found=%v err=%v", found, err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }
 
 func TestOpenCodeReviewTransportLensMaterializationCarriesOnlyGoIssuedBytes(t *testing.T) {
@@ -215,7 +209,7 @@ func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLau
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repo, lineage, _ := providerCorrectionReady(t)
+			repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 			task := openCodeTargetedValidatorTask(t, repo, lineage)
 			store, before, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
 			if err != nil {
@@ -251,7 +245,7 @@ func TestOpenCodeReviewTransportRefusesCanonicalTaskAuthorityMismatchesBeforePro
 	reviewEnabledHome(t)
 	targetedValidatorFixture := func(t *testing.T) (string, string, ReviewProviderTask) {
 		t.Helper()
-		repo, lineage, _ := providerCorrectionReady(t)
+		repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 		return repo, lineage, openCodeTargetedValidatorTask(t, repo, lineage)
 	}
 	for _, test := range []struct {
@@ -508,7 +502,7 @@ func TestOpenCodeReviewTransportTimedOutReadDoesNotLeaveAGoroutine(t *testing.T)
 	}
 }
 
-func TestOpenCodeReviewTransportCapturesProviderRefuter(t *testing.T) {
+func TestOpenCodeReviewTransportRefuterClosesThroughSharedGoReducer(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	reviewer := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
@@ -552,8 +546,13 @@ func TestOpenCodeReviewTransportCapturesProviderRefuter(t *testing.T) {
 	completed, err := relay.complete(openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
 	})
-	if err != nil || completed.Output == nil || !strings.Contains(*completed.Output, `"captured":true`) {
+	if err != nil || completed.Output == nil {
 		t.Fatalf("provider refuter completion = %#v, %v", completed, err)
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
+	if terminal.Operation != reviewCaptureRefuterCaptureOperation || terminal.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("provider refuter terminal closure = %#v", terminal)
 	}
 	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
 	if err != nil || !slot.Occupied {
@@ -561,9 +560,9 @@ func TestOpenCodeReviewTransportCapturesProviderRefuter(t *testing.T) {
 	}
 }
 
-func TestOpenCodeReviewTransportCapturesProviderTargetedValidator(t *testing.T) {
+func TestOpenCodeReviewTransportValidatorClosesThroughSharedGoReducer(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, lineage, request := providerCorrectionReady(t)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	store, record, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
 	if err != nil {
@@ -581,14 +580,16 @@ func TestOpenCodeReviewTransportCapturesProviderTargetedValidator(t *testing.T) 
 	completed, err := relay.complete(openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
 	})
-	if err != nil || completed.Output == nil || !strings.Contains(*completed.Output, `"role":"targeted-validator"`) ||
-		!strings.Contains(*completed.Output, `"captured":true`) {
+	if err != nil || completed.Output == nil {
 		t.Fatalf("provider targeted-validator completion = %#v, %v", completed, err)
 	}
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
-	if err != nil || !slot.Occupied || record.State.CorrectionAttemptConsumed() {
-		t.Fatalf("provider targeted-validator slot = %#v, correction consumed=%v, %v", slot, record.State.CorrectionAttemptConsumed(), err)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
+	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved ||
+		!strings.Contains(terminal.Action, "burned") {
+		t.Fatalf("provider targeted-validator terminal closure = %#v", terminal)
 	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }
 
 func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testing.T) {
@@ -598,7 +599,7 @@ func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testin
 		{name: "primary completion before secondary completion"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repo, lineage, request := providerCorrectionReady(t)
+			repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
 			task := openCodeTargetedValidatorTask(t, repo, lineage)
 			store, _, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
 			if err != nil {
@@ -646,18 +647,15 @@ func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testin
 				final, finalErr = completion(primary, *forwarded.Output)
 			case "primary completion before secondary completion":
 				captured, err := completion(primary, hostOutput)
-				if err != nil || captured.Output == nil || !strings.Contains(*captured.Output, `"captured":true`) {
-					t.Fatalf("primary capture = %#v, %v", captured, err)
+				if err != nil || captured.Output == nil || !strings.Contains(*captured.Output, `"operation":"review/capture-validation"`) {
+					t.Fatalf("primary terminal capture = %#v, %v", captured, err)
 				}
 				final, finalErr = completion(secondary, *captured.Output)
 			}
-			if finalErr != nil || final.Output == nil || !strings.Contains(*final.Output, `"captured":true`) {
-				t.Fatalf("mixed relay final output = %#v, %v", final, finalErr)
+			if finalErr != nil || final.Output == nil || !strings.Contains(*final.Output, `"operation":"review/capture-validation"`) {
+				t.Fatalf("mixed relay terminal output = %#v, %v", final, finalErr)
 			}
-			slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
-			if err != nil || !slot.Occupied {
-				t.Fatalf("targeted-validator capture slot = %#v, %v", slot, err)
-			}
+			assertApprovedCompactAuthorityBurned(t, store, lineage)
 		})
 	}
 }
@@ -692,7 +690,7 @@ func TestOpenCodeReviewTransportRefusesUnavailableAuthorityAtStartOrCompletion(t
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := reviewEnabledHome(t)
-			repo, lineage, request := providerCorrectionReady(t)
+			repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
 			task := openCodeTargetedValidatorTask(t, repo, lineage)
 			store, before, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
 			if err != nil {
@@ -925,7 +923,7 @@ func mustArtifactSubject(t *testing.T, repo string, record reviewtransaction.Com
 
 func TestOpenCodeReviewTransportCompletionWithoutOutputFailsClosed(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, lineage, _ := providerCorrectionReady(t)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	issued, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt,
@@ -972,9 +970,9 @@ func TestOpenCodeReviewTransportBoundsCompletionWaitForSilentlyDeadHost(t *testi
 	reviewEnabledHome(t)
 	original := openCodeTransportCompletionSafetyBound
 	t.Cleanup(func() { openCodeTransportCompletionSafetyBound = original })
-	if openCodeTransportCompletionSafetyBound != reviewFacadeFinalizeProviderOperationTimeout {
-		t.Fatalf("completion safety bound = %s, want the %s provider operation deadline",
-			openCodeTransportCompletionSafetyBound, reviewFacadeFinalizeProviderOperationTimeout)
+	if openCodeTransportCompletionSafetyBound != reviewProviderRoleCaptureTimeout {
+		t.Fatalf("completion safety bound = %s, want the %s provider capture deadline",
+			openCodeTransportCompletionSafetyBound, reviewProviderRoleCaptureTimeout)
 	}
 	openCodeTransportCompletionSafetyBound = 30 * time.Millisecond
 	repo, _, store, record := newArtifactReview(t, false)

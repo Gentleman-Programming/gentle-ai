@@ -12,6 +12,7 @@ func TestProjectStatusV1FreezesExactLegacyShape(t *testing.T) {
 	status.RemediationState.CorrectionBudgetRemaining = 7
 	status.RemediationState.CorrectionBudgetTotal = 10
 	status.Artifacts["futureArtifact"] = ArtifactDone
+	status.Artifacts["research"] = ArtifactDone
 
 	projected, err := ProjectStatusV1(status)
 	if err != nil {
@@ -48,6 +49,12 @@ func TestProjectStatusV1FreezesExactLegacyShape(t *testing.T) {
 	if _, exists := artifacts["futureArtifact"]; exists {
 		t.Fatal("legacy projection leaked futureArtifact")
 	}
+	if _, exists := artifacts["research"]; exists {
+		t.Fatal("legacy projection leaked research artifact state")
+	}
+	if strings.Contains(string(payload), `"research"`) {
+		t.Fatalf("legacy projection leaked research fields: %s", payload)
+	}
 }
 
 func TestProjectStatusV1RejectsNonLegacyValues(t *testing.T) {
@@ -62,6 +69,13 @@ func TestProjectStatusV1RejectsNonLegacyValues(t *testing.T) {
 				status.NextRecommended = "working"
 			},
 			want: `unsupported SDD v1 next action "working"`,
+		},
+		{
+			name: "research next action",
+			mutate: func(status *Status) {
+				status.NextRecommended = "sdd-research"
+			},
+			want: `unsupported SDD v1 next action "sdd-research"`,
 		},
 		{
 			name: "future artifact state",
