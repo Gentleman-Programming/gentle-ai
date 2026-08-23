@@ -81,6 +81,34 @@ func TestTargetedValidatorPromptCarriesEveryInspectionArgument(t *testing.T) {
 	}
 }
 
+func TestTargetedValidatorPromptCarriesFrozenPolicyAndCausalFindingEvidence(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, state, revision := driveReviewToOpenTargetedValidation(t)
+	prompt := string(targetedValidatorProviderPrompt(t, repo, state, revision))
+
+	if !strings.Contains(prompt, facadeReviewPolicy) {
+		t.Fatal("targeted validator prompt omits the exact policy bound when the review started")
+	}
+	for _, findingID := range state.FixFindingIDs {
+		var finding reviewtransaction.Finding
+		for _, candidate := range state.Findings {
+			if candidate.ID == findingID {
+				finding = candidate
+				break
+			}
+		}
+		classification, found := state.Classifications[findingID]
+		if finding.ID == "" || !found {
+			t.Fatalf("open correction has no frozen causal finding for %q: %#v", findingID, state)
+		}
+		for _, value := range append([]string{finding.ID, finding.Location, finding.Claim, classification.Proof}, finding.ProofRefs...) {
+			if !strings.Contains(prompt, value) {
+				t.Fatalf("targeted validator prompt omits frozen causal finding evidence %q", value)
+			}
+		}
+	}
+}
+
 // TestTargetedValidatorInspectionRecipeExecutes is the honest half: it does not
 // assert that the prompt mentions a command, it executes the command the
 // prompt describes, using only values parsed out of that prompt. A recipe that
@@ -190,8 +218,8 @@ func decodeTargetedValidatorPromptRequest(t *testing.T, prompt []byte) targetedV
 
 // driveReviewToOpenTargetedValidation runs a faithful staged correction cycle
 // to the exact state the two field reports were stuck in: one open, unconsumed
-// correction whose corrected candidate has passed repository verification and
-// is waiting on a targeted validation verdict.
+// correction whose corrected candidate is waiting on a targeted validation
+// verdict.
 func driveReviewToOpenTargetedValidation(t *testing.T) (repo string, state reviewtransaction.CompactState, revision string) {
 	t.Helper()
 	repo = initReviewCLIRepo(t)
@@ -203,6 +231,9 @@ func driveReviewToOpenTargetedValidation(t *testing.T) (repo string, state revie
 			t.Fatal(err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(repo, "alpha.go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	runReviewCLIGit(t, repo, "add", "alpha.go", "beta.go")
 
 	var startOut bytes.Buffer
@@ -213,10 +244,12 @@ func driveReviewToOpenTargetedValidation(t *testing.T) (repo string, state revie
 		t.Fatalf("start: %v\n%s", err, startOut.String())
 	}
 	started := decodeNegotiatedReviewStart(t, startOut.Bytes())
+	captureStarted := ReviewFacadeStartResult{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
+		SelectedLenses: started.SelectedLenses,
+	}
 
-	finalizeArgs := []string{"--cwd", repo, "--lineage", started.LineageID}
-	for index, lens := range started.SelectedLenses {
-		resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
+	for index := range started.SelectedLenses {
 		findings := []facadeFinding{}
 		if index == 0 {
 			findings = []facadeFinding{{
@@ -225,59 +258,18 @@ func driveReviewToOpenTargetedValidation(t *testing.T) (repo string, state revie
 				EvidenceClass: "deterministic", CausalDisposition: "introduced",
 			}}
 		}
-		writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-			Lens: lens, Findings: findings, Evidence: []string{"inspected the exact frozen candidate"},
-		})
-		finalizeArgs = append(finalizeArgs, "--result", resultPath)
+		captureCLIReviewerResultWithFindings(t, repo, captureStarted, index, findings, &bytes.Buffer{})
 	}
-	if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
-		t.Fatalf("finalize results: %v", err)
-	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2",
-	}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("forecast: %v", err)
-	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, 2)
 
 	if err := os.WriteFile(filepath.Join(repo, "alpha.go"), []byte("package candidate\n\nfunc Alpha() int { return 10 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, repo, "add", "alpha.go")
 
-	for hop := 1; hop <= 8; hop++ {
-		var raw bytes.Buffer
-		if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
-			"--agent", "claude-code", "--next-transition", "--lineage", started.LineageID, "--projection", "staged"}, &raw); err != nil {
-			t.Fatalf("status hop %d: %v", hop, err)
-		}
-		var parsed ReviewTargetStatusResult
-		decodeStrictReviewJSON(t, raw.Bytes(), &parsed)
-		transition := parsed.NextTransition
-		if transition == nil {
-			t.Fatalf("hop %d: no transition", hop)
-		}
-		switch transition.ReasonCode {
-		case "correction_repository_verification_required":
-			passed := filepath.Join(t.TempDir(), "passed.txt")
-			if err := os.WriteFile(passed, []byte("full repository verification passed\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-				"--target", transitionArgumentValue(t, transition, "target"),
-				"--expected-revision", transitionArgumentValue(t, transition, "expected-revision"),
-				"--outcome", "passed", "--input", passed}, &bytes.Buffer{}); err != nil {
-				t.Fatalf("capture passed evidence: %v", err)
-			}
-		case "targeted_validation_required":
-			_, record, err := discoverCompactFacadeReview(context.Background(), repo, started.LineageID, false)
-			if err != nil {
-				t.Fatalf("discover compact authority: %v", err)
-			}
-			return repo, record.State, record.Revision
-		default:
-			t.Fatalf("hop %d reached %s/%s instead of targeted_validation_required", hop, transition.Kind, transition.ReasonCode)
-		}
+	_, record, err := discoverCompactFacadeReview(context.Background(), repo, started.LineageID, false)
+	if err != nil {
+		t.Fatalf("discover open correction authority: %v", err)
 	}
-	t.Fatal("never reached targeted_validation_required")
-	return "", reviewtransaction.CompactState{}, ""
+	return repo, record.State, record.Revision
 }

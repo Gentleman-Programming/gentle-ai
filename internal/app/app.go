@@ -61,7 +61,13 @@ func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
 }
 
+const nonInteractiveTUIError = "gentle-ai requires both stdin and stdout to be terminals (TTYs); use --version, gentle-ai update, or --help for non-interactive use"
+
 func RunArgs(args []string, stdout io.Writer) error {
+	if len(args) == 0 && (!isattyFn(os.Stdin.Fd()) || !isattyFn(os.Stdout.Fd())) {
+		return errors.New(nonInteractiveTUIError)
+	}
+
 	// Propagate the build-time version to the CLI and upgrade layers so backup
 	// manifests record which version of gentle-ai created them.
 	cli.AppVersion = Version
@@ -121,7 +127,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "review-bundle-import":
 			return cli.RunReviewBundleImport(args[1:], stdout)
 		case "review-validate":
-			return cli.RunReviewValidate(args[1:], stdout)
+			return cli.RunReviewValidateNonDeciding(args[1:], stdout)
 		case "install":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)

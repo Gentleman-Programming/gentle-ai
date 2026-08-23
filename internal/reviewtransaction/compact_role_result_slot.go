@@ -21,6 +21,11 @@ const (
 	compactTargetedValidatorResultFile = "result.json"
 )
 
+// ErrCompactRoleResultSlotPartiallyPublished reports the short publication
+// window where a concurrent reader observed one immutable slot sidecar before
+// its pair. Callers may retry discovery; they must never admit the partial slot.
+var ErrCompactRoleResultSlotPartiallyPublished = errors.New("provider role result slot is partially published") // refusal:by-design human-authority: interrupted immutable evidence requires maintainer inspection
+
 type compactRoleResultSlotKind string
 
 const (
@@ -38,6 +43,7 @@ type compactRoleResultSlotKey struct {
 	lens              string
 	authorityRevision string
 	targetIdentity    string
+	requestHash       string
 }
 
 func compactLensRoleResultSlotKey(order int, lens string) compactRoleResultSlotKey {
@@ -48,9 +54,10 @@ func compactRefuterRoleResultSlotKey() compactRoleResultSlotKey {
 	return compactRoleResultSlotKey{kind: compactRoleResultSlotRefuter}
 }
 
-func compactTargetedValidatorRoleResultSlotKey(revision, target string) compactRoleResultSlotKey {
+func compactTargetedValidatorRoleResultSlotKey(request TargetedValidationRequest) compactRoleResultSlotKey {
 	return compactRoleResultSlotKey{
-		kind: compactRoleResultSlotTargetedValidator, authorityRevision: revision, targetIdentity: target,
+		kind: compactRoleResultSlotTargetedValidator, authorityRevision: request.ExpectedRevision,
+		targetIdentity: request.CorrectionTargetIdentity, requestHash: request.RequestHash,
 	}
 }
 
@@ -121,7 +128,7 @@ func (store CompactStore) CaptureAdmittedTargetedValidatorResult(ctx context.Con
 			if err != nil || !reflect.DeepEqual(authoritative, request.ExpectedRequest) {
 				return compactRoleResultSlotKey{}, errors.New("targeted validator capture binding does not match the current open correction authority") // refusal:by-design operator-knowledge: refresh the open correction before capturing its validator result
 			}
-			return compactTargetedValidatorRoleResultSlotKey(authoritative.ExpectedRevision, authoritative.CorrectionTargetIdentity), nil
+			return compactTargetedValidatorRoleResultSlotKey(authoritative), nil
 		}, func(state CompactState) error {
 			authoritative, err := BuildTargetedValidationRequest(ctx, store.repo, state, request.ExpectedRequest.ExpectedRevision)
 			if err != nil || !reflect.DeepEqual(authoritative, request.ExpectedRequest) {
@@ -137,7 +144,7 @@ func ReadCompactTargetedValidatorResultSlot(storeDir string, request TargetedVal
 	if err := ValidateTargetedValidationRequest(request); err != nil {
 		return CompactTargetedValidatorResultSlot{}, err
 	}
-	return ReadCompactRoleResultSlot(storeDir, compactTargetedValidatorRoleResultSlotKey(request.ExpectedRevision, request.CorrectionTargetIdentity))
+	return ReadCompactRoleResultSlot(storeDir, compactTargetedValidatorRoleResultSlotKey(request))
 }
 
 // captureAdmittedRoleResult is the common lock, replay, state predicate, and
@@ -249,11 +256,11 @@ func compactRoleResultSlotPath(storeDir string, key compactRoleResultSlotKey) (s
 	case "transaction-refuter-batch":
 		return filepath.Join(storeDir, compactRefuterResultsDir, compactRefuterResultFile), nil
 	case "correction-targeted-validator":
-		if !validSHA256(key.authorityRevision) || !validSHA256(key.targetIdentity) {
+		if !validSHA256(key.authorityRevision) || !validSHA256(key.targetIdentity) || !validSHA256(key.requestHash) {
 			return "", errors.New("targeted validator role result identity is invalid") // refusal:by-design world-action: only a current correction authority can define a validator slot
 		}
 		return filepath.Join(storeDir, compactTargetedValidatorResultsDir, strings.TrimPrefix(key.targetIdentity, "sha256:"),
-			strings.TrimPrefix(key.authorityRevision, "sha256:"), compactTargetedValidatorResultFile), nil
+			strings.TrimPrefix(key.authorityRevision, "sha256:"), strings.TrimPrefix(key.requestHash, "sha256:"), compactTargetedValidatorResultFile), nil
 	default:
 		return "", fmt.Errorf("provider role %q has unsupported storage binding %q", contract.Role, contract.StorageSlot) // refusal:by-design world-action: every role must have a compiled storage binding
 	}
@@ -280,7 +287,7 @@ func ReadCompactRoleResultSlot(storeDir string, key compactRoleResultSlotKey) (C
 		return CompactRoleResultSlot{}, nil
 	}
 	if payloadMissing || digestMissing {
-		return CompactRoleResultSlot{}, errors.New("provider role result slot is partially published") // refusal:by-design human-authority: interrupted immutable evidence requires maintainer inspection
+		return CompactRoleResultSlot{}, ErrCompactRoleResultSlotPartiallyPublished
 	}
 	digest := strings.TrimSpace(string(digestPayload))
 	if !validSHA256(digest) || compactPreservedPayloadDigest(payload) != digest {
