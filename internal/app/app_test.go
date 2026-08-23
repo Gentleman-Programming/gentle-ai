@@ -1534,6 +1534,7 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 
 func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	// NOTE: modifies package-level vars; must not run in parallel.
+	setupMockInteractiveTerminal(t, true)
 	origSelfUpdate := selfUpdateFn
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
@@ -1611,6 +1612,17 @@ func setupMockHome(t *testing.T, home string) {
 	})
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
+}
+
+func setupMockInteractiveTerminal(t *testing.T, interactive bool) {
+	t.Helper()
+	orig := isInteractiveTerminalFn
+	t.Cleanup(func() {
+		isInteractiveTerminalFn = orig
+	})
+	isInteractiveTerminalFn = func() bool {
+		return interactive
+	}
 }
 
 // TestTUIExecuteReturnsStatePersistenceFailure verifies that the TUI applies
@@ -2023,6 +2035,7 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
@@ -2064,6 +2077,7 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 // state.json has PendingSync=true, RunArgs (TUI path / no args) calls
 // the deferred sync runner and writes PendingSync=false on success.
 func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2127,6 +2141,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2192,6 +2207,7 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2255,6 +2271,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2313,6 +2330,7 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 // post-upgrade state. Per #1901, this reuses the existing PendingSync signal
 // rather than introducing a new persisted flag.
 func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2366,6 +2384,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
 // the doctor advisory is printed regardless of deferred sync outcome. The
 // advisory is informational and complements the sync outcome (not a replacement).
 func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2419,6 +2438,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T)
 // doctor advisory is NOT printed on a normal launch where PendingSync=false.
 // The advisory is gated strictly on the post-upgrade signal.
 func TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory(t *testing.T) {
+	setupMockInteractiveTerminal(t, true)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2609,4 +2629,106 @@ func writeFakeOpenCodeRuntime(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return binDir
+}
+
+// ─── Issue #95: TTY detection before TUI launch ──────────────────────────────
+
+// TestRunArgs_NoArgs_RequiresInteractiveTerminal verifies that launching the TUI
+// without an interactive terminal returns a clear, actionable error before
+// performing OS validation, system detection, probes, or launching Bubbletea.
+func TestRunArgs_NoArgs_RequiresInteractiveTerminal(t *testing.T) {
+	setupMockInteractiveTerminal(t, false)
+
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	origRunTUI := runTUI
+	detectCalled := 0
+	ensureCalled := 0
+	tuiCalled := 0
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		detectCalled++
+		return system.DetectionResult{}, nil
+	}
+	ensureCurrentOSSupported = func() error {
+		ensureCalled++
+		return nil
+	}
+	runTUI = func(tea.Model, ...tea.ProgramOption) (tea.Model, error) {
+		tuiCalled++
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+	})
+
+	var buf bytes.Buffer
+	err := RunArgs(nil, &buf)
+	if err == nil {
+		t.Fatalf("RunArgs(nil) with non-interactive terminal expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "interactive TUI requires an interactive terminal (TTY)") {
+		t.Errorf("error = %q, want TTY required notice", err.Error())
+	}
+	if !strings.Contains(err.Error(), "--help") || !strings.Contains(err.Error(), "--version") {
+		t.Errorf("error = %q, want guidance with --help and --version", err.Error())
+	}
+	if detectCalled != 0 || ensureCalled != 0 || tuiCalled != 0 {
+		t.Errorf("expected zero downstream calls, got detect=%d ensure=%d tui=%d", detectCalled, ensureCalled, tuiCalled)
+	}
+}
+
+// TestRunArgs_ExplicitCommands_DoNotRequireInteractiveTerminal verifies that
+// non-interactive commands (--version, --help, update) succeed without requiring a TTY.
+func TestRunArgs_ExplicitCommands_DoNotRequireInteractiveTerminal(t *testing.T) {
+	setupMockInteractiveTerminal(t, false)
+
+	origCheckAll := updateCheckAll
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() {
+		updateCheckAll = origCheckAll
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	updateCheckAll = func(context.Context, string, system.PlatformProfile) []update.UpdateResult {
+		return []update.UpdateResult{
+			{
+				Tool:             update.ToolInfo{Name: "gentle-ai"},
+				InstalledVersion: "1.0.0",
+				LatestVersion:    "1.0.0",
+				Status:           update.UpToDate,
+			},
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs([]string{"--version"}, &buf); err != nil {
+		t.Fatalf("RunArgs(--version) error = %v, want success in non-interactive environment", err)
+	}
+	if !strings.Contains(buf.String(), "gentle-ai") {
+		t.Fatalf("RunArgs(--version) output = %q, want version output", buf.String())
+	}
+
+	buf.Reset()
+	if err := RunArgs([]string{"--help"}, &buf); err != nil {
+		t.Fatalf("RunArgs(--help) error = %v, want success in non-interactive environment", err)
+	}
+	if !strings.Contains(buf.String(), "gentle-ai") {
+		t.Fatalf("RunArgs(--help) output = %q, want help output", buf.String())
+	}
+
+	buf.Reset()
+	if err := RunArgs([]string{"update"}, &buf); err != nil {
+		t.Fatalf("RunArgs(update) error = %v, want success in non-interactive environment", err)
+	}
+	if !strings.Contains(buf.String(), "gentle-ai") {
+		t.Fatalf("RunArgs(update) output = %q, want update output", buf.String())
+	}
 }
