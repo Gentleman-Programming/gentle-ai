@@ -550,6 +550,73 @@ func TestLoadConfigProviders(t *testing.T) {
 	}
 }
 
+func TestLoadConfigProvidersReadsJSONCSource(t *testing.T) {
+	configDir := t.TempDir()
+	settingsPath := filepath.Join(configDir, "opencode.json")
+	jsoncPath := filepath.Join(configDir, "opencode.jsonc")
+	if err := os.WriteFile(jsoncPath, []byte(`{
+		// Local provider with JSONC syntax.
+		"provider": {
+			"local": {
+				"models": {
+					"model-a": {"name": "Model A", "tool_call": true},
+				},
+			},
+		},
+	}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	providers, err := LoadConfigProviders(settingsPath)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
+	model, ok := providers["local"].Models["model-a"]
+	if !ok || !model.ToolCall {
+		t.Fatalf("LoadConfigProviders() = %#v, want JSONC local/model-a", providers)
+	}
+}
+
+func TestLoadConfigProvidersMergesJSONAndJSONC(t *testing.T) {
+	configDir := t.TempDir()
+	settingsPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
+		"provider": {
+			"shared": {"name": "JSON", "models": {"base": {"name": "Base", "tool_call": false}, "conflict": {"name": "JSON", "tool_call": false}}},
+			"json-only": {"models": {"model": {"name": "JSON only", "tool_call": true}}}
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write JSON settings: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.jsonc"), []byte(`{
+		"provider": {
+			"shared": {"name": "JSONC", "models": {"conflict": {"name": "JSONC", "tool_call": true}, "jsonc-only": {"name": "JSONC only", "tool_call": true}}},
+			"jsonc-only": {"models": {"model": {"name": "JSONC only", "tool_call": true}}}
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	providers, err := LoadConfigProviders(settingsPath)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
+	shared := providers["shared"]
+	if shared.Name != "JSONC" || !shared.Models["conflict"].ToolCall || shared.Models["conflict"].Name != "JSONC" {
+		t.Fatalf("JSONC conflict did not win: %#v", shared)
+	}
+	for _, id := range []string{"base", "jsonc-only"} {
+		if _, ok := shared.Models[id]; !ok {
+			t.Fatalf("merged shared provider missing model %q: %#v", id, shared.Models)
+		}
+	}
+	for _, id := range []string{"json-only", "jsonc-only"} {
+		if _, ok := providers[id]; !ok {
+			t.Fatalf("merged providers missing %q: %#v", id, providers)
+		}
+	}
+}
+
 func TestLoadConfigProvidersMissingFile(t *testing.T) {
 	config, err := LoadConfigProviders("/nonexistent/opencode.json")
 	if err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
@@ -213,6 +214,44 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	}
 	if strings.Contains(text, `"mcpServers"`) {
 		t.Fatal("opencode.json should use 'mcp' key, not 'mcpServers'")
+	}
+}
+
+func TestInjectOpenCodePreservesCommentedJSONCSettings(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{
+  // Keep this user-managed provider.
+  "provider": {"user": {}},
+}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	if _, err := Inject(home, home, opencodeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read JSONC settings: %v", err)
+	}
+	if !strings.Contains(string(content), "Keep this user-managed provider.") {
+		t.Fatalf("Context7 injection lost user comment:\n%s", content)
+	}
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
+		t.Fatalf("parse injected JSONC settings: %v", err)
+	}
+	if _, ok := root["provider"].(map[string]any)["user"]; !ok {
+		t.Fatalf("Context7 injection lost user provider: %#v", root)
+	}
+	if _, ok := root["mcp"].(map[string]any)["context7"]; !ok {
+		t.Fatalf("Context7 injection missing managed server: %#v", root)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("Context7 injection created JSON sibling: %v", err)
 	}
 }
 

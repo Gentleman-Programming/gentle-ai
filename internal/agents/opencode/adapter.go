@@ -2,15 +2,16 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeconfig "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -98,7 +99,7 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	return opencodeconfig.ManagedSettingsPath(ConfigPath(homeDir))
 }
 
 // --- Config strategies ---
@@ -114,21 +115,18 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
-	// OpenCode merges into opencode.json, but this provides the path
-	// for components that use the separate-file strategy fallback.
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	// OpenCode merges MCP into the managed settings source; this path is also
+	// used by components that need a settings-file fallback.
+	return a.SettingsPath(homeDir)
 }
 
 // EffectiveCodeGraphWiring validates OpenCode's effective MCP entry while
 // keeping OpenCode's JSON/JSONC schema behind the adapter boundary.
 func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 	settingsPath := a.SettingsPath(homeDir)
-	paths := []string{settingsPath}
-	if strings.HasSuffix(settingsPath, ".json") {
-		paths = append(paths, strings.TrimSuffix(settingsPath, ".json")+".jsonc")
-	}
-
-	for _, path := range paths {
+	merged := map[string]any{}
+	codeGraphSource := ""
+	for _, path := range opencodeconfig.SettingsSourcePaths(filepath.Dir(settingsPath)) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -137,12 +135,38 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 		if err != nil {
 			continue
 		}
-		mcp, ok := root["mcp"].(map[string]any)
-		if ok && isEffectiveCodeGraphEntry(mcp["codegraph"]) {
-			return path, true
+		encoded, err := json.Marshal(root)
+		if err != nil {
+			continue
+		}
+		mergedBytes, err := filemerge.MergeJSONObjects(mustMarshalJSONObject(merged), encoded)
+		if err != nil {
+			continue
+		}
+		if err := json.Unmarshal(mergedBytes, &merged); err != nil {
+			continue
+		}
+		if mcp, ok := root["mcp"].(map[string]any); ok {
+			if _, exists := mcp["codegraph"]; exists {
+				codeGraphSource = path
+			}
 		}
 	}
+	if mcp, ok := merged["mcp"].(map[string]any); ok && isEffectiveCodeGraphEntry(mcp["codegraph"]) {
+		if codeGraphSource != "" {
+			return codeGraphSource, true
+		}
+		return settingsPath, true
+	}
 	return "", false
+}
+
+func mustMarshalJSONObject(value map[string]any) []byte {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return []byte("{}")
+	}
+	return encoded
 }
 
 func isEffectiveCodeGraphEntry(value any) bool {

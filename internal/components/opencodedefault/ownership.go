@@ -67,7 +67,10 @@ func (p *InstallPlan) Apply() (bool, error) {
 		owned = newOwnership(current)
 	}
 	root["default_agent"] = ManagedAgent
-	settings := encode(root)
+	settings, err := filemerge.RewriteJSONObjectForPath(p.settingsPath, raw, root)
+	if err != nil {
+		return false, err
+	}
 	metadata := encode(owned)
 	ownerPath := OwnershipPath(p.settingsPath)
 	ownerRaw, _ := os.ReadFile(ownerPath)
@@ -105,7 +108,10 @@ func (p *UninstallPlan) Apply(cleaned []byte, settingsExist bool) (changed, remo
 	settingsExist = settingsExist && len(root) > 0
 	var settings []byte
 	if settingsExist {
-		settings = encode(root)
+		settings, err = filemerge.RewriteJSONObjectForPath(p.settingsPath, cleaned, root)
+		if err != nil {
+			return false, false, err
+		}
 	}
 	currentRaw, readErr := os.ReadFile(p.settingsPath)
 	currentExists := readErr == nil

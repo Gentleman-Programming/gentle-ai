@@ -1937,20 +1937,20 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 		baseJSON = nil
 	}
 
-	baseJSON, err = migrateLegacyOpenCodeAgentsKey(baseJSON)
+	baseJSON, err = migrateLegacyOpenCodeAgentsKey(path, baseJSON)
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("migrate opencode agents key: %w", err)
 	}
-	baseJSON, err = migrateLegacyOpenCodeSDDOrchestrator(baseJSON)
+	baseJSON, err = migrateLegacyOpenCodeSDDOrchestrator(path, baseJSON)
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("migrate opencode sdd orchestrator agent: %w", err)
 	}
-	baseJSON, err = migrateLegacyOpenCodeCommandPrompt(baseJSON)
+	baseJSON, err = migrateLegacyOpenCodeCommandPrompt(path, baseJSON)
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("migrate opencode command prompt field: %w", err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
@@ -1998,8 +1998,8 @@ func openCodeSettingsHasShare(settingsPath string) bool {
 		return false
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(content, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
 		return false
 	}
 	_, exists := root["share"]
@@ -2014,13 +2014,13 @@ func openCodeSettingsHasShare(settingsPath string) bool {
 // key is revoked and is removed during sync; if it clearly contains the old SDD
 // conductor prompt and no gentle-orchestrator exists yet, its prompt is migrated
 // before the revoked key is deleted.
-func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
+func migrateLegacyOpenCodeSDDOrchestrator(path string, baseJSON []byte) ([]byte, error) {
 	if len(strings.TrimSpace(string(baseJSON))) == 0 {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		return baseJSON, nil
 	}
 
@@ -2052,11 +2052,7 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 		delete(agentsMap, "gentleman")
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(encoded, '\n'), nil
+	return filemerge.RewriteJSONObjectForPath(path, baseJSON, root)
 }
 
 func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
@@ -2088,8 +2084,8 @@ func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
 }
 
 func hasOpenCodeAgentKey(settingsText, agentKey string) bool {
-	root := map[string]any{}
-	if err := json.Unmarshal([]byte(settingsText), &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject([]byte(settingsText))
+	if err != nil {
 		return false
 	}
 	agentsRaw, ok := root["agent"]
@@ -2107,13 +2103,13 @@ func hasOpenCodeAgentKey(settingsText, agentKey string) bool {
 // migrateLegacyOpenCodeAgentsKey normalizes old OpenCode schema that used
 // "agents" to the current "agent" key. It keeps existing agent entries and
 // merges legacy ones without overriding current definitions.
-func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
+func migrateLegacyOpenCodeAgentsKey(path string, baseJSON []byte) ([]byte, error) {
 	if len(strings.TrimSpace(string(baseJSON))) == 0 {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}
@@ -2126,11 +2122,7 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	legacy, ok := legacyRaw.(map[string]any)
 	if !ok {
 		delete(root, "agents")
-		encoded, err := json.MarshalIndent(root, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		return append(encoded, '\n'), nil
+		return filemerge.RewriteJSONObjectForPath(path, baseJSON, root)
 	}
 
 	current := map[string]any{}
@@ -2149,12 +2141,7 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	root["agent"] = current
 	delete(root, "agents")
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-
-	return append(encoded, '\n'), nil
+	return filemerge.RewriteJSONObjectForPath(path, baseJSON, root)
 }
 
 // migrateLegacyOpenCodeCommandPrompt normalizes inline OpenCode command entries
@@ -2166,13 +2153,13 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 // OpenCode startup ("Missing key" / ConfigInvalidError). For each command entry
 // we move "prompt" into "template" when "template" is absent, then drop "prompt".
 // Entries that already define "template" keep it and simply shed the stale key.
-func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
+func migrateLegacyOpenCodeCommandPrompt(path string, baseJSON []byte) ([]byte, error) {
 	if len(strings.TrimSpace(string(baseJSON))) == 0 {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}
@@ -2205,12 +2192,7 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-
-	return append(encoded, '\n'), nil
+	return filemerge.RewriteJSONObjectForPath(path, baseJSON, root)
 }
 
 // sddOrchestratorMarkers are used to detect if SDD content was already injected

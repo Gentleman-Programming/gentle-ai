@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 // DefaultCachePath returns the default path to the OpenCode models cache file.
@@ -22,13 +24,13 @@ func DefaultCachePath() string {
 	return filepath.Join(home, ".cache", "opencode", "models.json")
 }
 
-// DefaultSettingsPath returns the default path to the OpenCode settings file.
+// DefaultSettingsPath returns the OpenCode settings file Gentle AI should manage.
 func DefaultSettingsPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "opencode", "opencode.json")
+	return ManagedSettingsPath(ConfigPath(home))
 }
 
 // DefaultAuthPath returns the default path to the OpenCode auth credentials file.
@@ -408,22 +410,39 @@ func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, err
 	return models, nil
 }
 
-// LoadConfigProviders reads the provider section from an opencode.json settings file.
-// Returns an empty map with nil error if the file is missing or has no provider key.
+// LoadConfigProviders reads providers from OpenCode settings sources. When path
+// names an OpenCode settings file, both JSON and JSONC siblings are merged with
+// JSONC taking precedence. Returns an empty map with nil error when all sources
+// are missing or have no provider key.
 func LoadConfigProviders(path string) (map[string]ConfigProvider, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	merged := []byte("{}")
+	for _, source := range settingsSourcesForPath(path) {
+		data, err := os.ReadFile(source)
 		if errors.Is(err, os.ErrNotExist) {
-			return map[string]ConfigProvider{}, nil
+			continue
 		}
-		return map[string]ConfigProvider{}, err
+		if err != nil {
+			return map[string]ConfigProvider{}, err
+		}
+		root, err := filemerge.UnmarshalJSONObject(data)
+		if err != nil {
+			return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings %q: %w", source, err)
+		}
+		encoded, err := json.Marshal(root)
+		if err != nil {
+			return map[string]ConfigProvider{}, fmt.Errorf("encode opencode settings %q: %w", source, err)
+		}
+		merged, err = filemerge.MergeJSONObjects(merged, encoded)
+		if err != nil {
+			return map[string]ConfigProvider{}, fmt.Errorf("merge opencode settings %q: %w", source, err)
+		}
 	}
 
 	var raw struct {
 		Provider map[string]ConfigProvider `json:"provider"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return map[string]ConfigProvider{}, fmt.Errorf("parse opencode settings %q: %w", path, err)
+	if err := json.Unmarshal(merged, &raw); err != nil {
+		return map[string]ConfigProvider{}, fmt.Errorf("decode merged opencode settings: %w", err)
 	}
 	if raw.Provider == nil {
 		return map[string]ConfigProvider{}, nil

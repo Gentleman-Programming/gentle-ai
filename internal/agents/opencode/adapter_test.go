@@ -186,6 +186,45 @@ func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
 	}
 }
 
+func TestSettingsAndMCPPathsUseManagedSettingsSource(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    []string
+		wantFile string
+	}{
+		{name: "existing JSONC", files: []string{"opencode.jsonc"}, wantFile: "opencode.jsonc"},
+		{name: "existing JSON", files: []string{"opencode.json"}, wantFile: "opencode.json"},
+		{name: "new configuration", wantFile: "opencode.json"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			configDir := ConfigPath(home)
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatalf("create config directory: %v", err)
+			}
+			for _, name := range tt.files {
+				if err := os.WriteFile(filepath.Join(configDir, name), []byte("{}"), 0o600); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+			}
+
+			want := filepath.Join(configDir, tt.wantFile)
+			adapter := NewAdapter()
+			if got := adapter.SettingsPath(home); got != want {
+				t.Fatalf("SettingsPath() = %q, want %q", got, want)
+			}
+			if got := adapter.MCPConfigPath(home, "context7"); got != want {
+				t.Fatalf("MCPConfigPath() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestEffectiveCodeGraphWiring(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -222,6 +261,32 @@ func TestEffectiveCodeGraphWiring(t *testing.T) {
 				t.Fatalf("EffectiveCodeGraphWiring() path = %q, want %q", gotPath, path)
 			}
 		})
+	}
+}
+
+func TestEffectiveCodeGraphWiringInheritsJSONWhenJSONCIsUnrelated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	configDir := ConfigPath(home)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jsonPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(jsonPath, []byte(`{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.jsonc"), []byte("{\n// User-owned JSONC settings.\n\"theme\": \"custom\",\n}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path, configured := NewAdapter().EffectiveCodeGraphWiring(home)
+	if !configured {
+		t.Fatal("EffectiveCodeGraphWiring() did not retain JSON CodeGraph wiring")
+	}
+	if path != jsonPath {
+		t.Fatalf("EffectiveCodeGraphWiring() path = %q, want inherited source %q", path, jsonPath)
 	}
 }
 

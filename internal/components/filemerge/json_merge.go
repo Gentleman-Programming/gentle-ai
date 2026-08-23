@@ -4,6 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+
+	"github.com/tailscale/hujson"
 )
 
 func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
@@ -28,6 +34,115 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	}
 
 	return append(encoded, '\n'), nil
+}
+
+// MergeJSONObjectsForPath merges an overlay into a settings document. Existing
+// JSONC documents keep their comments and JSONC syntax; strict JSON retains the
+// established MergeJSONObjects output exactly.
+func MergeJSONObjectsForPath(path string, baseJSON, overlayJSON []byte) ([]byte, error) {
+	if !strings.EqualFold(filepath.Ext(path), ".jsonc") || len(bytes.TrimSpace(baseJSON)) == 0 || json.Valid(baseJSON) {
+		return MergeJSONObjects(baseJSON, overlayJSON)
+	}
+
+	base, err := unmarshalJSONObject(baseJSON)
+	if err != nil {
+		return MergeJSONObjects(baseJSON, overlayJSON)
+	}
+	overlay, err := unmarshalJSONObject(overlayJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
+	}
+
+	return rewriteJSONC(baseJSON, base, mergeObjects(base, overlay))
+}
+
+// RewriteJSONObjectForPath serializes an already-updated settings object. JSONC
+// inputs retain their comments and trailing-comma syntax; strict JSON uses the
+// same indented encoding as existing mutation call sites.
+func RewriteJSONObjectForPath(path string, baseJSON []byte, updated map[string]any) ([]byte, error) {
+	if !strings.EqualFold(filepath.Ext(path), ".jsonc") || len(bytes.TrimSpace(baseJSON)) == 0 || json.Valid(baseJSON) {
+		encoded, err := json.MarshalIndent(updated, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshal rewritten json: %w", err)
+		}
+		return append(encoded, '\n'), nil
+	}
+	base, err := unmarshalJSONObject(baseJSON)
+	if err != nil {
+		return RewriteJSONObjectForPath("", nil, updated)
+	}
+	return rewriteJSONC(baseJSON, base, updated)
+}
+
+func rewriteJSONC(baseJSON []byte, base, updated map[string]any) ([]byte, error) {
+	value, err := hujson.Parse(baseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse JSONC settings: %w", err)
+	}
+	operations := make([]jsonPatchOperation, 0)
+	appendJSONPatchDifference(&operations, "", base, updated)
+	if len(operations) == 0 {
+		return baseJSON, nil
+	}
+	patch, err := json.Marshal(operations)
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSONC patch: %w", err)
+	}
+	if err := value.Patch(patch); err != nil {
+		return nil, fmt.Errorf("apply JSONC patch: %w", err)
+	}
+	value.Format()
+	return value.Pack(), nil
+}
+
+type jsonPatchOperation struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value"`
+}
+
+func appendJSONPatchDifference(operations *[]jsonPatchOperation, path string, base, updated map[string]any) {
+	for _, key := range sortedObjectKeys(base) {
+		if _, exists := updated[key]; !exists {
+			*operations = append(*operations, jsonPatchOperation{Op: "remove", Path: path + "/" + escapeJSONPointerToken(key)})
+		}
+	}
+	for _, key := range sortedObjectKeys(updated) {
+		updatedValue := updated[key]
+		keyPath := path + "/" + escapeJSONPointerToken(key)
+		baseValue, exists := base[key]
+		baseMap, baseIsMap := baseValue.(map[string]any)
+		updatedMap, updatedIsMap := updatedValue.(map[string]any)
+		if exists && baseIsMap && updatedIsMap {
+			appendJSONPatchDifference(operations, keyPath, baseMap, updatedMap)
+			continue
+		}
+		appendJSONPatchOperation(operations, keyPath, exists, baseValue, updatedValue)
+	}
+}
+
+func sortedObjectKeys(object map[string]any) []string {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func appendJSONPatchOperation(operations *[]jsonPatchOperation, path string, exists bool, baseValue, replacement any) {
+	if exists && reflect.DeepEqual(baseValue, replacement) {
+		return
+	}
+	op := "add"
+	if exists {
+		op = "replace"
+	}
+	*operations = append(*operations, jsonPatchOperation{Op: op, Path: path, Value: replacement})
+}
+
+func escapeJSONPointerToken(token string) string {
+	return strings.NewReplacer("~", "~0", "/", "~1").Replace(token)
 }
 
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {

@@ -1265,6 +1265,30 @@ func TestLMStudioDiscoveryErrorWarnsOnceWhenConfiguredModelsLackToolCalls(t *tes
 	}
 }
 
+func TestNewModelPickerStateDiscoversJSONCCustomProvider(t *testing.T) {
+	configDir := t.TempDir()
+	settingsPath := filepath.Join(configDir, "opencode.json")
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.jsonc"), []byte(`{
+		// JSONC providers must be available to Configure Models.
+		"provider": {
+			"jsonc-provider": {
+				"models": {"jsonc-model": {"name": "JSONC Model", "tool_call": true},},
+			},
+		},
+	}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	state := NewModelPickerState(writeTempFile(t, "models.json", `{}`), settingsPath)
+	provider, ok := state.Providers["jsonc-provider"]
+	if !ok {
+		t.Fatalf("Providers = %#v, want jsonc-provider", state.Providers)
+	}
+	if _, ok := provider.Models["jsonc-model"]; !ok {
+		t.Fatalf("jsonc-provider models = %#v, want jsonc-model", provider.Models)
+	}
+}
+
 func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
 	state := NewModelPickerState(writeTempFile(t, "models.json", `{`), writeTempFile(t, "opencode.json", `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1","models":{"model":{"tool_call":true}}}}}`))
 	if state.Providers == nil || state.lmStudioURL != "http://gateway:1234/v1" || len(state.AvailableIDs) != 1 || !strings.Contains(state.ConfigWarning, "model cache") || state.DiscoverLMStudioCmd() == nil {

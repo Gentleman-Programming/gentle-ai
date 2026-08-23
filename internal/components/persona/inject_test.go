@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -101,6 +102,44 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	}
 	if !strings.Contains(text, "Persona Voice") {
 		t.Fatal("CLAUDE.md residual persona section missing the 'Persona Voice' pointer to the output style")
+	}
+}
+
+func TestInjectOpenCodePreservesCommentedJSONCSettings(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{
+  // Keep this user-managed provider.
+  "provider": {"user": {}},
+}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read JSONC settings: %v", err)
+	}
+	if !strings.Contains(string(content), "Keep this user-managed provider.") {
+		t.Fatalf("persona injection lost user comment:\n%s", content)
+	}
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
+		t.Fatalf("parse injected JSONC settings: %v", err)
+	}
+	if _, ok := root["provider"].(map[string]any)["user"]; !ok {
+		t.Fatalf("persona injection lost user provider: %#v", root)
+	}
+	if _, ok := root["agent"].(map[string]any)["gentleman"]; !ok {
+		t.Fatalf("persona injection missing managed agent: %#v", root)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("persona injection created JSON sibling: %v", err)
 	}
 }
 

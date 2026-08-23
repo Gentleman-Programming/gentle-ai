@@ -20,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
@@ -573,6 +574,52 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectOpenCodeUsesExistingJSONCSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	mockNoPackageManager(t)
+
+	jsoncPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.MkdirAll(filepath.Dir(jsoncPath), 0o755); err != nil {
+		t.Fatalf("create OpenCode config directory: %v", err)
+	}
+	if err := os.WriteFile(jsoncPath, []byte(`{
+		// User-managed JSONC settings.
+		"provider": {"local": {"models": {"model": {"name": "Local", "tool_call": true},},},},
+	}`), 0o600); err != nil {
+		t.Fatalf("write JSONC settings: %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{{Name: "review"}}}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(jsoncPath), "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("opencode.json exists after JSONC injection: %v", err)
+	}
+	settings, err := os.ReadFile(jsoncPath)
+	if err != nil {
+		t.Fatalf("read JSONC settings: %v", err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(settings)
+	if err != nil {
+		t.Fatalf("parse injected JSONC settings: %v", err)
+	}
+	if _, ok := root["provider"].(map[string]any)["local"]; !ok {
+		t.Fatalf("injected settings lost user provider: %#v", root)
+	}
+	if !strings.Contains(string(settings), "User-managed JSONC settings.") {
+		t.Fatalf("injected settings lost user comment:\n%s", settings)
+	}
+	if _, ok := root["agent"].(map[string]any)["gentle-orchestrator"]; !ok {
+		t.Fatalf("injected settings missing SDD agent: %#v", root)
+	}
+	if _, ok := root["agent"].(map[string]any)["sdd-orchestrator-review"]; !ok {
+		t.Fatalf("injected settings missing named profile agent: %#v", root)
 	}
 }
 
@@ -5298,6 +5345,141 @@ func TestMergeJSONFileReturnsMergedBytes(t *testing.T) {
 	}
 }
 
+func TestMergeJSONFileMigratesCommentedLegacyOpenCodeJSONC(t *testing.T) {
+	tests := []struct {
+		name   string
+		base   string
+		assert func(*testing.T, map[string]any)
+	}{
+		{
+			name: "agents key",
+			base: `{
+  // Root comment.
+  // Unrelated setting.
+  "keep": true,
+  "agents": {
+    "legacy-agent": {"mode": "all",},
+  },
+}`,
+			assert: func(t *testing.T, root map[string]any) {
+				t.Helper()
+				if _, hasLegacy := root["agents"]; hasLegacy {
+					t.Fatal("legacy agents key survived migration")
+				}
+				agents, ok := root["agent"].(map[string]any)
+				if !ok {
+					t.Fatal("agent key missing after migration")
+				}
+				if _, ok := agents["legacy-agent"]; !ok {
+					t.Fatal("legacy agent was not migrated")
+				}
+			},
+		},
+		{
+			name: "sdd orchestrator agent",
+			base: `{
+  // Root comment.
+  // Unrelated setting.
+  "keep": true,
+  "agent": {
+    "unrelated": {"mode": "all",},
+    "sdd-orchestrator": {"mode": "primary", "prompt": "legacy",},
+  },
+}`,
+			assert: func(t *testing.T, root map[string]any) {
+				t.Helper()
+				agents, ok := root["agent"].(map[string]any)
+				if !ok {
+					t.Fatal("agent key missing after migration")
+				}
+				if _, hasLegacy := agents["sdd-orchestrator"]; hasLegacy {
+					t.Fatal("legacy sdd-orchestrator agent survived migration")
+				}
+				if _, ok := agents["gentle-orchestrator"]; !ok {
+					t.Fatal("gentle-orchestrator agent missing after migration")
+				}
+				if _, ok := agents["unrelated"]; !ok {
+					t.Fatal("unrelated agent was lost")
+				}
+			},
+		},
+		{
+			name: "command prompt field",
+			base: `{
+  // Root comment.
+  // Unrelated setting.
+  "keep": true,
+  "command": {
+    "keep": {"template": "keep",},
+    "skill-creator": {"prompt": "legacy template",},
+  },
+}`,
+			assert: func(t *testing.T, root map[string]any) {
+				t.Helper()
+				commands, ok := root["command"].(map[string]any)
+				if !ok {
+					t.Fatal("command key missing after migration")
+				}
+				entry, ok := commands["skill-creator"].(map[string]any)
+				if !ok {
+					t.Fatal("migrated command missing")
+				}
+				if _, hasLegacy := entry["prompt"]; hasLegacy {
+					t.Fatal("legacy command prompt field survived migration")
+				}
+				if got, _ := entry["template"].(string); got != "legacy template" {
+					t.Fatalf("command template = %q, want legacy template", got)
+				}
+				if _, ok := commands["keep"]; !ok {
+					t.Fatal("unrelated command was lost")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(path, []byte(tt.base), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			first, err := mergeJSONFile(path, []byte(`{"managed":{"enabled":true}}`))
+			if err != nil {
+				t.Fatalf("mergeJSONFile() error = %v", err)
+			}
+			for _, comment := range []string{"Root comment.", "Unrelated setting."} {
+				if !strings.Contains(string(first.merged), comment) {
+					t.Fatalf("merged JSONC lost comment %q:\n%s", comment, first.merged)
+				}
+			}
+
+			root, err := filemerge.UnmarshalJSONObject(first.merged)
+			if err != nil {
+				t.Fatalf("UnmarshalJSONObject() error = %v", err)
+			}
+			if root["keep"] != true {
+				t.Fatalf("unrelated setting = %#v, want true", root["keep"])
+			}
+			if managed, _ := root["managed"].(map[string]any); managed["enabled"] != true {
+				t.Fatalf("overlay was not merged: %#v", root["managed"])
+			}
+			tt.assert(t, root)
+
+			second, err := mergeJSONFile(path, []byte(`{"managed":{"enabled":true}}`))
+			if err != nil {
+				t.Fatalf("second mergeJSONFile() error = %v", err)
+			}
+			if second.writeResult.Changed {
+				t.Fatal("second migration changed an already migrated JSONC document")
+			}
+			if !bytes.Equal(first.merged, second.merged) {
+				t.Fatalf("JSONC migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", first.merged, second.merged)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fix 1: Cursor sub-agent files written to disk
 // ---------------------------------------------------------------------------
@@ -7079,7 +7261,7 @@ func TestMigrateLegacyOpenCodeCommandPrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := migrateLegacyOpenCodeCommandPrompt([]byte(tt.input))
+			out, err := migrateLegacyOpenCodeCommandPrompt("opencode.json", []byte(tt.input))
 			if err != nil {
 				t.Fatalf("migrateLegacyOpenCodeCommandPrompt() error = %v", err)
 			}
@@ -7110,7 +7292,7 @@ func TestMigrateLegacyOpenCodeCommandPrompt(t *testing.T) {
 func TestMigrateLegacyOpenCodeCommandPromptNoOp(t *testing.T) {
 	// No command key, empty input, and non-JSON must pass through unchanged.
 	for _, in := range []string{``, `   `, `{"agent":{}}`, `not json`} {
-		out, err := migrateLegacyOpenCodeCommandPrompt([]byte(in))
+		out, err := migrateLegacyOpenCodeCommandPrompt("opencode.json", []byte(in))
 		if err != nil {
 			t.Fatalf("unexpected error for %q: %v", in, err)
 		}
