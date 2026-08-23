@@ -649,6 +649,7 @@ func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testi
 	  "agent": {
 	    "sdd-orchestrator": {"mode": "primary", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-apply": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
+	    "sdd-research": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-onboard": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-verify": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
 	    "sdd-orchestrator-fast": {"mode": "primary", "model": "openai:gpt-4.1-mini"},
@@ -701,6 +702,7 @@ func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testi
 	for _, removedKey := range []string{
 		"sdd-orchestrator",
 		"sdd-apply",
+		"sdd-research",
 		"sdd-onboard",
 		"sdd-verify",
 		"sdd-orchestrator-fast",

@@ -7876,7 +7876,7 @@ func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {
 	m.CodexModelPicker = screens.NewCodexModelPickerState()
 	m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
 	m.Selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))
-	m.Cursor = 13 // Confirm row after the 13 phases.
+	m.Cursor = 14 // Confirm row after the 14 phases.
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -8107,6 +8107,171 @@ func TestOpenCodePluginUninstallSpinnerAdvancesFrame(t *testing.T) {
 	state = updated.(Model)
 	if state.OpenCodePluginUninstallSpinnerFrame != 2 {
 		t.Fatalf("spinner frame after second tick = %d, want 2", state.OpenCodePluginUninstallSpinnerFrame)
+	}
+}
+
+func setNoAnimationEnv(t *testing.T, value *string) {
+	t.Helper()
+	const name = "GENTLE_AI_NO_ANIMATION"
+	previous, wasSet := os.LookupEnv(name)
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(name, previous)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	})
+
+	var err error
+	if value == nil {
+		err = os.Unsetenv(name)
+	} else {
+		err = os.Setenv(name, *value)
+	}
+	if err != nil {
+		t.Fatalf("set %s: %v", name, err)
+	}
+}
+
+func executeSingleNoAnimationCommand(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected operation command")
+	}
+
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		if len(batch) != 1 {
+			t.Fatalf("no-animation operation batch contains %d commands, want 1", len(batch))
+		}
+		if batch[0] == nil {
+			t.Fatal("no-animation operation batch contains a nil command")
+		}
+		return batch[0]()
+	}
+	return raw
+}
+
+func TestTickMsg_NoAnimationRequiresExactOne(t *testing.T) {
+	one := "1"
+	zero := "0"
+	empty := ""
+	truthy := "true"
+	tests := []struct {
+		name     string
+		value    *string
+		wantStep int
+		wantCmd  bool
+	}{
+		{name: "exact one disables animation", value: &one, wantStep: 3, wantCmd: false},
+		{name: "unset preserves animation", value: nil, wantStep: 4, wantCmd: true},
+		{name: "empty preserves animation", value: &empty, wantStep: 4, wantCmd: true},
+		{name: "zero preserves animation", value: &zero, wantStep: 4, wantCmd: true},
+		{name: "other value preserves animation", value: &truthy, wantStep: 4, wantCmd: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setNoAnimationEnv(t, tt.value)
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenUpgrade
+			m.OperationRunning = true
+			m.SpinnerFrame = 3
+
+			updated, cmd := m.Update(TickMsg{})
+			state := updated.(Model)
+			if state.SpinnerFrame != tt.wantStep {
+				t.Fatalf("spinner frame = %d, want %d", state.SpinnerFrame, tt.wantStep)
+			}
+			if (cmd != nil) != tt.wantCmd {
+				t.Fatalf("tick command present = %t, want %t", cmd != nil, tt.wantCmd)
+			}
+		})
+	}
+}
+
+func TestOpenCodePluginUninstallSpinner_NoAnimationKeepsFrameAndStopsReschedule(t *testing.T) {
+	one := "1"
+	setNoAnimationEnv(t, &one)
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenOpenCodePluginUninstallConfirm
+	m.OperationRunning = true
+	m.OpenCodePluginUninstallSpinnerFrame = 6
+
+	updated, cmd := m.Update(TickMsg{})
+	state := updated.(Model)
+	if state.OpenCodePluginUninstallSpinnerFrame != 6 {
+		t.Fatalf("spinner frame = %d, want 6", state.OpenCodePluginUninstallSpinnerFrame)
+	}
+	if cmd != nil {
+		t.Fatal("tick command should not be rescheduled when animation is disabled")
+	}
+}
+
+func TestNoAnimationPreservesSyncOperationCommand(t *testing.T) {
+	one := "1"
+	setNoAnimationEnv(t, &one)
+
+	called := false
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSync
+	m.SyncFn = func(_ *model.SyncOverrides) ([]string, error) {
+		called = true
+		return []string{"changed"}, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if !state.OperationRunning {
+		t.Fatal("sync operation should start with animation disabled")
+	}
+
+	msg := executeSingleNoAnimationCommand(t, cmd)
+	done, ok := msg.(SyncDoneMsg)
+	if !ok {
+		t.Fatalf("operation message = %T, want SyncDoneMsg", msg)
+	}
+	if done.Err != nil {
+		t.Fatalf("sync returned unexpected error: %v", done.Err)
+	}
+	if !called {
+		t.Fatal("sync operation command was not executed")
+	}
+}
+
+func TestNoAnimationPreservesOpenCodePluginUninstallOperationCommand(t *testing.T) {
+	one := "1"
+	setNoAnimationEnv(t, &one)
+
+	called := false
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenOpenCodePluginUninstallConfirm
+	m.OpenCodePluginUninstallSelected = model.OpenCodePluginSubAgentStatusline
+	m.OpenCodePluginUninstallFn = func(_ string, id model.OpenCodeCommunityPluginID) (opencodeplugin.UninstallResult, error) {
+		called = true
+		return opencodeplugin.UninstallResult{PluginID: id}, nil
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if !state.OperationRunning {
+		t.Fatal("OpenCode plugin uninstall should start with animation disabled")
+	}
+
+	msg := executeSingleNoAnimationCommand(t, cmd)
+	done, ok := msg.(OpenCodePluginUninstallDoneMsg)
+	if !ok {
+		t.Fatalf("operation message = %T, want OpenCodePluginUninstallDoneMsg", msg)
+	}
+	if done.Err != nil {
+		t.Fatalf("uninstall returned unexpected error: %v", done.Err)
+	}
+	if done.Result.PluginID != model.OpenCodePluginSubAgentStatusline {
+		t.Fatalf("uninstalled plugin = %q, want %q", done.Result.PluginID, model.OpenCodePluginSubAgentStatusline)
+	}
+	if !called {
+		t.Fatal("OpenCode plugin uninstall command was not executed")
 	}
 }
 

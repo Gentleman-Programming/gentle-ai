@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -52,10 +53,14 @@ func reviewerRoleFor(lens string) (reviewerRole, bool) {
 }
 
 const (
-	authorityFirstProcedurePlaceholder = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
-	authorityFirstProcedureStart       = "<!-- authority-first-terminal-procedure:start -->"
-	authorityFirstProcedureEnd         = "<!-- authority-first-terminal-procedure:end -->"
-	runtimeAgentIDPlaceholder          = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+	authorityFirstProcedurePlaceholder      = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
+	authorityFirstProcedureStart            = "<!-- authority-first-terminal-procedure:start -->"
+	authorityFirstProcedureEnd              = "<!-- authority-first-terminal-procedure:end -->"
+	runtimeAgentIDPlaceholder               = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+	researchLifecyclePlaceholder            = "{{GENTLE_AI_RESEARCH_LIFECYCLE}}"
+	openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
+		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
+		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 )
 
 func boundedReviewContract() string {
@@ -66,6 +71,25 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 	return composeOrchestratorPrompt(agent, options...)
 }
 
+func boundedReviewContractFor(agent model.AgentID) string {
+	contract := boundedReviewContract()
+	if agent != model.AgentOpenCode {
+		return contract
+	}
+	return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+}
+
+func researchLifecycleContract() string {
+	source := assets.MustRead("skills/_shared/research-lifecycle.md")
+	start := strings.Index(source, "<!-- research-lifecycle-gate:start -->")
+	end := strings.Index(source, "<!-- research-lifecycle-gate:end -->")
+	if start < 0 || end < start {
+		return ""
+	}
+	start += len("<!-- research-lifecycle-gate:start -->")
+	return strings.TrimSpace(source[start:end])
+}
+
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a
 // single runtime installs. The agent is required, not optional: the shared
 // review ledger contract states the runtime identity every negotiated STATUS
@@ -74,7 +98,7 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 // hand every runtime the same false identity and walk it straight through the
 // review transport admission check (issue #2440).
 func renderBoundedReviewAsset(agent model.AgentID, path string) string {
-	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(path), agent)
+	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(agent, path), agent)
 }
 
 // bindRuntimeAgentIdentity is the single substitution point every rendered
@@ -84,14 +108,20 @@ func bindRuntimeAgentIdentity(content string, agent model.AgentID) string {
 	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 }
 
-func renderBoundedReviewAssetBody(path string) string {
-	return renderBoundedReviewAssetBodyFromContent(path, assets.MustRead(path))
+func renderBoundedReviewAssetBody(agent model.AgentID, path string) string {
+	return renderBoundedReviewAssetBodyFromContent(agent, path, assets.MustRead(path))
 }
 
-func renderBoundedReviewAssetBodyFromContent(path, content string) string {
-	content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
+func renderBoundedReviewAssetBodyFromContent(agent model.AgentID, path, content string) string {
+	if rendersReviewLifecycle(agent) {
+		content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
+	}
+	content = strings.ReplaceAll(content, researchLifecyclePlaceholder, researchLifecycleContract())
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {
-		return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
+		if rendersReviewLifecycle(agent) {
+			return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance", boundedReviewContractFor(agent))
+		}
+		return removeBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
 	}
 	prompt, reviewer := reviewerPrompt(reviewerName(path))
 	if reviewer && strings.HasPrefix(path, "claude/agents/") {
@@ -110,6 +140,15 @@ func renderBoundedReviewAssetBodyFromContent(path, content string) string {
 		return replaceBoundedReviewSection(content, "## Review ledger contract", "")
 	}
 	return content
+}
+
+// rendersReviewLifecycle is deliberately derived from the canonical capability
+// manifest. An agent cannot receive the shared lifecycle prose unless it
+// advertises the review transport contract; generic SDD composition therefore
+// remains safe for runtimes outside the closed RDD set.
+func rendersReviewLifecycle(agent model.AgentID) bool {
+	manifest, err := capabilitymanifest.ForAgent(agent)
+	return err == nil && manifest.Advertises(capabilitymanifest.ContractReviewTransportV1)
 }
 
 func authorityFirstTerminalProcedure() string {
@@ -144,6 +183,24 @@ func replaceBoundedReviewSection(content, heading, nextHeading string, contracts
 	}
 	replacement := heading + "\n\n" + contract + "\n\n"
 	return strings.TrimRight(content[:start], "\n") + "\n\n" + replacement + strings.TrimLeft(content[end:], "\n")
+}
+
+func removeBoundedReviewSection(content, heading, nextHeading string) string {
+	start := strings.Index(content, heading)
+	if start < 0 {
+		return content
+	}
+	end := len(content)
+	if nextHeading != "" {
+		remainder := content[start+len(heading):]
+		for _, candidate := range []string{"\n#### " + nextHeading, "\n### " + nextHeading, "\n## " + nextHeading} {
+			if relative := strings.Index(remainder, candidate); relative >= 0 {
+				end = start + len(heading) + relative + 1
+				break
+			}
+		}
+	}
+	return strings.TrimRight(content[:start], "\n") + "\n\n" + strings.TrimLeft(content[end:], "\n")
 }
 
 func reviewerName(path string) string {

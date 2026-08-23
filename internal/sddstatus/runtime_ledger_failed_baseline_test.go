@@ -146,7 +146,7 @@ func TestRuntimeRemediationRevertToFailedBytesStaysRefused(t *testing.T) {
 		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
 		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	})
-	if err == nil || !strings.Contains(err.Error(), "unmanaged remediation requires a changed correction candidate") {
+	if err == nil || !strings.Contains(err.Error(), "failed-evidence remediation requires a changed correction candidate") {
 		t.Fatalf("revert to the failed bytes = %v, want the changed-candidate refusal", err)
 	}
 	status, statusErr := store.Status()
