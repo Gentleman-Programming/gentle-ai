@@ -545,10 +545,19 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 		}
 	}
 
-	// Pin to the exact release version.
+	// Pin release installs to their exact version. Beta checks advertise
+	// main@<sha>, which Go installs by resolving the main branch, not by
+	// prepending a v to that display value.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
+	betaGentleAI := isBetaGentleAIUpgrade(r)
+	if betaGentleAI {
+		target = tool.GoImportPath + "@main"
+	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
+	if betaGentleAI {
+		cmd.Env = goProxyBypassEnv(cmd.Env, gentleAIModulePath(tool))
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
 	}
@@ -629,15 +638,7 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 // same risk of writing somewhere the shell does not resolve, so it performs the
 // same non-fatal destination verification.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
-	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if repository == "github.com//" {
-		repository = "github.com/gentleman-programming/gentle-ai"
-	}
-	// Go derives the module path from the repository plus the major-version
-	// suffix: for major 2 and above the module path must end in /vN or the
-	// toolchain refuses every resolution of that repository, including the
-	// branch pseudo-versions this beta path installs.
-	module := repository + "/v2"
+	module := gentleAIModulePath(tool)
 
 	destDir, destErr := goInstallDestinationDir()
 
@@ -651,6 +652,18 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 
 	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
+}
+
+func gentleAIModulePath(tool update.ToolInfo) string {
+	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
+	if repository == "github.com//" {
+		repository = "github.com/gentleman-programming/gentle-ai"
+	}
+	// Go derives the module path from the repository plus the major-version
+	// suffix: for major 2 and above the module path must end in /vN or the
+	// toolchain refuses every resolution of that repository, including the
+	// branch pseudo-versions this beta path installs.
+	return repository + "/v2"
 }
 
 func goProxyBypassEnv(base []string, module string) []string {

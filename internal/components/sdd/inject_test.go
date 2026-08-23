@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
@@ -1170,6 +1171,34 @@ PRESERVE_THIS_UNRELATED_SECTION exactly as authored.
 		firstEnd := min(len(prompt), diffAt+160)
 		secondEnd := min(len(secondPrompt), diffAt+160)
 		t.Fatalf("preserved v1 Review Execution Contract migration is not idempotent at byte %d\nfirst:  %q\nsecond: %q", diffAt, prompt[start:firstEnd], secondPrompt[start:secondEnd])
+	}
+}
+
+func TestInjectOpenCodePreservesRoutingGuardAcrossMigratedPrompt(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	seed := `{"agent":{"gentle-orchestrator":{"prompt":"Bind this to the dedicated \u0060sdd-orchestrator\u0060 agent only."}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := agentguidance.InjectRouting(home, model.AgentOpenCode); err != nil {
+		t.Fatalf("InjectRouting() error = %v", err)
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	prompt := readGentleOrchestratorPrompt(t, settingsPath)
+	const guard = "First establish whether the requested outcome explicitly authorizes a change."
+	if got := strings.Count(prompt, guard); got != 1 {
+		t.Fatalf("migrated OpenCode prompt contains the routing guard %d times, want 1:\n%s", got, prompt)
+	}
+	if !strings.Contains(prompt, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
+		t.Fatalf("migrated OpenCode prompt lost its orchestrator migration:\n%s", prompt)
 	}
 }
 

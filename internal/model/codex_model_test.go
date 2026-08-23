@@ -184,6 +184,7 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 	tiers := model.CodexTierGroups()
 	validCarrils := map[string]bool{
 		"sdd-strong": true,
+		"sdd-spec":   true,
 		"sdd-mid":    true,
 		"sdd-cheap":  true,
 	}
@@ -212,6 +213,39 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 	if len(seen) != 13 {
 		t.Errorf("expected 13 phases total, got %d", len(seen))
 	}
+
+	// Explicit assertions requested by CodeRabbit review:
+	// Verify sdd-spec belongs to sdd-spec carril and sdd-tasks belongs to sdd-mid
+	if got := seen["sdd-spec"]; got != "sdd-spec" {
+		t.Errorf("sdd-spec phase mapped to %q, want sdd-spec", got)
+	}
+	if got := seen["sdd-tasks"]; got != "sdd-mid" {
+		t.Errorf("sdd-tasks phase mapped to %q, want sdd-mid", got)
+	}
+
+	// Verify exact sdd-cheap phase set
+	var cheapPhases []string
+	for _, g := range tiers {
+		if g.Profile == "sdd-cheap" {
+			cheapPhases = g.Phases
+			break
+		}
+	}
+	wantCheap := []string{"sdd-explore", "sdd-archive", "sdd-onboard"}
+	if !reflect.DeepEqual(cheapPhases, wantCheap) {
+		t.Errorf("sdd-cheap phases = %v, want %v", cheapPhases, wantCheap)
+	}
+
+	// Verify sdd-spec effort across presets
+	if got := model.CodexModelPresetRecommended()["sdd-spec"]; got != model.CodexEffortHigh {
+		t.Errorf("Recommended preset sdd-spec effort = %q, want %q", got, model.CodexEffortHigh)
+	}
+	if got := model.CodexModelPresetLowCost()["sdd-spec"]; got != model.CodexEffortMedium {
+		t.Errorf("LowCost preset sdd-spec effort = %q, want %q", got, model.CodexEffortMedium)
+	}
+	if got := model.CodexModelPresetPowerful()["sdd-spec"]; got != model.CodexEffortHigh {
+		t.Errorf("Powerful preset sdd-spec effort = %q, want %q", got, model.CodexEffortHigh)
+	}
 }
 
 func TestDefaultCarrilModels(t *testing.T) {
@@ -219,14 +253,17 @@ func TestDefaultCarrilModels(t *testing.T) {
 	if m["sdd-strong"] != "gpt-5.6-sol" {
 		t.Errorf("sdd-strong = %q, want gpt-5.6-sol", m["sdd-strong"])
 	}
+	if m["sdd-spec"] != "gpt-5.6-terra" {
+		t.Errorf("sdd-spec = %q, want gpt-5.6-terra", m["sdd-spec"])
+	}
 	if m["sdd-mid"] != "gpt-5.6-terra" {
 		t.Errorf("sdd-mid = %q, want gpt-5.6-terra", m["sdd-mid"])
 	}
 	if m["sdd-cheap"] != "gpt-5.6-luna" {
 		t.Errorf("sdd-cheap = %q, want gpt-5.6-luna", m["sdd-cheap"])
 	}
-	if len(m) != 3 {
-		t.Errorf("DefaultCarrilModels() has %d entries, want 3", len(m))
+	if len(m) != 4 {
+		t.Errorf("DefaultCarrilModels() has %d entries, want 4", len(m))
 	}
 }
 
@@ -264,18 +301,17 @@ func TestPresetLowCost_ModelEffortPerCarril(t *testing.T) {
 	if m["sdd-propose"] != model.CodexEffortMedium {
 		t.Errorf("Low-cost preset sdd-propose = %q, want medium", m["sdd-propose"])
 	}
-	// explore reasons over delivered context, so it rides Razonamiento/sdd-strong.
-	if m["sdd-explore"] != model.CodexEffortMedium {
-		t.Errorf("Low-cost preset sdd-explore = %q, want medium", m["sdd-explore"])
+	// explore is in sdd-cheap (Liviano) which is high effort in Low-cost preset
+	if m["sdd-explore"] != model.CodexEffortHigh {
+		t.Errorf("Low-cost preset sdd-explore = %q, want high", m["sdd-explore"])
 	}
 	// apply (Código/sdd-mid) is medium
 	if m["sdd-apply"] != model.CodexEffortMedium {
 		t.Errorf("Low-cost preset sdd-apply = %q, want medium", m["sdd-apply"])
 	}
-	// spec (Liviano/sdd-cheap) is high: transcription is cheap per token, so
-	// effort buys accuracy without buying an expensive model.
-	if m["sdd-spec"] != model.CodexEffortHigh {
-		t.Errorf("Low-cost preset sdd-spec = %q, want high", m["sdd-spec"])
+	// spec is in sdd-spec carril (medium in Low-cost preset)
+	if m["sdd-spec"] != model.CodexEffortMedium {
+		t.Errorf("Low-cost preset sdd-spec = %q, want medium", m["sdd-spec"])
 	}
 
 	// Verify Low-cost preset carril models
@@ -583,7 +619,7 @@ func TestRenderCodexPhaseEffortsByPhase_UnassignedUsesProvidedCarrilModel(t *tes
 		"| `sdd-propose` | `gpt-5.4` | `medium` |",
 		"| `sdd-design` | `gpt-5.4-mini` | `medium` |",
 		"| `sdd-apply` | `gpt-5.5` | `high` |",
-		"| `sdd-explore` | `gpt-5.4-mini` | `medium` |",
+		"| `sdd-explore` | `gpt-5.3-codex` | `high` |",
 	}
 	for _, wantRow := range wantRows {
 		if !strings.Contains(out, wantRow) {
