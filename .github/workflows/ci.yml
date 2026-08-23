@@ -80,7 +80,8 @@ jobs:
             completed_once("j89-staged-validation-is-informational-and-unmanaged") and
             completed_once("j104-repository-context-survives-fresh-process") and
             completed_once("j110-untracked-terminal-burn-and-unmanaged-staged-validation") and
-            completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged")
+            completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged") and
+            completed_once("j113-correction-removes-candidate-only-path")
           ' "$RUNNER_TEMP/bench-portable.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
           jq -e '

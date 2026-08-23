@@ -433,6 +433,25 @@ func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
 		!slices.Equal(status.Projection.Paths, []string{"corrected.go", "untouched.go"}) {
 		t.Fatalf("subset request/projection = %#v / %#v", status.ValidationRequest, status.Projection)
 	}
+
+	writeReviewStartCandidate(t, repo, "corrected.go", "package candidate\n\nfunc correctedSubset() int { return 0 }\n", 0o644)
+	if err := os.Chtimes(filepath.Join(repo, "corrected.go"), fixed.Add(time.Second), fixed.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--lineage", started.LineageID, "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("status rejected a correction path restored exactly to base: %v\n%s", err, output.String())
+	}
+	status = ReviewTargetStatusResult{}
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.ValidationRequest == nil ||
+		!slices.Equal(status.ValidationRequest.CorrectionPaths, []string{"corrected.go"}) ||
+		!slices.Equal(status.Projection.Paths, []string{"untouched.go"}) {
+		t.Fatalf("base-equivalent request/projection = %#v / %#v", status.ValidationRequest, status.Projection)
+	}
 }
 
 func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {

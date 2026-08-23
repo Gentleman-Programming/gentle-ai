@@ -577,7 +577,11 @@ func capturePassedCorrectionEvidence(r *journeyRun) error {
 }
 
 func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
-	status, err := readCorrectionStatusFor(r, lineage)
+	return capturePassedCorrectionEvidenceForContract(r, lineage, reviewContract)
+}
+
+func capturePassedCorrectionEvidenceForContract(r *journeyRun, lineage, contract string) error {
+	status, err := readCorrectionStatusForContract(r, lineage, contract)
 	if err != nil {
 		return err
 	}

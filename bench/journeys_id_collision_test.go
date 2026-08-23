@@ -61,6 +61,7 @@ func journeySources() []journeySource {
 		{"journeys_sdd_shared_scaffolding.go", sddSharedScaffoldingJourneys()},
 		{"journeys_sdd_post_review_verify_report.go", sddPostReviewVerifyReportJourneys()},
 		{"journeys_issue3564.go", issue3564Journeys()},
+		{"journeys_issue3321.go", issue3321Journeys()},
 	}
 	for index := range sources {
 		sources[index].Journeys = removeRetiredAtomicJourneys(sources[index].Journeys)

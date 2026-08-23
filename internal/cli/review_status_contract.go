@@ -606,7 +606,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			result.ValidationRequest.TargetIdentity != result.Projection.InitialSnapshotIdentity ||
 			result.ValidationRequest.Projection != result.Projection.Projection ||
 			result.ValidationRequest.CorrectionCandidateTree != result.Projection.CurrentCandidateTree ||
-			!reviewStatusPathsContain(result.Projection.Paths, result.ValidationRequest.CorrectionPaths) ||
 			reviewtransaction.ValidateTargetedValidationRequest(*result.ValidationRequest) != nil {
 			return errors.New("negotiated status validation request is invalid")
 		}
@@ -1250,19 +1249,6 @@ func manifestPathsForStatus(entries []reviewtransaction.ChangedPathManifestEntry
 		paths[index] = entry.Path
 	}
 	return paths
-}
-
-func reviewStatusPathsContain(candidate, correction []string) bool {
-	available := make(map[string]struct{}, len(candidate))
-	for _, value := range candidate {
-		available[value] = struct{}{}
-	}
-	for _, value := range correction {
-		if _, exists := available[value]; !exists {
-			return false
-		}
-	}
-	return len(correction) > 0
 }
 
 func reviewTransitionValidationRequest(transition *ReviewNextTransition) *reviewtransaction.TargetedValidationRequest {

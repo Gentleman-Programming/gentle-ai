@@ -18,6 +18,7 @@ j11-unborn-head
 j110-untracked-terminal-burn-and-unmanaged-staged-validation
 j111-approved-transaction-burns-and-shipped-gates-are-unmanaged
 j112-sdd-attempt-settle-survives-review-mode-transition
+j113-correction-removes-candidate-only-path
 j12-rejected-capture-then-recapture
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
