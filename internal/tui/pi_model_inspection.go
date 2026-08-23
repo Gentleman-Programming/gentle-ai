@@ -97,6 +97,19 @@ func (m *Model) leavePiModelInspection() {
 }
 
 func (m Model) handlePiModelInspectionKey(key string) (tea.Model, tea.Cmd) {
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeAgents {
+		switch key {
+		case "esc":
+			m.PiModelInspection.BackEditor()
+		case "up", "k":
+			m.PiModelInspection.MoveEditor(-1, m.Height)
+		case "down", "j":
+			m.PiModelInspection.MoveEditor(1, m.Height)
+		case "enter", " ":
+			m.PiModelInspection.SelectEditor()
+		}
+		return m, nil
+	}
 	switch key {
 	case "esc":
 		m.leavePiModelInspection()
@@ -104,6 +117,8 @@ func (m Model) handlePiModelInspectionKey(key string) (tea.Model, tea.Cmd) {
 		m.PiModelInspection.Move(-1, m.Height)
 	case "down", "j":
 		m.PiModelInspection.Move(1, m.Height)
+	case "enter", " ":
+		m.PiModelInspection.BeginEdit()
 	case "g":
 		m.PiModelInspection.SelectTarget(pi.ModelRoutingTargetGlobal)
 	case "p":

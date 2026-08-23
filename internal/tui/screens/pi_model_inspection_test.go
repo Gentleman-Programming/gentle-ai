@@ -8,6 +8,63 @@ import (
 	"testing"
 )
 
+func TestPiModelInspectionEditorTransitionsAndOwnership(t *testing.T) {
+	model, thinking := "z/model", pi.ModelRoutingThinkingMax
+	assignment := pi.ModelRoutingAssignment{Model: &model, Thinking: &thinking}
+	state := NewPiModelInspectionState()
+	state.SetResult(pi.ModelRoutingInspection{
+		Targets: map[pi.ModelRoutingTarget]pi.ModelRoutingTargetInspection{
+			pi.ModelRoutingTargetProject: {Assignments: map[string]pi.ModelRoutingAssignment{"worker": assignment}},
+			pi.ModelRoutingTargetGlobal:  {Assignments: map[string]pi.ModelRoutingAssignment{}},
+		}, Agents: []pi.ModelRoutingAgent{{Name: "worker", Configurable: true}},
+		Models: []pi.ModelRoutingModel{
+			{CanonicalID: "z/model", Provider: "z", Configured: true, Available: true, SupportedThinkingLevels: []string{"off", "max"}},
+			{CanonicalID: "a/model", Provider: "a", Configured: true, Available: true},
+			{CanonicalID: "z/catalog", Provider: "z", Catalog: true, Configured: false, Available: true},
+			{CanonicalID: "z/down", Provider: "z", Configured: true, Available: false},
+		},
+	}, nil)
+	if got := state.ProviderOptions(); len(got) != 2 || got[0] != "a" || got[1] != "z" {
+		t.Fatalf("providers = %v", got)
+	}
+	if !state.BeginEdit() || state.Mode != PiModelInspectionModeProviders || state.SelectedProvider != "z" {
+		t.Fatalf("begin = %#v", state)
+	}
+	state.SelectEditor()
+	if state.Mode != PiModelInspectionModeModels || len(state.ModelOptions()) != 1 {
+		t.Fatalf("model phase = %#v", state)
+	}
+	state.SelectEditor()
+	if got := state.ThinkingOptions(); len(got) != 3 || got[1] != "off" || got[2] != "max" {
+		t.Fatalf("thinking = %v", got)
+	}
+	state.Cursor = 2
+	state.SelectEditor()
+	draft := state.Draft["worker"]
+	if draft.Model == nil || *draft.Model != model || draft.Thinking == nil || *draft.Thinking != thinking || draft.Model == assignment.Model || state.Inspection.Targets[pi.ModelRoutingTargetProject].Assignments["worker"].Model != assignment.Model {
+		t.Fatalf("draft/ownership = %#v", draft)
+	}
+	if !state.Rows()[0].Pending {
+		t.Fatal("committed row is not pending")
+	}
+	state.SelectTarget(pi.ModelRoutingTargetGlobal)
+	if !state.Rows()[0].Pending {
+		t.Fatal("target switch erased pending marker")
+	}
+	state.BeginEdit()
+	state.Cursor = 0
+	state.SelectEditor()
+	state.SelectEditor()
+	if got := state.Draft["worker"]; got.Model != nil || got.Thinking != nil {
+		t.Fatalf("inherit draft = %#v", got)
+	}
+	state.BeginEdit()
+	state.BackEditor()
+	if state.Mode != PiModelInspectionModeAgents || state.Draft["worker"].Model != nil {
+		t.Fatal("esc did not back without mutation")
+	}
+}
+
 func TestPiModelInspectionStateRowsScrollAndSafeError(t *testing.T) {
 	state := NewPiModelInspectionState()
 	if state.Status != PiModelInspectionLoading || state.Target != pi.ModelRoutingTargetProject {
