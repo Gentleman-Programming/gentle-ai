@@ -40,7 +40,7 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 // JSONC documents keep their comments and JSONC syntax; strict JSON retains the
 // established MergeJSONObjects output exactly.
 func MergeJSONObjectsForPath(path string, baseJSON, overlayJSON []byte) ([]byte, error) {
-	if !strings.EqualFold(filepath.Ext(path), ".jsonc") || json.Valid(baseJSON) {
+	if !strings.EqualFold(filepath.Ext(path), ".jsonc") || len(bytes.TrimSpace(baseJSON)) == 0 || json.Valid(baseJSON) {
 		return MergeJSONObjects(baseJSON, overlayJSON)
 	}
 
@@ -60,7 +60,7 @@ func MergeJSONObjectsForPath(path string, baseJSON, overlayJSON []byte) ([]byte,
 // inputs retain their comments and trailing-comma syntax; strict JSON uses the
 // same indented encoding as existing mutation call sites.
 func RewriteJSONObjectForPath(path string, baseJSON []byte, updated map[string]any) ([]byte, error) {
-	if !strings.EqualFold(filepath.Ext(path), ".jsonc") || json.Valid(baseJSON) {
+	if !strings.EqualFold(filepath.Ext(path), ".jsonc") || len(bytes.TrimSpace(baseJSON)) == 0 || json.Valid(baseJSON) {
 		encoded, err := json.MarshalIndent(updated, "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("marshal rewritten json: %w", err)

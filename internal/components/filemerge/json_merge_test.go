@@ -134,6 +134,49 @@ func TestMergeJSONObjectsForPathKeepsStrictJSONBehavior(t *testing.T) {
 	}
 }
 
+func TestPathAwareJSONHelpersSerializeEmptyJSONCBases(t *testing.T) {
+	updated := map[string]any{"settings": map[string]any{"enabled": true}}
+	overlay := []byte(`{"settings":{"enabled":true}}`)
+
+	tests := []struct {
+		name string
+		base []byte
+	}{
+		{name: "nil"},
+		{name: "empty", base: []byte{}},
+		{name: "whitespace", base: []byte(" \n\t ")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged, err := MergeJSONObjectsForPath("opencode.jsonc", tt.base, overlay)
+			if err != nil {
+				t.Fatalf("MergeJSONObjectsForPath() error = %v", err)
+			}
+			wantMerged, err := MergeJSONObjects(tt.base, overlay)
+			if err != nil {
+				t.Fatalf("MergeJSONObjects() error = %v", err)
+			}
+			if !bytes.Equal(merged, wantMerged) {
+				t.Fatalf("empty JSONC merge did not use strict serialization:\ngot:\n%s\nwant:\n%s", merged, wantMerged)
+			}
+
+			rewritten, err := RewriteJSONObjectForPath("opencode.jsonc", tt.base, updated)
+			if err != nil {
+				t.Fatalf("RewriteJSONObjectForPath() error = %v", err)
+			}
+			encoded, err := json.MarshalIndent(updated, "", "  ")
+			if err != nil {
+				t.Fatalf("MarshalIndent() error = %v", err)
+			}
+			wantRewritten := append(encoded, '\n')
+			if !bytes.Equal(rewritten, wantRewritten) {
+				t.Fatalf("empty JSONC rewrite did not use strict serialization:\ngot:\n%s\nwant:\n%s", rewritten, wantRewritten)
+			}
+		})
+	}
+}
+
 func TestMergeJSONObjectsMalformedBaseReturnsOverlayOnly(t *testing.T) {
 	// Real user machines (e.g. Windows) may have a malformed ~/.cursor/mcp.json.
 	// The installer should recover by treating the broken base as {} and continuing.
