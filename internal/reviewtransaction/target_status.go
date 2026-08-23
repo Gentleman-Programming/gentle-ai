@@ -222,6 +222,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			continue
 		}
 		state := candidate.compact.State
+		// guard:population frozen-reviewing-status too-tight: legitimate selector-free workspace STATUS candidates may recover a drifted frozen reviewing authority only when its immutable inputs and canonical result slots remain safe; exact matches and stale, superseded, incomplete, or non-reviewing authorities remain excluded from recovery
 		if allowFrozenReviewing &&
 			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			eligible, pendingSlots, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
