@@ -297,12 +297,20 @@ func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T
 	if !ok {
 		t.Fatal("opencode adapter not found in registry")
 	}
-	settingsPath := opencodeAdapter.SettingsPath(homeDir)
+	settingsPath := filepath.Join(opencodeAdapter.GlobalConfigDir(homeDir), "tui.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(opencode settings dir) error = %v", err)
 	}
 	if err := os.WriteFile(settingsPath, []byte(`{"theme":"gentleman","keep":true}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(opencode settings) error = %v", err)
+	}
+
+	themePath := filepath.Join(opencodeAdapter.GlobalConfigDir(homeDir), "themes", "gentleman.json")
+	if err := os.MkdirAll(filepath.Dir(themePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme dir) error = %v", err)
+	}
+	if err := os.WriteFile(themePath, []byte(`{"$schema":"https://opencode.ai/theme.json"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(theme) error = %v", err)
 	}
 
 	logoPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
@@ -334,6 +342,9 @@ func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T
 	}
 	if got := settings["keep"]; got != true {
 		t.Fatalf("user setting should be preserved, got %#v", got)
+	}
+	if _, err := os.Stat(themePath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode theme should be removed by visual polish group uninstall, err = %v", err)
 	}
 	if _, err := os.Stat(logoPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode logo should be removed by visual polish group uninstall, err = %v", err)

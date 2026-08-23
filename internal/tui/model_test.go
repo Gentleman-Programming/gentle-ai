@@ -4267,7 +4267,7 @@ func TestCustomPresetStrictTDDAppearsAfterComponentSelection(t *testing.T) {
 	// Select SDD component (and Skills so skill picker would show, but StrictTDD must come first).
 	m.Selection.Components = []model.ComponentID{model.ComponentSDD, model.ComponentSkills}
 	// cursor == len(allComps) → "Continue"
-	allComps := screens.AllComponents()
+	allComps := screens.AllComponents(m.Selection.Agents...)
 	m.Cursor = len(allComps)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -4313,7 +4313,7 @@ func TestCustomPresetStrictTDDWithClaudeFlow(t *testing.T) {
 	m2.Selection.Preset = model.PresetCustom
 	m2.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
 	m2.Selection.Components = []model.ComponentID{model.ComponentSDD}
-	allComps := screens.AllComponents()
+	allComps := screens.AllComponents(m2.Selection.Agents...)
 	m2.Cursor = len(allComps) // "Continue"
 
 	updated, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -5131,7 +5131,8 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 	m.Screen = ScreenPersona
 	m.Selection.Preset = model.PresetFullGentleman
 	m.Selection.Persona = model.PersonaGentleman
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
+	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman, m.Selection.Agents...)
 
 	// Confirm that managed persona and visual polish are initially included.
 	hasPersonaBefore := false
@@ -7749,7 +7750,7 @@ func TestPickerBackRowRegression(t *testing.T) {
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
 				m.Selection.Components = sddComponents
-				m.Cursor = len(screens.AllComponents()) // "Continue" row
+				m.Cursor = len(screens.AllComponents(m.Selection.Agents...)) // "Continue" row
 				return m
 			},
 			wantScreen: ScreenKiroModelPicker,
@@ -7763,7 +7764,7 @@ func TestPickerBackRowRegression(t *testing.T) {
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentCodex}
 				m.Selection.Components = sddComponents
-				m.Cursor = len(screens.AllComponents()) // "Continue" row
+				m.Cursor = len(screens.AllComponents(m.Selection.Agents...)) // "Continue" row
 				return m
 			},
 			wantScreen: ScreenCodexModelPicker,

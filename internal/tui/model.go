@@ -732,7 +732,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		s = installState[0]
 	}
 	agents := preselectedAgents(detection, s)
-	components := componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
+	components := componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman, agents...)
 	if isPiOnlyAgents(agents) {
 		components = piOnlyComponents()
 	}
@@ -2207,7 +2207,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Selection.Persona = options[m.Cursor]
 			// Recompute components if a non-custom preset was already chosen
 			if m.Selection.Preset != "" && m.Selection.Preset != model.PresetCustom {
-				m.Selection.Components = componentsForPreset(m.Selection.Preset, m.Selection.Persona)
+				m.Selection.Components = componentsForPreset(m.Selection.Preset, m.Selection.Persona, m.Selection.Agents...)
 			}
 			m.setScreen(ScreenPreset)
 			return m, nil
@@ -2217,7 +2217,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		options := screens.PresetOptions()
 		if m.Cursor < len(options) {
 			m.Selection.Preset = options[m.Cursor]
-			m.Selection.Components = componentsForPreset(options[m.Cursor], m.Selection.Persona)
+			m.Selection.Components = componentsForPreset(options[m.Cursor], m.Selection.Persona, m.Selection.Agents...)
 			// Enter the conditional picker chain through the single source of
 			// truth. pickerNextScreen(ScreenPreset) returns the first chain member
 			// for the current selection (Claude → Kiro → Codex → SDDMode →
@@ -2455,7 +2455,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		return m, nil
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
-			allComps := screens.AllComponents()
+			allComps := screens.AllComponents(m.Selection.Agents...)
 			switch {
 			case m.Cursor < len(allComps):
 				m.toggleCurrentComponent()
@@ -3891,7 +3891,7 @@ func (m Model) optionCount() int {
 		return len(screens.ModelPickerRowsForState(m.ModelPicker)) + 2 // rows + Continue + Back
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
-			return len(screens.AllComponents()) + len(screens.DependencyTreeOptions())
+			return len(screens.AllComponents(m.Selection.Agents...)) + len(screens.DependencyTreeOptions())
 		}
 		return len(screens.DependencyTreeOptions())
 	case ScreenSkillPicker:
@@ -4004,7 +4004,7 @@ func (m *Model) toggleCurrentAgent() {
 }
 
 func (m *Model) toggleCurrentComponent() {
-	allComps := screens.AllComponents()
+	allComps := screens.AllComponents(m.Selection.Agents...)
 	if m.Cursor >= len(allComps) {
 		return
 	}
@@ -4729,8 +4729,8 @@ func (m *Model) initializeModelPicker() tea.Cmd {
 	return m.ModelPicker.DiscoverLMStudioCmd()
 }
 
-func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {
-	return model.ComponentsForPreset(preset, persona)
+func componentsForPreset(preset model.PresetID, persona model.PersonaID, agents ...model.AgentID) []model.ComponentID {
+	return model.ComponentsForPreset(preset, persona, agents...)
 }
 
 func hasSelectedComponent(components []model.ComponentID, target model.ComponentID) bool {

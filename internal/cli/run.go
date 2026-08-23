@@ -2287,8 +2287,12 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
-				paths = append(paths, p)
+			if adapter.Agent() == model.AgentOpenCode {
+				configDir := adapter.GlobalConfigDir(homeDir)
+				paths = append(paths,
+					filepath.Join(configDir, "tui.json"),
+					filepath.Join(configDir, "themes", "gentleman.json"),
+				)
 			}
 		case model.ComponentClaudeTheme:
 			if adapter.Agent() == model.AgentClaudeCode {

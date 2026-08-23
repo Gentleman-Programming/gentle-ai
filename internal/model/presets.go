@@ -1,14 +1,13 @@
 package model
 
 // VisualPolishComponents returns the complete managed visual-polish inventory.
-// Cleanup flows use this inventory, which intentionally includes the generic theme
-// even though presets do not install it.
+// Cleanup flows use the full inventory; preset installs filter theme by agent.
 func VisualPolishComponents() []ComponentID {
 	return []ComponentID{ComponentTheme, ComponentClaudeTheme, ComponentOpenCodeGentleLogo}
 }
 
-// installSafePresetVisualComponents returns only the agent-specific visual
-// components that presets can install without overwriting a generic theme.
+// installSafePresetVisualComponents returns visual components that do not depend
+// on the selected agent.
 func installSafePresetVisualComponents() []ComponentID {
 	return []ComponentID{ComponentClaudeTheme, ComponentOpenCodeGentleLogo}
 }
@@ -16,7 +15,7 @@ func installSafePresetVisualComponents() []ComponentID {
 // ComponentsForPreset returns the managed components implied by a preset/persona
 // pair. PersonaCustom opts out of managed persona only; preset choice still
 // controls visual polish.
-func ComponentsForPreset(preset PresetID, persona PersonaID) []ComponentID {
+func ComponentsForPreset(preset PresetID, persona PersonaID, agents ...AgentID) []ComponentID {
 	var components []ComponentID
 	switch preset {
 	case PresetMinimal:
@@ -33,6 +32,12 @@ func ComponentsForPreset(preset PresetID, persona PersonaID) []ComponentID {
 			ComponentContext7,
 			ComponentPermission,
 			ComponentGGA,
+		}
+		for _, agent := range agents {
+			if agent == AgentOpenCode {
+				components = append(components, ComponentTheme)
+				break
+			}
 		}
 		components = append(components, installSafePresetVisualComponents()...)
 	}

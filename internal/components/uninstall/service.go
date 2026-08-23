@@ -693,7 +693,18 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 		}
 	case model.ComponentTheme:
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		if adapter.Agent() == model.AgentOpenCode {
+			configDir := adapter.GlobalConfigDir(homeDir)
+			tuiPath := filepath.Join(configDir, "tui.json")
+			themePath := filepath.Join(configDir, "themes", "gentleman.json")
+			targets = append(targets, tuiPath, themePath)
+			ops = append(ops,
+				rewriteJSONFile(tuiPath, jsonPath{"theme"}),
+				removeFile(themePath),
+				removeDirIfEmpty(filepath.Dir(themePath)),
+			)
+		} else if path := adapter.SettingsPath(homeDir); path != "" {
+			// Remove theme keys written by older generic installations.
 			targets = append(targets, path)
 			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
 		}
