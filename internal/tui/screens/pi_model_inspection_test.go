@@ -144,3 +144,32 @@ func TestPiModelInspectionValidationStatesRenderSafely(t *testing.T) {
 		})
 	}
 }
+
+func TestPiModelApplyResultRendersTypedOutcomesAndSafeMaterialization(t *testing.T) {
+	target, path := pi.ModelRoutingTargetProject, "/cfg\x1b[31m"
+	cases := []struct {
+		name   string
+		result pi.ModelRoutingApplyResult
+		want   []string
+	}{
+		{"success", pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomeSuccess, Saved: true, Target: &target, ConfigPath: &path, Materialization: &pi.ModelRoutingApplyMaterialization{Affected: []string{"global", "project"}, Succeeded: []string{"global", "project"}}}, []string{"saved", "/cfg[31m", "affected=2"}},
+		{"persistence", pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomePersistenceFailure}, []string{"not saved", "persistence-failure"}},
+		{"partial", pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomePartial, Saved: true, Materialization: &pi.ModelRoutingApplyMaterialization{Succeeded: []string{"global\t"}, Failed: []pi.ModelRoutingApplyFailure{{Target: "project\n", Message: "write\x1bfailed"}}}}, []string{"partially materialized", "Saved: true", "Succeeded targets", "Failed targets", "writefailed"}},
+		{"unknown", pi.ModelRoutingApplyResult{}, []string{"Outcome unknown", "Inspect Pi configuration before retrying"}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			state := NewPiModelInspectionState()
+			state.SetApplyResult(tt.result, errors.New("provider\x1bdetail"))
+			out := RenderPiModelInspection(state, 24)
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Fatalf("render = %q, missing %q", out, want)
+				}
+			}
+			if strings.ContainsAny(out, "\x00\x1b\t\r") {
+				t.Fatalf("unsafe render = %q", out)
+			}
+		})
+	}
+}

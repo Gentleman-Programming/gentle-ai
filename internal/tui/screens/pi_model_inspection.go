@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -22,6 +23,9 @@ const (
 	PiModelInspectionModeValidating
 	PiModelInspectionModeValidationResult
 	PiModelInspectionModeReviewReady
+	PiModelInspectionModeConfirmApply
+	PiModelInspectionModeApplying
+	PiModelInspectionModeApplyResult
 )
 
 const (
@@ -41,6 +45,8 @@ type PiModelInspectionState struct {
 	Draft             pi.ModelRoutingDraft
 	ValidationResult  pi.ModelRoutingValidationResult
 	ValidationErr     error
+	ApplyResult       pi.ModelRoutingApplyResult
+	ApplyErr          error
 	Mode              PiModelInspectionMode
 	SelectedAgent     string
 	SelectedProvider  string
@@ -55,6 +61,7 @@ func NewPiModelInspectionState() PiModelInspectionState {
 func (s *PiModelInspectionState) SetResult(i pi.ModelRoutingInspection, err error) {
 	s.Inspection, s.Err, s.Cursor, s.Scroll = i, err, 0, 0
 	s.ValidationResult, s.ValidationErr = pi.ModelRoutingValidationResult{}, nil
+	s.ApplyResult, s.ApplyErr = pi.ModelRoutingApplyResult{}, nil
 	s.Mode, s.SelectedAgent, s.SelectedProvider = PiModelInspectionModeAgents, "", ""
 	s.PendingAssignment = pi.ModelRoutingDraftAssignment{}
 	s.Status = PiModelInspectionSuccess
@@ -67,6 +74,7 @@ func (s *PiModelInspectionState) BeginValidation() bool {
 		return false
 	}
 	s.ValidationResult, s.ValidationErr = pi.ModelRoutingValidationResult{}, nil
+	s.ApplyResult, s.ApplyErr = pi.ModelRoutingApplyResult{}, nil
 	s.Mode = PiModelInspectionModeValidating
 	return true
 }
@@ -81,7 +89,32 @@ func (s *PiModelInspectionState) SetValidationResult(result pi.ModelRoutingValid
 }
 func (s *PiModelInspectionState) ClearValidation() {
 	s.ValidationResult, s.ValidationErr = pi.ModelRoutingValidationResult{}, nil
+	s.ApplyResult, s.ApplyErr = pi.ModelRoutingApplyResult{}, nil
 	s.Mode = PiModelInspectionModeAgents
+}
+func (s *PiModelInspectionState) BeginApplyConfirmation() bool {
+	if s.Status != PiModelInspectionSuccess || s.Mode != PiModelInspectionModeReviewReady {
+		return false
+	}
+	s.ApplyResult, s.ApplyErr = pi.ModelRoutingApplyResult{}, nil
+	s.Mode = PiModelInspectionModeConfirmApply
+	return true
+}
+func (s *PiModelInspectionState) BeginApply() bool {
+	if s.Status != PiModelInspectionSuccess || s.Mode != PiModelInspectionModeConfirmApply {
+		return false
+	}
+	s.ApplyResult, s.ApplyErr = pi.ModelRoutingApplyResult{}, nil
+	s.Mode = PiModelInspectionModeApplying
+	return true
+}
+func (s *PiModelInspectionState) SetApplyResult(result pi.ModelRoutingApplyResult, err error) {
+	s.ApplyResult, s.ApplyErr = clonePiApplyResult(result), err
+	s.Mode = PiModelInspectionModeApplyResult
+}
+func (s *PiModelInspectionState) ClearApply() {
+	s.ApplyResult, s.ApplyErr = pi.ModelRoutingApplyResult{}, nil
+	s.Mode = PiModelInspectionModeReviewReady
 }
 func clonePiValidationResult(result pi.ModelRoutingValidationResult) pi.ModelRoutingValidationResult {
 	result.Diagnostics = append([]pi.ModelRoutingDiagnostic(nil), result.Diagnostics...)
@@ -90,6 +123,31 @@ func clonePiValidationResult(result pi.ModelRoutingValidationResult) pi.ModelRou
 			path := *result.Diagnostics[i].Path
 			result.Diagnostics[i].Path = &path
 		}
+	}
+	return result
+}
+func clonePiApplyResult(result pi.ModelRoutingApplyResult) pi.ModelRoutingApplyResult {
+	if result.Target != nil {
+		target := *result.Target
+		result.Target = &target
+	}
+	if result.ConfigPath != nil {
+		path := *result.ConfigPath
+		result.ConfigPath = &path
+	}
+	result.Diagnostics = append([]pi.ModelRoutingDiagnostic(nil), result.Diagnostics...)
+	for i := range result.Diagnostics {
+		if result.Diagnostics[i].Path != nil {
+			path := *result.Diagnostics[i].Path
+			result.Diagnostics[i].Path = &path
+		}
+	}
+	if result.Materialization != nil {
+		materialization := *result.Materialization
+		materialization.Affected = append([]string(nil), materialization.Affected...)
+		materialization.Succeeded = append([]string(nil), materialization.Succeeded...)
+		materialization.Failed = append([]pi.ModelRoutingApplyFailure(nil), materialization.Failed...)
+		result.Materialization = &materialization
 	}
 	return result
 }
@@ -407,6 +465,14 @@ func renderPiModelEditor(state PiModelInspectionState, height int) string {
 	return b.String()
 }
 func RenderPiModelInspection(state PiModelInspectionState, height int) string {
+	switch state.Mode {
+	case PiModelInspectionModeConfirmApply:
+		return renderPiApplyConfirm(state)
+	case PiModelInspectionModeApplying:
+		return renderPiApplying(state)
+	case PiModelInspectionModeApplyResult:
+		return renderPiApplyResult(state)
+	}
 	if state.Mode >= PiModelInspectionModeValidating {
 		return renderPiDraftValidation(state)
 	}
@@ -475,16 +541,112 @@ func renderPiDraftValidation(state PiModelInspectionState) string {
 	b.WriteString("\n" + renderPiDraftSummary(state.Draft))
 	if state.Mode == PiModelInspectionModeReviewReady {
 		b.WriteString("\n" + styles.SubtextStyle.Render("No changes were applied."))
+		b.WriteString("\n" + styles.SubtextStyle.Render("Press a to review and explicitly confirm applying this draft."))
 	} else if state.Mode == PiModelInspectionModeValidationResult {
 		b.WriteString("\n" + styles.SubtextStyle.Render(piValidationErrorText(state.ValidationResult, state.ValidationErr)))
 	}
 	renderPiDiagnostics(&b, state.ValidationResult.Diagnostics)
 	help := "esc: cancel • q: quit"
-	if state.Mode != PiModelInspectionModeValidating {
+	if state.Mode == PiModelInspectionModeReviewReady {
+		help = "a: review apply • esc: back • q: quit"
+	} else if state.Mode != PiModelInspectionModeValidating {
 		help = "esc: back • q: quit"
 	}
 	b.WriteString("\n" + styles.HelpStyle.Render(help))
 	return styles.FrameStyle.Render(b.String())
+}
+func renderPiApplyConfirm(state PiModelInspectionState) string {
+	var b strings.Builder
+	b.WriteString(styles.TitleStyle.Render("Confirm Pi Model Apply") + "\n\n")
+	b.WriteString(styles.WarningStyle.Render("This writes Pi routing/materialization."))
+	b.WriteString("\n" + styles.SubtextStyle.Render("Target: "+piSafeText(string(state.Target))))
+	b.WriteString("\n" + styles.SubtextStyle.Render("Pending agent changes:"))
+	b.WriteString("\n" + renderPiDraftSummary(state.Draft))
+	b.WriteString("\n" + styles.HelpStyle.Render("enter or y: apply • esc: back • q: quit"))
+	return styles.FrameStyle.Render(b.String())
+}
+func renderPiApplying(state PiModelInspectionState) string {
+	var b strings.Builder
+	b.WriteString(styles.TitleStyle.Render("Applying Pi Model Routing") + "\n\n")
+	b.WriteString(styles.SubtextStyle.Render("Applying the validated draft to Pi."))
+	b.WriteString("\n" + styles.SubtextStyle.Render("Target: "+piSafeText(string(state.Target))))
+	b.WriteString("\n" + styles.SubtextStyle.Render("Writing Pi routing/materialization..."))
+	b.WriteString("\n\n" + styles.WarningStyle.Render("Bounded operation in progress; please wait."))
+	b.WriteString("\n" + styles.HelpStyle.Render("ctrl+c: emergency quit"))
+	return styles.FrameStyle.Render(b.String())
+}
+func renderPiApplyResult(state PiModelInspectionState) string {
+	var b strings.Builder
+	result := state.ApplyResult
+	b.WriteString(styles.TitleStyle.Render("Pi Model Apply Result") + "\n\n")
+	if result.Outcome == "" {
+		b.WriteString(styles.ErrorStyle.Render("Outcome unknown"))
+		b.WriteString("\n" + styles.SubtextStyle.Render("Pi did not return an authoritative apply result. Inspect Pi configuration before retrying."))
+	} else {
+		if result.Outcome == pi.ModelRoutingApplyOutcomeSuccess && result.Saved {
+			b.WriteString(styles.SuccessStyle.Render("Pi model routing saved."))
+		} else if result.Outcome == pi.ModelRoutingApplyOutcomePartial {
+			b.WriteString(styles.WarningStyle.Render("Pi model routing partially materialized."))
+		} else {
+			b.WriteString(styles.ErrorStyle.Render("Pi model routing was not saved."))
+		}
+		b.WriteString("\nSaved: " + fmt.Sprintf("%t", result.Saved))
+		b.WriteString("\nOutcome: " + piSafeText(string(result.Outcome)))
+		if result.Target != nil {
+			b.WriteString("\nTarget: " + piSafeText(string(*result.Target)))
+		} else {
+			b.WriteString("\nTarget: " + piSafeText(string(state.Target)))
+		}
+		if result.ConfigPath != nil {
+			b.WriteString("\nConfig path: " + piSafeText(*result.ConfigPath))
+		}
+		if message := piApplyOutcomeText(result.Outcome); message != "" {
+			b.WriteString("\n" + styles.SubtextStyle.Render(message))
+		}
+	}
+	renderPiMaterialization(&b, result.Materialization)
+	renderPiDiagnostics(&b, result.Diagnostics)
+	b.WriteString("\n" + styles.HelpStyle.Render("enter or esc: return to Model Config • q: quit"))
+	return styles.FrameStyle.Render(b.String())
+}
+func piApplyOutcomeText(outcome pi.ModelRoutingApplyOutcome) string {
+	switch outcome {
+	case pi.ModelRoutingApplyOutcomeValidationFailure:
+		return "Pi rejected this draft. Review diagnostics and edit the draft."
+	case pi.ModelRoutingApplyOutcomeUnavailableRuntime:
+		return "Pi runtime was unavailable. No saved state was reported."
+	case pi.ModelRoutingApplyOutcomePersistenceFailure:
+		return "Pi could not persist this routing. No saved state was reported."
+	case pi.ModelRoutingApplyOutcomePartial:
+		return "Inspect the succeeded and failed materialization targets before retrying."
+	}
+	return ""
+}
+func renderPiMaterialization(b *strings.Builder, materialization *pi.ModelRoutingApplyMaterialization) {
+	if materialization == nil {
+		b.WriteString("\nMaterialization: unavailable")
+		return
+	}
+	b.WriteString(fmt.Sprintf("\nMaterialization: affected=%d succeeded=%d failed=%d", len(materialization.Affected), len(materialization.Succeeded), len(materialization.Failed)))
+	b.WriteString("\nSucceeded targets: " + joinPiSafeText(materialization.Succeeded))
+	if len(materialization.Failed) == 0 {
+		b.WriteString("\nFailed targets: none")
+		return
+	}
+	b.WriteString("\nFailed targets:")
+	for _, failure := range materialization.Failed {
+		b.WriteString("\n  " + piSafeText(failure.Target) + ": " + piSafeText(failure.Message))
+	}
+}
+func joinPiSafeText(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	cleaned := make([]string, len(values))
+	for i, value := range values {
+		cleaned[i] = piSafeText(value)
+	}
+	return strings.Join(cleaned, ", ")
 }
 func renderPiDraftSummary(draft pi.ModelRoutingDraft) string {
 	if len(draft) == 0 {

@@ -19,11 +19,13 @@ func restorePiModelInspectionFns(t *testing.T) {
 	dir, enumerate := piModelInspectionAgentDirFn, piModelInspectionEnumerateFn
 	selectCandidate, inspect, load := piModelInspectionSelectFn, piModelInspectionInspectFn, piModelInspectionLoadFn
 	validate, validateLoad := piModelValidationFn, piModelValidationLoadFn
+	apply, applyLoad := piModelApplyFn, piModelApplyLoadFn
 	t.Cleanup(func() {
 		piModelInspectionGetwdFn, piModelInspectionHomeDirFn, piModelInspectionEnvFn = getwd, home, env
 		piModelInspectionAgentDirFn, piModelInspectionEnumerateFn = dir, enumerate
 		piModelInspectionSelectFn, piModelInspectionInspectFn, piModelInspectionLoadFn = selectCandidate, inspect, load
 		piModelValidationFn, piModelValidationLoadFn = validate, validateLoad
+		piModelApplyFn, piModelApplyLoadFn = apply, applyLoad
 	})
 }
 
@@ -312,5 +314,54 @@ func TestLoadPiModelValidationUsesExactInputsAndSupportsEmptyDrafts(t *testing.T
 	}
 	if calls != 2 {
 		t.Fatalf("validate calls = %d, want one per draft", calls)
+	}
+}
+
+func TestPiModelApplyCommandCapturesInputsAndClonesDraft(t *testing.T) {
+	restorePiModelInspectionFns(t)
+	ctx := context.WithValue(context.Background(), "key", "value")
+	target, draft := pi.ModelRoutingTargetGlobal, pi.ModelRoutingDraft{"worker": {}}
+	model := "provider/model"
+	draft["worker"] = pi.ModelRoutingDraftAssignment{Model: &model}
+	var gotContext context.Context
+	var gotCWD, gotAgentDir string
+	var gotTarget pi.ModelRoutingTarget
+	var gotDraft pi.ModelRoutingDraft
+	piModelInspectionGetwdFn = func() (string, error) { return "/before/project", nil }
+	piModelInspectionAgentDirFn = func() (string, error) { return "/before/agent", nil }
+	piModelApplyLoadFn = func(got context.Context, cwd, agentDir string, target pi.ModelRoutingTarget, draft pi.ModelRoutingDraft) (pi.ModelRoutingApplyResult, error) {
+		gotContext, gotCWD, gotAgentDir, gotTarget, gotDraft = got, cwd, agentDir, target, draft
+		return pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomeSuccess, Saved: true}, nil
+	}
+	cmd := piModelApplyCmd(ctx, 42, target, draft)
+	model = "mutated"
+	draft["worker"] = pi.ModelRoutingDraftAssignment{}
+	msg := cmd().(piModelApplyMsg)
+	assignment := gotDraft["worker"]
+	if msg.requestID != 42 || msg.err != nil || gotContext != ctx || gotCWD != "/before/project" || gotAgentDir != "/before/agent" || gotTarget != target || assignment.Model == nil || *assignment.Model != "provider/model" {
+		t.Fatalf("captured apply inputs = %+v/%v/%q/%q/%q/%#v", msg, gotContext, gotCWD, gotAgentDir, gotTarget, gotDraft)
+	}
+}
+
+func TestLoadPiModelApplyEnumeratesSelectsAndAppliesOnce(t *testing.T) {
+	restorePiModelInspectionFns(t)
+	candidate, caps := pi.ModelRoutingCandidate{Path: "/selected"}, pi.Capabilities{Contract: "contract"}
+	calls := 0
+	piModelInspectionEnumerateFn = func(cwd, agentDir string) ([]pi.ModelRoutingCandidate, error) {
+		return []pi.ModelRoutingCandidate{{Path: "/candidate"}}, nil
+	}
+	piModelInspectionSelectFn = func(context.Context, []pi.ModelRoutingCandidate) (pi.ModelRoutingCandidate, pi.Capabilities, error) {
+		return candidate, caps, nil
+	}
+	piModelApplyFn = func(_ context.Context, gotCandidate pi.ModelRoutingCandidate, gotCaps pi.Capabilities, request pi.ModelRoutingRequestContext, _ pi.ModelRoutingDraft) (pi.ModelRoutingApplyResult, error) {
+		calls++
+		if gotCandidate != candidate || !reflect.DeepEqual(gotCaps, caps) || request != (pi.ModelRoutingRequestContext{CWD: "/project", AgentDir: "/agents", Target: pi.ModelRoutingTargetProject}) {
+			t.Fatalf("apply inputs = %#v/%#v/%#v", gotCandidate, gotCaps, request)
+		}
+		return pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomeSuccess, Saved: true}, nil
+	}
+	got, err := loadPiModelApply(context.Background(), "/project", "/agents", pi.ModelRoutingTargetProject, nil)
+	if err != nil || !got.Saved || calls != 1 {
+		t.Fatalf("result/error/calls = %#v/%v/%d", got, err, calls)
 	}
 }

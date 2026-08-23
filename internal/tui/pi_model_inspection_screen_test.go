@@ -157,3 +157,75 @@ func TestPiModelValidationKeysAndStaleMessages(t *testing.T) {
 		t.Fatal("left-screen validation message was accepted")
 	}
 }
+func readyPiModelForApply() Model {
+	m := piScreenModel()
+	m.Screen = ScreenPiModelInspection
+	m.PiModelInspection = screens.NewPiModelInspectionState()
+	m.PiModelInspection.SetResult(pi.ModelRoutingInspection{
+		Targets: map[pi.ModelRoutingTarget]pi.ModelRoutingTargetInspection{pi.ModelRoutingTargetProject: {}},
+		Agents:  []pi.ModelRoutingAgent{{Name: "worker", Configurable: true}},
+	}, nil)
+	m.PiModelInspection.BeginValidation()
+	m.PiModelInspection.SetValidationResult(pi.ModelRoutingValidationResult{OK: true}, nil)
+	return m
+}
+func TestPiModelApplyKeysRequireValidationConfirmationAndBlockInFlight(t *testing.T) {
+	restorePiModelInspectionFns(t)
+	calls := 0
+	piModelApplyLoadFn = func(context.Context, string, string, pi.ModelRoutingTarget, pi.ModelRoutingDraft) (pi.ModelRoutingApplyResult, error) {
+		calls++
+		return pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomeSuccess, Saved: true}, nil
+	}
+	m := readyPiModelForApply()
+	m.PiModelInspection.ClearValidation()
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if calls != 0 || m.PiModelInspection.Mode != screens.PiModelInspectionModeProviders {
+		t.Fatalf("apply escaped agent/editor gate: calls=%d mode=%v", calls, m.PiModelInspection.Mode)
+	}
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m.PiModelInspection.BeginValidation()
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeValidating || calls != 0 {
+		t.Fatalf("validation gate: calls=%d mode=%v", calls, m.PiModelInspection.Mode)
+	}
+	m.PiModelInspection.SetValidationResult(pi.ModelRoutingValidationResult{OK: true}, nil)
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if calls != 0 || m.PiModelInspection.Mode != screens.PiModelInspectionModeReviewReady {
+		t.Fatalf("a then esc called apply or lost review: calls=%d mode=%v", calls, m.PiModelInspection.Mode)
+	}
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, ok := updated.(Model)
+	if !ok || cmd == nil || m.PiModelInspection.Mode != screens.PiModelInspectionModeApplying {
+		t.Fatalf("confirm = %#v/%v", updated, cmd != nil)
+	}
+	id := m.piModelApplyRequest
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune("q")}, {Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune("a")}, {Type: tea.KeyEnter}} {
+		m = piKey(m, key)
+	}
+	if calls != 0 || m.PiModelInspection.Mode != screens.PiModelInspectionModeApplying {
+		t.Fatalf("in-flight input changed apply: calls=%d mode=%v", calls, m.PiModelInspection.Mode)
+	}
+	m = piKey(m, piModelApplyMsg{requestID: id - 1, result: pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomeSuccess, Saved: true}})
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeApplying {
+		t.Fatal("stale apply result was accepted")
+	}
+	if _, quitCmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); quitCmd == nil {
+		t.Fatal("ctrl-c lost global quit")
+	}
+	m = piKey(m, cmd().(piModelApplyMsg))
+	if calls != 1 || m.PiModelInspection.Mode != screens.PiModelInspectionModeApplyResult {
+		t.Fatalf("apply result = calls=%d mode=%v", calls, m.PiModelInspection.Mode)
+	}
+	m = piKey(m, piModelApplyMsg{requestID: id, result: pi.ModelRoutingApplyResult{Outcome: pi.ModelRoutingApplyOutcomePersistenceFailure}})
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeApplyResult || !m.PiModelInspection.ApplyResult.Saved {
+		t.Fatal("wrong-mode apply result mutated state")
+	}
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Screen != ScreenModelConfig || m.PiModelInspection.Status != 0 {
+		t.Fatalf("result reset = screen=%v state=%#v", m.Screen, m.PiModelInspection)
+	}
+}

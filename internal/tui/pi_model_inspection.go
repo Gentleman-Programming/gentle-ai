@@ -24,10 +24,16 @@ type piModelValidationMsg struct {
 	result    pi.ModelRoutingValidationResult
 	err       error
 }
+type piModelApplyMsg struct {
+	requestID uint64
+	result    pi.ModelRoutingApplyResult
+	err       error
+}
 type piModelInspectionEnumerateFunc func(cwd, agentDir string) ([]pi.ModelRoutingCandidate, error)
 type piModelInspectionSelectFunc func(context.Context, []pi.ModelRoutingCandidate) (pi.ModelRoutingCandidate, pi.Capabilities, error)
 type piModelInspectionInspectFunc func(context.Context, pi.ModelRoutingCandidate, pi.Capabilities, pi.ModelRoutingRequestContext) (pi.ModelRoutingInspection, error)
 type piModelValidationFunc func(context.Context, pi.ModelRoutingCandidate, pi.Capabilities, pi.ModelRoutingRequestContext, pi.ModelRoutingDraft) (pi.ModelRoutingValidationResult, error)
+type piModelApplyFunc func(context.Context, pi.ModelRoutingCandidate, pi.Capabilities, pi.ModelRoutingRequestContext, pi.ModelRoutingDraft) (pi.ModelRoutingApplyResult, error)
 
 var (
 	piModelInspectionGetwdFn   = os.Getwd
@@ -41,6 +47,8 @@ var (
 	piModelInspectionLoadFn                                     = loadPiModelInspection
 	piModelValidationFn          piModelValidationFunc          = validatePiModelRoutingClient
 	piModelValidationLoadFn                                     = loadPiModelValidation
+	piModelApplyFn               piModelApplyFunc               = applyPiModelRoutingClient
+	piModelApplyLoadFn                                          = loadPiModelApply
 )
 
 func resolvePiModelInspectionAgentDir() (string, error) {
@@ -89,6 +97,21 @@ func loadPiModelValidation(ctx context.Context, cwd, agentDir string, target pi.
 	}
 	request := pi.ModelRoutingRequestContext{CWD: cwd, AgentDir: agentDir, Target: target}
 	return piModelValidationFn(ctx, candidate, capabilities, request, clonePiModelRoutingDraft(draft))
+}
+func applyPiModelRoutingClient(ctx context.Context, candidate pi.ModelRoutingCandidate, capabilities pi.Capabilities, request pi.ModelRoutingRequestContext, draft pi.ModelRoutingDraft) (pi.ModelRoutingApplyResult, error) {
+	return pi.NewModelRoutingClient(candidate, capabilities).Apply(ctx, request, clonePiModelRoutingDraft(draft))
+}
+func loadPiModelApply(ctx context.Context, cwd, agentDir string, target pi.ModelRoutingTarget, draft pi.ModelRoutingDraft) (pi.ModelRoutingApplyResult, error) {
+	candidates, err := piModelInspectionEnumerateFn(cwd, agentDir)
+	if err != nil {
+		return pi.ModelRoutingApplyResult{}, err
+	}
+	candidate, capabilities, err := piModelInspectionSelectFn(ctx, candidates)
+	if err != nil {
+		return pi.ModelRoutingApplyResult{}, err
+	}
+	request := pi.ModelRoutingRequestContext{CWD: cwd, AgentDir: agentDir, Target: target}
+	return piModelApplyFn(ctx, candidate, capabilities, request, clonePiModelRoutingDraft(draft))
 }
 func clonePiModelRoutingDraft(draft pi.ModelRoutingDraft) pi.ModelRoutingDraft {
 	if draft == nil {
@@ -140,11 +163,27 @@ var piModelValidationCmd = func(ctx context.Context, requestID uint64, target pi
 		return piModelValidationMsg{requestID: requestID, result: result, err: err}
 	}
 }
+var piModelApplyCmd = func(ctx context.Context, requestID uint64, target pi.ModelRoutingTarget, draft pi.ModelRoutingDraft) tea.Cmd {
+	cwd, err := piModelInspectionGetwdFn()
+	if err != nil {
+		return func() tea.Msg { return piModelApplyMsg{requestID: requestID, err: err} }
+	}
+	agentDir, err := piModelInspectionAgentDirFn()
+	if err != nil {
+		return func() tea.Msg { return piModelApplyMsg{requestID: requestID, err: err} }
+	}
+	draft = clonePiModelRoutingDraft(draft)
+	return func() tea.Msg {
+		result, err := piModelApplyLoadFn(ctx, cwd, agentDir, target, clonePiModelRoutingDraft(draft))
+		return piModelApplyMsg{requestID: requestID, result: result, err: err}
+	}
+}
 
 func (m *Model) beginPiModelInspection() tea.Cmd {
 	m.PiModelInspection = screens.NewPiModelInspectionState()
 	m.piModelInspectionRequest++
 	m.piModelValidationRequest++
+	m.piModelApplyRequest++
 	m.setScreen(ScreenPiModelInspection)
 	return piModelInspectionCmd(context.Background(), m.piModelInspectionRequest)
 }
@@ -156,16 +195,48 @@ func (m *Model) beginPiModelValidation() tea.Cmd {
 	m.piModelValidationRequest++
 	return piModelValidationCmd(context.Background(), m.piModelValidationRequest, m.PiModelInspection.Target, clonePiModelRoutingDraft(m.PiModelInspection.Draft))
 }
+func (m *Model) beginPiModelApply() tea.Cmd {
+	if !m.PiModelInspection.BeginApply() {
+		return nil
+	}
+	m.piModelApplyRequest++
+	return piModelApplyCmd(context.Background(), m.piModelApplyRequest, m.PiModelInspection.Target, clonePiModelRoutingDraft(m.PiModelInspection.Draft))
+}
 func (m *Model) leavePiModelInspection() {
 	m.piModelInspectionRequest++
 	m.piModelValidationRequest++
+	m.piModelApplyRequest++
 	m.PiModelInspection = screens.PiModelInspectionState{}
 	m.setScreen(ScreenModelConfig)
 }
 
 func (m Model) handlePiModelInspectionKey(key string) (tea.Model, tea.Cmd) {
 	switch m.PiModelInspection.Mode {
-	case screens.PiModelInspectionModeValidating, screens.PiModelInspectionModeValidationResult, screens.PiModelInspectionModeReviewReady:
+	case screens.PiModelInspectionModeApplying:
+		return m, nil
+	case screens.PiModelInspectionModeConfirmApply:
+		switch key {
+		case "esc":
+			m.PiModelInspection.ClearApply()
+		case "enter", "y":
+			return m, m.beginPiModelApply()
+		}
+		return m, nil
+	case screens.PiModelInspectionModeApplyResult:
+		if key == "enter" || key == "esc" {
+			m.leavePiModelInspection()
+		}
+		return m, nil
+	case screens.PiModelInspectionModeReviewReady:
+		switch key {
+		case "a":
+			m.PiModelInspection.BeginApplyConfirmation()
+		case "esc":
+			m.piModelValidationRequest++
+			m.PiModelInspection.ClearValidation()
+		}
+		return m, nil
+	case screens.PiModelInspectionModeValidating, screens.PiModelInspectionModeValidationResult:
 		if key == "esc" {
 			m.piModelValidationRequest++
 			m.PiModelInspection.ClearValidation()
@@ -195,6 +266,7 @@ func (m Model) handlePiModelInspectionKey(key string) (tea.Model, tea.Cmd) {
 	case "enter", " ":
 		if m.PiModelInspection.BeginEdit() {
 			m.piModelValidationRequest++
+			m.piModelApplyRequest++
 		}
 	case "v":
 		return m, m.beginPiModelValidation()

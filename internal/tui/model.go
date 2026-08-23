@@ -562,6 +562,7 @@ type Model struct {
 	codexModelDiscoveryRequest uint64
 	piModelInspectionRequest   uint64
 	piModelValidationRequest   uint64
+	piModelApplyRequest        uint64
 
 	// TUI operations — set by startUpgrade / startSync / startUpgradeSync goroutines.
 
@@ -1046,6 +1047,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.PiModelInspection.SetValidationResult(msg.result, msg.err)
 		return m, nil
+	case piModelApplyMsg:
+		if m.Screen != ScreenPiModelInspection || msg.requestID != m.piModelApplyRequest || m.PiModelInspection.Mode != screens.PiModelInspectionModeApplying {
+			return m, nil
+		}
+		m.PiModelInspection.SetApplyResult(msg.result, msg.err)
+		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {
 			return m, nil
@@ -1387,7 +1394,8 @@ func (m Model) View() string {
 
 func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := key.String()
-	if m.Screen == ScreenPiModelInspection && keyStr != "q" && keyStr != "ctrl+c" {
+	if m.Screen == ScreenPiModelInspection && keyStr != "ctrl+c" &&
+		(keyStr != "q" || m.PiModelInspection.Mode == screens.PiModelInspectionModeApplying) {
 		return m.handlePiModelInspectionKey(keyStr)
 	}
 
