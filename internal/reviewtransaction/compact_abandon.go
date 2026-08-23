@@ -64,9 +64,8 @@ const (
 )
 
 type CompactDiscardedWorkSummary struct {
-	CapturedLensResults    []string `json:"captured_lens_results"`
-	FindingsPresent        bool     `json:"findings_present"`
-	EvidenceRecordsPresent bool     `json:"evidence_records_present"`
+	CapturedLensResults []string `json:"captured_lens_results"`
+	FindingsPresent     bool     `json:"findings_present"`
 }
 
 type CompactAbandonmentProof struct {
@@ -87,7 +86,7 @@ func compactAbandonAuthorizationBindingV2(lineage, revision, snapshotIdentity, a
 	return CompactAbandonAuthorizationSchema + "\nlineage=" + lineage + "\nrevision=" + revision +
 		"\nsnapshot_identity=" + snapshotIdentity + "\nreason=" + reason +
 		"\ncaptured_lens_results=" + strings.Join(discarded.CapturedLensResults, ",") +
-		fmt.Sprintf("\nfindings_present=%t\nevidence_records_present=%t", discarded.FindingsPresent, discarded.EvidenceRecordsPresent) +
+		fmt.Sprintf("\nfindings_present=%t", discarded.FindingsPresent) +
 		"\nactor=" + strings.TrimSpace(actor)
 }
 
@@ -102,7 +101,6 @@ func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record
 	}
 	summary := CompactDiscardedWorkSummary{
 		CapturedLensResults: captured, FindingsPresent: len(record.State.Findings) > 0,
-		EvidenceRecordsPresent: record.State.EvidenceRecordDigest != "",
 	}
 	if len(captured) == 0 {
 		return summary, nil

@@ -14,66 +14,35 @@ const legacyFinalVerificationWorkUnit = "post-correction-final-verification"
 // native settlement binds that exact replacement without relaxing review gates.
 func sddPostReviewVerifyReportJourneys() []Journey {
 	return []Journey{{
-		ID:     "j108-sdd-post-review-verify-report-is-natively-bound",
 		Review: reviewOptedIn,
-		Title:  "Post-review final verify report is admitted only through native settlement attestation",
-		Source: "native SDD archive-status report-attestation contract",
-		Steps: append(sddApprovedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
-			Step{Name: "bind the approved authority to the active change", Requires: bindSDDCapability, Composite: sddBindApprovedReview},
-			Step{Name: "the bound receipt initially allows archive", Requires: sddStatusCapability,
-				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("pre-report-replacement archive readiness", func(status sddStatusV1) error {
-					if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-						return fmt.Errorf("pre-replacement status = %+v", status)
-					}
-					return nil
-				})},
+		ID:     "j108-sdd-post-review-verify-report-is-natively-bound",
+		Title:  "#3417: native final-verify settlement preserves its report attestation while archive remains unmanaged ordinary policy",
+		Source: "native SDD report-attestation contract under #3417: terminal review burns, so settlement metadata never fabricates durable review authority or a delivery gate",
+		Steps: append(sddBurnedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
+			Step{Name: "terminal burn leaves initial archive readiness under unmanaged ordinary policy", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("pre-report-replacement ordinary archive readiness", requireSDDUnmanagedOrdinaryArchive("pre-replacement"))},
 			Step{Name: "final verification replaces and stages only the canonical report", Fixture: sddReplacePostReviewVerifyReport},
-			Step{Name: "the unbound report replacement remains archive-blocked", Requires: sddStatusCapability,
-				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("unattested report delta", func(status sddStatusV1) error {
-					if status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-						return fmt.Errorf("unattested report status = %+v", status)
-					}
-					return nil
-				})},
+			Step{Name: "the unbound report replacement remains archive-ready under unmanaged ordinary policy", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("unattested report ordinary archive", requireSDDUnmanagedOrdinaryArchive("unattested report"))},
 			Step{Name: "settle the final verify work unit and bind exact report bytes", Requires: sddAttemptSettleCapability, Composite: sddSettleAttestedFinalVerifyReport},
-			Step{Name: "archive status accepts only the attested report-only delta", Requires: sddStatusCapability,
-				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("attested report archive readiness", func(status sddStatusV1) error {
-					if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-						return fmt.Errorf("attested report status = %+v", status)
-					}
-					return nil
-				})},
+			Step{Name: "native report settlement leaves archive under unmanaged ordinary policy", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("attested report ordinary archive", requireSDDUnmanagedOrdinaryArchive("attested report"))},
 		),
 	}, {
 		ID:     "j109-sdd-legacy-post-review-report-requires-current-attestation",
 		Review: reviewOptedIn,
-		Title:  "Legacy post-review report settlement with an arbitrary work-unit label requires one current native attestation",
-		Source: "native SDD report-attestation upgrade compatibility contract",
-		Steps: append(sddApprovedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
-			Step{Name: "bind the approved authority to the active change", Requires: bindSDDCapability, Composite: sddBindApprovedReview},
+		Title:  "#3417: legacy final-verify settlement preserves its compatibility record without creating a durable review gate",
+		Source: "native SDD report-attestation compatibility under #3417: terminal review burn leaves legacy and current settlement metadata under unmanaged ordinary policy",
+		Steps: append(sddBurnedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
 			Step{Name: "final verification replaces and stages only the canonical report", Fixture: sddReplacePostReviewVerifyReport},
 			Step{Name: "fixture: create a digestless settlement with its historical free-form work-unit label", Requires: sddAttemptSettleCapability, Composite: sddSettleLegacyFinalVerifyReport},
-			Step{Name: "legacy status requires verification attestation instead of a new review", Requires: sddStatusCapability,
-				Args: productArgs("sdd-status", sddChange, "--json", "--instructions"), After: sddStatusAssertion("legacy attestation routing", func(status sddStatusV1) error {
-					if status.ReviewGate != nil || status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "verify" {
-						return fmt.Errorf("legacy attestation status = %+v", status)
-					}
-					instructions := strings.Join(status.PhaseInstructions.Verify, "\n")
-					if !strings.Contains(instructions, "verification attestation required") || !strings.Contains(instructions, "--work-unit \"verify-attestation\"") {
-						return fmt.Errorf("legacy attestation instructions = %q", instructions)
-					}
-					return nil
-				})},
-			Step{Name: "settle one distinct current verify-attestation work unit", Requires: sddAttemptSettleCapability, Composite: func(r *journeyRun) error {
+			Step{Name: "legacy settlement leaves archive under unmanaged ordinary policy instead of fabricating review authority", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", sddChange, "--json", "--instructions"), After: sddStatusAssertion("legacy ordinary archive routing", requireSDDUnmanagedOrdinaryArchive("legacy settlement"))},
+			Step{Name: "settle one distinct current verify-attestation work unit as ordinary-policy metadata", Requires: sddAttemptSettleCapability, Composite: func(r *journeyRun) error {
 				return sddSettleAttestedFinalVerifyReportWorkUnit(r, "verify-attestation", "bench-legacy-attestation-acquire", "bench-legacy-attestation-settle")
 			}},
-			Step{Name: "archive status accepts the current native attestation", Requires: sddStatusCapability,
-				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("current attestation archive readiness", func(status sddStatusV1) error {
-					if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-						return fmt.Errorf("current-attested legacy status = %+v", status)
-					}
-					return nil
-				})},
+			Step{Name: "current settlement still leaves archive under unmanaged ordinary policy", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("current attestation ordinary archive", requireSDDUnmanagedOrdinaryArchive("current legacy attestation"))},
 		),
 	}}
 }
