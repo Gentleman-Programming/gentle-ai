@@ -49,7 +49,7 @@ func TestModelRoutingClientInspectRequestAndCopies(t *testing.T) {
 			if string(gotRequest) != want || gotPath != "/tmp/model-routing" {
 				t.Fatalf("path/request = %q, %q; want %q, %q", gotPath, gotRequest, "/tmp/model-routing", want)
 			}
-			wantOptions := ModelRoutingProcessOptions{Timeout: modelRoutingInspectTimeout, MaxRequestBytes: 64 << 10, MaxStdoutBytes: MaxModelRoutingResponseBytes, MaxStderrBytes: 4 << 10}
+			wantOptions := ModelRoutingProcessOptions{Timeout: modelRoutingTimeout, MaxRequestBytes: 64 << 10, MaxStdoutBytes: MaxModelRoutingResponseBytes, MaxStderrBytes: 4 << 10}
 			if gotOptions != wantOptions || !reflect.DeepEqual(client.Candidate(), ModelRoutingCandidate{Path: "/tmp/model-routing", Source: "PATH"}) || !reflect.DeepEqual(client.Capabilities(), clientCapabilities()) {
 				t.Fatalf("client state/options = %#v, %#v, %#v", client.Candidate(), client.Capabilities(), gotOptions)
 			}
@@ -142,5 +142,176 @@ func TestModelRoutingClientTransportAndBoundaries(t *testing.T) {
 	}).Inspect(ctx, ModelRoutingRequestContext{})
 	if calls != 0 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled context = %v; calls=%d", err, calls)
+	}
+}
+
+func TestModelRoutingValidateRequestDraftWireShape(t *testing.T) {
+	model := "provider/model"
+	thinking := ModelRoutingThinkingHigh
+	for _, tt := range []struct {
+		name  string
+		draft ModelRoutingDraft
+		want  string
+	}{
+		{name: "nil", want: `{"version":1,"contract":"` + modelRoutingContract + `","operation":"validate","cwd":"","agentDir":"","target":"","draft":{}}` + "\n"},
+		{name: "empty", draft: ModelRoutingDraft{}, want: `{"version":1,"contract":"` + modelRoutingContract + `","operation":"validate","cwd":"","agentDir":"","target":"","draft":{}}` + "\n"},
+		{name: "populated", draft: ModelRoutingDraft{"z": {Thinking: &thinking}, "a": {Model: &model}, "inherit": {}}, want: `{"version":1,"contract":"` + modelRoutingContract + `","operation":"validate","cwd":"","agentDir":"","target":"","draft":{"a":{"model":"provider/model"},"inherit":{},"z":{"thinking":"high"}}}` + "\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := marshalModelRoutingValidateRequest(ModelRoutingRequestContext{}, tt.draft)
+			if err != nil || string(got) != tt.want {
+				t.Fatalf("request = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestModelRoutingClientValidateSuccessRequestAndCopies(t *testing.T) {
+	model := "provider/model"
+	thinking := ModelRoutingThinkingHigh
+	draft := ModelRoutingDraft{"z": {Thinking: &thinking}, "a": {Model: &model}, "inherit": {}}
+	var calls int
+	var gotPath string
+	var gotRequest []byte
+	var gotOptions ModelRoutingProcessOptions
+	transport := func(_ context.Context, path string, request []byte, options ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+		calls++
+		gotPath, gotRequest, gotOptions = path, append([]byte(nil), request...), options
+		model, thinking = "changed", ModelRoutingThinkingLow
+		draft["new"] = ModelRoutingDraftAssignment{}
+		return ModelRoutingProcessResult{Stdout: modelRoutingValidateEnvelope(modelRoutingValidateResult(true, `[{"code":"warn","message":"check","severity":"warning"},{"code":"info","message":"context","severity":"info"}]`), true, "success")}, nil
+	}
+	client := newModelRoutingClient(ModelRoutingCandidate{Path: "/tmp/model-routing/."}, clientCapabilities(), transport)
+	got, err := client.Validate(context.Background(), ModelRoutingRequestContext{CWD: "/workspace", AgentDir: "/agents", Target: ModelRoutingTargetProject, ConfigHome: "/config", LoadExtensions: true}, draft)
+	if err != nil || !got.OK || len(got.Diagnostics) != 2 || got.Diagnostics[0].Severity != ModelRoutingDiagnosticSeverityWarning || calls != 1 {
+		t.Fatalf("validate = %#v, %v; calls=%d", got, err, calls)
+	}
+	want := `{"version":1,"contract":"` + modelRoutingContract + `","operation":"validate","cwd":"/workspace","agentDir":"/agents","target":"project","configHome":"/config","loadExtensions":true,"draft":{"a":{"model":"provider/model"},"inherit":{},"z":{"thinking":"high"}}}` + "\n"
+	if gotPath != "/tmp/model-routing" || string(gotRequest) != want {
+		t.Fatalf("path/request = %q, %q; want %q, %q", gotPath, gotRequest, "/tmp/model-routing", want)
+	}
+	wantOptions := ModelRoutingProcessOptions{Timeout: modelRoutingTimeout, MaxRequestBytes: 64 << 10, MaxStdoutBytes: MaxModelRoutingResponseBytes, MaxStderrBytes: 4 << 10}
+	if gotOptions != wantOptions {
+		t.Fatalf("options = %#v; want %#v", gotOptions, wantOptions)
+	}
+}
+
+func TestModelRoutingClientValidateParserCause(t *testing.T) {
+	_, err := newModelRoutingClient(ModelRoutingCandidate{Path: "/pi"}, clientCapabilities(), func(context.Context, string, []byte, ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+		return ModelRoutingProcessResult{Stdout: []byte("{")}, nil
+	}).Validate(context.Background(), ModelRoutingRequestContext{}, nil)
+	var responseErr *ModelRoutingResponseError
+	if !errors.As(err, &responseErr) || responseErr.Kind != ModelRoutingResponseErrorMalformed || responseErr.ExpectedOperation != ModelRoutingOperationValidate || !errors.Is(err, ErrModelRoutingResponseMalformed) {
+		t.Fatalf("parser error = %T %v", err, err)
+	}
+}
+
+func TestModelRoutingClientValidateTransportAndBoundaries(t *testing.T) {
+	for _, kind := range []TransportErrorKind{TransportErrorInvalidOptions, TransportErrorInvalidPath, TransportErrorInvalidRequest, TransportErrorStart, TransportErrorWait, TransportErrorCanceled, TransportErrorTimeout, TransportErrorStdoutOverflow, TransportErrorStderrOverflow, TransportErrorTermination, TransportErrorUnsupportedPlatform} {
+		t.Run(string(kind), func(t *testing.T) {
+			cause := errors.New("validate-transport-secret")
+			calls := 0
+			_, err := newModelRoutingClient(ModelRoutingCandidate{Path: "/pi"}, clientCapabilities(), func(context.Context, string, []byte, ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+				calls++
+				return ModelRoutingProcessResult{}, transportError(kind, cause)
+			}).Validate(context.Background(), ModelRoutingRequestContext{}, nil)
+			var clientErr *ModelRoutingClientError
+			var transportErr *TransportError
+			if calls != 1 || !errors.As(err, &clientErr) || clientErr.Kind != ModelRoutingClientErrorTransport || !errors.As(err, &transportErr) || transportErr.Kind != kind || !errors.Is(err, cause) || strings.Contains(err.Error(), "validate-transport-secret") || strings.Contains(err.Error(), "inspect") || strings.Contains(err.Error(), "validate") {
+				t.Fatalf("transport error = %T %v; calls=%d", err, err, calls)
+			}
+		})
+	}
+	var nilClient *ModelRoutingClient
+	if _, err := nilClient.Validate(context.Background(), ModelRoutingRequestContext{}, nil); !errors.Is(err, ErrModelRoutingClientInvalidClient) {
+		t.Fatalf("nil client error = %v", err)
+	}
+	if _, err := newModelRoutingClient(ModelRoutingCandidate{}, clientCapabilities(), nil).Validate(context.Background(), ModelRoutingRequestContext{}, nil); !errors.Is(err, ErrModelRoutingClientTransport) {
+		t.Fatalf("nil transport error = %v", err)
+	}
+	for _, tt := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{name: "nil", want: ErrTransportInvalidOptions},
+		{name: "canceled", ctx: canceledContext(), want: context.Canceled},
+		{name: "timeout", ctx: timeoutContext(), want: context.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			client := newModelRoutingClient(ModelRoutingCandidate{}, clientCapabilities(), func(context.Context, string, []byte, ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+				calls++
+				return ModelRoutingProcessResult{}, nil
+			})
+			_, err := client.Validate(tt.ctx, ModelRoutingRequestContext{}, nil)
+			if calls != 0 || !errors.Is(err, tt.want) {
+				t.Fatalf("context error = %v; calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+func timeoutContext() context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	cancel()
+	return ctx
+}
+
+func TestModelRoutingClientValidateSemanticAndProtocolMatrix(t *testing.T) {
+	response := func(envelopeOK, resultOK bool, class string) []byte {
+		return modelRoutingValidateEnvelope(modelRoutingValidateResult(resultOK, `[{"code":"C","message":"M","severity":"warning"}]`), envelopeOK, class)
+	}
+	for _, tt := range []struct {
+		name  string
+		code  int
+		class string
+	}{
+		{"invalid-input", 2, "invalid-input"}, {"unsupported-contract", 3, "unsupported-contract"}, {"unavailable-runtime", 4, "unavailable-runtime"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cause := errors.New("validate-provider-secret")
+			got, err := newModelRoutingClient(ModelRoutingCandidate{Path: "/pi"}, clientCapabilities(), func(context.Context, string, []byte, ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+				return ModelRoutingProcessResult{ExitCode: tt.code, Stdout: response(false, false, tt.class)}, transportError(TransportErrorNonzeroExit, cause)
+			}).Validate(context.Background(), ModelRoutingRequestContext{}, nil)
+			var clientErr *ModelRoutingClientError
+			var transportErr *TransportError
+			if err == nil || got.OK || len(got.Diagnostics) != 1 || !errors.As(err, &clientErr) || clientErr.Kind != ModelRoutingClientErrorSemantic || clientErr.ExitCode != tt.code || clientErr.ExitClass != tt.class || !errors.As(err, &transportErr) || !errors.Is(err, cause) || strings.Contains(err.Error(), "validate-provider-secret") {
+				t.Fatalf("semantic result/error = %#v, %T %v", got, err, err)
+			}
+		})
+	}
+	valid := response(true, true, "success")
+	for _, tt := range []struct {
+		name string
+		code int
+		body []byte
+		err  error
+	}{
+		{"exit5", 5, valid, transportError(TransportErrorNonzeroExit, errors.New("exit5-secret"))},
+		{"exit6", 6, valid, transportError(TransportErrorNonzeroExit, errors.New("exit6-secret"))},
+		{"typed-code0", 0, valid, transportError(TransportErrorNonzeroExit, errors.New("code0-secret"))},
+		{"nonzero-without-error", 2, valid, nil},
+		{"envelope-mismatch", 0, response(false, true, "success"), nil},
+		{"class-mismatch", 0, response(true, true, "invalid-input"), nil},
+		{"result-mismatch", 0, response(true, false, "success"), nil},
+		{"malformed", 0, []byte("{"), nil},
+		{"wrong-identity", 0, bytes.Replace(valid, []byte(`"operation":"validate"`), []byte(`"operation":"inspect"`), 1), nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := newModelRoutingClient(ModelRoutingCandidate{Path: "/pi"}, clientCapabilities(), func(context.Context, string, []byte, ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+				return ModelRoutingProcessResult{ExitCode: tt.code, Stdout: tt.body}, tt.err
+			}).Validate(context.Background(), ModelRoutingRequestContext{}, nil)
+			var clientErr *ModelRoutingClientError
+			if err == nil || !reflect.DeepEqual(got, ModelRoutingValidationResult{}) || !errors.As(err, &clientErr) || clientErr.Kind != ModelRoutingClientErrorProtocol || !errors.Is(err, ErrModelRoutingClientProtocol) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("protocol result/error = %#v, %T %v", got, err, err)
+			}
+		})
 	}
 }

@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	modelRoutingInspectTimeout = 5 * time.Second
-	modelRoutingInspectRequest = 64 << 10
-	modelRoutingInspectStderr  = 4 << 10
+	modelRoutingTimeout = 5 * time.Second
+	modelRoutingRequest = 64 << 10
+	modelRoutingStderr  = 4 << 10
 )
 
 // ModelRoutingRequestContext identifies the context used by a model-routing
@@ -25,7 +25,7 @@ type ModelRoutingRequestContext struct {
 	LoadExtensions bool
 }
 
-// ModelRoutingClientErrorKind classifies a client-side inspect failure.
+// ModelRoutingClientErrorKind classifies a model-routing client failure.
 type ModelRoutingClientErrorKind string
 
 const (
@@ -37,9 +37,9 @@ const (
 
 var (
 	ErrModelRoutingClientInvalidClient = errors.New("nil model-routing client")
-	ErrModelRoutingClientTransport     = errors.New("model-routing inspect client transport failure")
-	ErrModelRoutingClientSemantic      = errors.New("model-routing inspect client semantic failure")
-	ErrModelRoutingClientProtocol      = errors.New("model-routing inspect client protocol failure")
+	ErrModelRoutingClientTransport     = errors.New("model-routing client transport failure")
+	ErrModelRoutingClientSemantic      = errors.New("model-routing client semantic failure")
+	ErrModelRoutingClientProtocol      = errors.New("model-routing client protocol failure")
 )
 
 // ModelRoutingClientError reports a failure after the client boundary. Cause
@@ -90,16 +90,16 @@ var modelRoutingClientErrorSentinels = map[ModelRoutingClientErrorKind]error{
 }
 
 // ModelRoutingClient invokes the selected model-routing executable for bounded
-// inspect requests. Its transport is fixed for production construction and
-// scoped to the instance for tests.
+// operations. Its transport is fixed for production construction and scoped to
+// the instance for tests.
 type ModelRoutingClient struct {
 	candidate    ModelRoutingCandidate
 	capabilities Capabilities
 	transport    modelRoutingTransport
 }
 
-// NewModelRoutingClient constructs an inspect client using the bounded process
-// transport and the selected candidate/capabilities.
+// NewModelRoutingClient constructs a model-routing client using the bounded
+// process transport and the selected candidate/capabilities.
 func NewModelRoutingClient(candidate ModelRoutingCandidate, capabilities Capabilities) *ModelRoutingClient {
 	return newModelRoutingClient(candidate, capabilities, RunBoundedModelRoutingProcess)
 }
@@ -157,10 +157,10 @@ func (c *ModelRoutingClient) Inspect(ctx context.Context, request ModelRoutingRe
 		return ModelRoutingInspection{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", 0, "", err)
 	}
 	result, callErr := c.transport(ctx, c.candidate.Path, cloneTransportBytes(payload), ModelRoutingProcessOptions{
-		Timeout:         modelRoutingInspectTimeout,
-		MaxRequestBytes: modelRoutingInspectRequest,
+		Timeout:         modelRoutingTimeout,
+		MaxRequestBytes: modelRoutingRequest,
 		MaxStdoutBytes:  MaxModelRoutingResponseBytes,
-		MaxStderrBytes:  modelRoutingInspectStderr,
+		MaxStderrBytes:  modelRoutingStderr,
 	})
 	if callErr != nil {
 		return c.handleTransportResult(result, callErr)
@@ -177,6 +177,79 @@ func (c *ModelRoutingClient) Inspect(ctx context.Context, request ModelRoutingRe
 		return ModelRoutingInspection{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, response.ExitClass, ErrModelRoutingClientProtocol)
 	}
 	return response.Result, nil
+}
+
+// Validate runs exactly one bounded validate operation and returns the parsed
+// validation result. Exit codes 2, 3, and 4 return their authoritative result with
+// a typed semantic error; all other protocol or transport failures return no result.
+func (c *ModelRoutingClient) Validate(ctx context.Context, request ModelRoutingRequestContext, draft ModelRoutingDraft) (ModelRoutingValidationResult, error) {
+	if c == nil {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorInvalidClient, ModelRoutingCandidate{}, "", 0, "", ErrModelRoutingClientInvalidClient)
+	}
+	if c.transport == nil {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, "", 0, "", ErrModelRoutingClientTransport)
+	}
+	if ctx == nil {
+		cause := transportError(TransportErrorInvalidOptions, ErrTransportInvalidOptions)
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, TransportErrorInvalidOptions, 0, "", cause)
+	}
+	if err := ctx.Err(); err != nil {
+		kind := TransportErrorCanceled
+		if errors.Is(err, context.DeadlineExceeded) {
+			kind = TransportErrorTimeout
+		}
+		cause := transportError(kind, err)
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, kind, 0, "", cause)
+	}
+
+	payload, err := marshalModelRoutingValidateRequest(request, draft)
+	if err != nil {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", 0, "", err)
+	}
+	result, callErr := c.transport(ctx, c.candidate.Path, cloneTransportBytes(payload), ModelRoutingProcessOptions{
+		Timeout:         modelRoutingTimeout,
+		MaxRequestBytes: modelRoutingRequest,
+		MaxStdoutBytes:  MaxModelRoutingResponseBytes,
+		MaxStderrBytes:  modelRoutingStderr,
+	})
+	if callErr != nil {
+		return c.handleValidateTransportResult(result, callErr)
+	}
+	if result.ExitCode != 0 {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, "", ErrModelRoutingClientProtocol)
+	}
+
+	response, parseErr := ParseModelRoutingValidateResponse(cloneTransportBytes(result.Stdout))
+	if parseErr != nil {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, "", parseErr)
+	}
+	if !response.OK || response.ExitClass != "success" || !response.Result.OK {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, response.ExitClass, ErrModelRoutingClientProtocol)
+	}
+	return response.Result, nil
+}
+
+func (c *ModelRoutingClient) handleValidateTransportResult(result ModelRoutingProcessResult, callErr error) (ModelRoutingValidationResult, error) {
+	var transportErr *TransportError
+	if !errors.As(callErr, &transportErr) || transportErr == nil {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, "", result.ExitCode, "", callErr)
+	}
+	if transportErr.Kind != TransportErrorNonzeroExit {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, transportErr.Kind, result.ExitCode, "", callErr)
+	}
+	if result.ExitCode != 2 && result.ExitCode != 3 && result.ExitCode != 4 {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, transportErr.Kind, result.ExitCode, "", errors.Join(callErr, ErrModelRoutingClientProtocol))
+	}
+
+	response, parseErr := ParseModelRoutingValidateResponse(cloneTransportBytes(result.Stdout))
+	if parseErr != nil {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, transportErr.Kind, result.ExitCode, "", errors.Join(callErr, parseErr))
+	}
+	wantClass := map[int]string{2: "invalid-input", 3: "unsupported-contract", 4: "unavailable-runtime"}[result.ExitCode]
+	if response.OK || response.Result.OK || response.ExitClass != wantClass {
+		return ModelRoutingValidationResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, transportErr.Kind, result.ExitCode, response.ExitClass, errors.Join(callErr, ErrModelRoutingClientProtocol))
+	}
+	return response.Result, modelRoutingClientError(ModelRoutingClientErrorSemantic, c.candidate, transportErr.Kind, result.ExitCode, response.ExitClass, callErr)
 }
 
 func (c *ModelRoutingClient) handleTransportResult(result ModelRoutingProcessResult, callErr error) (ModelRoutingInspection, error) {
@@ -232,6 +305,34 @@ func marshalModelRoutingInspectRequest(request ModelRoutingRequestContext) ([]by
 		Target:         request.Target,
 		ConfigHome:     request.ConfigHome,
 		LoadExtensions: request.LoadExtensions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(payload, '\n'), nil
+}
+
+func marshalModelRoutingValidateRequest(request ModelRoutingRequestContext, draft ModelRoutingDraft) ([]byte, error) {
+	payload, err := json.Marshal(struct {
+		Version        int                `json:"version"`
+		Contract       string             `json:"contract"`
+		Operation      string             `json:"operation"`
+		CWD            string             `json:"cwd"`
+		AgentDir       string             `json:"agentDir"`
+		Target         ModelRoutingTarget `json:"target"`
+		ConfigHome     string             `json:"configHome,omitempty"`
+		LoadExtensions bool               `json:"loadExtensions,omitempty"`
+		Draft          ModelRoutingDraft  `json:"draft"`
+	}{
+		Version:        modelRoutingVersion,
+		Contract:       modelRoutingContract,
+		Operation:      "validate",
+		CWD:            request.CWD,
+		AgentDir:       request.AgentDir,
+		Target:         request.Target,
+		ConfigHome:     request.ConfigHome,
+		LoadExtensions: request.LoadExtensions,
+		Draft:          cloneModelRoutingDraft(draft),
 	})
 	if err != nil {
 		return nil, err
