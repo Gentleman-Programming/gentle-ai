@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
 
 const piCodingAgentDirEnv = "PI_CODING_AGENT_DIR"
@@ -80,4 +81,39 @@ var piModelInspectionCmd = func(ctx context.Context, requestID uint64) tea.Cmd {
 		inspection, err := piModelInspectionLoadFn(ctx, cwd, agentDir)
 		return piModelInspectionMsg{requestID: requestID, inspection: inspection, err: err}
 	}
+}
+
+func (m *Model) beginPiModelInspection() tea.Cmd {
+	m.PiModelInspection = screens.NewPiModelInspectionState()
+	m.piModelInspectionRequest++
+	m.setScreen(ScreenPiModelInspection)
+	return piModelInspectionCmd(context.Background(), m.piModelInspectionRequest)
+}
+
+func (m *Model) leavePiModelInspection() {
+	m.piModelInspectionRequest++
+	m.PiModelInspection = screens.PiModelInspectionState{}
+	m.setScreen(ScreenModelConfig)
+}
+
+func (m Model) handlePiModelInspectionKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.leavePiModelInspection()
+	case "up", "k":
+		m.PiModelInspection.Move(-1, m.Height)
+	case "down", "j":
+		m.PiModelInspection.Move(1, m.Height)
+	case "g":
+		m.PiModelInspection.SelectTarget(pi.ModelRoutingTargetGlobal)
+	case "p":
+		m.PiModelInspection.SelectTarget(pi.ModelRoutingTargetProject)
+	case "tab":
+		if m.PiModelInspection.Target == pi.ModelRoutingTargetGlobal {
+			m.PiModelInspection.SelectTarget(pi.ModelRoutingTargetProject)
+		} else {
+			m.PiModelInspection.SelectTarget(pi.ModelRoutingTargetGlobal)
+		}
+	}
+	return m, nil
 }

@@ -418,6 +418,7 @@ const (
 	ScreenSync
 	ScreenUpgradeSync
 	ScreenModelConfig
+	ScreenPiModelInspection
 	ScreenUninstallMode
 	ScreenUninstall
 	ScreenUninstallComponents
@@ -478,6 +479,7 @@ type Model struct {
 	ClaudeModelPicker screens.ClaudeModelPickerState
 	KiroModelPicker   screens.KiroModelPickerState
 	CodexModelPicker  screens.CodexModelPickerState
+	PiModelInspection screens.PiModelInspectionState
 	SkillPicker       []model.SkillID
 	Err               error
 
@@ -558,6 +560,7 @@ type Model struct {
 	// codexModelDiscoveryRequest identifies the Custom picker catalog request that
 	// is allowed to update the current picker state.
 	codexModelDiscoveryRequest uint64
+	piModelInspectionRequest   uint64
 
 	// TUI operations — set by startUpgrade / startSync / startUpgradeSync goroutines.
 
@@ -1030,6 +1033,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.CodexModelPicker.AvailableModels = msg.Models
 		return m, nil
+	case piModelInspectionMsg:
+		if m.Screen != ScreenPiModelInspection || msg.requestID != m.piModelInspectionRequest {
+			return m, nil
+		}
+		m.PiModelInspection.SetResult(msg.inspection, msg.err)
+		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {
 			return m, nil
@@ -1221,7 +1230,9 @@ func (m Model) View() string {
 	case ScreenSync:
 		return screens.RenderSync(m.SyncFiles, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
 	case ScreenModelConfig:
-		return screens.RenderModelConfig(m.Cursor)
+		return screens.RenderModelConfig(m.Cursor, m.piModelsAvailable())
+	case ScreenPiModelInspection:
+		return screens.RenderPiModelInspection(m.PiModelInspection, m.Height)
 	case ScreenProfiles:
 		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
 	case ScreenProfileCreate:
@@ -1369,6 +1380,9 @@ func (m Model) View() string {
 
 func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := key.String()
+	if m.Screen == ScreenPiModelInspection && keyStr != "q" && keyStr != "ctrl+c" {
+		return m.handlePiModelInspectionKey(keyStr)
+	}
 
 	// When the model picker is in a sub-mode, delegate navigation there first.
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
@@ -2163,7 +2177,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.ModelConfigMode = true
 			m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 			m.setScreen(ScreenCodexModelPicker)
-		case 4: // Back
+		case 4:
+			if m.piModelsAvailable() {
+				return m, m.beginPiModelInspection()
+			}
+			fallthrough
+		case 5:
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -3561,6 +3580,11 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		return m
 	}
 
+	if m.Screen == ScreenPiModelInspection {
+		m.leavePiModelInspection()
+		return m
+	}
+
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
 	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
@@ -3821,7 +3845,9 @@ func (m Model) optionCount() int {
 		}
 		return 1
 	case ScreenModelConfig:
-		return len(screens.ModelConfigOptions())
+		return len(screens.ModelConfigOptions(m.piModelsAvailable()))
+	case ScreenPiModelInspection:
+		return 0
 	case ScreenUninstallMode:
 		return len(screens.UninstallModeOptions()) + 1
 	case ScreenUninstall:
@@ -4561,6 +4587,18 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 func (m Model) hasDetectedOpenCode() bool {
 	for _, cfg := range m.Detection.Configs {
 		if cfg.Agent == string(model.AgentOpenCode) && cfg.Exists {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) piModelsAvailable() bool {
+	if m.Selection.HasAgent(model.AgentPi) {
+		return true
+	}
+	for _, cfg := range m.Detection.Configs {
+		if cfg.Agent == string(model.AgentPi) && cfg.Exists {
 			return true
 		}
 	}
