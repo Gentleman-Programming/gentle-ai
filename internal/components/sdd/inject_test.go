@@ -613,7 +613,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 				"Read the configured models from `opencode.json`",
 				"Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
-				"present the correct/second-round/continue choice through the lossless blocking-prompt route",
+				"### Research and Pre-Proposal Gate (MANDATORY)",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
 				"otherwise emit the complete choice through the plain chat or terminal fallback and STOP",
 			} {
@@ -777,8 +777,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"ask before launching the next phase via the `question` tool",
 		"present the proceed/adjust/stop options through a single `question` tool call",
 		"approve only the immediate next phase",
-		"proposal question round",
-		"business rules, implications, impact, edge cases",
+		"### Research and Pre-Proposal Gate (MANDATORY)",
+		"confirmed pre-proposal handoff",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
 		"fully mandatory",
@@ -1286,8 +1286,8 @@ Map answers to canonical values: A1/Interactive -> interactive.
 		"ask before launching the next phase via the `question` tool",
 		"present the proceed/adjust/stop options through a single `question` tool call",
 		"approve only the immediate next phase",
-		"proposal question round",
-		"business rules, implications, impact, edge cases",
+		"### Research and Pre-Proposal Gate (MANDATORY)",
+		"confirmed pre-proposal handoff",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
@@ -1395,8 +1395,8 @@ Hard gate rules:
 		"ask before launching the next phase via the `question` tool",
 		"present the proceed/adjust/stop options through a single `question` tool call",
 		"approve only the immediate next phase",
-		"proposal question round",
-		"business rules, implications, impact, edge cases",
+		"### Research and Pre-Proposal Gate (MANDATORY)",
+		"confirmed pre-proposal handoff",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing refreshed preserved prompt content %q", wanted)
@@ -2250,9 +2250,9 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Multi overlay must contain gentle-orchestrator + 2 native fallback agents +
-	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
-	if len(agentMap) != 22 {
-		t.Fatalf("agent count = %d, want 22", len(agentMap))
+	// 11 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 23 agents.
+	if len(agentMap) != 23 {
+		t.Fatalf("agent count = %d, want 23", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -2276,7 +2276,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Verify representative sub-agents are present.
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		if _, ok := agentMap[subAgent]; !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
 		}
@@ -2638,12 +2638,12 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
-	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
+	// 11 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 23 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 22 {
-		t.Fatalf("agent count = %d, want 22", len(agentMap))
+	if len(agentMap) != 23 {
+		t.Fatalf("agent count = %d, want 23", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2672,7 +2672,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		raw, ok := agentMap[subAgent]
 		if !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)

@@ -13,6 +13,7 @@
             "explore": "allow",
             "sdd-init": "allow",
             "sdd-explore": "allow",
+            "sdd-research": "allow",
             "sdd-propose": "allow",
             "sdd-spec": "allow",
             "sdd-design": "allow",
@@ -93,6 +94,21 @@
         "write": true,
         "edit": true,
         "bash": true
+      }
+    },
+    "sdd-research": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Collect source-backed evidence for selected SDD research",
+      "prompt": "You are the SDD research executor, not the orchestrator. Do NOT delegate or call task. Read ~/.config/opencode/skills/sdd-research/SKILL.md and follow it exactly. Evidence grants: documentation=[]; open-web=[]. Persistence tools are not evidence grants. Unsupported or undeclared classes deny admission and emit no claims. Retain selected intent and persist blocked recovery state without source claims.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": false,
+        "webfetch": false,
+        "websearch": false,
+        "task": false
       }
     },
     "sdd-propose": {

@@ -109,6 +109,7 @@ func TestProfileAgentKeys_Named(t *testing.T) {
 		"sdd-orchestrator-cheap",
 		"sdd-init-cheap",
 		"sdd-explore-cheap",
+		"sdd-research-cheap",
 		"sdd-propose-cheap",
 		"sdd-spec-cheap",
 		"sdd-design-cheap",
@@ -145,6 +146,7 @@ func TestProfileAgentKeys_Default(t *testing.T) {
 		"sdd-orchestrator",
 		"sdd-init",
 		"sdd-explore",
+		"sdd-research",
 		"sdd-propose",
 		"sdd-spec",
 		"sdd-design",
@@ -171,11 +173,11 @@ func TestProfileAgentKeys_Default(t *testing.T) {
 }
 
 func TestProfileAgentKeys_Count(t *testing.T) {
-	if n := len(ProfileAgentKeys("cheap")); n != 14 {
-		t.Errorf("ProfileAgentKeys(\"cheap\") = %d keys, want 14", n)
+	if n := len(ProfileAgentKeys("cheap")); n != 15 {
+		t.Errorf("ProfileAgentKeys(\"cheap\") = %d keys, want 15", n)
 	}
-	if n := len(ProfileAgentKeys("")); n != 11 {
-		t.Errorf("ProfileAgentKeys(\"\") = %d keys, want 11", n)
+	if n := len(ProfileAgentKeys("")); n != 12 {
+		t.Errorf("ProfileAgentKeys(\"\") = %d keys, want 12", n)
 	}
 }
 
@@ -390,7 +392,7 @@ func makeHaikuProfile() model.Profile {
 	haikuModel := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}
 	phases := map[string]model.ModelAssignment{}
 	for _, ph := range []string{
-		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
 		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify",
 		"sdd-archive", "sdd-onboard",
 	} {
@@ -429,9 +431,9 @@ func TestGenerateProfileOverlay_Structure(t *testing.T) {
 		t.Fatal("overlay 'agent' is not an object")
 	}
 
-	// Must have 11 agents
-	if len(agentMap) != 11 {
-		t.Errorf("agent map has %d entries, want 11", len(agentMap))
+	// Must have 12 agents
+	if len(agentMap) != 12 {
+		t.Errorf("agent map has %d entries, want 12", len(agentMap))
 	}
 
 	// Orchestrator checks
@@ -539,8 +541,8 @@ func TestGenerateProfileOverlay_JDAssignmentsGenerateSuffixedAgents(t *testing.T
 	}
 	agentMap := root["agent"].(map[string]any)
 
-	if len(agentMap) != 14 {
-		t.Fatalf("agent map has %d entries, want 14; keys: %v", len(agentMap), keysOf(agentMap))
+	if len(agentMap) != 15 {
+		t.Fatalf("agent map has %d entries, want 15; keys: %v", len(agentMap), keysOf(agentMap))
 	}
 
 	checks := map[string]string{

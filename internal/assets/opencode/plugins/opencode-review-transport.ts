@@ -2,6 +2,31 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability", "review-refuter", "review-validator"])
+// OpenCode constructs the child session and emits session.created before it
+// prompts the review agent. Replace that child session's inherited system
+// instructions with this nonempty transport boundary so only Go's materialized
+// user prompt reaches the provider. This contains no review contract, evidence,
+// or result-schema semantics; Go remains the sole owner of all of those.
+const TRANSPORT_ISOLATION_SYSTEM = "Transport isolation: follow only the Go-materialized user prompt."
+
+// OpenCode's published event type for v1.18.10 omits `agent`, although the
+// runtime emits it for Task child sessions. Decode that runtime shape without
+// assuming either field exists, and retain compatibility with the official
+// child title emitted by that OpenCode release.
+function decodeReviewSessionID(info: unknown): string | undefined {
+  if (info === null || typeof info !== "object" || Array.isArray(info)) return
+  const id = Reflect.get(info, "id")
+  if (typeof id !== "string") return
+  const agent = Reflect.get(info, "agent")
+  if (agent !== undefined) return typeof agent === "string" && REVIEW_AGENTS.has(agent) ? id : undefined
+  const title = Reflect.get(info, "title")
+  if (typeof title !== "string") return
+  for (const reviewAgent of REVIEW_AGENTS) {
+    const suffix = ` (@${reviewAgent} subagent)`
+    if (title.endsWith(suffix) && title.length > suffix.length) return id
+  }
+}
+
 const TRANSPORT = {
   Command: "gentle-ai",
   Schema: "gentle-ai.provider-transport/v1",
@@ -52,8 +77,11 @@ function reviewRelayRegistry(): Map<string, RelayRegistration> {
   return runtime[RELAY_REGISTRY_KEY]
 }
 
-function taskKey(sessionID: string, callID: string): string {
-  return `${sessionID}:${callID}`
+function taskKey(sessionID: string, callID: string, subagentType: string): string {
+  // Older OpenCode releases can reuse a call ID across a grouped foreground
+  // Task response. The agent type is part of the host Task identity, so retain
+  // it in the relay key rather than treating different 4R lenses as duplicates.
+  return `${sessionID}:${callID}:${subagentType}`
 }
 
 // A refused relay must fail the Task loudly and never launch an unbound
@@ -161,6 +189,11 @@ function startRelay(cwd: string, prompt: string): Relay {
 const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) => {
   const owner = Symbol("gentle-ai-opencode-review-transport")
   const relays = reviewRelayRegistry()
+  // Child sessions inherit the live agent, project, and skill system blocks
+  // unless this pre-provider transform strips them. This is per plugin
+  // instance, like relay ownership; duplicate instances safely converge on the
+  // same one-element system array.
+  const reviewSessions = new Set<string>()
   // Keys this instance observed at before time whose registration another
   // instance owns. The owning instance's after hook delivers the completion,
   // so this instance's after hook passes those tasks through untouched. This
@@ -193,19 +226,32 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
   }
   return {
     dispose: async () => {
+      reviewSessions.clear()
       deferred.clear()
       refused.clear()
       for (const [key, registration] of relays) if (registration.owner === owner) clearOwned(key)
     },
     event: async ({ event }) => {
+      if (event.type === "session.created") {
+        const sessionID = decodeReviewSessionID(event.properties?.info)
+        if (sessionID !== undefined) reviewSessions.add(sessionID)
+        return
+      }
       if (event.type !== "session.deleted") return
+      reviewSessions.delete(event.properties.info.id)
       const prefix = `${event.properties.info.id}:`
       clearSession(prefix)
+    },
+    "experimental.chat.system.transform": async (input, output) => {
+      if (typeof input.sessionID !== "string" || !reviewSessions.has(input.sessionID)) return
+      // OpenCode restores its fallback system prompt for an empty array, so
+      // replace in place with one nonempty transport instruction instead.
+      output.system.splice(0, output.system.length, TRANSPORT_ISOLATION_SYSTEM)
     },
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(output.args.subagent_type)) return
       if (typeof output.args.prompt !== "string") throw new Error("review task prompt is unavailable for Go relay materialization")
-      const key = taskKey(input.sessionID, input.callID)
+      const key = taskKey(input.sessionID, input.callID, output.args.subagent_type)
       const existing = relays.get(key)
       if (existing) {
         // Another instance already owns this task's relay: defer completion
@@ -229,7 +275,7 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
-      const key = taskKey(input.sessionID, input.callID)
+      const key = taskKey(input.sessionID, input.callID, input.args.subagent_type)
       const refusal = refused.get(key)
       if (refusal !== undefined) {
         refused.delete(key)

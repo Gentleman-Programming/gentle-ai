@@ -24,3 +24,11 @@ func TestKiroModelID(t *testing.T) {
 		}
 	}
 }
+
+func TestKiroModelPresetsIncludeResearch(t *testing.T) {
+	for name, preset := range []map[string]KiroModelAlias{KiroModelPresetBalanced(), KiroModelPresetPerformance(), KiroModelPresetEconomy(), KiroModelPresetOpenWeight()} {
+		if _, ok := preset["sdd-research"]; !ok {
+			t.Errorf("preset %d missing sdd-research", name)
+		}
+	}
+}

@@ -227,8 +227,7 @@ func withoutStrings(values []string, excluded ...string) []string {
 	return kept
 }
 
-// TestWriteSharedPromptFilesCreates10Files verifies that WriteSharedPromptFiles
-// creates exactly the 10 expected prompt files under {homeDir}/.config/opencode/prompts/sdd/.
+// TestWriteSharedPromptFilesCreates11Files verifies the complete phase inventory.
 func TestWriteSharedPromptFilesCreates10Files(t *testing.T) {
 	home := t.TempDir()
 
@@ -243,6 +242,7 @@ func TestWriteSharedPromptFilesCreates10Files(t *testing.T) {
 	expectedFiles := []string{
 		"sdd-init.md",
 		"sdd-explore.md",
+		"sdd-research.md",
 		"sdd-propose.md",
 		"sdd-spec.md",
 		"sdd-design.md",
@@ -306,6 +306,7 @@ func TestWriteSharedPromptFilesContent(t *testing.T) {
 	}{
 		{"sdd-init.md", "init"},
 		{"sdd-explore.md", "explore"},
+		{"sdd-research.md", "research"},
 		{"sdd-propose.md", "propose"},
 		{"sdd-spec.md", "spec"},
 		{"sdd-design.md", "design"},
@@ -350,6 +351,7 @@ func TestWriteSharedPromptFilesLanguageContract(t *testing.T) {
 	phases := []string{
 		"sdd-init.md",
 		"sdd-explore.md",
+		"sdd-research.md",
 		"sdd-propose.md",
 		"sdd-spec.md",
 		"sdd-design.md",
@@ -541,7 +543,7 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 	}
 
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	bashCapableAgents := append(SharedPromptPhases(), "jd-fix-agent", opencode.ReviewValidatorAgent)
+	bashCapableAgents := append(withoutStrings(SharedPromptPhases(), "sdd-research"), "jd-fix-agent", opencode.ReviewValidatorAgent)
 	for _, agentName := range bashCapableAgents {
 		prompt := agentPrompt(t, agentsMap, agentName)
 		if !strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
@@ -557,6 +559,10 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
 		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
+	}
+	researchPrompt := agentPrompt(t, agentsMap, "sdd-research")
+	if strings.Contains(researchPrompt, "<!-- gentle-ai:codegraph-guidance -->") {
+		t.Fatal("sdd-research must not receive shell-based CodeGraph guidance with bash disabled")
 	}
 }
 
@@ -591,6 +597,10 @@ func TestInjectOpenCodeMultiModeSubagentPromptFilesIncludeCodeGraphGuidanceWhenE
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
 		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
+	}
+	researchPrompt := agentPrompt(t, agentsMap, "sdd-research")
+	if strings.Contains(researchPrompt, "<!-- gentle-ai:codegraph-guidance -->") {
+		t.Fatal("sdd-research must not receive shell-based CodeGraph guidance with bash disabled")
 	}
 }
 

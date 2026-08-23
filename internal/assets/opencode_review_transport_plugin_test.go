@@ -51,6 +51,153 @@ console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output })
 	}
 }
 
+func TestOpenCodeReviewTransportPluginStripsAmbientSystemOnlyForRegisteredReviewChildren(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const transform = hooks["experimental.chat.system.transform"]
+if (typeof transform !== "function") throw new Error("review transport must install a system transform")
+const sentinels = ["GENTLE_AI_AMBIENT_AGENT", "GENTLE_AI_AMBIENT_PROJECT", "GENTLE_AI_AMBIENT_SKILL"]
+const unchanged = (name, system) => {
+  if (JSON.stringify(system) !== JSON.stringify(sentinels)) throw new Error(name + " session system was changed: " + JSON.stringify(system))
+}
+
+const runtimeAgentSystem = [...sentinels]
+const runtimeAgentIdentity = runtimeAgentSystem
+await hooks.event({ event: { type: "session.created", properties: { info: { id: "runtime-agent-session", agent: "review-risk" } } } })
+await transform({ sessionID: "runtime-agent-session" }, { system: runtimeAgentSystem })
+if (runtimeAgentSystem !== runtimeAgentIdentity) throw new Error("runtime-agent review system array was replaced instead of mutated in place")
+if (runtimeAgentSystem.length !== 1 || !runtimeAgentSystem[0].includes("Go-materialized user prompt")) throw new Error("runtime-agent review system was not reduced to the transport isolation instruction: " + JSON.stringify(runtimeAgentSystem))
+if (sentinels.some((sentinel) => runtimeAgentSystem.some((entry) => entry.includes(sentinel)))) throw new Error("runtime-agent review system retained ambient agent, project, or skill content: " + JSON.stringify(runtimeAgentSystem))
+
+await hooks.event({ event: { type: "session.created", properties: {} } })
+const legacyTitleSystem = [...sentinels]
+await hooks.event({ event: { type: "session.created", properties: { info: { id: "legacy-title-session", title: "Review task (@review-readability subagent)" } } } })
+await transform({ sessionID: "legacy-title-session" }, { system: legacyTitleSystem })
+if (legacyTitleSystem.length !== 1 || !legacyTitleSystem[0].includes("Go-materialized user prompt")) throw new Error("legacy review title did not register review-session isolation: " + JSON.stringify(legacyTitleSystem))
+
+await hooks.event({ event: { type: "session.created", properties: { info: { id: "ordinary-agent-session", agent: "ordinary-agent", title: "Review task (@review-risk subagent)" } } } })
+await hooks.event({ event: { type: "session.created", properties: { info: { id: "partial-title-session", title: "Review task (@review-risk subagent) extra" } } } })
+const ordinaryAgentSystem = [...sentinels]
+const partialTitleSystem = [...sentinels]
+const malformedSystem = [...sentinels]
+const undefinedSessionIDSystem = [...sentinels]
+await transform({ sessionID: "ordinary-agent-session" }, { system: ordinaryAgentSystem })
+await transform({ sessionID: "partial-title-session" }, { system: partialTitleSystem })
+await transform({ sessionID: "malformed-session" }, { system: malformedSystem })
+await transform({}, { system: undefinedSessionIDSystem })
+unchanged("ordinary-agent", ordinaryAgentSystem)
+unchanged("partial-title", partialTitleSystem)
+unchanged("malformed", malformedSystem)
+unchanged("undefined-sessionID", undefinedSessionIDSystem)
+
+await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "runtime-agent-session" } } } })
+const deletedSystem = [...sentinels]
+await transform({ sessionID: "runtime-agent-session" }, { system: deletedSystem })
+unchanged("deleted", deletedSystem)
+await hooks.event({ event: { type: "session.created", properties: { info: { id: "disposed-session", agent: "review-risk" } } } })
+await hooks.dispose()
+const disposedSystem = [...sentinels]
+await transform({ sessionID: "disposed-session" }, { system: disposedSystem })
+unchanged("disposed", disposedSystem)
+console.log(JSON.stringify({ runtimeAgentSystem, legacyTitleSystem, ordinaryAgentSystem, partialTitleSystem, malformedSystem, undefinedSessionIDSystem, deletedSystem, disposedSystem }))
+`
+	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		RuntimeAgentSystem       []string `json:"runtimeAgentSystem"`
+		LegacyTitleSystem        []string `json:"legacyTitleSystem"`
+		OrdinaryAgentSystem      []string `json:"ordinaryAgentSystem"`
+		PartialTitleSystem       []string `json:"partialTitleSystem"`
+		MalformedSystem          []string `json:"malformedSystem"`
+		UndefinedSessionIDSystem []string `json:"undefinedSessionIDSystem"`
+		DeletedSystem            []string `json:"deletedSystem"`
+		DisposedSystem           []string `json:"disposedSystem"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode system transform harness output %q: %v", output, err)
+	}
+	for _, system := range [][]string{result.RuntimeAgentSystem, result.LegacyTitleSystem} {
+		if len(system) != 1 || !strings.Contains(system[0], "Go-materialized user prompt") {
+			t.Fatalf("review system = %#v, want only a transport isolation instruction", system)
+		}
+	}
+	for _, system := range [][]string{result.OrdinaryAgentSystem, result.PartialTitleSystem, result.MalformedSystem, result.UndefinedSessionIDSystem, result.DeletedSystem, result.DisposedSystem} {
+		if got, want := strings.Join(system, ","), "GENTLE_AI_AMBIENT_AGENT,GENTLE_AI_AMBIENT_PROJECT,GENTLE_AI_AMBIENT_SKILL"; got != want {
+			t.Fatalf("non-review or cleaned-up system = %#v, want ambient system unchanged", system)
+		}
+	}
+}
+
+func TestOpenCodeReviewTransportPluginKeysGroupedReviewersBySubagentType(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const lenses = ["review-risk", "review-resilience", "review-readability", "review-reliability"]
+const tasks = lenses.map((subagent_type) => ({ args: { subagent_type, prompt: "Go must receive this original host prompt" } }))
+await Promise.all(tasks.map((task) => hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "grouped-call" }, task)))
+const taskOutputs = tasks.map(() => ({ output: "untrusted reviewer output", metadata: {} }))
+const completions = await Promise.allSettled(tasks.map((task, index) => hooks["tool.execute.after"](
+  { tool: "task", sessionID: "session", callID: "grouped-call", args: { subagent_type: task.args.subagent_type } },
+  taskOutputs[index],
+)))
+for (const [index, completion] of completions.entries()) {
+  if (completion.status !== "fulfilled") throw new Error("grouped reviewer " + lenses[index] + " did not complete: " + completion.reason)
+}
+console.log(JSON.stringify({ prompts: tasks.map((task) => task.args.prompt), outputs: taskOutputs.map((task) => task.output) }))
+`
+	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	var result struct {
+		Prompts []string `json:"prompts"`
+		Outputs []string `json:"outputs"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode grouped relay harness output %q: %v", output, err)
+	}
+	if len(result.Prompts) != 4 || len(result.Outputs) != 4 {
+		t.Fatalf("grouped reviewer results = %#v, want four prompts and outputs", result)
+	}
+	for index, prompt := range result.Prompts {
+		if prompt != "Go-materialized immutable prompt" {
+			t.Fatalf("grouped reviewer prompt[%d] = %q, want Go materialization", index, prompt)
+		}
+	}
+	for index, output := range result.Outputs {
+		if output != "captured" {
+			t.Fatalf("grouped reviewer output[%d] = %q, want captured", index, output)
+		}
+	}
+	if got := strings.Count(log, `"operation":"start"`); got != 4 {
+		t.Fatalf("grouped reviewer relay starts = %d, want 4; log=%q", got, log)
+	}
+	if got := strings.Count(log, `"operation":"complete"`); got != 4 {
+		t.Fatalf("grouped reviewer relay completions = %d, want 4; log=%q", got, log)
+	}
+}
+
+func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentGates(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		`spawn("opencode"`, `spawn('opencode'`, `exec("opencode"`, `exec('opencode'`,
+		"OPENCODE_DISABLE_", "--version",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("OpenCode transport plugin must use the active host process, found forbidden %q", forbidden)
+		}
+	}
+	if !strings.Contains(source, `spawn(TRANSPORT.Command, ["review", "opencode-transport"]`) {
+		t.Fatal("OpenCode transport plugin must spawn only the shared Go transport")
+	}
+}
+
 func TestOpenCodeReviewTransportPluginRefusesDeferredCompletionWhoseOwnerIsGone(t *testing.T) {
 	source, err := Read("opencode/plugins/opencode-review-transport.ts")
 	if err != nil {

@@ -480,6 +480,7 @@ func SDDPhases() []string {
 	return []string{
 		"sdd-init",
 		"sdd-explore",
+		"sdd-research",
 		"sdd-propose",
 		"sdd-spec",
 		"sdd-design",

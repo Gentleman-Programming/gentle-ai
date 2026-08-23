@@ -60,6 +60,7 @@ func KiroModelPresetBalanced() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
 		"sdd-explore":  KiroModelAuto,
+		"sdd-research": KiroModelAuto,
 		"sdd-propose":  KiroModelAuto,
 		"sdd-spec":     KiroModelAuto,
 		"sdd-design":   KiroModelOpus,
@@ -80,6 +81,7 @@ func KiroModelPresetPerformance() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelOpus,
 		"sdd-explore":  KiroModelSonnet,
+		"sdd-research": KiroModelSonnet,
 		"sdd-propose":  KiroModelOpus,
 		"sdd-spec":     KiroModelSonnet,
 		"sdd-design":   KiroModelOpus,
@@ -100,6 +102,7 @@ func KiroModelPresetEconomy() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
 		"sdd-explore":  KiroModelQwen,
+		"sdd-research": KiroModelQwen,
 		"sdd-propose":  KiroModelDeepSeek,
 		"sdd-spec":     KiroModelQwen,
 		"sdd-design":   KiroModelMiniMax,

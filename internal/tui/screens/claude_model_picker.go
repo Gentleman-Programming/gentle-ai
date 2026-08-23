@@ -40,6 +40,7 @@ var claudePresetOrder = []ClaudeModelPreset{
 // claudePhases is the ordered list of model-assignment keys shown in custom mode.
 var claudePhases = []string{
 	"sdd-explore",
+	"sdd-research",
 	"sdd-propose",
 	"sdd-spec",
 	"sdd-design",
@@ -58,6 +59,7 @@ var claudePhases = []string{
 // agent phase (SDD phases, JD agents, and the general delegation row).
 var claudePhaseLabels = map[string]string{
 	"sdd-explore":  "Explore",
+	"sdd-research": "Research",
 	"sdd-propose":  "Propose",
 	"sdd-spec":     "Spec",
 	"sdd-design":   "Design",
