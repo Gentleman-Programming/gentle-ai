@@ -234,10 +234,12 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/commands/sdd-init.md",
 		"claude/commands/sdd-new.md",
 		"claude/commands/sdd-onboard.md",
+		"claude/commands/sdd-research.md",
 		"claude/commands/sdd-status.md",
 		"claude/commands/sdd-verify.md",
 		"claude/agents/sdd-init.md",
 		"claude/agents/sdd-onboard.md",
+		"claude/agents/sdd-research.md",
 		"claude/agents/review-risk.md",
 		"claude/agents/review-readability.md",
 		"claude/agents/review-reliability.md",
@@ -258,6 +260,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"opencode/commands/sdd-init.md",
 		"opencode/commands/sdd-new.md",
 		"opencode/commands/sdd-onboard.md",
+		"opencode/commands/sdd-research.md",
 		"opencode/commands/sdd-status.md",
 		"opencode/commands/sdd-verify.md",
 
@@ -275,6 +278,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/sdd-init.md",
 		"cursor/agents/sdd-explore.md",
 		"cursor/agents/sdd-propose.md",
+		"cursor/agents/sdd-research.md",
 		"cursor/agents/sdd-spec.md",
 		"cursor/agents/sdd-design.md",
 		"cursor/agents/sdd-tasks.md",
@@ -304,6 +308,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-init.yaml",
 		"kimi/agents/sdd-explore.yaml",
 		"kimi/agents/sdd-propose.yaml",
+		"kimi/agents/sdd-research.yaml",
 		"kimi/agents/sdd-spec.yaml",
 		"kimi/agents/sdd-design.yaml",
 		"kimi/agents/sdd-tasks.yaml",
@@ -314,6 +319,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-init.md",
 		"kimi/agents/sdd-explore.md",
 		"kimi/agents/sdd-propose.md",
+		"kimi/agents/sdd-research.md",
 		"kimi/agents/sdd-spec.md",
 		"kimi/agents/sdd-design.md",
 		"kimi/agents/sdd-tasks.md",
@@ -340,6 +346,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/sdd-design/SKILL.md",
 		"skills/sdd-explore/SKILL.md",
 		"skills/sdd-propose/SKILL.md",
+		"skills/sdd-research/SKILL.md",
 		"skills/sdd-spec/SKILL.md",
 		"skills/sdd-tasks/SKILL.md",
 		"skills/sdd-verify/SKILL.md",
@@ -351,6 +358,8 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/_shared/openspec-convention.md",
 		"skills/_shared/sdd-phase-common.md",
 		"skills/_shared/sdd-status-contract.md",
+		"skills/_shared/research-lifecycle.md",
+		"kiro/agents/sdd-research.md",
 
 		// Hermes agent files
 		"hermes/sdd-orchestrator.md",
@@ -550,8 +559,8 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 12 {
-		t.Fatalf("opencode commands count = %d, want 12", len(commandEntries))
+	if len(commandEntries) != 13 {
+		t.Fatalf("opencode commands count = %d, want 13", len(commandEntries))
 	}
 	wantCommands := map[string]bool{"skill-creator.md": true, "skill-registry.md": true}
 	for _, entry := range commandEntries {
@@ -794,16 +803,92 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/commands) error = %v", err)
 	}
-	if len(commandEntries) != 10 {
-		t.Fatalf("claude commands count = %d, want 10", len(commandEntries))
+	if len(commandEntries) != 11 {
+		t.Fatalf("claude commands count = %d, want 11", len(commandEntries))
 	}
 
 	agentEntries, err := FS.ReadDir("claude/agents")
 	if err != nil {
 		t.Fatalf("ReadDir(claude/agents) error = %v", err)
 	}
-	if len(agentEntries) != 18 {
-		t.Fatalf("claude agents count = %d, want 18", len(agentEntries))
+	if len(agentEntries) != 19 {
+		t.Fatalf("claude agents count = %d, want 19", len(agentEntries))
+	}
+}
+
+func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
+	tests := []struct {
+		path        string
+		declaration string
+		toolLine    string
+		toolsExact  string
+		evidence    []string
+		forbidden   []string
+		required    []string
+	}{
+		{
+			path: "claude/agents/sdd-research.md", declaration: "Evidence grants: documentation=[WebFetch]; open-web=[WebSearch,WebFetch].",
+			toolLine: "tools:", toolsExact: "tools: WebFetch, WebSearch", evidence: []string{"WebFetch", "WebSearch"},
+			forbidden: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__"},
+			required:  []string{"already-persisted intent", "Do not read or mutate repository or Engram state", "bounded evidence envelope", "The orchestrator validates and persists this envelope"},
+		},
+		{
+			path: "kiro/agents/sdd-research.md", declaration: "Evidence grants: documentation=[@context7]; open-web=[].",
+			toolLine: "tools:", evidence: []string{"@context7"},
+		},
+		{path: "cursor/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+		{path: "kimi/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			content := MustRead(tt.path)
+			for _, required := range []string{
+				tt.declaration,
+				"Persistence tools are not evidence grants.",
+				"Unsupported or undeclared classes deny admission and emit no claims.",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing %q", tt.path, required)
+				}
+			}
+
+			tools := ""
+			if tt.toolLine != "" {
+				for _, line := range strings.Split(content, "\n") {
+					if strings.HasPrefix(line, tt.toolLine) {
+						tools = line
+						break
+					}
+				}
+				if tools == "" {
+					t.Fatalf("%s missing scoped tools", tt.path)
+				}
+				if tt.toolsExact != "" && tools != tt.toolsExact {
+					t.Fatalf("%s tools = %q, want %q", tt.path, tools, tt.toolsExact)
+				}
+				for _, forbidden := range tt.forbidden {
+					if strings.Contains(tools, forbidden) {
+						t.Fatalf("%s collection-only tools retain %q", tt.path, forbidden)
+					}
+				}
+				for _, required := range tt.required {
+					if !strings.Contains(content, required) {
+						t.Fatalf("%s missing collection-only contract %q", tt.path, required)
+					}
+				}
+			}
+
+			for _, known := range []string{"WebFetch", "WebSearch", "@context7"} {
+				want := false
+				for _, grant := range tt.evidence {
+					want = want || grant == known
+				}
+				if got := strings.Contains(tools, known); got != want {
+					t.Fatalf("%s evidence tool %q present = %v, want %v in %q", tt.path, known, got, want, tools)
+				}
+			}
+		})
 	}
 }
 
@@ -937,8 +1022,7 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		"Ask before launching the next phase",
 		"Interactive approval is phase-scoped",
 		"approve only the immediate next phase",
-		"Before the `sdd-propose` phase in interactive mode",
-		"proposal question round",
+		"{{GENTLE_AI_RESEARCH_LIFECYCLE}}",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
@@ -1726,9 +1810,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 26 skill directories (10 SDD + judgment-day + 13 foundation/review + hermes-ephemeral-delegation + _shared).
-	if skillDirs != 26 {
-		t.Fatalf("expected 26 skill directories, got %d", skillDirs)
+	// We expect 27 skill directories (11 SDD + judgment-day + 13 foundation/review + hermes-ephemeral-delegation + _shared).
+	if skillDirs != 27 {
+		t.Fatalf("expected 27 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -1737,7 +1821,7 @@ func TestEmbeddedAssetCount(t *testing.T) {
 			continue
 		}
 		if entry.Name() == "_shared" {
-			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "skill-resolver.md"} {
+			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "research-lifecycle.md", "skill-resolver.md"} {
 				sharedPath := "skills/_shared/" + sharedFile
 				if _, err := Read(sharedPath); err != nil {
 					t.Fatalf("shared directory missing %q: %v", sharedFile, err)

@@ -7876,7 +7876,7 @@ func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {
 	m.CodexModelPicker = screens.NewCodexModelPickerState()
 	m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
 	m.Selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))
-	m.Cursor = 13 // Confirm row after the 13 phases.
+	m.Cursor = 14 // Confirm row after the 14 phases.
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)

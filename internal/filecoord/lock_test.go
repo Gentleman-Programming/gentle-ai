@@ -1,7 +1,6 @@
 package filecoord
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -67,22 +66,6 @@ func TestLockPathRejectsInvalidRootAndTarget(t *testing.T) {
 			_, err := LockPath(test.root, test.target)
 			assertError(t, err, test.want, test.typed)
 		})
-	}
-}
-
-func TestAcquireUnsupportedHasNoFilesystemSideEffects(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "not-created-lock-root")
-	target := filepath.Join(t.TempDir(), "not-created-target")
-	lease, err := Acquire(context.Background(), target, root)
-	if lease != nil {
-		t.Fatal("unsupported Acquire returned a lease")
-	}
-	assertError(t, err, ErrUnsupported, new(*UnsupportedError))
-	if _, err := os.Stat(root); !os.IsNotExist(err) {
-		t.Fatalf("Acquire changed lock root: %v", err)
-	}
-	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Fatalf("Acquire changed target: %v", err)
 	}
 }
 

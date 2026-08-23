@@ -112,6 +112,8 @@ The canonical native bounded-review contract is injected from the shared provide
 - Let native review select its bounded checking plan; delivery remains human-owned under ordinary repository policy.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
+{{GENTLE_AI_RESEARCH_LIFECYCLE}}
+
 ## SDD Workflow (lazy-loaded)
 
 The detailed SDD procedure is intentionally NOT embedded in this always-on parent thread. Before handling any SDD command, meta-command, continuation, apply/verify/archive routing, or SDD/Judgment-Day phase delegation, read:

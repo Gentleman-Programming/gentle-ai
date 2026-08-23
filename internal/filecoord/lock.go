@@ -122,11 +122,20 @@ func cleanTarget(path string) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
-// Acquire validates inputs, then fails closed in PR1 without filesystem work.
-// It is cooperative, provides no arbitrary-writer CAS, and defers platform primitives.
+// Acquire validates inputs, honors context cancellation before any
+// filesystem work, then takes the shared cooperative lock through the
+// hardened authority-lock primitive. Acquisition is one non-blocking attempt:
+// contention returns a typed BusyError and the caller owns retry pacing. The
+// lease is cooperative and provides no arbitrary-writer CAS. The secure
+// no-follow open walk rejects symlinked roots and lock paths, so lock roots
+// must be canonical paths.
 func Acquire(ctx context.Context, target, lockRoot string) (*Lease, error) {
-	if _, err := LockPath(lockRoot, target); err != nil {
+	path, err := LockPath(lockRoot, target)
+	if err != nil {
 		return nil, err
 	}
-	return nil, unsupportedBackend()
+	if err := ctx.Err(); err != nil {
+		return nil, &OperationalError{Cause: err}
+	}
+	return acquireCooperativeLock(path)
 }
