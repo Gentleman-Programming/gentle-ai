@@ -2,7 +2,7 @@ package pi
 
 import "encoding/json"
 
-// ModelRoutingDraft contains the assignments supplied to a validate operation.
+// ModelRoutingDraft contains the assignments supplied to a validate or apply operation.
 // An assignment with no model or thinking value inherits the selected setting.
 type ModelRoutingDraft map[string]ModelRoutingDraftAssignment
 

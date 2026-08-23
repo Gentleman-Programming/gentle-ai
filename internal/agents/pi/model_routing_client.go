@@ -229,6 +229,89 @@ func (c *ModelRoutingClient) Validate(ctx context.Context, request ModelRoutingR
 	return response.Result, nil
 }
 
+// Apply runs exactly one bounded apply operation and returns the provider-owned
+// result. Recognized nonzero exits return their authoritative result with a typed
+// semantic error; all other protocol or transport failures return no result.
+func (c *ModelRoutingClient) Apply(ctx context.Context, request ModelRoutingRequestContext, draft ModelRoutingDraft) (ModelRoutingApplyResult, error) {
+	if c == nil {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorInvalidClient, ModelRoutingCandidate{}, "", 0, "", ErrModelRoutingClientInvalidClient)
+	}
+	if c.transport == nil {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, "", 0, "", ErrModelRoutingClientTransport)
+	}
+	if ctx == nil {
+		cause := transportError(TransportErrorInvalidOptions, ErrTransportInvalidOptions)
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, TransportErrorInvalidOptions, 0, "", cause)
+	}
+	if err := ctx.Err(); err != nil {
+		kind := TransportErrorCanceled
+		if errors.Is(err, context.DeadlineExceeded) {
+			kind = TransportErrorTimeout
+		}
+		cause := transportError(kind, err)
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, kind, 0, "", cause)
+	}
+
+	payload, err := marshalModelRoutingApplyRequest(request, draft)
+	if err != nil {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", 0, "", err)
+	}
+	result, callErr := c.transport(ctx, c.candidate.Path, cloneTransportBytes(payload), ModelRoutingProcessOptions{
+		Timeout:         modelRoutingTimeout,
+		MaxRequestBytes: modelRoutingRequest,
+		MaxStdoutBytes:  MaxModelRoutingResponseBytes,
+		MaxStderrBytes:  modelRoutingStderr,
+	})
+	if callErr != nil {
+		return c.handleApplyTransportResult(result, callErr)
+	}
+	if result.ExitCode != 0 {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, "", ErrModelRoutingClientProtocol)
+	}
+
+	response, parseErr := ParseModelRoutingApplyResponse(cloneTransportBytes(result.Stdout))
+	if parseErr != nil {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, "", parseErr)
+	}
+	if !response.OK || response.ExitClass != "success" || !response.Result.OK || response.Result.Outcome != ModelRoutingApplyOutcomeSuccess || !response.Result.Saved {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, "", result.ExitCode, response.ExitClass, ErrModelRoutingClientProtocol)
+	}
+	return response.Result, nil
+}
+
+func (c *ModelRoutingClient) handleApplyTransportResult(result ModelRoutingProcessResult, callErr error) (ModelRoutingApplyResult, error) {
+	var transportErr *TransportError
+	if !errors.As(callErr, &transportErr) || transportErr == nil {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, "", result.ExitCode, "", callErr)
+	}
+	if transportErr.Kind != TransportErrorNonzeroExit {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorTransport, c.candidate, transportErr.Kind, result.ExitCode, "", callErr)
+	}
+	expected, ok := map[int]struct {
+		exitClass string
+		outcome   ModelRoutingApplyOutcome
+		saved     bool
+	}{
+		2: {"invalid-input", ModelRoutingApplyOutcomeValidationFailure, false},
+		3: {"unsupported-contract", ModelRoutingApplyOutcomeValidationFailure, false},
+		4: {"unavailable-runtime", ModelRoutingApplyOutcomeUnavailableRuntime, false},
+		5: {"persistence", ModelRoutingApplyOutcomePersistenceFailure, false},
+		6: {"partial", ModelRoutingApplyOutcomePartial, true},
+	}[result.ExitCode]
+	if !ok {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, transportErr.Kind, result.ExitCode, "", errors.Join(callErr, ErrModelRoutingClientProtocol))
+	}
+
+	response, parseErr := ParseModelRoutingApplyResponse(cloneTransportBytes(result.Stdout))
+	if parseErr != nil {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, transportErr.Kind, result.ExitCode, "", errors.Join(callErr, parseErr))
+	}
+	if response.OK || response.Result.OK || response.ExitClass != expected.exitClass || response.Result.Outcome != expected.outcome || response.Result.Saved != expected.saved {
+		return ModelRoutingApplyResult{}, modelRoutingClientError(ModelRoutingClientErrorProtocol, c.candidate, transportErr.Kind, result.ExitCode, response.ExitClass, errors.Join(callErr, ErrModelRoutingClientProtocol))
+	}
+	return response.Result, modelRoutingClientError(ModelRoutingClientErrorSemantic, c.candidate, transportErr.Kind, result.ExitCode, response.ExitClass, callErr)
+}
+
 func (c *ModelRoutingClient) handleValidateTransportResult(result ModelRoutingProcessResult, callErr error) (ModelRoutingValidationResult, error) {
 	var transportErr *TransportError
 	if !errors.As(callErr, &transportErr) || transportErr == nil {
@@ -313,20 +396,28 @@ func marshalModelRoutingInspectRequest(request ModelRoutingRequestContext) ([]by
 }
 
 func marshalModelRoutingValidateRequest(request ModelRoutingRequestContext, draft ModelRoutingDraft) ([]byte, error) {
+	return marshalModelRoutingDraftRequest(request, draft, ModelRoutingOperationValidate)
+}
+
+func marshalModelRoutingApplyRequest(request ModelRoutingRequestContext, draft ModelRoutingDraft) ([]byte, error) {
+	return marshalModelRoutingDraftRequest(request, draft, ModelRoutingOperationApply)
+}
+
+func marshalModelRoutingDraftRequest(request ModelRoutingRequestContext, draft ModelRoutingDraft, operation ModelRoutingOperation) ([]byte, error) {
 	payload, err := json.Marshal(struct {
-		Version        int                `json:"version"`
-		Contract       string             `json:"contract"`
-		Operation      string             `json:"operation"`
-		CWD            string             `json:"cwd"`
-		AgentDir       string             `json:"agentDir"`
-		Target         ModelRoutingTarget `json:"target"`
-		ConfigHome     string             `json:"configHome,omitempty"`
-		LoadExtensions bool               `json:"loadExtensions,omitempty"`
-		Draft          ModelRoutingDraft  `json:"draft"`
+		Version        int                   `json:"version"`
+		Contract       string                `json:"contract"`
+		Operation      ModelRoutingOperation `json:"operation"`
+		CWD            string                `json:"cwd"`
+		AgentDir       string                `json:"agentDir"`
+		Target         ModelRoutingTarget    `json:"target"`
+		ConfigHome     string                `json:"configHome,omitempty"`
+		LoadExtensions bool                  `json:"loadExtensions,omitempty"`
+		Draft          ModelRoutingDraft     `json:"draft"`
 	}{
 		Version:        modelRoutingVersion,
 		Contract:       modelRoutingContract,
-		Operation:      "validate",
+		Operation:      operation,
 		CWD:            request.CWD,
 		AgentDir:       request.AgentDir,
 		Target:         request.Target,
