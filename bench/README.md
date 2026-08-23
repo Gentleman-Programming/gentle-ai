@@ -33,9 +33,8 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 57 journeys. `j57` is deliberately excluded because
-it requires the product's `bench_fixture` seam; it is an explicit
-`source-coupled` axis, not a portable black-box measurement.
+The portable core contains every non-axis journey and stays independent of
+product-private test seams.
 
 The measured binary is passed in with `--binary`, so the tool never depends on
 the sources next to it. That is what lets it measure an old release and the
@@ -75,18 +74,6 @@ gentle-ai-bench run --binary /path/to/gentle-ai --only \
   j55-sdd-mismatched-authority-receipt-fails-closed,\
   j56-sdd-non-allow-post-apply-gate-fails-closed,\
   j58-sdd-foreign-openspec-path-fails-closed
-```
-
-Run the source-coupled receipt-drift proof only with its tagged product binary.
-Build the product from the repository root, then run the benchmark from `bench/`:
-
-```sh
-# From the repository root.
-go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
-
-# From bench/, after building gentle-ai-bench above.
-./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only \
-  j57-sdd-authority-drift-during-discovery-fails-closed
 ```
 
 **`run` fails closed on failed journeys.** A journey that reports `failed`
@@ -334,13 +321,11 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty-seven mandatory portable
-   black-box journeys run end to end, weighted toward failure paths because that
-   is where friction lives. `j57` is one explicit source-coupled journey that
-   requires a `bench_fixture`-tagged product binary, for 58 registered journey
-   IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
-   are inspection steps rather than review-lifecycle friction and are not
-   modelled.
+7. **The corpus is honest, not exhaustive.** Mandatory portable black-box
+   journeys run end to end, weighted toward failure paths because that is where
+   friction lives. Testing-guide flows 1 (install) and 8 (no phantom SDD
+   artifacts) are inspection steps rather than review-lifecycle friction and are
+   not modelled.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
    instead.** A network mount where advisory locks fail in ways that are
@@ -462,9 +447,8 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The portable core has since
-grown to 57 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
-Re-run `run` against your own binary rather than reading the block above as
-current totals. The row labels moved too: `by_design` did not exist when this
+grown; re-run `run` against your own binary rather than reading the block above
+as current totals. The row labels moved too: `by_design` did not exist when this
 was recorded and is now printed as `4d`, next to the number it carves out of,
 with `dead_end` at `4e`.
 
@@ -667,8 +651,7 @@ unrelated lineage in the repository.
 Portable journeys 52 to 56 and 58 prove SDD chooses the sole exact approved
 authority over stale history and fails closed for every public authority shape.
 Each uses the public binary through the normal benchmark sandbox, not a
-source-level proxy. The `j57` receipt-drift proof is source-coupled and is
-listed with its axis below.
+source-level proxy.
 
 | ID | Flow | Source |
 |---|---|---|
@@ -716,22 +699,14 @@ Adding an axis is adding one file with an `init()` that calls `RegisterAxis`.
 The seam in `axis.go` is deliberately small — one registry, one flag, one report
 section — and it does not know what any axis measures.
 
-### `source-coupled` (`axis_source_coupled.go`)
-
-The preserved `j57-sdd-authority-drift-during-discovery-fails-closed` fixture
-uses the `bench_fixture` build tag to mutate its fresh sandbox receipt between
-the product's immutable authority reads. That hook is intentionally absent from
-ordinary binaries, so this is not portable black-box core coverage. Run it only
-with `--axis source-coupled` and a product binary built with
-`-tags bench_fixture`.
-
-| ID | Coupling | What it tests |
-|---|---|---|
-| `j57-sdd-authority-drift-during-discovery-fails-closed` | tagged sandbox receipt mutation seam | authority reads must remain immutable during discovery |
-
 ### `damaged-store` (`axis_damaged_store.go`)
 
 Journeys that start from a compact-v2 review store already damaged on disk.
+
+The `ds11` crash-recovery positions require a product binary built with
+`-tags bench_fixture`, which exposes only their deterministic crash hook. The
+`model-picker` axis uses the same tag for `j97`; ordinary binaries report that
+journey unsupported rather than fabricating a pass.
 
 `validateCompactRecoveryEdge` runs at write time on both `review recover` and
 the compact transport import, so **no sequence of CLI commands produces a store

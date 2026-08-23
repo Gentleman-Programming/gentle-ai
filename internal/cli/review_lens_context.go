@@ -324,34 +324,27 @@ func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, st
 	return outcome == reviewLensContextOverBudget
 }
 
-// reviewLensContextStartBudgetRefusal is START's representability check: it
-// refuses a candidate whose complete immutable evidence is proven not to fit,
-// before any durable authority exists.
-//
-// This is what makes the facade's stated invariant true rather than merely
-// intended -- "a candidate that starts here is a candidate STATUS can answer".
-// The same budget was previously discovered only by STATUS, after START had
-// already persisted authority, so an over-budget candidate became a permanent
-// dead lineage whose only exits were abandoning review for the clone or
-// splitting the candidate anyway (issue #3367). Refusing here reports that
-// once, at the point of decision, with nothing to clean up afterwards.
-//
-// It refuses on the proven verdict and only that, and never hands back the
-// untyped error a consumer cannot route on. An unproven probe classified the
-// probe rather than the candidate, and refusing on it would block candidates
-// that review perfectly well whenever one inspection read refuses -- while
-// telling their author to split a change nothing ever measured. The launch
-// path re-runs this same assembly and answers with its own typed, refreshable
-// refusal, which is where an undecided budget belongs.
-func reviewLensContextStartBudgetRefusal(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
-	if len(state.SelectedLenses) == 0 {
+// reviewLensContextCompactAtomicStartBudgetRefusal applies the complete-evidence
+// bound to the compact authority START will create or replay. It derives the
+// provisional compact revision in memory, never opens or discovers authority
+// storage, and therefore keeps an over-budget refusal persistence-free.
+func reviewLensContextCompactAtomicStartBudgetRefusal(
+	ctx context.Context, repo string, request reviewtransaction.CompactAtomicStartRequest,
+) error {
+	if len(request.Binding.SelectedLenses) == 0 {
 		return nil
 	}
-	// An underivable revision is one more way the budget stays undecided.
-	outcome := reviewLensContextUnproven
-	if revision, err := reviewtransaction.CompactRevisionForState(state); err == nil {
-		outcome, _ = reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+	state := request.State
+	binding := request.Binding
+	binding.Selector.IntendedUntracked = append([]string(nil), binding.Selector.IntendedUntracked...)
+	binding.Selector.LedgerIDs = append([]string(nil), binding.Selector.LedgerIDs...)
+	binding.SelectedLenses = append([]string(nil), binding.SelectedLenses...)
+	state.InitialAtomicStart = &binding
+	revision, err := reviewtransaction.CompactRevisionForState(state)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("derive compact atomic START reviewer-context binding: %w", err))
 	}
+	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
 	if outcome != reviewLensContextOverBudget {
 		return nil
 	}

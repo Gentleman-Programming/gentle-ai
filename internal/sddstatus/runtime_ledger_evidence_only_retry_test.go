@@ -131,7 +131,7 @@ func TestRuntimeUnchangedRetryWithoutAuditedResetStaysRefused(t *testing.T) {
 		HarnessDisposition: HarnessReused, CleanupEvidence: "retry cleanup completed",
 		ProcessEvidence: "retry process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	})
-	if err == nil || !strings.Contains(err.Error(), "unmanaged remediation requires a changed correction candidate") {
+	if err == nil || !strings.Contains(err.Error(), "failed-evidence remediation requires a changed correction candidate") {
 		t.Fatalf("unauthorized unchanged retry = %v, want the changed-candidate refusal", err)
 	}
 	status, statusErr := store.Status()
@@ -281,7 +281,7 @@ func TestRuntimeRescopeBeforeObjectiveBFailureDoesNotAuthorizeEvidenceOnlyRetry(
 		HarnessDisposition: HarnessReused, CleanupEvidence: "retry cleanup completed",
 		ProcessEvidence: "retry process scan completed", RemediatesEvidenceRevision: failedBEvidence,
 	})
-	if err == nil || !strings.Contains(err.Error(), "unmanaged remediation requires a changed correction candidate") {
+	if err == nil || !strings.Contains(err.Error(), "failed-evidence remediation requires a changed correction candidate") {
 		t.Fatalf("older rescope authorized objective B retry = %v, want the changed-candidate refusal", err)
 	}
 	status, statusErr := store.Status()
