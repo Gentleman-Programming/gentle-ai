@@ -122,8 +122,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 }
 
 // doctorUnknownExitError surfaces a non-zero CLI exit code only on the
-// "unknown" classification per design "Exit code mapping": aligned/stale/
-// mixed/user_modified return nil; unknown returns doctor.ErrUnknownClassification.
+// "unknown" classification. Aligned / stale / mixed / user_modified return
+// nil; unknown returns doctor.ErrUnknownClassification.
 func doctorUnknownExitError(report DoctorReport) error {
 	for _, c := range report.Checks {
 		if c.Name != doctor.CheckInstalledAssetVersion {
@@ -734,8 +734,7 @@ func statusIcon(s CheckStatus) string {
 	}
 }
 
-// checkManagedAssets is the managed-bundle check that pairs with
-// checkInstalledAssetVersion (#1884, AC4, AC9). It reads the
+// checkManagedAssets is the managed-bundle check. It reads the
 // gentle-ai.managed-assets/v1 manifest alongside state.json and reports the
 // binary-vs-bundle classification via doctor.Classify. Both identities
 // appear on separate lines in the Detail string so a support engineer can
@@ -743,7 +742,7 @@ func statusIcon(s CheckStatus) string {
 func checkManagedAssets(homeDir, binaryVersion string) CheckResult {
 	manifest, manifestErr := state.ReadManifest(homeDir)
 	if manifestErr != nil {
-		// AC10: legacy install without a manifest classifies as "unknown".
+		// Legacy install without a manifest classifies as "unknown".
 		return CheckResult{
 			Status: CheckStatusWarn,
 			Detail: fmt.Sprintf(

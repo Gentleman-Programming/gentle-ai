@@ -15,7 +15,7 @@ var version = "dev"
 // GoReleaser (via the same ldflags mechanism as version) and recorded into
 // the gentle-ai.managed-assets/v1 manifest as the producer's commit identity
 // so doctor can correlate a binary against its bundle even when a release
-// tag was not yet cut (#1884, AC2). Default "unknown" preserves the
+// tag was not yet cut. Default "unknown" preserves the
 // manifest as authoritative for whatever identity it does carry.
 var commit = "unknown"
 

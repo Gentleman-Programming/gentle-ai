@@ -987,8 +987,8 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	}
 	// Seed a managed-assets manifest so the doctor reports "aligned" rather
 	// than the "unknown" classification it now emits for legacy installs
-	// without a manifest (#1884, AC10). This test's intent is the
-	// RunDoctor rendering shape, not the legacy-migration path.
+	// without a manifest. This test's intent is the RunDoctor rendering
+	// shape, not the legacy-migration path.
 	alignedProducer := state.Producer{BinaryVersion: "dev", Commit: "test"}
 	alignedManifest := state.Manifest{
 		Schema:   state.ManifestSchema,
@@ -1419,8 +1419,8 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	}
 	// Seed a managed-assets manifest so the doctor reports "aligned" rather
 	// than the "unknown" classification it now emits for legacy installs
-	// without a manifest (#1884, AC10). This test's intent is the per-agent
-	// rendering shape from #709, not the legacy-migration path.
+	// without a manifest. This test's intent is the per-agent rendering
+	// shape from #709, not the legacy-migration path.
 	alignedManifest := state.Manifest{
 		Schema:   state.ManifestSchema,
 		Producer: state.Producer{BinaryVersion: "dev", Commit: "test"},
@@ -1473,8 +1473,8 @@ func TestRenderDoctorReportDoesNotRenderRemedyMetadata(t *testing.T) {
 	}
 }
 
-// TestCheckManagedAssets_ReportsBothIdentities covers AC9 — the managed-assets
-// check MUST render the binary identity (state.json's InstalledBinaryVersion)
+// TestCheckManagedAssets_ReportsBothIdentities asserts the managed-assets
+// check renders the binary identity (state.json's InstalledBinaryVersion)
 // AND the bundle identity (manifest's producer + bundle digest) as separate
 // named fields, so a receiving support engineer can see both signals even
 // when they disagree.
@@ -1531,8 +1531,8 @@ func TestCheckManagedAssets_ReportsBothIdentities(t *testing.T) {
 	}
 }
 
-// TestCheckManagedAssets_ExitCodeUnknown covers AC4 + AC10 — when no manifest
-// exists (legacy install), RunDoctor MUST return ErrUnknownClassification
+// TestCheckManagedAssets_ExitCodeUnknown asserts that when no manifest
+// exists (legacy install), RunDoctor returns ErrUnknownClassification
 // so the CLI surfaces a non-zero exit code only on the failure-mode case.
 func TestCheckManagedAssets_ExitCodeUnknown(t *testing.T) {
 	homeDir := t.TempDir()
