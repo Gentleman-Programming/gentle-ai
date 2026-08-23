@@ -12,6 +12,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	golang.org/x/sys v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )

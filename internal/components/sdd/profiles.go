@@ -490,11 +490,10 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.RewriteJSONObjectForPath(settingsPath, data, root)
 	if err != nil {
-		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
+		return filemerge.WriteResult{}, fmt.Errorf("rewrite settings: %w", err)
 	}
-	out = append(out, '\n')
 
 	return filemerge.WriteFileAtomic(settingsPath, out, 0o644)
 }
@@ -784,11 +783,10 @@ func RemoveProfileAgents(settingsPath string, profileName string) error {
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.RewriteJSONObjectForPath(settingsPath, data, root)
 	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
+		return fmt.Errorf("rewrite settings: %w", err)
 	}
-	out = append(out, '\n')
 
 	_, err = filemerge.WriteFileAtomic(settingsPath, out, 0o644)
 	return err
