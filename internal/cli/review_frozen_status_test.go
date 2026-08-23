@@ -158,6 +158,41 @@ func TestSelectorFreeFrozenReviewingStatusRediscoversFrozenAuthority(t *testing.
 	}
 }
 
+func TestSelectorFreeFrozenReviewingStatusIgnoresSiblingWorktreeAuthority(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	runReviewCLIGit(t, repo, "worktree", "add", "--detach", sibling, "HEAD")
+	for _, root := range []string{repo, sibling} {
+		writeReviewStartCandidate(t, root, "service-token.ts", "export const token = 'same candidate'\n", 0o644)
+		runReviewCLIGit(t, root, "add", "service-token.ts")
+	}
+	_, record := createFrozenReviewingStatusRecord(t, sibling, "frozen-sibling-status", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--cwd", repo,
+	}, &output); err != nil {
+		t.Fatalf("selector-free local STATUS: %v\n%s", err, output.String())
+	}
+	var selectorless ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &selectorless)
+	if selectorless.Action != reviewtransaction.TargetStatusActionStart || selectorless.Authority != nil ||
+		selectorless.NextTransition == nil || selectorless.NextTransition.Kind != reviewNextTransitionExecute ||
+		selectorless.NextTransition.Execute == nil || selectorless.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("selector-free local STATUS = %#v, want a local START", selectorless)
+	}
+
+	explicit := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+	if explicit.Authority == nil || explicit.Authority.LineageID != record.State.LineageID ||
+		explicit.NextTransition == nil || explicit.NextTransition.Kind != reviewNextTransitionCollect ||
+		explicit.NextTransition.ReasonCode != "reviewer_results_required" {
+		t.Fatalf("explicit sibling frozen STATUS = %#v, want the named reviewing authority", explicit)
+	}
+}
+
 func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t *testing.T) {
 	t.Run("partial canonical slot fails closed", func(t *testing.T) {
 		repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)

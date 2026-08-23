@@ -207,6 +207,16 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	if err != nil {
 		return targetStatusFailure(base, err)
 	}
+	selectorFreeFrozenReviewing := request.LineageID == "" && request.Target.Kind == TargetCurrentChanges &&
+		request.Target.Projection == ProjectionWorkspace
+	worktreeIdentity := ""
+	if selectorFreeFrozenReviewing {
+		lease, err := OpenRepositoryIdentityLease(ctx, repo)
+		if err != nil {
+			return targetStatusFailure(base, err)
+		}
+		worktreeIdentity = lease.Identity().RepositoryRef
+	}
 
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
@@ -222,7 +232,11 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			continue
 		}
 		state := candidate.compact.State
-		// guard:population frozen-reviewing-status too-tight: legitimate selector-free workspace STATUS candidates may recover a drifted frozen reviewing authority only when its immutable inputs and canonical result slots remain safe; exact matches and stale, superseded, incomplete, or non-reviewing authorities remain excluded from recovery
+		// guard:population frozen-reviewing-status too-tight: legitimate selector-free workspace STATUS candidates may admit an atomically started frozen reviewing authority only from the current canonical worktree with safe immutable inputs and canonical result slots; sibling atomic, stale, superseded, incomplete, or non-reviewing authorities remain excluded from frozen discovery
+		if selectorFreeFrozenReviewing && state.State == StateReviewing &&
+			state.InitialAtomicStart != nil && state.InitialAtomicStart.WorktreeIdentity != worktreeIdentity {
+			continue
+		}
 		if allowFrozenReviewing &&
 			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			eligible, pendingSlots, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
