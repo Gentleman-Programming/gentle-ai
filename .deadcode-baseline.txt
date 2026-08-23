@@ -72,6 +72,17 @@ internal/agents/pi/model_routing_candidates.go	canonicalRoutingExecutable
 internal/agents/pi/model_routing_candidates.go	enumerateModelRoutingPATH
 internal/agents/pi/model_routing_candidates.go	modelRoutingExecutableNames
 internal/agents/pi/model_routing_candidates.go	routingPathErrorKind
+internal/agents/pi/model_routing_client.go	ModelRoutingClient.Candidate
+internal/agents/pi/model_routing_client.go	ModelRoutingClient.Capabilities
+internal/agents/pi/model_routing_client.go	ModelRoutingClient.Inspect
+internal/agents/pi/model_routing_client.go	ModelRoutingClient.handleTransportResult
+internal/agents/pi/model_routing_client.go	ModelRoutingClientError.Error
+internal/agents/pi/model_routing_client.go	ModelRoutingClientError.Is
+internal/agents/pi/model_routing_client.go	ModelRoutingClientError.Unwrap
+internal/agents/pi/model_routing_client.go	NewModelRoutingClient
+internal/agents/pi/model_routing_client.go	marshalModelRoutingInspectRequest
+internal/agents/pi/model_routing_client.go	modelRoutingClientError
+internal/agents/pi/model_routing_client.go	newModelRoutingClient
 internal/agents/pi/model_routing_inspect_decoder.go	decodeModelRoutingInspectionJSON
 internal/agents/pi/model_routing_inspect_parser.go	ModelRoutingInspectError.Error
 internal/agents/pi/model_routing_inspect_parser.go	ModelRoutingInspectError.Unwrap
