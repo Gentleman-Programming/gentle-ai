@@ -13,6 +13,7 @@ import (
 )
 
 func TestOccupiedSlotUsesStatusContinuationForOpaqueCapture(t *testing.T) {
+	reviewEnabledHome(t)
 	const lineage = "slot-conflict-classification"
 	binding, _, repo := startedOpaqueCaptureBinding(t, lineage)
 
@@ -46,6 +47,7 @@ func TestOccupiedSlotUsesStatusContinuationForOpaqueCapture(t *testing.T) {
 }
 
 func TestOccupiedSlotUsesStatusContinuationForDirectCapture(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "reviewer-result.json")
 	args := []string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}
@@ -126,6 +128,7 @@ func assertReviewerSlotUnchanged(t *testing.T, path string, beforeArtifact, befo
 // other side: a capture that really could not reach its repository context
 // keeps the code and the retry action, which for that cause is correct.
 func TestGenuineRepositoryContextCaptureFailureKeepsItsCode(t *testing.T) {
+	reviewEnabledHome(t)
 	binding, _, repo := startedOpaqueCaptureBinding(t, "slot-conflict-control")
 	result := admissibleOpaqueReviewerResult(t, binding, "reviewer evidence")
 	blocked := filepath.Join(reviewCLICompactStoreDir(repo, "slot-conflict-control"), reviewtransaction.CompactReviewerResultsDir)

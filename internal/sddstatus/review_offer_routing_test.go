@@ -38,6 +38,10 @@ func seedVerifiedReadyChangeForOffer(t *testing.T, root string) {
 // Archive stays whatever resolveDependencies already computed for a passing
 // verify report (Ready), never gated on the offer.
 func TestReviewOfferBlockPresentWhenVerifiedAndEnabled(t *testing.T) {
+	// "Enabled" is this fixture's premise, so it has to be stated. Without
+	// the opt-in the offer still arrives, but unavailable, and the nil check
+	// below accepts it -- the test would keep passing while proving nothing.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -149,6 +153,9 @@ func TestReviewOfferJourneyFiresZeroTimesAcrossFullFlowWhenDisabled(t *testing.T
 // repository policy regardless — there is no new state and no new
 // persistence to represent "declined".
 func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.T) {
+	// Declining an offer is only meaningful when there is a real one to
+	// decline, which takes a user who switched receipt-driven development on.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedVerifiedReadyChangeForOffer(t, root)
 
@@ -178,28 +185,24 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 	}
 }
 
-// TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock is task
-// 4.8's integration proof, realized as a same-fixture double-eval (the
-// only valid shape for a byte-equivalence claim: evaluated twice, only the
-// kill-switch toggle changed — internal/cli/review_new_lineage_switch_off_
-// golden_test.go and the pre-existing archive-gate byte-equivalence tests
-// use the same discipline). A decline — the switch on, the offer present,
-// nothing ever acted on — must never block archive on review grounds, the
-// same operational property the switch-off case provides. This asserts at
-// the PROJECTION level (ProjectStatusV1, the exact bytes a caller like
-// RunSDDStatus emits), the verify cycle's own key learning: asserting on
-// json.Marshal(Status) directly is how CRITICAL-2 (ReviewOffer/ReVerify
-// unreachable at the wire) survived a fully green suite.
+// TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel is task 4.8's
+// integration proof at the ProjectStatusV1 boundary—the exact bytes a caller
+// such as RunSDDStatus emits. It proves the narrow delivery invariant that an
+// ignored offer and a review-disabled status each leave archive unblocked; it
+// does not claim their projections are byte-equivalent. The representations
+// differ structurally because review-disabled omits ReviewOffer and ReviewGate.
 //
-// Corrective verify cycle note: this test previously asserted the declined
-// and switch-off projections were byte-identical outside the offer block.
-// That assumption no longer holds and is not restored here: CRITICAL-1's
-// fix makes switch-off a genuine structural absence (ReviewGate nil), while
-// the declined fixture below still carries an approving legacy receipt that
-// legitimately governs while the switch is ON (ReviewGate present, Allow) —
-// two different, both-correct dispositions that happen to agree on the one
-// property that matters for delivery: neither blocks archive.
+// Unconditional atomic-v3 START is covered separately by
+// TestReviewStartAlwaysCreatesV3Authority and
+// TestReviewStartCreatesNoLegacySiblings; atomic worktree isolation and exact
+// no-mutation replay are covered by
+// TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly. This scope
+// prevents an SDD status assertion from standing in for authority evidence.
 func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
+	// The comparison is switch-on versus switch-off, so the "on" half has to
+	// be a user who opted in; the "off" half stays an explicit
+	// ResolveOptions.ReviewDisabled toggle over the same fixture.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -258,6 +261,9 @@ func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) 
 // (there is no `--consent declined` verb and no decline state to record;
 // the user declines simply by proceeding to archive without acting).
 func TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt(t *testing.T) {
+	// "Switch on, verify passed, no receipt anywhere" is the repro shape, so
+	// the switch has to actually be on for the offer to be available.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedVerifiedReadyChangeForOffer(t, root)
 

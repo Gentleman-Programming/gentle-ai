@@ -35,7 +35,7 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 	if policy := renderOpenCodeBackgroundPolicy(agent, renderOptions); policy != "" {
 		content = appendOpenCodeBackgroundPolicy(content, policy)
 	}
-	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(path, content), agent)
+	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent, path, content), agent)
 }
 
 func renderOpenCodeBackgroundPolicy(agent model.AgentID, options ...OrchestratorRenderOptions) string {

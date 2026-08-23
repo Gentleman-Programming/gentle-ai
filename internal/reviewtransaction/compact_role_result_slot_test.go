@@ -18,7 +18,7 @@ func TestCompactRoleResultSlotsPreserveImmutablePublicationSemantics(t *testing.
 	}{
 		{name: "lens", key: compactLensRoleResultSlotKey(0, "review-risk")},
 		{name: "refuter", key: compactRefuterRoleResultSlotKey()},
-		{name: "targeted validator", key: compactTargetedValidatorRoleResultSlotKey(revision, target)},
+		{name: "targeted validator", key: compactTargetedValidatorRoleResultSlotKey(TargetedValidationRequest{ExpectedRevision: revision, CorrectionTargetIdentity: target, RequestHash: hash("c")})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			storeDir := t.TempDir()

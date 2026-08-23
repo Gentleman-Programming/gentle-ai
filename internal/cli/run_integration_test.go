@@ -11,13 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -49,12 +46,7 @@ func stringSliceContains(items []string, want string) bool {
 	return false
 }
 
-func engramInitCommandForTest() string {
-	if _, err := exec.LookPath("pnpm"); err == nil {
-		return "pnpm dlx gentle-engram@latest pi-engram init"
-	}
-	return "npm exec --yes --package gentle-engram@latest -- pi-engram init"
-}
+const engramInitCommandForTest = "npm exec --yes --package gentle-engram@latest -- pi-engram init"
 
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
@@ -165,8 +157,7 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 		// Simulate pi-engram init writing mcp.json with the new schema.
 		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
-		isPnpmEngramInit := name == "pnpm" && len(args) >= 4 && args[2] == "pi-engram" && args[3] == "init"
-		if isNpmEngramInit || isPnpmEngramInit {
+		if isNpmEngramInit {
 			mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
 				return err
@@ -197,88 +188,30 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	if !stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
 		t.Fatalf("commands missing %q; got %v", "pi install npm:pi-mcp-adapter", commands)
 	}
-	if !stringSliceContains(commands, "npm exec --yes --package gentle-engram@latest -- pi-engram init") &&
-		!stringSliceContains(commands, "pnpm dlx gentle-engram@latest pi-engram init") {
-		t.Fatalf("commands missing Engram init command; got %v", commands)
+	if !stringSliceContains(commands, engramInitCommandForTest) {
+		t.Fatalf("commands missing %q; got %v", engramInitCommandForTest, commands)
 	}
 }
 
-// TestAgentInstallStepRefusesMissingCodexInsteadOfInstalling proves that when
-// Codex is not detected, gentle-ai never runs an install command on the
-// user's behalf: it refuses and names the exact command the user would need
-// to run themselves. Before this behavior existed, this same scenario
-// (Codex undetected) executed `npm install -g --ignore-scripts
-// @openai/codex@0.144.0` via runCommand — see git history for the prior
-// version of this test, TestRunInstallInstallsMissingCodexBeforeRuntimeValidationAndProfileWrite.
-func TestAgentInstallStepRefusesMissingCodexInsteadOfInstalling(t *testing.T) {
-	home := t.TempDir()
-	codexInstallCalls := 0
-	validationCalls := 0
-
-	restoreCodexLookPath := codex.LookPathOverride
-	codex.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }
-	t.Cleanup(func() { codex.LookPathOverride = restoreCodexLookPath })
-
-	restoreVersionProbe := codex.SetRuntimeVersionProbeForTest(func() ([]byte, error) {
-		validationCalls++
-		return nil, exec.ErrNotFound
-	})
-	t.Cleanup(restoreVersionProbe)
-
-	restorePreflightLookPath := installcmd.OverrideLookPath(func(string) (string, error) { return "npm", nil })
-	t.Cleanup(restorePreflightLookPath)
-
-	restoreLookPath := cmdLookPath
-	cmdLookPath = func(name string) (string, error) {
-		if name == "engram" {
-			return filepath.Join(home, "bin", "engram"), nil
-		}
-		return "", exec.ErrNotFound
-	}
-	t.Cleanup(func() { cmdLookPath = restoreLookPath })
-
-	restoreDownload := engramDownloadFn
-	engramDownloadFn = func(system.PlatformProfile) (string, error) {
-		t.Fatal("engramDownloadFn must not use the network in this test")
-		return "", nil
-	}
-	t.Cleanup(func() { engramDownloadFn = restoreDownload })
-
+// TestAgentInstallStepSkipsMissingNonPiRuntime proves an explicitly selected
+// desktop agent does not block installation or trigger agent acquisition when
+// its runtime is absent.
+func TestAgentInstallStepSkipsMissingNonPiRuntime(t *testing.T) {
 	restoreCommand := runCommand
-	runCommand = func(name string, args ...string) error {
-		codexInstallCalls++
-		return fmt.Errorf("gentle-ai must never execute a command on the user's behalf, got: %s %s", name, strings.Join(args, " "))
-	}
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
 	t.Cleanup(func() { runCommand = restoreCommand })
 
-	runtime := installRuntime{
-		homeDir: home,
-		resolved: planner.ResolvedPlan{
-			Agents: []model.AgentID{model.AgentCodex}, OrderedComponents: []model.ComponentID{model.ComponentEngram},
-		},
-		profile: system.PlatformProfile{OS: "linux", NpmWritable: true},
+	step := agentInstallStep{
+		id:      "agent:vscode-copilot",
+		agent:   model.AgentVSCodeCopilot,
+		homeDir: t.TempDir(),
 	}
-
-	var refusal error
-	for _, step := range runtime.stagePlan().Apply {
-		if err := step.Run(); err != nil {
-			refusal = err
-			break
-		}
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v, want absent non-Pi runtime to be skipped", err)
 	}
-
-	if refusal == nil {
-		t.Fatal("agentInstallStep refusal error = nil, want a refusal because Codex is not installed")
-	}
-	const wantCommand = "npm install -g --ignore-scripts @openai/codex@latest"
-	if !strings.Contains(refusal.Error(), wantCommand) {
-		t.Fatalf("refusal error = %q, want it to name %q", refusal.Error(), wantCommand)
-	}
-	if codexInstallCalls != 0 {
-		t.Fatalf("Codex install calls = %d, want 0 — gentle-ai must never run an install command on the user's behalf", codexInstallCalls)
-	}
-	if validationCalls != 0 {
-		t.Fatalf("Codex runtime validation calls = %d, want 0 — the pipeline must stop at the refusal, never proceed past a missing runtime", validationCalls)
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("commands executed = %v, want none for non-Pi agent", got)
 	}
 }
 
@@ -331,7 +264,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
-		engramInitCommandForTest(),
+		engramInitCommandForTest,
 		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
@@ -341,31 +274,6 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		if !stringSliceContains(commands, want) {
 			t.Fatalf("commands missing %q; got %v", want, commands)
 		}
-	}
-}
-
-// TestAgentInstallStepReportsUndetectedClassBAgentInsteadOfSilentNoop proves
-// that an agent with no AutoInstall claim (a desktop app or vendor-managed
-// tool gentle-ai has never been able to install) now reports when it is not
-// detected, instead of silently no-opping and letting the pipeline proceed
-// to write config for a tool that may not exist. Cursor's own
-// AgentNotInstallableError string is the refusal — it already existed and
-// was already unit-tested at the adapter level, but was unreachable from
-// this pipeline step before this behavior existed.
-func TestAgentInstallStepReportsUndetectedClassBAgentInsteadOfSilentNoop(t *testing.T) {
-	step := agentInstallStep{
-		id:      "agent:cursor",
-		agent:   model.AgentCursor,
-		homeDir: t.TempDir(),
-	}
-
-	err := step.Run()
-	if err == nil {
-		t.Fatal("agentInstallStep.Run() error = nil, want a report because Cursor is not installed")
-	}
-	const want = "agent cursor is a desktop app and cannot be installed via CLI"
-	if err.Error() != want {
-		t.Fatalf("agentInstallStep.Run() error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -786,70 +694,6 @@ func TestRunInstallFedoraQwenEngramSkipsUnsupportedSetupAndWritesSettings(t *tes
 		if strings.Contains(cmd, "engram setup qwen-code") {
 			t.Fatalf("unexpected unsupported setup command: %s", cmd)
 		}
-	}
-}
-
-// TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling proves that when
-// OpenCode is not detected, gentle-ai never runs an install command on the
-// user's behalf: RunInstall fails with a refusal naming the exact command
-// the user would need to run themselves. Before this behavior existed, this
-// same scenario (OpenCode undetected on Ubuntu) executed `sudo npm install
-// -g --ignore-scripts opencode-ai@<pin>` via runCommand — see git history
-// for the prior version of this test,
-// TestRunInstallLinuxAgentInstallResolvesGoInstallCommand.
-func TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling(t *testing.T) {
-	home := t.TempDir()
-	restoreHome := osUserHomeDir
-	restoreCommand := runCommand
-	restoreLookPath := cmdLookPath
-	t.Cleanup(func() {
-		osUserHomeDir = restoreHome
-		runCommand = restoreCommand
-		cmdLookPath = restoreLookPath
-	})
-
-	osUserHomeDir = func() (string, error) { return home, nil }
-	cmdLookPath = missingBinaryLookPath
-	recorder := &commandRecorder{}
-	runCommand = recorder.record
-
-	// The refusal makes the Apply stage fail, which triggers the pipeline's
-	// rollback of the pre-install snapshot. Rollback validates every restored
-	// path is under the real user home directory, so it must be told this
-	// test's fake home — otherwise the rollback itself fails first and its
-	// error masks the refusal this test is asserting on.
-	restoreBackupHome := backup.UserHomeDirFn
-	backup.UserHomeDirFn = func() (string, error) { return home, nil }
-	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
-
-	// Set the agent adapter's lookPath to simulate missing opencode
-	opencodeAdapterLookPath := opencode.LookPathOverride
-	opencode.LookPathOverride = missingBinaryLookPath
-	t.Cleanup(func() {
-		opencode.LookPathOverride = opencodeAdapterLookPath
-	})
-
-	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
-	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "permissions"},
-		detection,
-	)
-	if err == nil {
-		t.Fatal("RunInstall() error = nil, want a refusal because opencode is not installed")
-	}
-
-	// OpenCode on Ubuntu resolves via npm install (official method from
-	// opencode.ai) — the refusal must name that exact command, never run it.
-	// This is deliberately "latest", not versions.OpenCode: that constant is
-	// the CI/E2E-owned pin for the binary actually installed in those tests,
-	// unrelated to this display-only advice string.
-	wantCommand := "sudo npm install -g --ignore-scripts opencode-ai@latest"
-	if !strings.Contains(err.Error(), wantCommand) {
-		t.Fatalf("RunInstall() error = %q, want it to name %q", err.Error(), wantCommand)
-	}
-
-	if commands := recorder.get(); len(commands) != 0 {
-		t.Fatalf("commands executed = %v, want none — gentle-ai must never run an install command on the user's behalf", commands)
 	}
 }
 
@@ -2381,76 +2225,6 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "{% include \"persona.md\" ignore missing %}") {
 		t.Errorf("bootstrapped hub missing modular include: %s", string(content))
-	}
-}
-
-// TestRunInstallRefusesMissingKimiRegardlessOfUVPresence proves that when
-// Kimi is not detected, gentle-ai refuses and names the exact `uv` command
-// the user would run themselves — it no longer preflights uv presence for
-// Kimi at all (uv is not Pi's dependency, and gentle-ai never runs this
-// command itself), so the refusal fires the same way whether uv is on this
-// machine's PATH or not. Before this behavior existed, this same scenario
-// (Kimi undetected, uv missing) failed earlier and differently — at
-// checkDependenciesStep's preflight, with a "preflight for agent kimi: uv"
-// error — see git history for the prior version of this test,
-// TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands.
-func TestRunInstallRefusesMissingKimiRegardlessOfUVPresence(t *testing.T) {
-	home := t.TempDir()
-	restoreHome := osUserHomeDir
-	restoreCommand := runCommand
-	restoreLookPath := cmdLookPath
-	t.Cleanup(func() {
-		osUserHomeDir = restoreHome
-		runCommand = restoreCommand
-		cmdLookPath = restoreLookPath
-	})
-
-	osUserHomeDir = func() (string, error) { return home, nil }
-	cmdLookPath = missingBinaryLookPath
-
-	recorder := &commandRecorder{}
-	runCommand = recorder.record
-
-	// Force Kimi absent explicitly rather than relying on it happening to be
-	// missing from the machine running go test — the whole point of this
-	// test is the refusal on genuine absence, so absence must be the tested
-	// condition, not an accident of the environment.
-	restoreKimiLookPath := kimi.LookPathOverride
-	kimi.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }
-	t.Cleanup(func() { kimi.LookPathOverride = restoreKimiLookPath })
-
-	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "uv" {
-			return "", exec.ErrNotFound
-		}
-		return "/usr/bin/" + name, nil
-	})
-	t.Cleanup(restoreInstallcmdLookPath)
-
-	// The refusal makes Apply fail, which triggers rollback of the
-	// pre-install snapshot; rollback validates restored paths are under the
-	// real user home directory, so it needs this test's fake home too (see
-	// TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling for the same
-	// fix and its full explanation).
-	restoreBackupHome := backup.UserHomeDirFn
-	backup.UserHomeDirFn = func() (string, error) { return home, nil }
-	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
-
-	_, err := RunInstall(
-		[]string{"--agent", "kimi", "--component", "permissions"},
-		macOSDetectionResult(),
-	)
-	if err == nil {
-		t.Fatal("RunInstall() error = nil, want a refusal because Kimi is not installed")
-	}
-
-	const wantCommand = "uv tool install --python 3.13 kimi-cli"
-	if !strings.Contains(err.Error(), wantCommand) {
-		t.Fatalf("RunInstall() error = %q, want it to name %q", err.Error(), wantCommand)
-	}
-
-	if got := recorder.get(); len(got) != 0 {
-		t.Fatalf("commands executed = %v, want none — gentle-ai must never run an install command on the user's behalf", got)
 	}
 }
 

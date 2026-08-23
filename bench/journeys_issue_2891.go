@@ -114,6 +114,7 @@ func issue2891SameParentGrantedStatus(sandbox *Sandbox, observation Observation)
 func issue2891Journeys() []Journey {
 	return []Journey{{
 		ID:     "j96-sdd-same-parent-repository-edit-authority",
+		Review: reviewOptedIn,
 		Title:  "Nested planning workspace blocks a sibling directory in the same Git repository",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2891",
 		Steps: []Step{

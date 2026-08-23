@@ -41,7 +41,7 @@ func TestFinalizeReviewerResultRefusalsNameCaptureResultContinuation(t *testing.
 	})
 
 	t.Run("readCapturedReviewerResults native discovery mismatch", func(t *testing.T) {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate needing a reviewer result\n"), 0o644); err != nil {
 			t.Fatal(err)

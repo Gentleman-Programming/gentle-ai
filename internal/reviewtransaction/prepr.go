@@ -295,7 +295,7 @@ func deriveCurrentChangesBoundaryCompatibility(ctx context.Context, repo string,
 	if refs.DeliveredCommitCount != 1 {
 		return BaseAdvanceCompatibility{}, errors.New("boundary reconciliation requires exactly one delivery commit")
 	}
-	if len(state.GenesisPaths) == 0 {
+	if len(state.CorrectionScopePaths()) == 0 {
 		return BaseAdvanceCompatibility{}, errors.New("an empty reviewed scope cannot authorize a publication")
 	}
 	frozenBaseTree := state.InitialSnapshot.BaseTree
@@ -315,7 +315,7 @@ func deriveCurrentChangesBoundaryCompatibility(ctx context.Context, repo string,
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
-	if len(deliveredPaths) == 0 || pathsAreSubset(deliveredPaths, state.GenesisPaths) != nil {
+	if len(deliveredPaths) == 0 || pathsAreSubset(deliveredPaths, state.CorrectionScopePaths()) != nil {
 		return BaseAdvanceCompatibility{}, errors.New("delivered paths do not stay inside the reviewed genesis scope")
 	}
 	patch, err := patchIdentity(ctx, repo, frozenBaseTree, snapshot.CandidateTree)
@@ -329,7 +329,7 @@ func deriveCurrentChangesBoundaryCompatibility(ctx context.Context, repo string,
 	if !disjointPaths(deliveredPaths, basePaths) {
 		return BaseAdvanceCompatibility{}, errors.New("boundary advance overlaps delivered paths")
 	}
-	if err := validateReviewedPublicationRange(ctx, repo, state.GenesisPaths, refs); err != nil {
+	if err := validateReviewedPublicationRange(ctx, repo, state.CorrectionScopePaths(), refs); err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
 	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, refs.HeadCommit)

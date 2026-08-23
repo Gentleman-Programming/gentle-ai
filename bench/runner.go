@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,14 +20,12 @@ type Sandbox struct {
 	Binary string
 	// PathOverride is prepended to PATH for journeys that need a deterministic
 	// local runtime probe without depending on the host installation.
-	PathOverride             string
-	Root                     string
-	Home                     string
-	Repo                     string
-	Remote                   string
-	TracePath                string
-	BenchReceiptMutationPath string
-
+	PathOverride string
+	Root         string
+	Home         string
+	Repo         string
+	Remote       string
+	TracePath    string
 	// BenchCrashAtPhase, when non-empty, is read by product binaries built
 	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
 	// (format "<phase>:<lineage_id>"): the deterministic phase-hook
@@ -37,14 +37,6 @@ type Sandbox struct {
 	// product binary without the bench_fixture tag never reads this
 	// variable at all.
 	BenchCrashAtPhase string
-
-	// NewLineageActivation opts this sandbox's whole isolated process
-	// environment into GENTLE_AI_RDD_NEW_LINEAGE (Wave 3 Slice 5, task 6.7).
-	// It is off by default, matching the product's own default-off
-	// activation switch (design decision 5): every wave1/wave2/edge/sdd
-	// journey that never sets this stays on the legacy `review start` path,
-	// byte-identical to before this field existed.
-	NewLineageActivation bool
 
 	// Journey state carried between steps.
 	Lineage  string
@@ -101,14 +93,8 @@ func (s *Sandbox) env() []string {
 		"TERM=dumb",
 		"LANG=C",
 	}
-	if s.BenchReceiptMutationPath != "" {
-		env = append(env, "GENTLE_AI_BENCH_MUTATE_RECEIPT="+s.BenchReceiptMutationPath)
-	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
-	}
-	if s.NewLineageActivation {
-		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
 	}
 	// Set last so a journey that poisons the process temp directory overrides
 	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
@@ -247,6 +233,50 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 	}
 }
 
+func (s *Sandbox) invokeInteractive(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	cmd := exec.Command(s.Binary, args...)
+	cmd.Dir = dir
+	cmd.Env = s.env()
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	var output, stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	reader := bufio.NewReader(io.TeeReader(stdout, &output))
+	exchangeErr := exchange(reader, stdin)
+	_ = stdin.Close()
+	_, readErr := io.Copy(io.Discard, reader)
+	waitErr := cmd.Wait()
+	exitCode := 0
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	} else if waitErr != nil {
+		exitCode = -1
+		stderr.WriteString("\nbench: " + waitErr.Error())
+	}
+	observation := interactiveObservation(args, exitCode, output.String(), stderr.String())
+	if exchangeErr != nil {
+		return observation, exchangeErr
+	}
+	if readErr != nil {
+		return observation, readErr
+	}
+	return observation, nil
+}
+
+func interactiveObservation(args []string, exitCode int, stdout, stderr string) Observation {
+	return Observation{Args: args, ExitCode: exitCode, Stdout: stdout, Stderr: stderr, StdoutCaptured: true, StderrCaptured: true}
+}
+
 // readBack runs the product for a fixture proof, a capability probe or an
 // assertion. It is benchmark instrumentation, not operator work, so it is never
 // counted — and it runs with GIT_TRACE blanked, exactly like Sandbox.git, so the
@@ -257,8 +287,12 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 // inside the product, and a fixture that assumed them instead of reading them
 // back is the failure this corpus refuses to ship.
 func (s *Sandbox) readBack(args ...string) Observation {
+	return s.readBackAt(s.Repo, args...)
+}
+
+func (s *Sandbox) readBackAt(dir string, args ...string) Observation {
 	cmd := exec.Command(s.Binary, args...)
-	cmd.Dir = s.Repo
+	cmd.Dir = dir
 	env := s.env()
 	for index, entry := range env {
 		if strings.HasPrefix(entry, "GIT_TRACE=") {
@@ -398,16 +432,90 @@ type Step struct {
 	AbortOnBlock bool
 }
 
+// ReviewPrecondition is a journey's declared receipt-driven-development
+// starting state, and every journey must declare one.
+//
+// Receipt-driven development is opt-in: a fresh install has the switch off, and
+// the sandbox HOME every journey runs under IS a fresh install. So a journey
+// whose subject is the review lifecycle no longer gets a review by standing
+// still — it has to opt in the way a user does. Leaving that to whatever the
+// product's default happens to be is what this type exists to stop: the corpus
+// once measured the lifecycle only because the default happened to say yes, and
+// the day the default changed those journeys did not fail, they quietly
+// measured a different flow.
+//
+// The declaration is what the RUNNER does with the switch, because that is the
+// part the harness can verify. It is not a prediction about what the product's
+// default resolves to.
+type ReviewPrecondition string
+
+const (
+	// reviewPreconditionUndeclared is the zero value, and validateCorpus
+	// rejects it. A new journey has to say which world it runs in.
+	reviewPreconditionUndeclared ReviewPrecondition = ""
+	// reviewOptedIn runs `gentle-ai review mode enable --scope global` in the
+	// sandbox HOME before the journey's first product command, exactly as a
+	// user opts in, and fails the journey if the product does not then report
+	// the switch on. Global is the only scope that can assert "on": a clone may
+	// only ever assert "off".
+	reviewOptedIn ReviewPrecondition = "opted-in"
+	// reviewUntouched runs no mode command at all. The journey either drives
+	// the switch itself (its subject IS the switch) or its subject is what
+	// happens with reviews off, and a runner that reached in first would be
+	// overwriting the state under test.
+	reviewUntouched ReviewPrecondition = "untouched"
+)
+
 // Journey is one end-to-end flow through the review lifecycle.
 type Journey struct {
 	ID     string
 	Title  string
 	Source string
+	// Review is the journey's receipt-driven-development precondition. It is
+	// mandatory: see ReviewPrecondition.
+	Review ReviewPrecondition
 	Steps  []Step
-	// NewLineageActivation propagates to the journey's own Sandbox (task
-	// 6.7): a journey exercising the new-lineage lifecycle sets this true;
-	// every other journey leaves it false and is unaffected.
-	NewLineageActivation bool
+}
+
+// optIntoReviewMode turns receipt-driven development on for one sandbox through
+// the product's own documented command, and reads the answer back instead of
+// assuming it. The corpus is black-box: the switch is opted into the way a user
+// opts in, never by writing the install state the product owns.
+//
+// It runs before the journey's first step, from a throwaway checkout of its
+// own, for two reasons a journey's own repository cannot satisfy. The
+// repository frequently does not exist yet — several fixtures drive `review
+// start` themselves while building the state under test — and one journey's
+// repository is deliberately bare, which the mode command refuses because a
+// review candidate is a working-tree diff. The switch it writes is global, so
+// where it is written from changes nothing about what the journey then sees.
+//
+// It is sandbox setup rather than operator work — the equivalent of the git
+// init that precedes it — so it runs through readBack and is never counted in
+// commands_to_completion.
+func optIntoReviewMode(sandbox *Sandbox) error {
+	anchor := filepath.Join(sandbox.Root, "review-opt-in")
+	if err := os.MkdirAll(anchor, 0o755); err != nil {
+		return err
+	}
+	if err := sandbox.git(anchor, "init", "-b", "main", "-q"); err != nil {
+		return err
+	}
+	observation := sandbox.readBackAt(anchor, "review", "mode", "enable", "--scope", "global", "--json")
+	if IsUnsupported(observation) {
+		return errors.New("this build has no `review mode enable --scope global` surface to opt in with")
+	}
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("review mode enable --scope global exited %d: %s", observation.ExitCode, strings.TrimSpace(observation.Stderr))
+	}
+	effective, ok := envelopeString(observation.Stdout, "status", "effective")
+	if !ok {
+		return fmt.Errorf("review mode enable --scope global printed no status.effective: %s", strings.TrimSpace(observation.Stdout))
+	}
+	if effective != "on" {
+		return fmt.Errorf("review mode enable --scope global left the switch %q, so this journey would measure a flow with reviews off", effective)
+	}
+	return nil
 }
 
 // validateCorpus checks every author-declared classifier input in the corpus
@@ -424,6 +532,14 @@ type Journey struct {
 func validateCorpus(journeys []Journey) error {
 	problems := []string{}
 	for _, journey := range journeys {
+		switch journey.Review {
+		case reviewOptedIn, reviewUntouched:
+		case reviewPreconditionUndeclared:
+			problems = append(problems, journey.ID+
+				": declares no review precondition, so whether it measures the review lifecycle at all would be inherited from the product's default instead of stated (set Review: reviewOptedIn or Review: reviewUntouched)")
+		default:
+			problems = append(problems, journey.ID+": declares an unrecognised review precondition "+string(journey.Review))
+		}
 		for _, step := range journey.Steps {
 			for _, problem := range stepDeclarationProblems(step) {
 				problems = append(problems, journey.ID+" / "+step.Name+": "+problem)
@@ -480,6 +596,17 @@ func (r *journeyRun) runAt(dir string, args []string, modelRun bool) Observation
 	return observation
 }
 
+// runInteractive drives a native command that publishes an intermediate frame
+// before it can accept its continuation. It records one real product command;
+// the exchange is limited to transport framing and never manufactures review
+// authority or provider output.
+func (r *journeyRun) runInteractive(args []string, modelRun bool, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	observation, err := r.sandbox.invokeInteractive(r.sandbox.Repo, args, exchange)
+	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
+	r.accumulator.records = append(r.accumulator.records, record)
+	return observation, err
+}
+
 func runJourney(binary string, journey Journey) JourneyResult {
 	result := JourneyResult{ID: journey.ID, Title: journey.Title, Source: journey.Source, Status: StatusCompleted}
 
@@ -505,10 +632,17 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		result.FailureReason = err.Error()
 		return result
 	}
-	sandbox.NewLineageActivation = journey.NewLineageActivation
 	accumulator := newAccumulator()
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}
+
+	if journey.Review == reviewOptedIn {
+		if err := optIntoReviewMode(sandbox); err != nil {
+			result.Status = StatusFailed
+			result.FailureReason = "review precondition: " + err.Error()
+			return result
+		}
+	}
 
 	for _, step := range journey.Steps {
 		run.step = step.Name
@@ -573,11 +707,6 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 		if step.After != nil {
 			if err := step.After(sandbox, observation); err != nil {
-				if errors.Is(err, errSourceCoupledFixtureUnavailable) {
-					result.Status = StatusUnsupported
-					result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" (source-coupled fixture unavailable)")
-					break
-				}
 				result.Status = StatusFailed
 				result.FailureReason = fmt.Sprintf("step %q after: %v", step.Name, err)
 				break

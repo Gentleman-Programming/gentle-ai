@@ -119,7 +119,7 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 - If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
 - An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
 - Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
-- Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization and never reopen review for unchanged content.
+- Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content.
 
 #### Review Execution Contract
 

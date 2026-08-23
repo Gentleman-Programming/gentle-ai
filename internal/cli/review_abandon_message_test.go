@@ -28,6 +28,7 @@ const reviewAbandonAuthorizationLines = 9
 // advertises as still abandonable, and it is the case in which any
 // worktree-derived surface would hand the operator the wrong identity.
 func TestReviewAbandonRefusalTerminatesInASuccessfulAbandon(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, _, _, _ := partiallyCapturedReview(t)
 
 	const actor = "maintainer"

@@ -119,6 +119,7 @@ func handoffJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j74-sdd-attempt-explicit-linked-worktree-handoff",
+			Review: reviewOptedIn,
 			Title:  "Delegated linked worktree: settlement refuses until one explicit handoff binds it",
 			Source: "issue #2469: preserve Begin provenance while moving only effective execution worktree",
 			Steps: []Step{

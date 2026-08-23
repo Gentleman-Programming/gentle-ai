@@ -82,7 +82,9 @@ Every phase MUST return a structured envelope to the orchestrator:
 - `risks`: risks discovered, or "None"
 - `skill_resolution`: how skills were loaded — `paths-injected` (received exact skill paths from orchestrator), `fallback-registry` (self-loaded paths from registry), `fallback-path` (loaded via SKILL: Load path), or `none` (no skills loaded)
 
-If the task transport reports `sdd_task_result_empty` or `sdd_task_result_malformed`, do not assume this envelope was delivered. Do not retry automatically or initiate another phase. The terminal value starts with `GENTLE_AI_SDD_FAILURE ` followed by a `gentle-ai.sdd-task-result-failure/v1` JSON handoff; preserve it unchanged, run its `continuation` exactly once to inspect current state, report the typed failure to the user, and wait for an explicit decision. A later launch in the same session receives `sdd_task_dispatch_latched` instead: that launch never dispatched, so it names the phase it requested, the earlier phase and code that actually failed, and its `exit` -- start a new session to launch SDD phases again.
+If terminal task-result validation reports `sdd_task_result_empty` or `sdd_task_result_malformed`, do not assume this envelope was delivered. Do not retry automatically or initiate another phase. The terminal value starts with `GENTLE_AI_SDD_FAILURE ` followed by a `gentle-ai.sdd-task-result-failure/v1` JSON handoff; preserve it unchanged, run its `continuation` exactly once to inspect current state, report the typed failure to the user, and wait for an explicit decision. A later launch in the same session receives `sdd_task_dispatch_latched` instead: that launch never dispatched, so it names the phase it requested, the earlier phase and code that actually failed, and its `exit` -- start a new session to launch SDD phases again.
+
+OpenCode `background: true` launch acknowledgements and progress signals are nonterminal. They must not produce either transport failure or a session latch; wait for the child to complete, then use the normal artifact/status route.
 
 Example:
 

@@ -49,6 +49,7 @@ func contaminatedReviewerPayloadForTest(t *testing.T, repo string, record review
 //  2. an authorization that does not name an admitted slot can never sweep it,
 //     even when the request names it.
 func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, initial := newArtifactReview(t, true)
 	for order, lens := range initial.State.SelectedLenses {
 		input := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", order))
@@ -144,7 +145,9 @@ func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *
 // route, recapture, and finalize to an approved terminal state over the exact
 // same candidate identity, with the overridden bytes preserved.
 func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequired(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo, started, store, initial := newArtifactReview(t, true)
 	if len(initial.State.SelectedLenses) != 4 {
@@ -203,12 +206,12 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	// correction forecast; after the forecast, the stop reason must present
 	// both truths, and the second one must name the reopen route runnably.
 	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
-		status := legacyCompatibleFrozenStatusForTest(t, repo, contract)
+		status := legacyCompatibleFrozenStatusForTest(t, repo, started.LineageID, contract)
 		if status.NextTransition == nil {
 			t.Fatalf("%s status omitted next transition", contract)
 		}
 	}
-	transition := nextTransitionForTest(t, repo)
+	transition := nextTransitionForTest(t, repo, started.LineageID)
 	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" {
 		t.Fatalf("first transition = %#v, want correction_plan_required collect", transition)
 	}
@@ -217,14 +220,15 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	transition = nextTransitionForTest(t, repo)
+	transition = nextTransitionForTest(t, repo, started.LineageID)
 	if transition == nil || transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "corrected_candidate_unavailable" {
 		t.Fatalf("post-forecast transition = %#v, want corrected_candidate_unavailable stop", transition)
 	}
-	statement, ok := reviewStopReasonStatement("corrected_candidate_unavailable")
+	emission, ok := reviewNarrationRegistry["stop:corrected_candidate_unavailable"]
 	if !ok {
 		t.Fatal("corrected_candidate_unavailable has no narration statement")
 	}
+	statement := emission.Statement
 	if !strings.Contains(statement, "Change the candidate content") {
 		t.Fatalf("narration lost the real-findings truth: %q", statement)
 	}
@@ -277,7 +281,7 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 		t.Fatalf("audit does not record the maintainer-named lenses: %#v", reopened.State.ResultReopens[0])
 	}
 	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
-		status := legacyCompatibleFrozenStatusForTest(t, repo, contract)
+		status := legacyCompatibleFrozenStatusForTest(t, repo, started.LineageID, contract)
 		if status.NextTransition == nil {
 			t.Fatalf("%s status omitted next transition after reopen", contract)
 		}
@@ -321,39 +325,30 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	if err := os.WriteFile(evidencePath, []byte("go test ./... passed on the unchanged candidate\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	var finalized bytes.Buffer
 	if err := RunReviewFacadeFinalize([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath,
-	}, io.Discard); err != nil {
+	}, &finalized); err != nil {
 		t.Fatalf("finalize verification evidence: %v", err)
 	}
-	terminal, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	result := decodeFacadeFinalize(t, finalized.Bytes())
+	if result.State != reviewtransaction.StateApproved || result.Action != reviewApprovedCompactBurnedFinalizeAction || result.ReceiptPath != "" {
+		t.Fatalf("reopened review terminal = %#v", result)
 	}
-	if terminal.State.State != reviewtransaction.StateApproved {
-		t.Fatalf("terminal state = %q, want approved", terminal.State.State)
-	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
-		t.Fatalf("no terminal receipt: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 
 	// The whole point: the candidate never moved.
-	if terminal.State.InitialSnapshot.Identity != identityBefore ||
-		terminal.State.CurrentSnapshot.Identity != identityBefore {
-		t.Fatalf("candidate identity moved: initial=%q current=%q want %q",
-			terminal.State.InitialSnapshot.Identity, terminal.State.CurrentSnapshot.Identity, identityBefore)
-	}
 	candidateAfter, err := os.ReadFile(candidatePath)
 	if err != nil || !bytes.Equal(candidateBefore, candidateAfter) {
 		t.Fatalf("candidate bytes moved: err=%v", err)
 	}
 }
 
-func nextTransitionForTest(t *testing.T, repo string) *ReviewNextTransition {
+func nextTransitionForTest(t *testing.T, repo, lineage string) *ReviewNextTransition {
 	t.Helper()
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", lineage,
 	}, &output); err != nil {
 		t.Fatalf("review status --next-transition: %v\n%s", err, output.String())
 	}
@@ -362,9 +357,9 @@ func nextTransitionForTest(t *testing.T, repo string) *ReviewNextTransition {
 	return status.NextTransition
 }
 
-func legacyCompatibleFrozenStatusForTest(t *testing.T, repo, contract string) ReviewTargetStatusResult {
+func legacyCompatibleFrozenStatusForTest(t *testing.T, repo, lineage, contract string) ReviewTargetStatusResult {
 	t.Helper()
-	args := []string{"status", "--cwd", repo, "--contract", contract}
+	args := []string{"status", "--cwd", repo, "--contract", contract, "--lineage", lineage}
 	if contract == ReviewIntegrationContractV2 {
 		args = append(args, "--agent", "claude-code")
 	}

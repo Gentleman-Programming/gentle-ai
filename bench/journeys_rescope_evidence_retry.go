@@ -97,6 +97,7 @@ func sddRescopeEvidenceOnlyPassB(r *journeyRun) error {
 func rescopeEvidenceOnlyRetryJourneys() []Journey {
 	return []Journey{{
 		ID:     "j80-rescope-authorized-evidence-only-retry",
+		Review: reviewOptedIn,
 		Title:  "Audited rescope authorizes one unchanged evidence-only retry",
 		Source: "#2621: failed A -> audited rescope B -> unchanged PASS linked to A",
 		Steps: []Step{

@@ -28,18 +28,6 @@ func TestCompactAbandonCommandTextRendersWindowsPathVerbatim(t *testing.T) {
 	}
 }
 
-func TestCompactRepairCommandTextRendersWindowsPathVerbatim(t *testing.T) {
-	repo := `C:\Users\dev\repo`
-	text := compactRepairCommandText(repo, AuthorityDispositionPlan{
-		AuthorityInventoryRevision: "inv-rev-1",
-		PlanDigest:                 "digest-1",
-	})
-	want := `--cwd "C:\Users\dev\repo"`
-	if got := strings.Count(text, want); got != 2 {
-		t.Fatalf("repair invocation renders --cwd twice and both must carry the verbatim path:\nwant 2 occurrences of %s, got %d\ngot: %s", want, got, text)
-	}
-}
-
 func TestCompactReclaimAuthorityRefusalRendersWindowsPathVerbatim(t *testing.T) {
 	repo := `C:\Users\dev\repo`
 	want := `--cwd "C:\Users\dev\repo"`

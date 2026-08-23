@@ -22,7 +22,7 @@ import (
 // later gate call to find. A drifted candidate still denies too, exactly
 // as before, for the identical structural reason (no receipt governs it).
 func TestRelayedCandidateDeclineNeverAuthorizesLaterGateDelivery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -48,31 +48,24 @@ func TestRelayedCandidateDeclineNeverAuthorizesLaterGateDelivery(t *testing.T) {
 
 	runReviewCLIGit(t, repo, "add", "scripts/deploy.sh")
 	var output bytes.Buffer
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	if err == nil {
-		t.Fatalf("candidate-declined pre-commit delivery unexpectedly allowed:\n%s", output.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err != nil {
+		t.Fatalf("candidate-declined pre-commit delivery: %v\n%s", err, output.String())
 	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Allowed || result.Result == reviewtransaction.GateAllow || result.Delivery != "" {
-		t.Fatalf("candidate-declined delivery = %#v, want a plain denial", result)
-	}
-	if result.Context.Denial == nil || result.Context.Denial.Stage != "receipt-discovery" || result.Context.Denial.Code != "receipt_missing" {
-		t.Fatalf("candidate-declined delivery context = %#v, want the generic receipt-discovery/receipt_missing denial", result.Context)
-	}
+	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePreCommit)
 
 	if err := os.WriteFile(filepath.Join(repo, "scripts", "deploy.sh"), []byte("echo drift\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, repo, "add", "scripts/deploy.sh")
 	var drifted bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &drifted); err == nil {
-		t.Fatalf("candidate-decline authorized drifted content:\n%s", drifted.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &drifted); err != nil {
+		t.Fatalf("candidate-decline drifted delivery: %v\n%s", err, drifted.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, drifted.Bytes(), reviewtransaction.GatePreCommit)
 }
 
 func TestCandidateDeclineNeverAuthorizesRelease(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -86,7 +79,8 @@ func TestCandidateDeclineNeverAuthorizesRelease(t *testing.T) {
 	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GateRelease)}, &output); err == nil {
-		t.Fatalf("candidate decline authorized release:\n%s", output.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GateRelease)}, &output); err != nil {
+		t.Fatalf("candidate decline release delivery: %v\n%s", err, output.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GateRelease)
 }

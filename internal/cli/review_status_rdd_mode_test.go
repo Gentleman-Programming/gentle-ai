@@ -25,7 +25,11 @@ func TestNegotiatedStatusMatchesReviewStartRDDMode(t *testing.T) {
 		{name: "global unset clone off", cloneOff: true, wantScope: "clone"},
 		{name: "global on clone off", global: "enable", cloneOff: true, wantScope: "clone"},
 		{name: "global on", global: "enable", enabled: true},
-		{name: "global unset clone unset default on", enabled: true},
+		// Receipt-driven development is opt-in, so a clone nobody enabled
+		// resolves through the same default as an explicit off: STATUS must
+		// report the disabled eligibility and the rdd_disabled stop, not a
+		// START it would then refuse.
+		{name: "global unset clone unset default off", wantScope: "default"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -42,10 +46,8 @@ func TestNegotiatedStatusMatchesReviewStartRDDMode(t *testing.T) {
 			if tt.cloneOff {
 				disableReviewForClone(t, repo)
 			}
-			var narration, output bytes.Buffer
-			previousNarrationOutput := reviewNarrationOutput
-			reviewNarrationOutput = &narration
-			t.Cleanup(func() { reviewNarrationOutput = previousNarrationOutput })
+			var output bytes.Buffer
+			stderr := captureReviewProcessStderr(t)
 			if err := RunReview([]string{
 				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode",
 				"--action-eligibility", "--next-transition",
@@ -71,19 +73,12 @@ func TestNegotiatedStatusMatchesReviewStartRDDMode(t *testing.T) {
 				if status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "rdd_disabled" {
 					t.Fatalf("disabled transition = %#v", status.NextTransition)
 				}
-				for _, want := range []string{
-					"gentle-ai review mode enable --scope=" + tt.wantScope,
-					"gentle-ai review status", "--cwd=" + repo,
-					"--contract", ReviewIntegrationContractV2,
-					"--agent", "opencode", "--action-eligibility", "--next-transition",
-				} {
-					if !strings.Contains(narration.String(), want) {
-						t.Fatalf("disabled STATUS continuation is incomplete; missing %q:\n%s", want, narration.String())
-					}
-				}
-				if tt.wantScope == "clone" && (!strings.Contains(narration.String(), "--cwd") || !strings.Contains(narration.String(), repo)) {
-					t.Fatalf("clone continuation is not repository-bound:\n%s", narration.String())
-				}
+			}
+			// A successful negotiated STATUS is byte-silent on stderr in
+			// every mode: the rdd_disabled continuation is not narrated, the
+			// reason code stays structural in next_transition.reason_code.
+			if got := stderr(); got != "" {
+				t.Fatalf("negotiated STATUS wrote stderr, want zero bytes:\n%q", got)
 			}
 			startErr := RunReview([]string{
 				"start", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode",
@@ -147,7 +142,11 @@ func TestNegotiatedStatusKeepsRDDDisabledStopWhenUntrackedSelectionIsNeeded(t *t
 	}
 }
 
-func TestDisabledStatusNarrationCanonicalizesCWD(t *testing.T) {
+// TestDisabledStatusStaysSilentForEveryCWDSpelling replaces the old
+// narration-canonicalization test: the rdd_disabled continuation is no longer
+// narrated at all, because a successful negotiated STATUS must write zero
+// bytes to stderr regardless of how the caller spelled --cwd.
+func TestDisabledStatusStaysSilentForEveryCWDSpelling(t *testing.T) {
 	for _, cwd := range [][]string{{"--cwd=."}, {"--cwd", "."}} {
 		t.Run(strings.Join(cwd, " "), func(t *testing.T) {
 			reviewModeHome(t)
@@ -157,20 +156,22 @@ func TestDisabledStatusNarrationCanonicalizesCWD(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			var narration, output bytes.Buffer
-			previous := reviewNarrationOutput
-			reviewNarrationOutput = &narration
-			t.Cleanup(func() { reviewNarrationOutput = previous })
+			var output bytes.Buffer
+			stderr := captureReviewProcessStderr(t)
 			args := append([]string{"status"}, cwd...)
 			args = append(args, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition")
 			if err := RunReview(args, &output); err != nil {
 				t.Fatalf("STATUS: %v\n%s", err, output.String())
 			}
-			if !strings.Contains(narration.String(), "--cwd="+repo) {
-				t.Fatalf("STATUS retry is not bound to the resolved root:\n%s", narration.String())
+			var status ReviewTargetStatusResult
+			if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+				t.Fatalf("decode STATUS: %v\n%s", err, output.String())
 			}
-			if strings.Contains(narration.String(), "--cwd=. --contract") || strings.Contains(narration.String(), "--cwd . --contract") {
-				t.Fatalf("STATUS retry retained caller cwd %q:\n%s", strings.Join(cwd, " "), narration.String())
+			if status.NextTransition == nil || status.NextTransition.ReasonCode != "rdd_disabled" {
+				t.Fatalf("disabled transition = %#v", status.NextTransition)
+			}
+			if got := stderr(); got != "" {
+				t.Fatalf("disabled negotiated STATUS wrote stderr, want zero bytes:\n%q", got)
 			}
 		})
 	}

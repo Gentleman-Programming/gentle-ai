@@ -67,7 +67,7 @@ func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, 
 	if err != nil {
 		return reviewProviderRequest{}, err
 	}
-	prompt, err := reviewLensContextAssemble(ctx, deps, authority.Binding, authority.Subject, authority.Frozen, authority.Inspector)
+	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
 	if err != nil {
 		return reviewLensContextCleanup(ctx, reviewProviderRequest{}, err, func() error { return deps.close(authority.Inspector) })
 	}

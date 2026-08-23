@@ -120,7 +120,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		{name: "missing rescope scope", args: []string{"rescope", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('e'), "--request-id", "rescope", "--reason", "narrowing", "--actor", "maintainer"}, want: "--work-unit"},
 		{name: "missing finish evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "failed", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "--evidence-revision"},
 		{name: "interrupted malformed evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "interrupted", "--evidence-revision", "not-a-revision", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "empty or a canonical legacy sha256 revision"},
-		{name: "partial remediation successor", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"}, want: "remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together"},
+		{name: "retired remediation successor flag", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"}, want: "flag provided but not defined"},
 		{name: "positional argument", args: []string{"status", "--cwd", repo, "--change", "thin", "extra"}, want: "unexpected sdd-attempt argument"},
 		// Grant's missing-flag refusal follows acquire/settle: it enumerates
 		// every missing flag and names the rerunnable continuation.
@@ -271,13 +271,13 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 	}{
 		{"status", []string{"cwd", "change", "change-instance", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"optional", "128 bytes"}},
 		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
-		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
+		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
 		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
 		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
 		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
-		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "unmanaged remediation"}},
-		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
+		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "failed evidence correction"}},
+		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
 		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},
 	}
 
@@ -458,7 +458,6 @@ func TestRunSDDAttemptFinishAcceptsApprovedSelfRemediationSuccessor(t *testing.T
 		"--outcome", "passed", "--evidence-revision", cliAttemptHash('b'),
 		"--diagnosis", "bounded self remediation passed corrected verification", "--harness-disposition", "reused",
 		"--cleanup-evidence", "self remediation cleanup completed", "--process-evidence", "self remediation process scan found no descendants",
-		"--expected-binding-revision", binding.Revision, "--successor-lineage", lineage,
 		"--remediates-evidence-revision", failedEvidence,
 	}
 	completed := runSDDAttemptStatus(t, finishArgs)

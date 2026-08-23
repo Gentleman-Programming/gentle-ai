@@ -293,41 +293,6 @@ func TestCompactLineageSupersededUnderMaintenanceIgnoresUnreadableForeignLineage
 	}
 }
 
-// TestInspectAuthorityClassifiesOutdatedIdentityAsOutdated pins the honest
-// diagnostics half of #2743: a record whose only load failure is the retired
-// snapshot-identity formula is OUTDATED — gate-invalid, preserved for
-// forensics — not malformed, and the damage narration must stop describing it
-// as the residue of an interrupted write.
-func TestInspectAuthorityClassifiesOutdatedIdentityAsOutdated(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	lineage := quarantineFixtureHealthyLineage(t, repo, "inspect-outdated-identity", "outdated candidate\n")
-	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outdateCompactSnapshotIdentity(t, store)
-
-	report, err := InspectCompactRecoveryEdges(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.EntryDiagnostics) != 1 || report.EntryDiagnostics[0].LineageID != lineage ||
-		report.EntryDiagnostics[0].Problem != "outdated_compact_state" {
-		t.Fatalf("entry diagnostics = %#v", report.EntryDiagnostics)
-	}
-
-	kinds := CompactAuthorityDamageKinds(report)
-	if len(kinds) != 1 {
-		t.Fatalf("damage kinds = %#v", kinds)
-	}
-	if strings.Contains(kinds[0], "interrupted write") || strings.Contains(kinds[0], "does not parse") {
-		t.Fatalf("outdated record still narrated as damage: %q", kinds[0])
-	}
-	if !strings.Contains(kinds[0], "outdated_compact_state") || !strings.Contains(kinds[0], "earlier release") {
-		t.Fatalf("outdated record narration is not honest about its class: %q", kinds[0])
-	}
-}
-
 // TestInspectAuthorityKeepsGenuineSemanticDamageMalformed proves the outdated
 // class is exactly as narrow as the retired-identity signature: any other
 // semantic-validation failure keeps the existing malformed classification.

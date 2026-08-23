@@ -17,6 +17,7 @@ import (
 // command shapes refuse before they can alter the fixture's source or shared
 // Git-common-dir authority.
 func TestReviewRetiredVerbAdvisoryIsUnknownCommand(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, contextArgs, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := contextArgs[slices.Index(contextArgs, "--repository-context")+1]
 	lens := contextArgs[slices.Index(contextArgs, "--lens")+1]

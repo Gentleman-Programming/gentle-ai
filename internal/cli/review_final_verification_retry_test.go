@@ -18,6 +18,7 @@ import (
 )
 
 func TestReviewRetryFinalVerificationOperationAndStatusCompleteNormally(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedFinalVerificationCLIFixture(t)
 	statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", fixture.repo, "--lineage", fixture.predecessor.State.LineageID}
 	var statusOutput bytes.Buffer
@@ -108,6 +109,7 @@ func TestReviewRetryFinalVerificationOperationAndStatusCompleteNormally(t *testi
 }
 
 func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedCorrectedFinalVerificationCLIFixture(t)
 	if fixture.predecessor.State.InitialSnapshot.Identity == fixture.predecessor.State.CurrentSnapshot.Identity {
 		t.Fatal("corrected fixture did not advance CurrentSnapshot")
@@ -167,6 +169,7 @@ func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t
 }
 
 func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedFinalVerificationCLIFixture(t)
 	request := reviewtransaction.FinalVerificationRetryRequest{
 		PredecessorLineageID: fixture.predecessor.State.LineageID, ExpectedPredecessorRevision: fixture.predecessor.Revision,
@@ -201,6 +204,7 @@ func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) 
 }
 
 func TestReviewRetryFinalVerificationIncidentInputIsBoundedAndCancellable(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("oversize regular file", func(t *testing.T) {
 		fixture := failedFinalVerificationCLIFixture(t)
 		oversize := filepath.Join(t.TempDir(), "oversize-incident.json")
@@ -552,7 +556,12 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	started := runNegotiatedReviewStart(t, repo, "retry-corrected-cli-source")
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", "retry-corrected-cli-source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{

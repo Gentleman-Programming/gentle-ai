@@ -88,30 +88,30 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
 3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
 4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
-5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
+5. **Per-action rule**: tests, builds, installs, and native checking actors may use fresh workers without changing the implementation route or creating SDD state.
 6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD.
 
 #### Native Checking Contract
 
 - Final source-mutating normalization happens before functional verification and candidate freeze.
 - **Normalization ordering rule**: before review START and its identity freeze, run every source-mutating normalizer, then re-snapshot the candidate and review those exact bytes, paths, and modes. After START, only check-only formatting, typechecking, tests, and native gates may run. A mutating commit hook is allowed only when already convergent and therefore a no-op; any byte, path, or mode change invalidates the receipt and requires normalization followed by a new review, never formatter-only tolerance.
-- Native RAR owns verification applicability, risk, the bounded zero/one/four-lens plan, correction impact, and the terminal receipt. The orchestrator and adapters never select lenses or author PASS.
+- Native RAR owns verification applicability, risk, the bounded zero/one/four-lens plan, correction impact, and terminal receipt. The orchestrator and adapters never select lenses or author PASS.
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
 - If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
 - An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
 - Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
-- Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization and never reopen review for unchanged content.
+- Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content.
 
 #### Review Execution Contract
 
-The canonical native bounded-review contract is injected from the shared provider source at render time.
+Runtime-specific lifecycle content is dynamically injected only when the compiled capability advertises it. Other runtimes retain this generic SDD baseline without review-transport promises.
 
 #### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
-- Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
+- Let the user and ordinary repository policy decide delivery; do not infer authorization from checking output.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 

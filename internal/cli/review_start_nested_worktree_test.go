@@ -25,6 +25,7 @@ import (
 )
 
 func TestReviewStartExcludesNestedWorktreeFromFrozenManifest(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "worktree", "add", "-q", "-b", "nested-1881", filepath.Join(repo, ".wt", "test"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
@@ -75,6 +76,7 @@ func TestNegotiatedReviewStartRejectsEmbeddedForeignRepository(t *testing.T) {
 	}
 }
 func TestReviewStartKeepsSiblingLinkedWorktreeWorking(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling-worktree")
 	runReviewCLIGit(t, repo, "worktree", "add", "-q", "-b", "sibling-1881", sibling)

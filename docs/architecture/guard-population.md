@@ -21,7 +21,7 @@ Arbitrary control flow does not qualify. Shell and workflow guards are out of sc
 | `result-reopen-state` | Review states eligible to quarantine contaminated reviewer input |
 | `convergent-lock-contention` | Lock contenders allowed to wait rather than fail immediately |
 | `finalize-result-admission` | Reviewer-result sources allowed to govern finalization |
-| `receipt-content-governance` | Terminal receipts allowed to govern delivered content |
+| `receipt-content-governance` | Terminal receipts admitted as immutable evidence for review-lifecycle validation; they never govern delivery |
 | `persisted-sync-state-integrity` | Persisted sync state admitted before persona mutation |
 
 Reviewers own identification of a new or omitted qualifying guard. The mechanism cannot derive the real-world population from source and MUST NOT be described as semantic completeness.

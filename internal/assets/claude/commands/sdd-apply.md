@@ -48,8 +48,8 @@ For each task:
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 
 REVIEW ROUTING (post-verify, not post-apply):
-Return control to the parent orchestrator. Apply itself never routes to review — `nextRecommended` proceeds to `verify` once tasks are complete; the review offer is a post-verify decision (see sdd-verify.md's post-verify review offer). If the parent later observes a `reviewOffer` block in native status output, it—not the apply executor—begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition`. It routes only from the returned `next_transition`: for `execute`, it invokes the exact operation and ordered argument tokens unchanged; for `collect`, it satisfies only the exact named inputs and capture operations before querying STATUS again; for `stop`, it stops without running a lifecycle operation. The parent never substitutes direct START, and the apply executor never launches review.
+Return control to the parent orchestrator. Apply itself never routes to review — `nextRecommended` proceeds to `verify` once tasks are complete; the review offer is a post-verify decision (see sdd-verify.md's post-verify review offer). If the parent later observes a `reviewOffer` block, selectorless negotiated STATUS may preflight only the current worktree candidate. The parent executes only the exact returned START, then retains and reuses that transaction's lineage, revision, and target tokens for every subsequent STATUS, capture, and FINALIZE call. The parent never resumes ambient authority, substitutes direct START, or lets the apply executor launch review.
 
 {{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
 
-Reuse a valid receipt; never auto-launch Judgment Day or create another budget at commit/push/PR/release.
+Approval burns its exact review authority before returning. Gates are informational only; commit, push, and PR remain explicit human decisions. Never auto-launch Judgment Day.

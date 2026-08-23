@@ -16,7 +16,7 @@ const reviewInspectCandidateTimeout = 25 * time.Second
 type reviewInspectCandidateAuthorityError struct{ cause error }
 
 func (err *reviewInspectCandidateAuthorityError) Error() string {
-	return "repository_context_authority_unavailable: provider-issued review repository context operation failed; refresh the exact native next_transition before retrying"
+	return "repository_context_authority_unavailable: provider-issued review repository context operation failed; refresh the exact native next_transition before retrying `gentle-ai review inspect-candidate`"
 }
 func (err *reviewInspectCandidateAuthorityError) Unwrap() error { return err.cause }
 

@@ -72,6 +72,7 @@ func init() {
 		Name:     realWorldAxis,
 		Title:    "Repositories with tool residue, and review lifecycles interleaved with ordinary git life",
 		BlackBox: true,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Black-box, unlike damaged-store: every fixture is built with git, the filesystem and the product's own CLI, every state is proven through git or the product before a counted command runs, and nothing product-owned is read or written. These journeys stay portable across builds the way the core does.",
 			"Opt-in anyway, because it is a different population: the core's repositories are sterile and its sequences contiguous; these repositories carry tool residue and accumulated review state, and their lifecycles are interleaved with rebase, amend and pull. \"45 core journeys\" and \"45 plus real-world\" must never look alike.",
@@ -983,6 +984,7 @@ func realWorldJourneys() []Journey {
 		// ------------------------------------------------------------ family A
 		{
 			ID:     "rw01-nested-worktree-not-ignored",
+			Review: reviewOptedIn,
 			Title:  "Nested worktree inside the repository, not gitignored: issue #1881 verbatim",
 			Source: "family A (ecosystem clutter): community production repo, issue #1881",
 			// Distinct path: untracked-scope discovery walking into a linked
@@ -1000,6 +1002,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw02-node-modules-scale-untracked-tree",
+			Review: reviewOptedIn,
 			Title:  "3,000 untracked files beside the candidate: STATUS requires explicit exclusion before START",
 			Source: "family A (ecosystem clutter): dependency trees tools leave behind; #2652",
 			// Distinct path: inventorying a node_modules-scale tree, then running
@@ -1011,6 +1014,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw03-untracked-env-with-secrets",
+			Review: reviewOptedIn,
 			Title:  "Untracked .env with secret-looking content: explicit exclusion must not quote the value",
 			Source: "family A (ecosystem clutter): secrets files beside every real candidate; #2652",
 			// Distinct path: redaction in the two STATUS envelopes and printed
@@ -1022,6 +1026,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw04-mutating-pre-commit-hook",
+			Review: reviewOptedIn,
 			Title:  "Husky-style hook rewrites a file during commit: the receipt meets bytes it never approved",
 			Source: "family A (ecosystem clutter): hooks that move bytes between review and commit",
 			// Distinct path: the normalization ordering rule's enforcement
@@ -1041,6 +1046,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw05-dirty-submodule-gitlink-bump",
+			Review: reviewOptedIn,
 			Title:  "Staged gitlink bump while the submodule's working tree is dirty",
 			Source: "family A (ecosystem clutter): j19's real-world sibling — the checkout is never clean",
 			// Distinct path: a candidate whose gitlink points at one commit
@@ -1060,6 +1066,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw06-shallow-clone-depth-1",
+			Review: reviewOptedIn,
 			Title:  "Shallow clone: publication-boundary derivation against history that is not there",
 			Source: "family A (ecosystem clutter): CI checkouts and laptop clones are depth 1",
 			// Distinct path: every ancestry question the pre-push gate asks
@@ -1076,6 +1083,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw07-fork-topology-tracks-upstream",
+			Review: reviewOptedIn,
 			Title:  "origin plus upstream, branch tracking upstream: the cross-remote logic's real-world shape",
 			Source: "family A (ecosystem clutter): the recently narrowed cross-remote logic, as contributors meet it",
 			// Distinct path: publication-boundary derivation with two remotes
@@ -1092,6 +1100,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw08-three-stale-reviewing-lineages",
+			Review: reviewOptedIn,
 			Title:  "Three lineages left in `reviewing` by prior sessions: a fresh review must not misroute",
 			Source: "family A (ecosystem clutter): community production composite — accumulated review state",
 			// Distinct path: discovery and gating against a store holding
@@ -1111,6 +1120,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw09-ignored-15mb-binary",
+			Review: reviewOptedIn,
 			Title:  "A 15MB gitignored binary inside the tree: ignored content must cost nothing and be cited nowhere",
 			Source: "family A (ecosystem clutter): community production composite — ignored build artifacts",
 			// Distinct path: the exclusion side of discovery. rw02 proves the
@@ -1132,6 +1142,7 @@ func realWorldJourneys() []Journey {
 		// ------------------------------------------------------------ family B
 		{
 			ID:     "rw10-rebase-onto-moved-main",
+			Review: reviewOptedIn,
 			Title:  "Approve, commit, rebase onto moved main, then the gate: base advance with a changed tree",
 			Source: "family B (life between commands): the most ordinary detour between approval and push",
 			// Distinct path: compatible-base-advance handling where BOTH the
@@ -1150,6 +1161,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw11-amend-identical-tree",
+			Review: reviewOptedIn,
 			Title:  "Approve, commit, amend the message: same bytes, new commit id, then the gate",
 			Source: "family B (life between commands): the tree-not-commit identity principle, as a human trips it",
 			// Distinct path: receipt identity under a commit-id change with a
@@ -1169,6 +1181,7 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw12-pull-into-reviewed-branch",
+			Review: reviewOptedIn,
 			Title:  "Approve, commit, pull a colleague's commit into the branch, then the gate",
 			Source: "family B (life between commands): mid-lifecycle `git pull` bringing new commits into the branch under review",
 			// Distinct path: receipt discovery across a merge commit. After

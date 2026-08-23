@@ -141,20 +141,20 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 	}, nil
 }
 
-// reviewTransportExposureByAgent is the adapter's own self-declared
-// capability to carry the review protocol at all. Pi advertised nothing
-// while its lens transport was genuinely unavailable; since gentle-pi owns
-// a host relay that forwards the Go-issued opaque provider task to a fresh
-// locked-down pi subprocess and returns raw bytes (gentle-pi#311,
-// gentle-ai#3249), Pi advertises alongside every other in-repo adapter.
-// A map miss (an agent with no entry) defaults to the Go zero value of
-// ContractExposure (""), which Advertises treats as not advertised —
-// the fail-closed default for unknown agents.
+// reviewTransportExposureByAgent is the closed set of runtimes that can
+// carry the review protocol. Every supported agent is explicitly dormant
+// first, then only the four runtimes with the required native transport and
+// immutable reviewer boundary advertise receipt-driven review. A map miss
+// (an unknown agent) remains fail-closed.
 var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
-		exposure[agent] = ContractExposureAdvertised
+		exposure[agent] = ContractExposureDormant
 	}
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
+	exposure[model.AgentCodex] = ContractExposureAdvertised
+	exposure[model.AgentPi] = ContractExposureAdvertised
 	return exposure
 }()
 

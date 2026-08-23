@@ -14,8 +14,7 @@ import (
 )
 
 func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo, started, store := submissionDescriptorCorrectionFixture(t)
 	status := submissionDescriptorStatus(t, repo, started.LineageID)
 	correction := submissionDescriptorInput(t, status)
@@ -140,19 +139,20 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 	output, err = runSubmissionDescriptor(t, *validation.Submission, wrongValidation)
 	assertSubmissionNotStarted(t, err, output, store, before)
 
-	if output, err := runSubmissionDescriptor(t, *validation.Submission, validationPath); err != nil {
+	output, err = runSubmissionDescriptor(t, *validation.Submission, validationPath)
+	if err != nil {
 		t.Fatalf("execute validation descriptor: %v\n%s", err, output)
 	}
-	terminal, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	terminal := assertApprovedBurnedCompactNegotiatedFinalize(t, output)
+	if terminal.LineageID != started.LineageID {
+		t.Fatalf("validation descriptor terminal lineage = %q, want %q", terminal.LineageID, started.LineageID)
 	}
-	if terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
-		t.Fatalf("validation descriptor terminal state = %#v", terminal.State)
-	}
-	before = readReviewOperationFile(t, store.StatePath())
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 	output, err = runSubmissionDescriptor(t, *validation.Submission, validationPath)
-	assertSubmissionNotStarted(t, err, output, store, before)
+	if err == nil {
+		t.Fatalf("burned validation descriptor succeeded: %s", output)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func submissionDescriptorCorrectionFixture(t *testing.T) (string, ReviewIntegrationStartResult, reviewtransaction.CompactStore) {
@@ -259,8 +259,7 @@ func assertSubmissionTransitionSchema(t *testing.T, status ReviewTargetStatusRes
 }
 
 func TestCaptureEvidenceDescriptorExecutesExactV5Transition(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{
 		"--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,

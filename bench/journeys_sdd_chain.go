@@ -148,6 +148,7 @@ func sddChainJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j64-unmanaged-remediation-survives-audited-reset",
+			Review: reviewOptedIn,
 			Title:  "An audited reset between the failed settle and the correction acquire no longer orphans the correction",
 			Source: "#1974 slice 2 (#2565): chain-derived failed-evidence binding",
 			Steps: []Step{
@@ -172,6 +173,7 @@ func sddChainJourneys() []Journey {
 		},
 		{
 			ID:     "j87-unmanaged-remediation-uses-chain-failed-evidence",
+			Review: reviewOptedIn,
 			Title:  "A reset-authorized correction settles against its failed evidence, not a later interruption",
 			Source: "#2871: compact settle must match the immutable failed-evidence chain",
 			Steps: []Step{

@@ -77,12 +77,13 @@ into applying a decision rather than making one.
 
 Before changing review, delivery or SDD behaviour, read:
 
-- [Organic RDD architecture](architecture/organic-rdd.md) — how a candidate
-  becomes a receipt, and what each gate validates
+- [Organic RDD architecture](architecture/organic-rdd.md) — how a candidate is
+  reviewed as evidence while ordinary repository policy controls delivery
 - [Review authority threat model](review-authority-threat-model.md) — what the
   authority store defends against, and what it deliberately does not
 - [Organic implementation routing](trigger-rules.md) — how work is routed
   before review ever runs
 
-RDD is **Receipt-Driven Development**. The receipt is what every delivery gate
-validates; reviewing is one step on the way to producing it.
+RDD is **Receipt-Driven Development**. Its review evidence never authorizes
+commit, push, PR, release, or archive; reviewing is separate from ordinary
+repository delivery policy.

@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin"
 
-const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
-const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n(?:<summary>[^<>\r\n]+<\/summary>\n)?<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
+const TASK_TAG = /<\/?(?:task|task_result|summary)(?:\s|>)/
 const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
 const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
 const SDD_TASK_ROUTE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
@@ -11,6 +11,10 @@ type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
 
 function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
+}
+
+function isBackgroundTask(args: unknown): boolean {
+  return !!args && typeof args === "object" && !Array.isArray(args) && (args as Record<string, unknown>).background === true
 }
 
 function taskResult(output: unknown): void {
@@ -99,6 +103,10 @@ const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => 
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string") return
       const subagent = input.args.subagent_type
       if (!isSDDPhase(subagent)) return
+      // OpenCode invokes this hook for the background launch acknowledgement while
+      // the child is still running. That signal has no terminal task result to
+      // validate; artifact/status ownership observes eventual completion.
+      if (isBackgroundTask(input.args)) return
       try {
         taskResult(output.output)
       } catch (cause) {

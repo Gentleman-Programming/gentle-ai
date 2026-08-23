@@ -677,8 +677,9 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"explicit request or accepted proposal",
 		"Per-action rule",
 		"Authority rule",
-		"gentle-ai review status",
-		"gentle-ai review validate --gate",
+		"selectorless `gentle-ai review status`",
+		"exact START",
+		"Gates are informational only",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt hard gate %q", wanted)
@@ -792,8 +793,9 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Authority rule",
 		"Semantic guard",
 		"execution, not delegation",
-		"gentle-ai review status",
-		"gentle-ai review validate --gate",
+		"selectorless `gentle-ai review status`",
+		"exact START",
+		"Gates are informational only",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
@@ -882,8 +884,9 @@ func TestInjectOpenCodeUpgradesPromptOwnedLensRouter(t *testing.T) {
 		"Optional SDD rule",
 		"explicit request or accepted proposal",
 		"Authority rule",
-		"gentle-ai review status",
-		"gentle-ai review validate --gate",
+		"selectorless `gentle-ai review status`",
+		"exact START",
+		"Gates are informational only",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing native routing fragment %q after migration", wanted)
@@ -924,7 +927,7 @@ func TestEnsurePreservedOpenCodeDelegationHardGatesMigratesToNativeTransition(t 
 	legacy := "### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
 		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)"
 	got := ensurePreservedOpenCodeDelegationHardGates(legacy)
-	for _, want := range []string{"`gentle-ai review status`", "`gentle-ai review validate --gate <gate>`", "exact owner-issued receipt"} {
+	for _, want := range []string{"selectorless `gentle-ai review status`", "exact START", "lineage, revision, and target", "Gates are informational only"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("migrated delegation gates missing native review authority clause %q:\n%s", want, got)
 		}
@@ -977,10 +980,11 @@ const retiredWorkRoutingAuthorityRule = "7. **Authority rule**: when a WorkRun e
 	" and apply only its exact provider-issued `gentle-ai.work-transition/v1` authorization." +
 	" Never select lenses, synthesize transitions, or infer PASS from prose."
 
-// The replacement rule 7, keyed on authority surfaces that still exist.
-const nativeReviewAuthorityRuleText = "7. **Authority rule**: read native review state with `gentle-ai review status`" +
-	" and let `gentle-ai review validate --gate <gate>` check the exact owner-issued receipt at every lifecycle gate." +
-	" Never select lenses, synthesize transitions, or infer PASS from prose."
+// The replacement rule 7 retains one current-worktree transaction binding and
+// never lets compatibility gates decide delivery.
+const nativeReviewAuthorityRuleText = "7. **Authority rule**: use selectorless `gentle-ai review status` only to preflight the current worktree" +
+	" and execute its exact START; retain that transaction's lineage, revision, and target for every later lifecycle call." +
+	" Gates are informational only. Never select lenses, synthesize transitions, infer PASS, or authorize delivery from prose."
 
 // previouslyInstalledDelegationHardGates reproduces, byte for byte, the managed
 // block that shipped before this migration, including the retired rule 7.
@@ -2217,9 +2221,9 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Multi overlay must contain gentle-orchestrator + 2 native fallback agents +
-	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter = 21 agents.
-	if len(agentMap) != 21 {
-		t.Fatalf("agent count = %d, want 21", len(agentMap))
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -2243,7 +2247,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Verify representative sub-agents are present.
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		if _, ok := agentMap[subAgent]; !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
 		}
@@ -2605,12 +2609,12 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
-	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter = 21 agents.
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 21 {
-		t.Fatalf("agent count = %d, want 21", len(agentMap))
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2639,7 +2643,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		raw, ok := agentMap[subAgent]
 		if !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
@@ -3132,6 +3136,7 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		"review-reliability": {ProviderID: "openai", ModelID: "gpt-5"},
 		"review-resilience":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		"review-refuter":     {ProviderID: "openai", ModelID: "gpt-5", Effort: "high"},
+		"review-validator":   {ProviderID: "openai", ModelID: "gpt-5-mini"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
@@ -3187,8 +3192,12 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		"review-reliability": "openai/gpt-5",
 		"review-resilience":  "anthropic/claude-sonnet-4",
 		"review-refuter":     "openai/gpt-5",
+		"review-validator":   "openai/gpt-5-mini",
 	} {
-		definition := agentMap[agent].(map[string]any)
+		definition, ok := agentMap[agent].(map[string]any)
+		if !ok {
+			t.Fatalf("%s agent definition = %#v, want object", agent, agentMap[agent])
+		}
 		if got := definition["model"]; got != want {
 			t.Fatalf("%s model = %q, want %q", agent, got, want)
 		}
@@ -4398,10 +4407,18 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	if strings.Contains(string(settings), "codegraph_codegraph_explore") {
 		t.Fatal("Kilocode settings must not receive the OpenCode CodeGraph grant")
 	}
-	for _, fallbackAgent := range []string{"general", "explore"} {
-		if _, exists := agentMap[fallbackAgent]; exists {
-			t.Fatalf("Kilocode settings must not receive OpenCode-only fallback agent %q", fallbackAgent)
+	for _, openCodeOnlyAgent := range []string{"general", "explore", opencodemodel.ReviewValidatorAgent} {
+		if _, exists := agentMap[openCodeOnlyAgent]; exists {
+			t.Fatalf("Kilocode settings must not receive OpenCode-only agent %q", openCodeOnlyAgent)
 		}
+	}
+	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
+	taskPermissions := orchestrator["permission"].(map[string]any)["task"].(map[string]any)
+	if replacement, ok := taskPermissions["__replace__"].(map[string]any); ok {
+		taskPermissions = replacement
+	}
+	if _, exists := taskPermissions[opencodemodel.ReviewValidatorAgent]; exists {
+		t.Fatalf("Kilocode settings must not authorize OpenCode-only agent %q", opencodemodel.ReviewValidatorAgent)
 	}
 }
 
@@ -7539,6 +7556,68 @@ func TestNativeFallbackRolesRemainAligned(t *testing.T) {
 	if len(ownership.Agents) != 0 {
 		t.Errorf("reconcile() retained picker-owned roles: %#v", ownership.Agents)
 	}
+}
+
+func TestInjectOpenCodeNativeFallbackOwnershipRetainsValuesWhenSourcesDisappear(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	firstAssignments := map[string]model.ModelAssignment{
+		"sdd-mid":     {ProviderID: "first", ModelID: "mid", Effort: "low"},
+		"sdd-explore": {ProviderID: "first", ModelID: "explore", Effort: "medium"},
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: firstAssignments}); err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+
+	want := map[string]nativeFallbackAssignment{
+		"general": {Model: "first/mid", Variant: "low"},
+		"explore": {Model: "first/explore", Variant: "medium"},
+	}
+	assertState := func(label string) {
+		t.Helper()
+		got, err := readNativeFallbackAssignments(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for role, expected := range want {
+			if got[role] != expected {
+				t.Fatalf("%s fallback[%s] = %#v, want %#v", label, role, got[role], expected)
+			}
+		}
+
+		raw, err := os.ReadFile(nativeFallbackOwnershipPath(settingsPath))
+		if err != nil {
+			t.Fatalf("%s ownership read error = %v", label, err)
+		}
+		var ownership nativeFallbackOwnership
+		if err := json.Unmarshal(raw, &ownership); err != nil {
+			t.Fatalf("%s ownership decode error = %v", label, err)
+		}
+		if ownership.Schema != nativeFallbackOwnershipSchema || ownership.Version != 1 {
+			t.Fatalf("%s ownership header = %q/%d, want %q/1", label, ownership.Schema, ownership.Version, nativeFallbackOwnershipSchema)
+		}
+		if !equalNativeFallbackAssignments(ownership.Agents, want) {
+			t.Fatalf("%s ownership agents = %#v, want %#v", label, ownership.Agents, want)
+		}
+	}
+	assertState("first sync")
+
+	// In multi mode, sdd-mid and sdd-explore are the managed derivation sources.
+	// When both disappear, retain the last managed values and ownership metadata;
+	// source absence is not authorization to delete existing OpenCode settings.
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: map[string]model.ModelAssignment{}}); err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	assertState("source-removal sync")
 }
 
 func TestReadNativeFallbackAssignmentsReturnsEmptyMapWithoutAgent(t *testing.T) {

@@ -138,6 +138,11 @@ type InstallState struct {
 	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
 
 	BackgroundIntent model.OpenCodeBackgroundIntent `json:"opencode_background_subagents,omitempty"`
+
+	// PiBackgroundIntent is the managed Pi background-subagent choice. It is
+	// persisted separately from the OpenCode field because each key is part of
+	// an independent state contract.
+	PiBackgroundIntent model.PiBackgroundIntent `json:"pi_background_subagents,omitempty"`
 }
 
 // UnmarshalJSON preserves whether the persisted persona field was present.
@@ -247,7 +252,8 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		RDDMode:                     existing.RDDMode,
 		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
 
-		BackgroundIntent: existing.BackgroundIntent,
+		BackgroundIntent:   existing.BackgroundIntent,
+		PiBackgroundIntent: existing.PiBackgroundIntent,
 	}
 }
 

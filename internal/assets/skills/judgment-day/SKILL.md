@@ -21,7 +21,7 @@ Load only when the user explicitly requests Judgment Day or equivalent dual/adve
 - Fix only severe findings confirmed by both judges. WARNING/SUGGESTION rows remain `info`.
 - Permit at most two fix rounds and two scoped re-judgments. Re-judgment sees only the frozen ledger plus fix delta and may record fix-caused defects.
 - The only terminal verdicts are `APPROVED | ESCALATED`; never reset or extend an exhausted round budget.
-- A judgment issues no receipt and carries no delivery authority: it satisfies no commit, push, PR, or release gate. When the caller explicitly wants delivery authority for the same target, run the ordinary negotiated review lifecycle as its own step; a runtime that cannot uphold receipt guarantees loses the receipt, not the judgment.
+- A judgment issues no receipt and carries no delivery authority: it satisfies no commit, push, PR, or release gate. When the caller explicitly wants ordinary negotiated review for the same target, run it as its own step; neither outcome authorizes delivery, which remains under ordinary repository policy.
 
 ## Decision Gates
 
@@ -50,4 +50,4 @@ Return target identity, round, confirmed/suspect/contradiction/INFO counts, corr
 ## References
 
 - [references/prompts-and-formats.md](references/prompts-and-formats.md) — compact judge/fix prompts and verdict shape.
-- [../_shared/review-ledger-contract.md](../_shared/review-ledger-contract.md) — delivery-authority route only: consult it when the caller explicitly opts into the ordinary negotiated review lifecycle; never required to run judges.
+- [../_shared/review-ledger-contract.md](../_shared/review-ledger-contract.md) — optional ordinary negotiated-review context: consult it only when the caller explicitly requests that lifecycle; never required to run judges and never delivery authorization.

@@ -87,6 +87,8 @@ expected_contract = [
 	current_contract_root / "schemas/consent-v3.schema.json",
 	current_contract_root / "schemas/consent.schema.json",
 	current_contract_root / "schemas/failure.schema.json",
+	current_contract_root / "schemas/gate-result.schema.json",
+	current_contract_root / "schemas/opencode-provider-role.schema.json",
 	current_contract_root / "schemas/operation.schema.json",
 	current_contract_root / "schemas/repair.schema.json",
 	current_contract_root / "schemas/start.schema.json",

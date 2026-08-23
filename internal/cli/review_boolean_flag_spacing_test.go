@@ -20,7 +20,7 @@ import (
 // verb's flag parsing already funnels through, so every verb benefits without
 // touching each verb's own "unexpected review <verb> argument" call site.
 func TestReviewBooleanFlagSpacedValueNamesTheEqualsForm(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/second.md", "# second\n\nplain prose, no executable content.\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "docs/second.md")

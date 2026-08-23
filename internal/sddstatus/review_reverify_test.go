@@ -3,7 +3,6 @@ package sddstatus
 import (
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -45,7 +44,7 @@ func TestDeriveCorrectionEvidenceBranches(t *testing.T) {
 			compact: &reviewtransaction.CompactState{CorrectionAttempts: []reviewtransaction.CompactCorrectionAttempt{
 				{Snapshot: reviewtransaction.Snapshot{CandidateTree: "deadbeef"}},
 			}},
-			want: correctionEvidence{applied: true, candidateTree: "deadbeef"},
+			want: correctionEvidence{applied: true},
 		},
 		{
 			name: "correction recorded with real path data -- derivable",
@@ -180,178 +179,17 @@ func TestResolveOmitsReVerifyBlockWithoutAnyCorrection(t *testing.T) {
 	}
 }
 
-// Phase 9 (design.md's "Amendment (corrective verify cycle 3): re-verify
-// archive-gating deferred to Wave 5" and its "What a compliant Wave 5 (or
-// later) implementation needs" checklist): a compliant replacement for the
-// livelocking blockArchiveForUnsatisfiedReVerify cycle 3 removed. The
-// frozen anchor is CompactCorrectionAttempt's own FixDeltaHash/
-// Snapshot.CandidateTree -- both written once, at CompleteCorrection time
-// (compact.go), by an append-only slice -- never a live value re-derived
-// from the current verify-report on every Resolve() the way the removed
-// attempt did. Satisfaction is proven structurally: a passing native SDD
-// runtime attempt whose FinishCandidateTree equals the frozen candidateTree.
+// Review correction data remains advisory. It may populate ReVerify, but
+// neither its presence nor its completion changes SDD archive readiness.
+func TestReviewCorrectionContextDoesNotBlockArchiveRouting(t *testing.T) {
+	status := Status{Dependencies: Dependencies{Apply: DependencyAllDone, Verify: DependencyAllDone, Archive: DependencyReady}, NextRecommended: string(PhaseArchive)}
+	block, emit := classifyTargetedReVerify(correctionEvidence{applied: true, derivable: true, paths: []string{"spec.md"}}, []string{"spec.md"})
 
-// TestBlockArchiveForUnsatisfiedReVerify_FrozenAnchorDoesNotRelabel
-// reproduces the exact Wave 4 CRITICAL-A livelock repro shape: cycle 1
-// blocks; a compliant remediation (a passing native runtime attempt against
-// the corrected candidate) satisfies it; cycle 2 (re-deriving the anchor
-// from the SAME, unchanged, append-only CorrectionAttempts) must NOT mint a
-// new demand -- it must stay satisfied.
-func TestBlockArchiveForUnsatisfiedReVerify_FrozenAnchorDoesNotRelabel(t *testing.T) {
-	compact := &reviewtransaction.CompactState{CorrectionAttempts: []reviewtransaction.CompactCorrectionAttempt{
-		{FixDeltaHash: "sha256:corrected", Snapshot: reviewtransaction.Snapshot{CandidateTree: "tree-corrected", Paths: []string{"a.go"}}},
-	}}
-
-	// Cycle 1: no native runtime attempt has yet addressed the correction.
-	evidenceCycle1 := deriveCorrectionEvidence(compact)
-	if !archiveReVerifyDemanded(evidenceCycle1) {
-		t.Fatalf("cycle 1: archive re-verify demand not raised for an applied, derivable correction")
+	if !emit || block.Mode != ReVerifyModeFull {
+		t.Fatalf("classifyTargetedReVerify() = %#v, emit=%v, want visible review context", block, emit)
 	}
-	if archiveReVerifySatisfied(evidenceCycle1, nil) {
-		t.Fatalf("cycle 1: archive re-verify reports satisfied with no matching runtime attempt")
+	status.ReVerify = &block
+	if status.Dependencies.Archive != DependencyReady || status.NextRecommended != string(PhaseArchive) {
+		t.Fatalf("review context routed archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 	}
-	// A passed attempt against a DIFFERENT candidate tree (e.g. a stale
-	// attempt that predates the correction) must not satisfy the demand --
-	// only Outcome==passed AND a matching FinishCandidateTree count.
-	if archiveReVerifySatisfied(evidenceCycle1, []RuntimeAttempt{{Outcome: AttemptPassed, FinishCandidateTree: "tree-unrelated"}}) {
-		t.Fatalf("cycle 1: a passed attempt against an unrelated candidate tree must not satisfy the demand")
-	}
-
-	// Compliant remediation: the operator re-verifies and records a passing
-	// native runtime attempt against the corrected candidate tree.
-	attempts := []RuntimeAttempt{{Outcome: AttemptPassed, FinishCandidateTree: "tree-corrected"}}
-	if !archiveReVerifySatisfied(evidenceCycle1, attempts) {
-		t.Fatalf("compliant remediation did not satisfy the archive re-verify demand")
-	}
-
-	// Cycle 2 ("resolve again"): CorrectionAttempts is append-only and
-	// unchanged -- no new correction landed -- so re-deriving evidence from
-	// the SAME compact state must produce the IDENTICAL frozen anchor. Wave
-	// 4's CRITICAL-A instead re-derived a NEW live verify-report revision on
-	// every Resolve(), relabeling a satisfied demand into an unsatisfied one.
-	evidenceCycle2 := deriveCorrectionEvidence(compact)
-	if !reflect.DeepEqual(evidenceCycle1, evidenceCycle2) {
-		t.Fatalf("frozen anchor relabeled itself between resolves: cycle1=%#v cycle2=%#v", evidenceCycle1, evidenceCycle2)
-	}
-	if !archiveReVerifySatisfied(evidenceCycle2, attempts) {
-		t.Fatalf("cycle 2: a compliant remediation must stay satisfied, not re-demand a new anchor (Wave 4 CRITICAL-A livelock shape)")
-	}
-}
-
-// TestBlockArchiveForUnsatisfiedReVerify_NamedContinuationIsRunnable asserts
-// the blocked-reason text names a complete, literally-runnable
-// `gentle-ai sdd-attempt finish` invocation carrying all 8 base flags
-// (missingSDDAttemptFlags's "finish" case, internal/cli/sdd_attempt.go).
-// It deliberately does NOT name the 3-flag remediation trio
-// (--expected-binding-revision, --successor-lineage,
-// --remediates-evidence-revision): that trio's own validation
-// (validateRuntimeRemediationSuccessor, internal/sddstatus/runtime_ledger.go)
-// demands an approved review successor lineage -- a full review round trip,
-// an entirely different and heavier axis than "re-verify the corrected
-// candidate" that would repeat Wave 4's unrunnable-continuation defect at
-// one remove. See the Phase 9 deviation note in tasks.md.
-func TestBlockArchiveForUnsatisfiedReVerify_NamedContinuationIsRunnable(t *testing.T) {
-	runtimeStatus := RuntimeStatus{Revision: "sha256:ledgerrevision"}
-	text := archiveReVerifyContinuation("/repo", "wave5", runtimeStatus)
-
-	if !strings.Contains(text, "gentle-ai sdd-attempt finish") {
-		t.Fatalf("archiveReVerifyContinuation() = %q, does not name a runnable sdd-attempt finish invocation", text)
-	}
-	for _, flag := range []string{
-		"--cwd", "--change", "--expected-revision", "--request-id", "--outcome",
-		"--evidence-revision", "--diagnosis", "--harness-disposition", "--cleanup-evidence", "--process-evidence",
-	} {
-		if !strings.Contains(text, flag) {
-			t.Fatalf("archiveReVerifyContinuation() = %q, missing required finish flag %q", text, flag)
-		}
-	}
-	if strings.Contains(text, "--successor-lineage") || strings.Contains(text, "--expected-binding-revision") || strings.Contains(text, "--remediates-evidence-revision") {
-		t.Fatalf("archiveReVerifyContinuation() = %q, must not name the heavier remediation-trio continuation", text)
-	}
-
-	t.Run("names begin first when no attempt is active", func(t *testing.T) {
-		text := archiveReVerifyContinuation("/repo", "wave5", RuntimeStatus{Revision: "sha256:ledgerrevision"})
-		if !strings.Contains(text, "gentle-ai sdd-attempt begin") {
-			t.Fatalf("archiveReVerifyContinuation() = %q, must name begin first when no attempt is active", text)
-		}
-	})
-
-	t.Run("names only finish when an attempt is already active", func(t *testing.T) {
-		text := archiveReVerifyContinuation("/repo", "wave5", RuntimeStatus{
-			Revision:      "sha256:ledgerrevision",
-			ActiveAttempt: &RuntimeAttempt{Ordinal: 1},
-		})
-		if strings.Contains(text, "gentle-ai sdd-attempt begin") {
-			t.Fatalf("archiveReVerifyContinuation() = %q, must not name begin while an attempt is already active (it would refuse)", text)
-		}
-	})
-}
-
-// TestBlockArchiveForUnsatisfiedReVerify_StructuralAbsence proves the
-// blocking budget (design constraint 3): no demand at all when no
-// correction was ever applied, and no demand on the fail-closed branch
-// (task 7.3's territory, same guard classifyTargetedReVerify already uses).
-func TestBlockArchiveForUnsatisfiedReVerify_StructuralAbsence(t *testing.T) {
-	t.Run("no correction applied", func(t *testing.T) {
-		if archiveReVerifyDemanded(correctionEvidence{}) {
-			t.Fatalf("archiveReVerifyDemanded() = true, want false with no correction ever recorded")
-		}
-	})
-	t.Run("fail closed", func(t *testing.T) {
-		if archiveReVerifyDemanded(correctionEvidence{applied: true, failClosed: true}) {
-			t.Fatalf("archiveReVerifyDemanded() = true, want false on the fail-closed branch")
-		}
-	})
-}
-
-// TestBlockArchiveForUnsatisfiedReVerify_MutatesOnlyArchive proves the
-// blocking budget's other half (design constraint 3): the orchestrating
-// function blocks Status.Dependencies.Archive only, appends exactly one
-// blocked reason naming the frozen fix_delta_hash, and leaves every other
-// dependency untouched -- archive-only, never commit/push/pr/release (those
-// live entirely outside Status.Dependencies, in the S1-S7 gate-cutover
-// domain this phase shares no files with).
-func TestBlockArchiveForUnsatisfiedReVerify_MutatesOnlyArchive(t *testing.T) {
-	status := &Status{Dependencies: Dependencies{Apply: DependencyAllDone, Verify: DependencyAllDone, Archive: DependencyReady}}
-	evidence := correctionEvidence{applied: true, derivable: true, fixDeltaHash: "sha256:corrected", candidateTree: "tree-corrected"}
-	runtimeStatus := &RuntimeStatus{Revision: "sha256:ledgerrevision"}
-
-	blockArchiveForUnsatisfiedReVerify(status, "/repo", "wave5", runtimeStatus, evidence)
-
-	if status.Dependencies.Archive != DependencyBlocked {
-		t.Fatalf("Dependencies.Archive = %v, want blocked", status.Dependencies.Archive)
-	}
-	if status.Dependencies.Apply != DependencyAllDone || status.Dependencies.Verify != DependencyAllDone {
-		t.Fatalf("Dependencies = %#v, want only Archive touched", status.Dependencies)
-	}
-	if len(status.BlockedReasons) != 1 || !strings.Contains(status.BlockedReasons[0], "sha256:corrected") {
-		t.Fatalf("BlockedReasons = %#v, want exactly one reason naming the frozen fix_delta_hash", status.BlockedReasons)
-	}
-
-	t.Run("satisfied leaves archive untouched", func(t *testing.T) {
-		status := &Status{Dependencies: Dependencies{Archive: DependencyReady}}
-		attempts := []RuntimeAttempt{{Outcome: AttemptPassed, FinishCandidateTree: "tree-corrected"}}
-		runtimeStatus := &RuntimeStatus{Revision: "sha256:ledgerrevision", Attempts: attempts}
-		blockArchiveForUnsatisfiedReVerify(status, "/repo", "wave5", runtimeStatus, evidence)
-		if status.Dependencies.Archive != DependencyReady || len(status.BlockedReasons) != 0 {
-			t.Fatalf("satisfied demand mutated status: Dependencies=%#v BlockedReasons=%#v", status.Dependencies, status.BlockedReasons)
-		}
-	})
-
-	t.Run("nil runtime status is structural absence", func(t *testing.T) {
-		status := &Status{Dependencies: Dependencies{Archive: DependencyReady}}
-		blockArchiveForUnsatisfiedReVerify(status, "/repo", "wave5", nil, evidence)
-		if status.Dependencies.Archive != DependencyReady || len(status.BlockedReasons) != 0 {
-			t.Fatalf("nil runtime status must not block archive: Dependencies=%#v BlockedReasons=%#v", status.Dependencies, status.BlockedReasons)
-		}
-	})
-
-	t.Run("no correction applied is structural absence", func(t *testing.T) {
-		status := &Status{Dependencies: Dependencies{Archive: DependencyReady}}
-		runtimeStatus := &RuntimeStatus{Revision: "sha256:ledgerrevision"}
-		blockArchiveForUnsatisfiedReVerify(status, "/repo", "wave5", runtimeStatus, correctionEvidence{})
-		if status.Dependencies.Archive != DependencyReady || len(status.BlockedReasons) != 0 {
-			t.Fatalf("no correction applied must not block archive: Dependencies=%#v BlockedReasons=%#v", status.Dependencies, status.BlockedReasons)
-		}
-	})
 }

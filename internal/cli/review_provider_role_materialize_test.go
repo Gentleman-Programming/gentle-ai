@@ -69,6 +69,7 @@ func piRefuterRawResult(t *testing.T, repo string, store reviewtransaction.Compa
 }
 
 func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(record, handle)
@@ -98,6 +99,7 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 }
 
 func TestReviewCaptureRefuterMaterializeRefusesWithoutInferentialFindings(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
@@ -132,6 +134,7 @@ func overrideProviderRoleHostAdapter(t *testing.T, adapter reviewerprovider.Adap
 }
 
 func TestReviewCaptureRefuterExecutesGoOwnedPiAndHostMediatedFinalizeDiscoversSlot(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(record, handle)
@@ -173,6 +176,7 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndHostMediatedFinalizeDiscoversSl
 // real spawned fake pi (its grandchild holds the inherited stdout pipe) past
 // the shrunken deadline: typed refusal, untouched slot, no hang.
 func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing.T) {
+	reviewEnabledHome(t)
 	if goruntime.GOOS == "windows" {
 		t.Skip("the stalled fake pi is a POSIX shell script")
 	}
@@ -339,6 +343,7 @@ func TestHostileProviderRoleCaptureTransitionsFailClosedWithoutPanic(t *testing.
 }
 
 func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, _ := piRefuterReview(t)
 	var output bytes.Buffer
@@ -417,6 +422,7 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 }
 
 func TestNegotiatedStatusPiRefuterSlotOccupiedKeepsCompiledRenderings(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, _, record, _ := piRefuterReview(t)
 	// The compiled claude-code rendering stays byte-identical: no provider
@@ -438,6 +444,7 @@ func TestNegotiatedStatusPiRefuterSlotOccupiedKeepsCompiledRenderings(t *testing
 }
 
 func TestReviewCaptureValidationMaterializesExecutesAndFinalizeDiscovers(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
@@ -541,19 +548,19 @@ func TestReviewCaptureValidationMaterializesExecutesAndFinalizeDiscovers(t *test
 	if err != nil || !slot.Occupied {
 		t.Fatalf("validator execution did not occupy the result slot: %#v, %v", slot, err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-evidence=true"}, &bytes.Buffer{}); err != nil {
+	var finalOutput bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-evidence=true"}, &finalOutput); err != nil {
 		t.Fatalf("host-mediated finalize did not discover the captured validator slot: %v", err)
 	}
-	final, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
+	final := assertApprovedBurnedCompactFacadeFinalize(t, finalOutput.Bytes())
+	if final.LineageID != lineage {
+		t.Fatalf("finalize lineage = %q, want the passed validator verdict to close %q", final.LineageID, lineage)
 	}
-	if final.State.State == reviewtransaction.StateCorrectionRequired {
-		t.Fatalf("finalize state = %q, want the passed validator verdict to close the correction", final.State.State)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, lineage, request := providerCorrectionReady(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
@@ -588,6 +595,7 @@ func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {
 }
 
 func TestNegotiatedStatusKeepsExternalValidationRenderingsForOtherRuntimes(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, lineage, _ := providerCorrectionReady(t)
 

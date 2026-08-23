@@ -45,6 +45,12 @@ type waveOperationResult struct {
 	TargetIdentity       string `json:"target_identity"`
 }
 
+type waveTransitionArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Token string `json:"token"`
+}
+
 type waveCorrectionStatus struct {
 	Schema         string `json:"schema"`
 	TargetIdentity string `json:"target_identity"`
@@ -81,10 +87,15 @@ type waveCorrectionStatus struct {
 				CaptureOperation string                         `json:"capture_operation"`
 				Arguments        []struct{ Name, Value string } `json:"arguments"`
 				Submission       *waveSubmissionDescriptor      `json:"submission"`
+				ProviderTask     *struct {
+					Prompt string `json:"prompt"`
+					Role   string `json:"role"`
+				} `json:"provider_task"`
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute *struct {
-			Operation string `json:"operation"`
+			Operation string                   `json:"operation"`
+			Arguments []waveTransitionArgument `json:"arguments"`
 		} `json:"execute"`
 	} `json:"next_transition"`
 }
@@ -566,7 +577,11 @@ func capturePassedCorrectionEvidence(r *journeyRun) error {
 }
 
 func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
-	status, err := readCorrectionStatusFor(r, lineage)
+	return capturePassedCorrectionEvidenceForContract(r, lineage, reviewContract)
+}
+
+func capturePassedCorrectionEvidenceForContract(r *journeyRun, lineage, contract string) error {
+	status, err := readCorrectionStatusForContract(r, lineage, contract)
 	if err != nil {
 		return err
 	}
@@ -592,6 +607,13 @@ func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
 
 func completeCorrectedReview(r *journeyRun) error {
 	return completeCorrectedReviewForContract(r, correctedDeliveryLineage, reviewContractV2)
+}
+
+func completeBurnedCorrectedReview(r *journeyRun) error {
+	if err := completeCorrectedReview(r); err != nil {
+		return err
+	}
+	return requireAtomicLineageBurned(r, correctedDeliveryLineage)
 }
 
 func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
@@ -1073,7 +1095,8 @@ func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error 
 // Absence" requirement): the disabled branch previously required a populated
 // "disabled/unmanaged" disposition; it now requires reviewGate's structural
 // ABSENCE instead -- no field, no ceremony, archive unfailable on review
-// grounds. The enabled branch is untouched.
+// grounds. With reviews enabled, a discovered scope change remains visible but
+// is equally informational: archive stays ready under ordinary policy.
 func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
 	return sddStatusAssertion("discovered scope-changed archive authority", func(status sddStatusV1) error {
 		if disabled {
@@ -1091,8 +1114,8 @@ func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) e
 		if !strings.Contains(status.ReviewGate.Reason, "review scope changed") {
 			return fmt.Errorf("reviewGate.reason = %q, want the changed candidate reason", status.ReviewGate.Reason)
 		}
-		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want scope-changed blocked/resolve-review",
+		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want informational scope-changed ready/archive",
 				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
 		}
 		return nil
@@ -1243,6 +1266,7 @@ func waveOneJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j44-corrected-current-changes-delivery",
+			Review: reviewOptedIn,
 			Title:  "Corrected current-changes receipt: one exact linked-worktree delivery is discovered selector-free",
 			Source: "issue #1819 + shape 3 (the squashed-delivery proof was hidden behind the wrong binding condition)",
 			Steps: []Step{
@@ -1273,6 +1297,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j45-completed-final-verification-retry",
+			Review: reviewOptedIn,
 			Title:  "Completed final-verification retry: provider successor remains authoritative in inventory and post-apply",
 			Source: "issue #1915 + shape 3 (retry edge validation was gated on a validating-only successor)",
 			Steps: []Step{
@@ -1304,6 +1329,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j46-correction-required-staged-recovery",
+			Review: reviewOptedIn,
 			Title:  "Correction-required base diff: negotiated staged recovery receives a fresh review and delivers",
 			Source: "issue #1921",
 			Steps: []Step{
@@ -1352,6 +1378,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j47-disabled-mode-archives-discovered-scope-changed-authority",
+			Review: reviewOptedIn,
 			Title:  "Discovered scope-changed archive authority: disabled mode steps aside without weakening explicit authority",
 			Source: "issue #2128",
 			Steps: []Step{
@@ -1379,6 +1406,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j48-recovered-workspace-preserves-full-candidate-scope",
+			Review: reviewOptedIn,
 			Title:  "Recovered workspace correction: terminal authorities preserve the complete candidate scope",
 			Source: "issue #2090",
 			Steps: []Step{
@@ -1412,6 +1440,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j49-status-without-cwd-honors-kill-switch",
+			Review: reviewOptedIn,
 			Title:  "SDD status without CWD: repository resolution and the kill switch share one workspace",
 			Source: "issue #2129",
 			Steps: []Step{
@@ -1445,6 +1474,7 @@ func waveOneJourneys() []Journey {
 			// tree matches the frozen target) were never gate-side and
 			// stay exactly as true as before.
 			ID:     "j50-candidate-decline-denies-generically-then-disabled",
+			Review: reviewOptedIn,
 			Title:  "Candidate decline creates no review authority; a later gate denies generically, or reaches ordinary unmanaged delivery once reviews are disabled",
 			Source: "issue #2045 (Wave 5 Slice 6 downgrade)",
 			Steps: []Step{
@@ -1462,17 +1492,20 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j51-negotiated-status-correction-continuation",
-			Title:  "Negotiated status: fresh candidate starts, corrected candidate continues",
-			Source: "issue #2044: selector-free fresh status and post-correction continuation",
+			Review: reviewOptedIn,
+			Title:  "#3417: selectorless STATUS starts only a fresh candidate; correction continues through its exact active lineage",
+			Source: "issue #2044 under #3417: selectorless STATUS is fresh by design, while every active correction continuation carries its exact lineage",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
 				{Name: "fixture: product process temp is unavailable", Fixture: unavailableProcessTemp},
 				{Name: "fresh negotiated status offers review start without authority history", Requires: statusCapability,
 					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition"), After: requireFreshNegotiatedStart},
-				{Name: "review start", Requires: startNamedCapability,
+				{Name: "review start with an exact active lineage", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", correctedDeliveryLineage), After: rememberLineage},
-				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "capture one blocking finding and finish the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, correctedDeliveryLineage, true)
+				}},
 				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
 					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
 					After: requireReviewState("correction_required", correctedDeliveryLineage)},
@@ -1480,11 +1513,12 @@ func waveOneJourneys() []Journey {
 					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
 				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
-				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+				{Name: "post-correction exact active-lineage status requests targeted validation and burns on completion", Requires: finalizeValidationCapability, Composite: completeBurnedCorrectedReview},
 			},
 		},
 		{
 			ID:     "j65-selectorless-committed-correction-continuation",
+			Review: reviewOptedIn,
 			Title:  "Committed-only correction: selector-less status and finalize rebuild the frozen base boundary",
 			Source: "issue #1925",
 			Steps: []Step{

@@ -14,6 +14,7 @@ func issue2031Journeys() []Journey {
 	return []Journey{
 		{
 			ID:     "j94-escalated-changed-scope-negotiates-recovery",
+			Review: reviewOptedIn,
 			Title:  "Escalated changed target: expanded scope negotiates recovery authorization",
 			Source: "issue #2031: changed-target recovery must precede delivery-scope matching",
 			Steps: []Step{

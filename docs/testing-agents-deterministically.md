@@ -248,7 +248,7 @@ In CI the `organic-runtime-e2e` job runs this across a matrix of `ubuntu-latest`
 
 ## What it proves, and what it does not
 
-**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, emits a content-bound receipt, authorizes delivery, performs a real compare-and-swap against the remote, and stops when the kill switch is set — on Linux and Windows.
+**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set — on Linux and Windows. Review evidence never authorizes delivery or archive.
 
 **Not proved.** That a live model, given the shipped prompt, produces the same tool calls the fixture scripts. That leap is non-deterministic by nature and does not belong in a merge gate; it is covered by real usage and by the cross-adapter asset parity fixtures.
 

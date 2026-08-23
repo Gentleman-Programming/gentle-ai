@@ -152,11 +152,7 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) error {
 	_, _ = fmt.Fprintf(stdout, "  maximum report size: %d bytes (%s)\n", contract.MaxBytes, formatSDDVerifyValidateByteLimit(contract.MaxBytes))
 	_, _ = fmt.Fprintln(stdout, "  requirements and scenarios are completed/total; each completed count must not exceed its total.")
 	_, _ = fmt.Fprintln(stdout, "  --requirements and --scenarios must exactly equal their report totals.")
-	_, _ = fmt.Fprintln(stdout, "\nAuthority-only fail extension:")
-	_, _ = fmt.Fprintf(stdout, "  all-or-none fields: %s\n", strings.Join(contract.AuthorityOnlyFields, ", "))
-	_, _ = fmt.Fprintln(stdout, "  requires verdict fail, test_exit_code 125, build_exit_code 125, and nonzero blockers and critical_findings.")
-	_, _ = fmt.Fprintln(stdout, "  values: authority_only_failure=true, missing_review_authority=true, substantive_failure=false, command_failed=false.")
-	_, _ = fmt.Fprintf(stdout, "  test_output_hash and build_output_hash must equal %s.\n", contract.EmptyOutputHash)
+	_, _ = fmt.Fprintln(stdout, "  Independent test and build execution evidence is required for a passing verification result.")
 	return nil
 }
 

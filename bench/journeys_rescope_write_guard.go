@@ -93,6 +93,7 @@ func rescopeWriteGuardJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j79-consecutive-rescope-refuses-before-publication",
+			Review: reviewOptedIn,
 			Title:  "Failed zero-drift objective: a second rescope refuses before it can corrupt status",
 			Source: "issue #2830: rescope successors require their own terminal attempt",
 			Steps: []Step{

@@ -16,7 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
-func TestRunSDDAttemptSettleRefusesUnsafeDisabledRARModeWithoutMutation(t *testing.T) {
+func TestRunSDDAttemptSettleIgnoresUnsafeRDDModeAuthority(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	const change = "unsafe-rar-mode"
@@ -31,33 +31,16 @@ func TestRunSDDAttemptSettleRefusesUnsafeDisabledRARModeWithoutMutation(t *testi
 		t.Fatalf("make private RAR directory unsafe: %v", err)
 	}
 	defer os.Chmod(privateRARDir, 0o700)
-	runtimeBefore := snapshotRuntimeAuthorityFiles(t, store.Dir)
 	rarBefore := snapshotRuntimeAuthorityFiles(t, privateRARDir)
-	settleArgs := compactSettleArgs(repo, change, started.Token, "unsafe-mode-settle", "passed")
-	var output bytes.Buffer
-	err = RunSDDAttempt(settleArgs, &output)
-	if err == nil {
-		t.Fatalf("unsafe disabled mode settle error = nil, output=%s", output.String())
-	}
-	wantRepair := (&reviewModeUnsafePathError{Path: privateRARDir, Directory: true}).repairCommand()
-	if !strings.Contains(err.Error(), wantRepair) || !strings.Contains(err.Error(), "rerun the original command") {
-		t.Fatalf("unsafe disabled mode refusal = %q, want actionable %q", err, wantRepair)
-	}
-	if strings.Contains(err.Error(), "invalid_continuation") || output.Len() != 0 {
-		t.Fatalf("unsafe disabled mode was misclassified: error=%q output=%q", err, output.String())
-	}
-	if runtimeAfter := snapshotRuntimeAuthorityFiles(t, store.Dir); !reflect.DeepEqual(runtimeBefore, runtimeAfter) {
-		t.Fatalf("unsafe disabled mode settle mutated runtime authority\nbefore=%v\nafter=%v", runtimeBefore, runtimeAfter)
+	completed, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, started.Token, "unsafe-mode-settle", "passed"))
+	if completed.State != "complete" {
+		t.Fatalf("unsafe RDD metadata changed SDD settlement = %#v", completed)
 	}
 	if rarAfter := snapshotRuntimeAuthorityFiles(t, privateRARDir); !reflect.DeepEqual(rarBefore, rarAfter) {
-		t.Fatalf("unsafe disabled mode settle mutated RAR authority\nbefore=%v\nafter=%v", rarBefore, rarAfter)
+		t.Fatalf("SDD settlement touched unsafe RDD authority\nbefore=%v\nafter=%v", rarBefore, rarAfter)
 	}
-	if output, repairErr := exec.Command("sh", "-c", wantRepair).CombinedOutput(); repairErr != nil {
-		t.Fatalf("execute printed repair %q: %v\n%s", wantRepair, repairErr, output)
-	}
-	completed, _ := runCompactSDDAttempt(t, settleArgs)
-	if completed.State != "complete" {
-		t.Fatalf("replayed settle after repair = %#v, want complete", completed)
+	if status, err := store.Status(); err != nil || !status.Complete {
+		t.Fatalf("settled runtime status = %#v err=%v", status, err)
 	}
 }
 
@@ -68,9 +51,6 @@ func TestUnsafeDisabledRARModeRefusesStatusAndValidationBeforeTheirReaders(t *te
 		args func(string) []string
 	}{
 		{name: "sdd-status", run: RunSDDStatus, args: func(repo string) []string { return []string{"--cwd", repo, "--json"} }},
-		{name: "review-validate", run: RunReviewValidate, args: func(repo string) []string {
-			return []string{"--cwd", repo, "--receipt", filepath.Join(repo, "missing.json")}
-		}},
 		{name: "review-facade gate", run: RunReviewFacadeValidate, args: func(repo string) []string { return []string{"--cwd", repo, "--gate", "post-apply"} }},
 	} {
 		t.Run(command.name, func(t *testing.T) {
