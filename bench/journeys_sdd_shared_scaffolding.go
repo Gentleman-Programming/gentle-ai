@@ -6,24 +6,28 @@ import (
 )
 
 // sddSharedScaffoldingJourneys protects the narrow shared OpenSpec allowlist:
-// fresh project scaffolding is not another change payload and must not shadow
-// an approved authority bound to the active change.
+// fresh project scaffolding is not another change payload and, after #3417 burns
+// the terminal review, SDD continues under ordinary policy without a gate.
 func sddSharedScaffoldingJourneys() []Journey {
 	return []Journey{{
 		ID:     "j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
 		Review: reviewOptedIn,
-		Title:  "Approved active change remains eligible with exact fresh OpenSpec scaffolding",
-		Source: "shared OpenSpec review-gate policy: config.yaml and empty archive/spec roots are infrastructure, not foreign change payload",
-		Steps: append(sddApprovedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
-			Step{Name: "sdd-status preserves the approved active-change review gate", Requires: sddStatusCapability,
-				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("shared OpenSpec scaffolding approval", func(status sddStatusV1) error {
-					if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.Dependencies.Archive == "blocked" || status.NextRecommended == "resolve-review" {
-						return fmt.Errorf("shared scaffolding status = %+v", status)
-					}
-					return nil
-				})},
+		Title:  "#3417: terminal burn leaves shared OpenSpec scaffolding eligible under unmanaged ordinary policy",
+		Source: "shared OpenSpec policy under #3417: config.yaml and empty archive/spec roots are infrastructure, not foreign payload; burned review leaves no durable authority or gate",
+		Steps: append(sddBurnedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
+			Step{Name: "sdd-status keeps shared OpenSpec scaffolding archive-ready under unmanaged ordinary policy", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("shared OpenSpec scaffolding", requireSDDUnmanagedOrdinaryArchive("shared OpenSpec scaffolding"))},
 		),
 	}}
+}
+
+func requireSDDUnmanagedOrdinaryArchive(label string) func(sddStatusV1) error {
+	return func(status sddStatusV1) error {
+		if status.ReviewGate != nil || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("%s status = %+v, want no durable review gate and ordinary archive readiness", label, status)
+		}
+		return nil
+	}
 }
 
 func sddSharedScaffoldingAuthorityFixture(sandbox *Sandbox) error {

@@ -8,8 +8,8 @@
 //     through an emulated Task hook surface with HOST-assembled binding
 //     frames, against a live scratch-repo lineage. Covers the lens frame and
 //     the validator role frame, in both host-shaped and Go-shaped variants.
-//   - claude lane: one low-risk full lifecycle (start -> finalize -> validate
-//     gate allow) and one medium-candidate consent/v3 round-trip (granted).
+//   - claude lane: one low-risk lifecycle ending in authority burn and five
+//     ordinary-policy gates, plus one medium-candidate consent/v3 round-trip.
 //     With --with-model it additionally runs the real compiled claude-code
 //     reviewer runtime, which is why this battery lives outside CI.
 //   - advisory lane: the middle path neither of the two lanes above reaches —
@@ -76,6 +76,7 @@ func run() int {
 		withModel:   *withModel,
 		withHost:    *withHost,
 		sandboxHome: filepath.Join(workRoot, "home"),
+		lineages:    map[string]lineageScope{},
 	}
 	if !*keepWork {
 		defer os.RemoveAll(workRoot)
@@ -100,6 +101,7 @@ func run() int {
 	b.runOpenCodeLane()
 	b.runClaudeLane()
 	b.runAdvisoryLane()
+	b.runCodexLane()
 	b.runHostLanes()
 	b.runSchemaLane()
 

@@ -696,14 +696,317 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 	if err := os.WriteFile(path, before, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Deactivate(home, options); err != nil {
+	removed, err := Deactivate(home, options)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := removed.ChangedPaths(), []string{path, filepath.Join(home, ".zprofile")}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("successful deactivation changed paths = %v, want %v", got, want)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("owned launcher stat error = %v, want absent", err)
 	}
-	if _, err := Deactivate(home, options); err != nil {
+	noOp, err := Deactivate(home, options)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got := noOp.ChangedPaths(); len(got) != 0 {
+		t.Fatalf("no-op deactivation changed paths = %v, want none", got)
+	}
+}
+
+func TestDeactivationTreatsConcurrentDeletionAsFailure(t *testing.T) {
+	home := t.TempDir()
+	path := POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(posixLauncher("/old/opencode")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	removeCalled := false
+	plan, err := PrepareDeactivation(home, ActivationOptions{
+		OS: "linux",
+		RemoveFile: func(candidate string) error {
+			if candidate != path {
+				t.Fatalf("RemoveFile path = %q, want %q", candidate, path)
+			}
+			removeCalled = true
+			if err := os.Remove(candidate); err != nil {
+				return err
+			}
+			return os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "disappeared after revalidation during removal") {
+		t.Fatalf("Apply() error = %v, want concurrent-deletion revalidation failure", err)
+	}
+	if !removeCalled {
+		t.Fatal("RemoveFile was not called")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("externally deleted launcher = %v, want absent", err)
+	}
+	if got := plan.ChangedPaths(); len(got) != 0 {
+		t.Fatalf("ChangedPaths() = %v, want no successful removals", got)
+	}
+}
+
+func TestWindowsDeactivationRollbackPreservesConcurrentDeletion(t *testing.T) {
+	home := t.TempDir()
+	first := WindowsCMDPath(home)
+	second := WindowsPS1Path(home)
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte(windowsCMDLauncher(`C:\old\opencode.exe`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte(windowsPS1Launcher(`C:\old\opencode.exe`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	removeCalls := 0
+	plan, err := PrepareDeactivation(home, ActivationOptions{
+		OS: "windows",
+		RemoveFile: func(path string) error {
+			removeCalls++
+			if path == second {
+				if _, err := os.Lstat(first); !os.IsNotExist(err) {
+					t.Fatalf("earlier launcher before later deletion = %v, want absent", err)
+				}
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			if path == second {
+				return os.ErrNotExist
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "disappeared after revalidation during removal") {
+		t.Fatalf("Apply() error = %v, want concurrent-deletion revalidation failure", err)
+	}
+	if got, want := removeCalls, 2; got != want {
+		t.Fatalf("RemoveFile calls = %d, want %d", got, want)
+	}
+	got, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := windowsCMDLauncher(`C:\old\opencode.exe`); string(got) != want {
+		t.Fatalf("plan-owned earlier launcher = %q, want restored snapshot %q", got, want)
+	}
+	if _, err := os.Lstat(second); !os.IsNotExist(err) {
+		t.Fatalf("externally deleted later launcher = %v, want absent", err)
+	}
+	if got := plan.ChangedPaths(); len(got) != 0 {
+		t.Fatalf("ChangedPaths() = %v, want no pending rollback state", got)
+	}
+}
+
+func TestActivationProfileRefusalDoesNotHideLauncherCollision(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, ".zprofile")
+	if err := os.WriteFile(profile, []byte("export USER=value\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	launcher := POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\necho user\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareActivation(home, testActivationOptions(t, home))
+	if err == nil || plan != nil || !strings.Contains(err.Error(), "user-owned OpenCode launcher collision") {
+		t.Fatalf("PrepareActivation() = %v, %v; want launcher collision above profile refusal", plan, err)
+	}
+}
+
+func TestPOSIXActivationRefusesMalformedOrMultipleManagedBlocks(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, ".zprofile")
+	block := profileBlock(BinDir(home))
+	tests := []struct{ name, before string }{
+		{"unbalanced", profileStart + "\nuser content\n"},
+		{"nested", profileStart + "\n" + profileStart + "\nexport PATH='old':\"$PATH\"\n" + profileEnd + "\n"},
+		{"multiple", block + profileBlock(filepath.Join(t.TempDir(), "old", "bin"))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(profile, []byte(tt.before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := Activate(home, testActivationOptions(t, home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.before {
+				t.Fatalf("malformed profile after activation = %q, want unchanged %q", got, tt.before)
+			}
+			if _, err := os.Lstat(POSIXLauncherPath(home)); !os.IsNotExist(err) {
+				t.Fatalf("launcher after malformed profile activation = %v, want absent", err)
+			}
+			reason := plan.Report().ActivationReason
+			if plan.Effective() || !strings.Contains(reason, "managed profile update is pending") || strings.Contains(reason, "activation is pending") {
+				t.Fatalf("activation report = %#v, want action-neutral profile marker refusal", plan.Report())
+			}
+			if plan.RestartRequired() || plan.RestartGuidance() != "" {
+				t.Fatalf("blocked activation restart state = %t, %q; want false and empty", plan.RestartRequired(), plan.RestartGuidance())
+			}
+			deactivation, err := Deactivate(home, testActivationOptions(t, home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			reason = deactivation.Report().ActivationReason
+			if !strings.Contains(reason, "managed profile update is pending") || strings.Contains(reason, "activation is pending") {
+				t.Fatalf("deactivation report = %#v, want action-neutral profile marker refusal", deactivation.Report())
+			}
+		})
+	}
+}
+
+func TestPOSIXActivationConvergesStaleProfileBlockAndPreservesBytesModeAndIdempotence(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, ".zprofile")
+	prefix := []byte("export BEFORE=1\r\n")
+	suffix := []byte("export AFTER=1\r\n")
+	oldBinDir := filepath.Join(t.TempDir(), "old", "bin")
+	before := append(append(append([]byte{}, prefix...), []byte(profileBlock(oldBinDir, "\r\n"))...), suffix...)
+	if err := os.WriteFile(profile, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	options := testActivationOptions(t, home)
+	_, err := Activate(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append(append([]byte{}, prefix...), []byte(profileBlock(BinDir(home), "\r\n"))...), suffix...)
+	got, err := os.ReadFile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("converged profile = %q, want %q", got, want)
+	}
+	if info, err := os.Stat(profile); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("converged profile mode = %v, %v; want 0600", info.Mode(), err)
+	}
+	if strings.Count(string(got), profileStart) != 1 || strings.Count(string(got), profileEnd) != 1 {
+		t.Fatalf("converged profile markers = %q, want exactly one block", got)
+	}
+
+	second, err := Activate(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("idempotent profile = %q, want %q", got, want)
+	}
+	if len(second.ChangedPaths()) != 0 {
+		t.Fatalf("idempotent activation changed paths = %v, want none", second.ChangedPaths())
+	}
+}
+
+func TestPOSIXActivationFailsClosedForSymlinkedProfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX profile symlink topology")
+	}
+	tests := []struct {
+		name, shell, profileName string
+		targetExists             bool
+	}{
+		{"zsh target", "/bin/zsh", ".zprofile", true},
+		{"bash target", "/bin/bash", ".bash_profile", true},
+		{"bash dangling target", "/bin/bash", ".bash_profile", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			profile := filepath.Join(home, tt.profileName)
+			target := filepath.Join(home, "managed-by-user")
+			before := []byte("export USER=value\n")
+			if tt.targetExists {
+				if err := os.WriteFile(target, before, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(target, profile); err != nil {
+				t.Fatal(err)
+			}
+			options := testActivationOptions(t, home)
+			options.Shell = tt.shell
+			plan, err := Activate(home, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reason := plan.Report().ActivationReason
+			if plan.Effective() || !strings.Contains(reason, "symlink") || strings.Contains(reason, "activation is pending") {
+				t.Fatalf("activation report = %#v, want action-neutral symlink refusal", plan.Report())
+			}
+			if _, err := os.Lstat(POSIXLauncherPath(home)); !os.IsNotExist(err) {
+				t.Fatalf("launcher after symlinked profile activation = %v, want absent", err)
+			}
+			link, err := os.Readlink(profile)
+			if err != nil || link != target {
+				t.Fatalf("profile symlink = %q, %v; want %q", link, err, target)
+			}
+			got, readErr := os.ReadFile(target)
+			if tt.targetExists {
+				if readErr != nil || !bytes.Equal(got, before) {
+					t.Fatalf("symlink target = %q, %v; want unchanged %q", got, readErr, before)
+				}
+				if info, statErr := os.Stat(target); statErr != nil || info.Mode().Perm() != 0o600 {
+					t.Fatalf("symlink target mode = %v, %v; want 0600", info.Mode(), statErr)
+				}
+			} else if !os.IsNotExist(readErr) {
+				t.Fatalf("dangling symlink target = %q, %v; want nonexistent", got, readErr)
+			}
+		})
+	}
+}
+
+func TestPOSIXActivationFailsClosedForReadOnlyProfile(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, ".zprofile")
+	before := []byte("export USER=value\n")
+	if err := os.WriteFile(profile, before, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Activate(home, testActivationOptions(t, home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Effective() || !strings.Contains(plan.Report().ActivationReason, "read-only") {
+		t.Fatalf("activation report = %#v, want pending read-only profile reason", plan.Report())
+	}
+	got, err := os.ReadFile(profile)
+	if err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("read-only profile = %q, %v; want unchanged %q", got, err, before)
+	}
+	if info, err := os.Stat(profile); err != nil || info.Mode().Perm() != 0o444 {
+		t.Fatalf("read-only profile mode = %v, %v; want 0444", info.Mode(), err)
+	}
+	if _, err := os.Lstat(POSIXLauncherPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("launcher after read-only profile activation = %v, want absent", err)
 	}
 }
 
@@ -980,32 +1283,6 @@ func TestPOSIXActivationLeavesUnsupportedShellPending(t *testing.T) {
 	}
 	if _, err := os.Stat(POSIXLauncherPath(home)); !os.IsNotExist(err) {
 		t.Fatalf("unsupported shell wrote launcher: %v", err)
-	}
-}
-
-func TestRemoveProfileChangePreservesMalformedMarkers(t *testing.T) {
-	home := t.TempDir()
-	path := filepath.Join(home, ".zprofile")
-	block := profileBlock(BinDir(home))
-	tests := []struct{ name, before, want string }{
-		{"orphan start", profileStart + "\nuser\n" + block, profileStart + "\nuser\n"},
-		{"interleaved markers", profileStart + "\nuser\n" + profileEnd + "\n" + block, profileStart + "\nuser\n" + profileEnd + "\n"},
-		{"duplicate blocks", "before\n" + block + "between\n" + block + "after\n", "before\nbetween\nafter\n"},
-		{"user content between malformed markers", profileStart + "\nuser\n" + profileEnd + "\n", profileStart + "\nuser\n" + profileEnd + "\n"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := os.WriteFile(path, []byte(tt.before), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			change, err := removeProfileChange(path, BinDir(home))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := string(change.desired); got != tt.want {
-				t.Fatalf("profile change = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 

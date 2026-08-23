@@ -45,9 +45,6 @@ import (
 // TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
 // deliberately-kept case.
 func TestMain(m *testing.M) {
-	if code, ok := reviewGitProcessHelperExitCode(); ok {
-		os.Exit(code)
-	}
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}
