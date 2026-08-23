@@ -116,6 +116,7 @@ var (
 		"sdd-orchestrator", // legacy key — kept for backward-compat cleanup
 		"sdd-init",
 		"sdd-explore",
+		"sdd-research",
 		"sdd-propose",
 		"sdd-spec",
 		"sdd-design",
