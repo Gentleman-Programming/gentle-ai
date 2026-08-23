@@ -12,7 +12,7 @@
     "allowed": {"type": "boolean"},
     "action": {"enum": ["continue", "explicit-maintainer-action", "review.status", "repository-policy"]},
     "reason": {"type": "string"},
-    "context": {"$ref": "#/$defs/gate_context"},
+    "context": {},
     "delivery": {"enum": ["receipt_governed", "disabled/unmanaged", "unmanaged", "candidate_declined/unmanaged"]},
     "relation": {"enum": ["exact", "compatible_base_advance", "provable_contraction", "changed", "unrelated", "ambiguous", "unknown"]},
     "next": {
@@ -25,7 +25,28 @@
     }
   },
   "allOf": [
-    {"if": {"properties": {"result": {"const": "allow"}}}, "then": {"properties": {"allowed": {"const": true}}}, "else": {"properties": {"allowed": {"const": false}}}}
+    {"if": {"properties": {"result": {"const": "allow"}}}, "then": {"properties": {"allowed": {"const": true}}}, "else": {"properties": {"allowed": {"const": false}}}},
+    {
+      "if": {
+        "required": ["delivery"],
+        "properties": {"delivery": {"enum": ["unmanaged", "disabled/unmanaged"]}}
+      },
+      "then": {
+        "required": ["delivery"],
+        "properties": {
+          "result": {"const": "invalidated"},
+          "allowed": {"const": false},
+          "action": {"const": "repository-policy"},
+          "context": {"$ref": "#/$defs/gate_only_context"}
+        },
+        "not": {"anyOf": [{"required": ["relation"]}, {"required": ["next"]}]}
+      },
+      "else": {
+        "properties": {
+          "context": {"$ref": "#/$defs/gate_context"}
+        }
+      }
+    }
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -81,6 +102,13 @@
             "actual": {"type": "string"}
           }
         }
+      }
+    },
+    "gate_only_context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate"],
+      "properties": {
+        "gate": {"enum": ["post-apply", "pre-commit", "pre-push", "pre-pr", "release"]}
       }
     },
     "base_advance_compatibility": {

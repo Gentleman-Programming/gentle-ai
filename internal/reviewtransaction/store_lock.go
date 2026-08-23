@@ -144,6 +144,7 @@ type StoreLockPreAcquisitionError struct {
 
 func (err *StoreLockPreAcquisitionError) Error() string {
 	if err == nil || err.Err == nil {
+		// refusal:by-design world-action: this sentence renders only for a degenerately constructed error with no cause, which no operator command can reach; the exit is a code fix at the construction site.
 		return "review store lock could not be acquired"
 	}
 	return fmt.Sprintf("review store lock could not be acquired: %v", err.Err)
@@ -231,21 +232,6 @@ func acquireLocalStoreLock(path string) (*storeLock, error) {
 // waiter in this package converges on the same wall-clock ceiling.
 var readOnlyStoreLockTimeout = 2 * time.Second
 var readOnlyStoreLockPollInterval = 25 * time.Millisecond
-
-// acquireStoreLockForReadOnlyEvaluation waits out transient advisory
-// contention for a caller that only reads authority under the lock.
-//
-// Retrying here cannot double-apply anything, because there is nothing to
-// apply: the guarded body is a re-derivation, not a mutation. That is exactly
-// why the mutation paths do not get this treatment — waiting cannot make a
-// second writer legitimate, it can only delay its refusal.
-//
-// Exhaustion returns *AuthorityLockTimeoutError rather than the contention
-// error, so the caller reports a bounded wait that genuinely elapsed instead
-// of an instantaneous refusal.
-func acquireStoreLockForReadOnlyEvaluation(ctx context.Context, path string) (*storeLock, error) {
-	return acquireStoreLockWithBoundedWait(ctx, path)
-}
 
 // acquireStoreLockForConvergentCompletion admits the second caller class that
 // may wait out transient contention instead of refusing: idempotent

@@ -1189,6 +1189,7 @@ func profileMode(change *profileChange) os.FileMode {
 	}
 	return change.before.mode
 }
+
 func requireSnapshot(path string, expected launcherSnapshot) error {
 	current, err := readLauncherSnapshot(path)
 	if err != nil {

@@ -312,7 +312,7 @@ func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
 	}
-	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Authority-only fail extension", "maximum report size: 1048576 bytes (1 MiB)"} {
+	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Independent test and build execution evidence is required", "maximum report size: 1048576 bytes (1 MiB)"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("sdd-verify-validate help missing %q:\n%s", want, output.String())
 		}
@@ -418,7 +418,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
-		{command: "review-validate", want: "review-validate requires --cwd and --receipt"},
+		{command: "review-validate", want: "review-validate requires --cwd"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			var output bytes.Buffer
@@ -453,7 +453,7 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <capture-result|capture-refuter|capture-validation|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|store-reset|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|opencode-transport|bind-sdd>") {
+	if !strings.Contains(output.String(), "review <capture-result|capture-correction-plan|capture-refuter|capture-validation|lens-context|preserve-result|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|opencode-transport>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
 	}
 	output.Reset()
@@ -707,7 +707,6 @@ func TestTuiInstallOnThenSyncPreservesCanonicalAndRefusesTamperedOpenCodeActivat
 	if !strings.Contains(string(before), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") {
 		t.Fatalf("TUI install launcher missing background environment: %s", before)
 	}
-
 	t.Run("canonical sync is idempotent", func(t *testing.T) {
 		changed, err := tuiSync(home)(nil)
 		if err != nil {
@@ -1560,6 +1559,7 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 }
 
 func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
+	assumeInteractiveTTY(t)
 	// NOTE: modifies package-level vars; must not run in parallel.
 	origSelfUpdate := selfUpdateFn
 	origDetect := detectSystem
@@ -2050,6 +2050,7 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	assumeInteractiveTTY(t)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
@@ -2091,6 +2092,7 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 // state.json has PendingSync=true, RunArgs (TUI path / no args) calls
 // the deferred sync runner and writes PendingSync=false on success.
 func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2154,6 +2156,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2219,6 +2222,7 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2282,6 +2286,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2340,6 +2345,7 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 // post-upgrade state. Per #1901, this reuses the existing PendingSync signal
 // rather than introducing a new persisted flag.
 func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2393,6 +2399,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
 // the doctor advisory is printed regardless of deferred sync outcome. The
 // advisory is informational and complements the sync outcome (not a replacement).
 func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2446,6 +2453,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T)
 // doctor advisory is NOT printed on a normal launch where PendingSync=false.
 // The advisory is gated strictly on the post-upgrade signal.
 func TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 

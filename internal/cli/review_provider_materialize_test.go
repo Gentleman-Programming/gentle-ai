@@ -93,19 +93,16 @@ func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t 
 	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--input", input), &output); err != nil {
 		t.Fatal(err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
-	if artifact.Lens != lens || artifact.SelectedOrder != 0 || artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
-		t.Fatalf("submitted reviewer artifact = %#v", artifact)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("submitted reviewer terminal result = %#v", terminal)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("submission did not occupy the reviewer result slot: %#v, %v", slot, err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }
 
 func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
@@ -131,9 +128,14 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "materializes internally",
 		},
 		{
+			// #3441: this refusal used to be byte-identical to the opposite
+			// one (--materialize omitted for a non-capture runtime), so the
+			// assertion could not tell them apart either. The exact texts of
+			// both live in
+			// TestCaptureResultHostMediatedRefusalsAreDistinguishable.
 			name: "opencode keeps its host-mediated refusal", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--materialize=true"),
-			want: "is host-mediated; use its live transport collection",
+			want: "--materialize is unavailable for \"opencode\": printing the Go-materialized provider task is the host-relay form",
 		},
 		{
 			name: "combined with input", env: reviewPiHostRelayContract,

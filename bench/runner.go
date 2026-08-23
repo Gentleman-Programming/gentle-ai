@@ -20,15 +20,13 @@ type Sandbox struct {
 	Binary string
 	// PathOverride is prepended to PATH for journeys that need a deterministic
 	// local runtime probe without depending on the host installation.
-	PathOverride             string
-	Shell                    string
-	Root                     string
-	Home                     string
-	Repo                     string
-	Remote                   string
-	TracePath                string
-	BenchReceiptMutationPath string
-
+	PathOverride string
+	Shell        string
+	Root         string
+	Home         string
+	Repo         string
+	Remote       string
+	TracePath    string
 	// BenchCrashAtPhase, when non-empty, is read by product binaries built
 	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
 	// (format "<phase>:<lineage_id>"): the deterministic phase-hook
@@ -40,14 +38,6 @@ type Sandbox struct {
 	// product binary without the bench_fixture tag never reads this
 	// variable at all.
 	BenchCrashAtPhase string
-
-	// NewLineageActivation opts this sandbox's whole isolated process
-	// environment into GENTLE_AI_RDD_NEW_LINEAGE (Wave 3 Slice 5, task 6.7).
-	// It is off by default, matching the product's own default-off
-	// activation switch (design decision 5): every wave1/wave2/edge/sdd
-	// journey that never sets this stays on the legacy `review start` path,
-	// byte-identical to before this field existed.
-	NewLineageActivation bool
 
 	// Journey state carried between steps.
 	Lineage  string
@@ -104,14 +94,8 @@ func (s *Sandbox) env() []string {
 		"TERM=dumb",
 		"LANG=C",
 	}
-	if s.BenchReceiptMutationPath != "" {
-		env = append(env, "GENTLE_AI_BENCH_MUTATE_RECEIPT="+s.BenchReceiptMutationPath)
-	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
-	}
-	if s.NewLineageActivation {
-		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
 	}
 	if s.Shell != "" {
 		env = append(env, "SHELL="+s.Shell)
@@ -495,10 +479,6 @@ type Journey struct {
 	// mandatory: see ReviewPrecondition.
 	Review ReviewPrecondition
 	Steps  []Step
-	// NewLineageActivation propagates to the journey's own Sandbox (task
-	// 6.7): a journey exercising the new-lineage lifecycle sets this true;
-	// every other journey leaves it false and is unaffected.
-	NewLineageActivation bool
 }
 
 // optIntoReviewMode turns receipt-driven development on for one sandbox through
@@ -656,7 +636,6 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		result.FailureReason = err.Error()
 		return result
 	}
-	sandbox.NewLineageActivation = journey.NewLineageActivation
 	accumulator := newAccumulator()
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}
@@ -732,11 +711,6 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 		if step.After != nil {
 			if err := step.After(sandbox, observation); err != nil {
-				if errors.Is(err, errSourceCoupledFixtureUnavailable) {
-					result.Status = StatusUnsupported
-					result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" (source-coupled fixture unavailable)")
-					break
-				}
 				result.Status = StatusFailed
 				result.FailureReason = fmt.Sprintf("step %q after: %v", step.Name, err)
 				break
