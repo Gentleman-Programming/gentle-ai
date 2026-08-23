@@ -65,6 +65,14 @@ internal/agents/pi/model_routing.go	scanJSONValue
 internal/agents/pi/model_routing.go	selectPackageBin
 internal/agents/pi/model_routing.go	unsafeBinPath
 internal/agents/pi/model_routing.go	windowsDrivePath
+internal/agents/pi/model_routing_apply_parser.go	ParseModelRoutingApplyResponse
+internal/agents/pi/model_routing_apply_parser.go	decodeModelRoutingApplyDiagnostics
+internal/agents/pi/model_routing_apply_parser.go	decodeModelRoutingApplyFailures
+internal/agents/pi/model_routing_apply_parser.go	decodeModelRoutingApplyMaterialization
+internal/agents/pi/model_routing_apply_parser.go	decodeModelRoutingApplyObject
+internal/agents/pi/model_routing_apply_parser.go	decodeModelRoutingApplyResult
+internal/agents/pi/model_routing_apply_parser.go	decodeModelRoutingApplyStrings
+internal/agents/pi/model_routing_apply_parser.go	requireModelRoutingApplyValue
 internal/agents/pi/model_routing_candidates.go	CandidateError.Error
 internal/agents/pi/model_routing_candidates.go	CandidateError.Unwrap
 internal/agents/pi/model_routing_candidates.go	EnumerateModelRoutingCandidates
