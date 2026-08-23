@@ -1493,8 +1493,8 @@ func waveOneJourneys() []Journey {
 		{
 			ID:     "j51-negotiated-status-correction-continuation",
 			Review: reviewOptedIn,
-			Title:  "#3587: selectorless STATUS starts only a fresh candidate; correction continues through its exact active lineage",
-			Source: "issue #2044 under #3587: selectorless STATUS is fresh by design, while every active correction continuation carries its exact lineage",
+			Title:  "#3587: selectorless STATUS starts a fresh staged candidate with no matching frozen authority; correction continues through its exact active lineage",
+			Source: "issue #2044 under #3587: selectorless STATUS is fresh when no frozen authority canonically matches, while every active correction continuation carries its exact lineage",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},

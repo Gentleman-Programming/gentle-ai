@@ -211,12 +211,18 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
 	approvedScopeRecovery := []targetStatusCandidate{}
+	// A selector-free workspace STATUS has no frozen selector from which to
+	// rebuild an overlay, recovered successor, or intended-untracked candidate.
+	// Let the authority's existing frozen reviewing reconstruction participate
+	// in canonical matching, just as an explicit lineage already does.
+	allowFrozenReviewing := request.Target.Kind == TargetCurrentChanges && request.Target.Projection != ProjectionStaged &&
+		(request.LineageID != "" || request.Target.Projection == ProjectionWorkspace)
 	for lineage, candidate := range view.compact {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
 		}
 		state := candidate.compact.State
-		if request.LineageID != "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection != ProjectionStaged &&
+		if allowFrozenReviewing &&
 			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			eligible, pendingSlots, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
 			if eligibilityErr != nil {
