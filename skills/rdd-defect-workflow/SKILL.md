@@ -21,7 +21,7 @@ This skill guides public collaboration. It does not grant issue approval, label,
 - Inventory every operator flow claimed by the issue or PR, including entry, mode, environment, expectation, and negative controls. Require one truthful black-box bench journey per CLI or lifecycle flow, or actual runtime E2E proof when the core bench cannot represent it. Synthetic proxy coverage never proves another runtime.
 - Use CodeGraph-first impact mapping, a dedicated worktree, and behavior-first tests. Run source-mutating normalization before candidate freeze.
 - Forecast authored changes before edits. The hard limit is 400 additions plus deletions; above it, STOP for a chain or explicit maintainer-approved exception.
-- Only when RDD is enabled, bind receipts, lineage, correction, recovery, and delivery gates to the exact candidate. Keep bounded review defects in one correction transaction.
+- Only when RDD is enabled, bind the review candidate identity, lineage, correction, and recovery records exactly. Keep bounded review defects in one correction transaction; ordinary repository policy decides delivery.
 - Require independent read-only candidate validation before publication. Validation cannot edit source or authority; findings require a new candidate.
 - Keep communication humane and evidence-based. Repository labels and workflow metadata are maintainer-owned, never evidence of contributor blame.
 
