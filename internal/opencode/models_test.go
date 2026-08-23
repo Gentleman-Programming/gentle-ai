@@ -379,6 +379,7 @@ func TestReviewPhasesCompleteRuntimeSet(t *testing.T) {
 		"review-reliability",
 		"review-resilience",
 		"review-refuter",
+		"review-validator",
 	}
 	if got := ReviewPhases(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ReviewPhases() = %v, want %v", got, want)

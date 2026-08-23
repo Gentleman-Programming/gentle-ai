@@ -64,6 +64,7 @@ func installFailingGitShim(t *testing.T, stderr string) {
 // instead of being collapsed into "refresh the exact native next_transition",
 // which cannot change a running process's Git trust context.
 func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, operation := range []struct {
 		name string
 		run  func(t *testing.T, args []string, input string) error
@@ -107,6 +108,7 @@ func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
 // half of the contract: an ordinary repository-context failure, including
 // another git failure that also exits 128, must keep its existing generic code.
 func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
+	reviewEnabledHome(t)
 	args, _, repo := startedOpaqueCaptureBinding(t, "git-trust-unrelated")
 	installFailingGitShim(t, gitMissingRepositoryStderr)
 
@@ -131,8 +133,7 @@ func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
 // a reviewer-result input path, and the repository root.
 func startedOpaqueCaptureBinding(t *testing.T, lineage string) ([]string, string, string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc trust() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, lineage)

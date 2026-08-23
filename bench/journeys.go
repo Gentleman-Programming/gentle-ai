@@ -13,6 +13,8 @@ import (
 // needs before it will emit next_transition.
 const reviewContract = "gentle-ai.review-integration/v1"
 
+const rejectedRecaptureLineage = "rejected-capture-recapture"
+
 // statusEnvelope is the subset of `review status --next-transition` this
 // benchmark reads. Unknown fields are ignored so older and newer envelopes
 // both parse.
@@ -235,13 +237,14 @@ func captureFinalEvidenceFor(r *journeyRun, selectors ...string) error {
 // refuses (the subject hash does not echo the binding), then spends a second
 // run on the correct one. Both count as model runs: the rejected one really
 // was paid for.
-func rejectedThenRecapture(r *journeyRun) error {
-	envelope, err := readStatus(r)
+func rejectedThenRecaptureFor(r *journeyRun, lineage string) error {
+	envelope, err := readAtomicReviewStatus(r, lineage)
 	if err != nil {
 		return err
 	}
-	if envelope.NextTransition.Kind != "collect" {
-		return errors.New("expected a reviewer-result collect transition")
+	if envelope.Authority.LineageID != lineage || envelope.NextTransition.Kind != "collect" ||
+		len(envelope.NextTransition.Collect.Inputs) == 0 || envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+		return errors.New("expected an exact active-lineage reviewer-result collect transition")
 	}
 	bad, err := synthesizeReviewerResult(
 		envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, nil)
@@ -252,7 +255,7 @@ func rejectedThenRecapture(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	r.run([]string{
+	refused := r.run([]string{
 		"review", "capture-result", "--cwd", r.sandbox.Repo,
 		"--lineage", envelope.argument("lineage"),
 		"--target", envelope.argument("target"),
@@ -261,7 +264,21 @@ func rejectedThenRecapture(r *journeyRun) error {
 		"--order", envelope.argument("order"),
 		"--input", badPath,
 	}, true)
-	return captureAllLenses(r)
+	if refused.ExitCode == 0 {
+		return errors.New("incomplete exact active-lineage reviewer inspection was accepted")
+	}
+	return captureExactSelectedReviewerSlots(r, lineage, false)
+}
+
+func finalizeRejectedRecapture(r *journeyRun) error {
+	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", rejectedRecaptureLineage, "--captured-evidence=true"), false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("finalize rejected-recapture evidence: %s", firstLine(observation.Stderr))
+	}
+	if err := requireBurnedApproval(rejectedRecaptureLineage)(r.sandbox, observation); err != nil {
+		return err
+	}
+	return requireAtomicLineageBurned(r, rejectedRecaptureLineage)
 }
 
 // executeNextTransitionVerbatim is the guide's flow 11: take the tokens the
@@ -300,14 +317,32 @@ func runNextTransitionVerbatim(r *journeyRun) (Observation, error) {
 // their verbs with hyphens -- so splitting on "." only ever produced a runnable
 // verb by coincidence.
 func runPrintedTransition(r *journeyRun, envelope statusEnvelope) (Observation, error) {
+	args, err := printedTransitionArguments(envelope)
+	if err != nil {
+		return Observation{}, err
+	}
+	return r.run(args, false), nil
+}
+
+// runPrintedTransitionAt preserves the exact rendered command while letting a
+// worktree-isolation journey run it in the worktree that STATUS bound.
+func runPrintedTransitionAt(r *journeyRun, cwd string, envelope statusEnvelope) (Observation, error) {
+	args, err := printedTransitionArguments(envelope)
+	if err != nil {
+		return Observation{}, err
+	}
+	return r.runAt(cwd, args, false), nil
+}
+
+func printedTransitionArguments(envelope statusEnvelope) ([]string, error) {
 	if envelope.NextTransition.Kind != "execute" {
-		return Observation{}, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
+		return nil, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
 	}
 	args, err := printedCommandArguments(envelope.NextTransition.Execute.Command)
 	if err != nil {
-		return Observation{}, fmt.Errorf("execute transition for %q %w", envelope.NextTransition.Execute.Operation, err)
+		return nil, fmt.Errorf("execute transition for %q %w", envelope.NextTransition.Execute.Operation, err)
 	}
-	return r.run(args, false), nil
+	return args, nil
 }
 
 // printedCommandArguments turns one printed command line into the argv a POSIX
@@ -649,6 +684,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
+	journeys = append(journeys, atomicReviewJourneys()...)
 	journeys = append(journeys, waveFiveJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
 	journeys = append(journeys, lensContextBudgetJourneys()...)
@@ -671,13 +707,21 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue3043Journeys()...)
 	journeys = append(journeys, repositoryContextJourneys()...)
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
-	return append(journeys, handoffJourneys()...)
+	journeys = append(journeys, capturedProviderValidatorJourneys()...)
+	journeys = append(journeys, sddSharedScaffoldingJourneys()...)
+	journeys = append(journeys, sddPostReviewVerifyReportJourneys()...)
+	journeys = append(journeys, issue3564Journeys()...)
+	journeys = append(journeys, issue3321Journeys()...)
+	journeys = append(journeys, handoffJourneys()...)
+	journeys = removeRetiredAtomicJourneys(journeys)
+	return declareCoreJourneyReviewModes(journeys)
 }
 
 func coreJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j01-docs-happy-path",
+			Review: reviewOptedIn,
 			Title:  "Documentation change: review, approve, commit, push gate",
 			Source: "guide flow 3 + flow 9 step 2",
 			Steps: []Step{
@@ -693,22 +737,30 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j02-high-risk-four-lens",
-			Title:  "High-risk code change: four lenses, evidence, approval",
-			Source: "guide flow 4 + the full native bounded review contract",
+			Review: reviewOptedIn,
+			Title:  "#3417: high-risk code change completes an actual four-lens capture and burns its terminal transaction",
+			Source: "#3417 atomic review: v2 STATUS binds each captured reviewer result before final evidence burns the exact transaction rather than publishing a durable receipt",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage auth code", Fixture: stageAuthCode},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "capture every lens", Requires: captureResultCapability, Composite: captureAllLenses},
+				{Name: "actual four-lens capture follows v2 STATUS bindings", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					if r.sandbox.Lineage == "" {
+						return errors.New("high-risk START did not publish a lineage for actual four-lens capture")
+					}
+					return captureAtomicReviewerSlots(r, r.sandbox.Lineage, false)
+				}},
 				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
 				{Name: "finalize without evidence", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
-				{Name: "capture final evidence", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true")},
-				{Name: "gate post-apply", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "post-apply")},
+				{Name: "capture final evidence through the v2 STATUS descriptor", Requires: captureEvidenceDescriptorCapability, Composite: captureJ02FinalEvidence},
+				{Name: "final evidence burns the exact transaction", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true"), After: func(sandbox *Sandbox, observation Observation) error {
+					return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+				}},
 			},
 		},
 		{
 			ID:     "j03-kill-switch",
+			Review: reviewUntouched,
 			Title:  "Kill switch: disable, start refused, re-enable, review",
 			Source: "guide flow 2",
 			Steps: []Step{
@@ -725,29 +777,35 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j04-size-does-not-escalate",
-			Title:  "1200 lines of prose still reviews as low risk",
-			Source: "guide flow 4 step 3",
+			Review: reviewOptedIn,
+			Title:  "#3417: 1200 lines of prose remain low risk and burn their terminal transaction",
+			Source: "#3417 atomic review keeps risk selection separate from durable delivery authorization",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage 1200 lines of docs", Fixture: stageLargeDocs},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
-				{Name: "gate post-apply", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "post-apply")},
+				{Name: "low-risk finalization burns the transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: func(sandbox *Sandbox, observation Observation) error {
+					return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+				}},
 			},
 		},
 		{
 			ID:     "j05-gate-without-any-review",
-			Title:  "Failure path: lifecycle gate before any review exists",
-			Source: "community failure path: receipt missing",
+			Review: reviewOptedIn,
+			Title:  "#3417: lifecycle validation before review is informational and unmanaged",
+			Source: "#3417 removes ordinary-path receipt gates; delivery remains under repository policy",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage docs", Fixture: stageDocs("ungated")},
-				{Name: "gate pre-commit with no receipt", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), AbortOnBlock: true},
+				{Name: "pre-commit validation is informational without a review", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+						return requireUnmanagedShippedGate(observation, "pre-commit")
+					}},
 			},
 		},
 		{
 			ID:     "j06-pre-push-after-publication",
+			Review: reviewOptedIn,
 			Title:  "Failure path: pre-push after the reviewed commit was already pushed",
 			Source: "guide flow 9",
 			Steps: []Step{
@@ -765,6 +823,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j97-pre-push-preserves-ls-remote-failure",
+			Review: reviewOptedIn,
 			Title:  "Failure path: pre-push preserves an advertised remote query failure",
 			Source: "issue #1890: advertised remote identity and ls-remote failures must not become semantic selector errors",
 			Steps: []Step{
@@ -781,6 +840,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j100-pre-push-unqualified-selector-ignores-unreachable-remote",
+			Review: reviewOptedIn,
 			Title:  "Failure path: pre-push selects the valid remote for an unqualified selector",
 			Source: "issue #1890: an unqualified advertised branch ignores unrelated remote identity or query failures when exactly one valid match remains",
 			Steps: []Step{
@@ -797,6 +857,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j07-disabled-with-stale-receipts",
+			Review: reviewOptedIn,
 			Title:  "Failure path: reviews disabled with two stale receipts present",
 			Source: "guide flow 6 + flow 9 step 5",
 			Steps: []Step{
@@ -818,6 +879,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j08-finalize-without-reviewer-results",
+			Review: reviewOptedIn,
 			Title:  "Failure path: finalize a high-risk review with no reviewer results",
 			Source: "community failure path",
 			Steps: []Step{
@@ -830,6 +892,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j09-finalize-without-evidence",
+			Review: reviewOptedIn,
 			Title:  "Failure path: finalize with results but no captured evidence",
 			Source: "guide flow 12",
 			Steps: []Step{
@@ -844,6 +907,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j10-invalid-flag-combination",
+			Review: reviewOptedIn,
 			Title:  "Failure path: staged projection combined with a base ref",
 			Source: "guide flow 13",
 			Steps: []Step{
@@ -857,6 +921,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j11-unborn-head",
+			Review: reviewOptedIn,
 			Title:  "Failure path: first commit in a repository with no history",
 			Source: "guide flow 10",
 			Steps: []Step{
@@ -870,20 +935,26 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j12-rejected-capture-then-recapture",
-			Title:  "Failure path: a reviewer result the product rejects, then a recapture",
-			Source: "#2614: incomplete inspection coverage refuses, then an unordered complete manifest recaptures",
+			Review: reviewOptedIn,
+			Title:  "#3417: an exact active-lineage reviewer result is rejected, then the full selected set recaptures",
+			Source: "#2614 under #3417: incomplete inspection coverage refuses on its exact active lineage, then an unordered complete manifest recaptures",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage ordinary code", Fixture: stageOrdinaryCode},
-				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "rejected capture then recapture", Requires: captureResultCapability, Composite: rejectedThenRecapture},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
-				{Name: "capture final evidence", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true")},
+				{Name: "review start with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", rejectedRecaptureLineage), After: rememberLineage},
+				{Name: "exact active-lineage rejected capture then full selected-set recapture", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return rejectedThenRecaptureFor(r, rejectedRecaptureLineage)
+				}},
+				{Name: "finalize exact active-lineage captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", rejectedRecaptureLineage, "--captured-results=true")},
+				{Name: "capture exact active-lineage final evidence through the STATUS descriptor", Requires: captureEvidenceDescriptorCapability, Composite: func(r *journeyRun) error {
+					return captureAtomicFinalEvidenceDescriptorFor(r, rejectedRecaptureLineage, "j12-final-evidence.txt")
+				}},
+				{Name: "final evidence burns the exact active-lineage transaction", Requires: finalizeEvidenceCapability, Composite: finalizeRejectedRecapture},
 			},
 		},
 		{
 			ID:     "j13-next-transition-runs-verbatim",
+			Review: reviewOptedIn,
 			Title:  "Agent path: the printed transition executes exactly as printed",
 			Source: "guide flow 11",
 			Steps: []Step{
@@ -896,6 +967,7 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j14-abandon-needs-a-hand-built-token",
+			Review: reviewOptedIn,
 			Title:  "Maintainer path: abandoning a non-terminal lineage binds its discarded work",
 			Source: "review abandon contract",
 			Steps: []Step{
@@ -907,8 +979,9 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j85-review-parse-refusals-are-preflight",
-			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
-			Source: "#1956: argv parsing happens before review authority can mutate",
+			Review: reviewOptedIn,
+			Title:  "Historical parser/refusal compatibility: START and FINALIZE remain preflight and non-mutating",
+			Source: "#1956 historical parser/refusal compatibility: argv parsing happens before review authority can mutate",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "START parser refusals preserve their preflight contract", Requires: startParseRefusalCapability, Composite: func(run *journeyRun) error { return assertReviewParseRefusalsPreflight(run, "start", "committed-only") }},

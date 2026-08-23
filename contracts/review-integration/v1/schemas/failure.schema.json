@@ -32,6 +32,7 @@
     "retry_safe": {"type": "boolean"},
     "replayability": {"enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"]},
     "lineage_id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
     "request_digest": {"$ref": "#/$defs/sha256"},
     "progress_identity": {"$ref": "#/$defs/sha256"},
     "required_inputs": {
@@ -80,6 +81,25 @@
       },
       "then": {
         "required": ["progress_identity"]
+      }
+    },
+    {
+      "if": {
+        "required": ["code"],
+        "properties": {"code": {"const": "receipt_publication_pending"}}
+      },
+      "then": {
+        "required": ["lineage_id", "target_identity", "request_digest"],
+        "properties": {
+          "operation": {"const": "review.finalize"},
+          "phase": {"const": "native_committed"},
+          "mutation_outcome": {"const": "committed"},
+          "authority_applicability": {"const": "current_target"},
+          "retry_safe": {"const": false},
+          "replayability": {"const": "status_required"},
+          "required_inputs": {"const": ["lineage_id"]},
+          "next_action": {"const": "review.status"}
+        }
       }
     }
   ],

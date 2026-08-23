@@ -12,12 +12,40 @@ package cli
 // mechanism behind the abandon token, the reset, `reopen-results`, the
 // stranded successor, and the reconciliation dead end.
 //
+// WHAT COUNTS AS A REFUSAL-ORIGIN SITE. The old walk enumerated error
+// CONSTRUCTORS, so a refusal escaped by changing how its bytes were produced
+// rather than what they said. #3471 and #2416 are two symptoms of that one
+// gap. The walk now collects by CARRIER -- by how the sentence reaches a
+// reader -- and there are three:
+//
+//  1. `errors.New` / `fmt.Errorf` with a statically known message.
+//  2. A `return` of a statically known string from an `Error() string`
+//     method. Not a heuristic about what "looks like" a refusal: the value
+//     that method returns IS the sentence the operator reads, exactly like
+//     the argument of `errors.New`. #3471 is what its absence cost --
+//     `GateRemoteFetchRequiredError.Error()` moved a governed refusal into
+//     that shape and silently left coverage, and the only trace was a
+//     baseline entry that matched nothing.
+//  3. A refusal-explanation struct field (#2416), which a consuming agent
+//     acts on exactly as it acts on an error string. Carriers 1 and 2 are
+//     ENFORCED against the baseline; carrier 3 is walked, listed, and capped
+//     but not yet frozen site by site, for the reasons written at
+//     refusalRatchetFieldCarriedCeiling. Do not read this file as claiming
+//     the third carrier is governed to the same standard as the first two.
+//
+// Still uncollected, and named so the boundary is not mistaken for coverage:
+// envelope reason codes, embedded asset and skill prose, and agent-facing
+// terminal prompts (#2415, audited at 113 dead ends). Those need their own
+// collectors and their own baseline; nothing here sees them.
+//
 // WHAT THIS RATCHET PROVES: every refusal-origin site in the production
 // sources of internal/cli, internal/reviewtransaction, and internal/sddstatus
 // either
 //
-//  (a) names a runnable continuation (a `gentle-ai ...` invocation in the
-//      message),
+//  (a) names a runnable continuation (a `gentle-ai ...` invocation) in the
+//      message the operator actually reads -- which includes text composed in
+//      from a package-local string-returning helper, so moving guidance behind
+//      a helper neither loses coverage nor loses credit for it,
 //  (b) carries an adjacent `// refusal:by-design <shape>: <reason>` marker
 //      whose shape comes from the CLOSED vocabulary the bench classifier
 //      already uses -- operator-knowledge, world-action, human-authority --
@@ -45,16 +73,45 @@ package cli
 // catches existent-but-unnamed. One direction each; together they still only
 // bound the problem, they do not close it.
 //
+// A BASELINE ENTRY THAT MATCHES NOTHING IS A FAILURE, not a note. The
+// baseline is keyed by (file, message), so an entry can stop matching for two
+// very different reasons: the refusal was fixed or removed (shrink the
+// baseline, the ratchet's whole point), or it moved into a shape the analyzer
+// cannot see (coverage was lost and nobody decided to lose it). Those are
+// separated: an entry whose (file, message) still names an ANALYZED site that
+// is no longer a violation is logged as a tighten-the-baseline note, while an
+// entry matching no analyzed site at all fails, because from here the two
+// causes are indistinguishable and only a human can tell them apart.
+//
+// WHY A MARKER PLUS A HELPER-SUPPLIED COMMAND IS NOT CONTRADICTORY: the
+// contradictory-claims rule is judged on the sentence authored AT the site.
+// A by-design marker claims that no command resolves THIS condition; a shared
+// helper that appends a generic way out of the practice (`review mode
+// disable`) is a different author's claim about a different thing, and the
+// two are not mutually exclusive. Judging the rule on the composed text
+// instead would make the only compliant shape "hide the guidance behind a
+// helper", which is exactly the unanalyzable shape #3471 is about. The
+// tradeoff is stated plainly: an author who extracts a one-line helper purely
+// to dodge the contradiction check will not be caught by it. That is a
+// deliberate, visible act, and unlike before the extracted text is still
+// analyzed and still governed.
+//
 // Known false negatives, by construction: propagation sites (fmt.Errorf with
 // %w) are exempt as plumbing, so a wrap that is itself the operator's
-// terminal framing of a foreign error (os, git) escapes; refusals emitted
-// through custom error-struct fields or printed directly to a stream are not
-// error-constructor calls and are not seen; the handful of constructor calls
-// whose message is a runtime value are counted and logged, never analyzed.
-// Known false positives: an origin site that is genuinely internal plumbing
-// still counts and must be annotated -- the honest shape for a programmer
-// invariant is world-action ("the exit is an action, not a command: edit the
-// code"), which the bench vocabulary names verbatim.
+// terminal framing of a foreign error (os, git) escapes; refusals printed
+// directly to a stream are not seen; every message whose value is built at
+// runtime is counted and logged, never analyzed -- which includes the
+// `Error() string` methods that return `fmt.Sprintf(...)` (measured at 57
+// across the three packages when #3471 landed). Governing those means
+// deciding whether a Sprintf inside Error() is terminal framing or the
+// propagation analogue of a %w wrap, which is a judgment this walk cannot
+// make and is deliberately not smuggled in here. Guidance reached through a
+// METHOD call rather than a package-local function is likewise not composed
+// in. Known false positives: an origin site
+// that is genuinely internal plumbing still counts and must be annotated --
+// the honest shape for a programmer invariant is world-action ("the exit is
+// an action, not a command: edit the code"), which the bench vocabulary names
+// verbatim.
 
 import (
 	"fmt"
@@ -96,10 +153,15 @@ var refusalRatchetMarkerRegexp = regexp.MustCompile(`^refusal:by-design\s+([a-z-
 // excludes prose that mentions the product name without naming a command.
 var refusalRatchetNamedContinuationRegexp = regexp.MustCompile(`gentle-ai [a-z][a-z-]*`)
 
+// refusalRatchetErrorMethodOrigin labels a refusal returned from an
+// `Error() string` method. It sits in the same slot as the constructor name so
+// every report names the shape that produced the sentence.
+const refusalRatchetErrorMethodOrigin = "Error() string"
+
 type refusalRatchetSite struct {
 	file        string // slash path relative to the repository root
 	line        int
-	constructor string // "errors.New" or "fmt.Errorf"
+	constructor string // "errors.New", "fmt.Errorf", or refusalRatchetErrorMethodOrigin
 	message     string
 }
 
@@ -116,10 +178,85 @@ type refusalRatchetAnalysis struct {
 	satisfiedAnnotated int
 	exemptWraps        int
 	unanalyzable       []refusalRatchetSite
+	// analyzed holds the baseline key of every site whose message is
+	// statically known, whatever its classification. It is what makes "this
+	// baselined refusal was fixed" distinguishable from "this baselined
+	// refusal matches nothing the analyzer can see any more".
+	analyzed map[string]bool
+	// fieldViolations are refusal-explanation struct fields (#2416) whose
+	// literal names no exit. They are reported and capped, not frozen site by
+	// site -- see refusalRatchetFieldCarriedCeiling.
+	fieldViolations []refusalRatchetSite
+	fieldSatisfied  int
+	// fieldCarried holds the baseline key of every field-carried refusal, so a
+	// refusal that MOVED from an error constructor into a struct field is
+	// reported as a move rather than as a disappearance.
+	fieldCarried map[string]bool
 	// problems are hard failures -- malformed markers, unknown shapes,
 	// contradictory claims, orphaned markers. They are never baseline-able,
 	// because a marker that cannot be trusted poisons the exemption it grants.
 	problems []string
+}
+
+func (a *refusalRatchetAnalysis) record(key string) {
+	if a.analyzed == nil {
+		a.analyzed = map[string]bool{}
+	}
+	a.analyzed[key] = true
+}
+
+func (a *refusalRatchetAnalysis) merge(other refusalRatchetAnalysis) {
+	a.violations = append(a.violations, other.violations...)
+	a.satisfiedNamed += other.satisfiedNamed
+	a.satisfiedAnnotated += other.satisfiedAnnotated
+	a.exemptWraps += other.exemptWraps
+	a.unanalyzable = append(a.unanalyzable, other.unanalyzable...)
+	a.problems = append(a.problems, other.problems...)
+	a.fieldViolations = append(a.fieldViolations, other.fieldViolations...)
+	a.fieldSatisfied += other.fieldSatisfied
+	for key := range other.analyzed {
+		a.record(key)
+	}
+	for key := range other.fieldCarried {
+		if a.fieldCarried == nil {
+			a.fieldCarried = map[string]bool{}
+		}
+		a.fieldCarried[key] = true
+	}
+}
+
+// refusalRatchetBaselineDrift separates the two reasons a frozen entry can
+// stop matching a violation. Conflating them is the #3471 defect: the note
+// "N baselined entries now name a resolution, are annotated, or are gone" read
+// as progress while one of those entries was a refusal that had quietly left
+// coverage.
+type refusalRatchetBaselineDrift struct {
+	// absent entries match no analyzed site at all: fixed, deleted, reworded
+	// -- or moved into a shape the analyzer cannot see.
+	absent []string
+	// resolved entries still name an analyzed site that is no longer a
+	// violation, so the baseline can simply be tightened.
+	resolved []string
+}
+
+func refusalRatchetClassifyBaselineDrift(baseline []string, analyzed map[string]bool, current map[string]refusalRatchetSite) refusalRatchetBaselineDrift {
+	var drift refusalRatchetBaselineDrift
+	for _, key := range baseline {
+		if key == "" {
+			continue
+		}
+		if _, still := current[key]; still {
+			continue
+		}
+		if analyzed[key] {
+			drift.resolved = append(drift.resolved, key)
+			continue
+		}
+		drift.absent = append(drift.absent, key)
+	}
+	sort.Strings(drift.absent)
+	sort.Strings(drift.resolved)
+	return drift
 }
 
 // --- Tests ---------------------------------------------------------------
@@ -315,6 +452,207 @@ func TestRefusalRatchetClassifiesSyntheticSites(t *testing.T) {
 	})
 }
 
+// TestRefusalRatchetAnalyzesRefusalsReturnedAsStrings is #3471's first half:
+// the exact shape `GateRemoteFetchRequiredError.Error()` used to leave
+// coverage with. A refusal is governed by what it says, not by which construct
+// produced it.
+func TestRefusalRatchetAnalyzesRefusalsReturnedAsStrings(t *testing.T) {
+	const header = "package synthetic\n\nimport \"fmt\"\n\nvar _ = fmt.Sprintf\n\ntype fetchRequired struct{ remote string }\n\n"
+
+	t.Run("a returned refusal with no exit is a violation naming its site", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func (err *fetchRequired) Error() string {\n"+
+			"\treturn \"advertised base commit is not available locally; fetch before validation\"\n"+
+			"}\n")
+		if len(analysis.problems) != 0 {
+			t.Fatalf("unexpected problems: %v", analysis.problems)
+		}
+		if len(analysis.violations) != 1 {
+			t.Fatalf("want the returned refusal to be a violation, got %+v", analysis)
+		}
+		got := analysis.violations[0]
+		if got.message != "advertised base commit is not available locally; fetch before validation" {
+			t.Fatalf("violation message = %q", got.message)
+		}
+		if got.constructor != refusalRatchetErrorMethodOrigin || got.line == 0 {
+			t.Fatalf("violation does not name the shape that produced it: %+v", got)
+		}
+	})
+
+	t.Run("a returned refusal that names its continuation satisfies", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func (err *fetchRequired) Error() string {\n"+
+			"\treturn \"blocked: run `gentle-ai review status` first\"\n"+
+			"}\n")
+		if len(analysis.violations) != 0 || analysis.satisfiedNamed != 1 {
+			t.Fatalf("want 1 named satisfaction and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("a returned refusal accepts the by-design marker", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func (err *fetchRequired) Error() string {\n"+
+			"\t// refusal:by-design world-action: the exit is a fetch, not a command this product owns\n"+
+			"\treturn \"advertised base commit is not available locally\"\n"+
+			"}\n")
+		if len(analysis.problems) != 0 {
+			t.Fatalf("unexpected problems: %v", analysis.problems)
+		}
+		if len(analysis.violations) != 0 || analysis.satisfiedAnnotated != 1 {
+			t.Fatalf("want 1 annotated satisfaction and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("a runtime-built returned message is unanalyzable, not judged", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func (err *fetchRequired) Error() string {\n"+
+			"\treturn fmt.Sprintf(\"fetch %s first\", err.remote)\n"+
+			"}\n")
+		if len(analysis.violations) != 0 || len(analysis.unanalyzable) != 1 {
+			t.Fatalf("want 1 unanalyzable site and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("an ordinary string-returning helper is not a refusal", func(t *testing.T) {
+		// The counter-proof for the rule: breadth here would flag every
+		// returned string in the repository. Only the error interface's own
+		// method is a refusal carrier.
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func lensLabel() string {\n\treturn \"Review CAPTURE-RESULT\"\n}\n")
+		if len(analysis.violations) != 0 || len(analysis.unanalyzable) != 0 {
+			t.Fatalf("a plain label must not be classified as a refusal, got %+v", analysis)
+		}
+	})
+}
+
+// TestRefusalRatchetAnalyzesGuidanceComposedFromHelpers is #3471's third half:
+// the contradictory-claims rule must not make the compliant shape an
+// unanalyzable one. Both directions are proven -- the helper's text counts,
+// and the marker plus that helper is no longer a hard error -- because
+// either alone would leave the trap open.
+func TestRefusalRatchetAnalyzesGuidanceComposedFromHelpers(t *testing.T) {
+	const header = "package synthetic\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar _ = errors.New\n\n" +
+		"func exitGuidance() string {\n\treturn \"; exit receipt-driven review with `gentle-ai review mode disable --scope clone`\"\n}\n\n"
+
+	t.Run("guidance behind a helper still names the continuation", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() error {\n"+
+			"\treturn fmt.Errorf(\"the active runtime is not eligible for immutable receipt review%s\", exitGuidance())\n"+
+			"}\n")
+		if len(analysis.problems) != 0 {
+			t.Fatalf("unexpected problems: %v", analysis.problems)
+		}
+		if len(analysis.violations) != 0 || analysis.satisfiedNamed != 1 {
+			t.Fatalf("want the helper-supplied command to satisfy, got %+v", analysis)
+		}
+	})
+
+	t.Run("a named string constant is composed in too", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"const freshReview = \"start a new one with `gentle-ai review start`\"\n\n"+
+			"func f() error {\n\treturn fmt.Errorf(\"review scope changed: %s\", freshReview)\n}\n")
+		if len(analysis.violations) != 0 || analysis.satisfiedNamed != 1 {
+			t.Fatalf("want the constant-supplied command to satisfy, got %+v", analysis)
+		}
+	})
+
+	t.Run("a by-design marker plus helper-supplied guidance is not contradictory", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() error {\n"+
+			"\t// refusal:by-design world-action: runtimes outside the fixed policy cannot receive immutable review authority\n"+
+			"\treturn fmt.Errorf(\"the active runtime is not eligible for immutable receipt review%s\", exitGuidance())\n"+
+			"}\n")
+		if len(analysis.problems) != 0 {
+			t.Fatalf("a shared exit appended by a helper is not the site's own claim: %v", analysis.problems)
+		}
+		if len(analysis.violations) != 0 || analysis.satisfiedAnnotated != 1 {
+			t.Fatalf("want 1 annotated satisfaction and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("a by-design marker plus a command the author wrote is still contradictory", func(t *testing.T) {
+		// The rule narrowed, it did not disappear.
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() error {\n"+
+			"\t// refusal:by-design human-authority: a maintainer must decide\n"+
+			"\treturn errors.New(\"blocked: run gentle-ai review finalize\")\n"+
+			"}\n")
+		if len(analysis.problems) != 1 || !strings.Contains(analysis.problems[0], "contradictory") {
+			t.Fatalf("want one contradictory-claims error, got %+v", analysis.problems)
+		}
+	})
+}
+
+// TestRefusalRatchetReportsFieldCarriedRefusals is #2416: a refusal handed to a
+// consumer through a reason field is the same dead end as a bare error string,
+// and the walk must see it without inventing refusals out of every literal.
+func TestRefusalRatchetReportsFieldCarriedRefusals(t *testing.T) {
+	const header = "package synthetic\n\ntype bridge struct {\n\tRelevant bool\n\tReason   string\n\tLabel    string\n}\n\n"
+
+	t.Run("a reason field with no exit is collected", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() bridge {\n\treturn bridge{Relevant: true, Reason: \"no eligible path-bound compact authority found\"}\n}\n")
+		if len(analysis.fieldViolations) != 1 {
+			t.Fatalf("want the reason field collected, got %+v", analysis.fieldViolations)
+		}
+		if analysis.fieldViolations[0].message != "no eligible path-bound compact authority found" {
+			t.Fatalf("field site does not carry its sentence: %+v", analysis.fieldViolations[0])
+		}
+	})
+
+	t.Run("a reason field that names its exit is satisfied, constant included", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"const freshReview = \"run `gentle-ai review start`\"\n\n"+
+			"func f() bridge {\n\treturn bridge{Reason: \"scope changed; \" + freshReview}\n}\n")
+		if len(analysis.fieldViolations) != 0 || analysis.fieldSatisfied != 1 {
+			t.Fatalf("want 1 satisfied field and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("fields outside the closed carrier set are never refusals", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() bridge {\n\treturn bridge{Label: \"Review CAPTURE-RESULT\"}\n}\n")
+		if len(analysis.fieldViolations) != 0 || analysis.fieldSatisfied != 0 {
+			t.Fatalf("a label field must not be classified as a refusal, got %+v", analysis)
+		}
+	})
+
+	t.Run("a reason field is never mistaken for an enforced baseline site", func(t *testing.T) {
+		// Field-carried sites are capped, not frozen. Letting them into the
+		// baseline key space would silently retire an error-constructor entry.
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() bridge {\n\treturn bridge{Reason: \"no eligible path-bound compact authority found\"}\n}\n")
+		if len(analysis.violations) != 0 || len(analysis.analyzed) != 0 {
+			t.Fatalf("field carriers must stay out of the enforced set, got %+v", analysis)
+		}
+	})
+}
+
+// TestRefusalRatchetReportsStaleBaselineEntries is #3471's second half. Before
+// this, all three cases below collapsed into one count -- "N baselined entries
+// now name a resolution, are annotated, or are gone" -- and the one that meant
+// LOST COVERAGE read exactly like the two that meant progress.
+func TestRefusalRatchetReportsStaleBaselineEntries(t *testing.T) {
+	const fixed = "internal/reviewtransaction/gate.go\t\"a refusal that now names its exit\""
+	const gone = "internal/reviewtransaction/gate.go\t\"advertised base commit is not available locally; fetch before validation\""
+	const live = "internal/reviewtransaction/gate.go\t\"a refusal still frozen\""
+
+	analyzed := map[string]bool{fixed: true, live: true}
+	current := map[string]refusalRatchetSite{live: {file: "internal/reviewtransaction/gate.go", message: "a refusal still frozen"}}
+
+	drift := refusalRatchetClassifyBaselineDrift([]string{fixed, gone, live, ""}, analyzed, current)
+
+	if len(drift.absent) != 1 || drift.absent[0] != gone {
+		t.Fatalf("an entry matching no analyzed site must be reported as absent, got %+v", drift.absent)
+	}
+	if len(drift.resolved) != 1 || drift.resolved[0] != fixed {
+		t.Fatalf("an entry whose site is analyzed and fixed must be reported as resolved, got %+v", drift.resolved)
+	}
+	if len(drift.absent)+len(drift.resolved) != 1+1 {
+		t.Fatalf("a still-violating entry must not drift at all: %+v", drift)
+	}
+}
+
 // TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign is the ratchet.
 // It analyzes every production source file of the three audited packages and
 // fails on any refusal-origin site that neither names a runnable continuation
@@ -335,6 +673,7 @@ func TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign(t *testing.T) {
 	for _, site := range analysis.unanalyzable {
 		t.Logf("unanalyzable (runtime-built message, out of scope by construction): %s:%d %s", site.file, site.line, site.constructor)
 	}
+	defer refusalRatchetReportFieldCarriedRefusals(t, analysis)
 	for _, problem := range analysis.problems {
 		t.Error(problem)
 	}
@@ -370,8 +709,9 @@ func TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing baseline %s -- run: GENTLE_AI_REFUSAL_RATCHET_UPDATE=1 go test ./internal/cli -run TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign -count=1 (%v)", baselinePath, err)
 	}
+	baselineEntries := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	baseline := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+	for _, line := range baselineEntries {
 		if line != "" {
 			baseline[line] = true
 		}
@@ -393,15 +733,76 @@ func TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign(t *testing.T) {
 			site.file, site.line, site.constructor, site.message)
 	}
 
-	removed := 0
-	for key := range baseline {
-		if _, still := current[key]; !still {
-			removed++
+	drift := refusalRatchetClassifyBaselineDrift(baselineEntries, analysis.analyzed, current)
+	for _, key := range drift.absent {
+		moved := ""
+		if analysis.fieldCarried[key] {
+			moved = "\n  This exact sentence is now carried by a refusal-explanation STRUCT FIELD in the\n" +
+				"  same file. It did not get fixed; it changed carrier."
 		}
+		t.Errorf("STALE baseline entry matches no analyzed refusal site: %s%s\n"+
+			"  A frozen entry that matches nothing has exactly two causes and they are opposites.\n"+
+			"  If the refusal was removed, reworded, or now names its exit, shrink the baseline:\n"+
+			"    GENTLE_AI_REFUSAL_RATCHET_UPDATE=1 go test ./internal/cli -run TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign -count=1\n"+
+			"  If instead it moved into a shape this analyzer cannot see -- a runtime-built\n"+
+			"  message, a stream write, a carrier outside the covered set -- then it left\n"+
+			"  coverage without anyone deciding to stop governing it (#3471). Put it back in an\n"+
+			"  analyzable shape rather than deleting the entry.", key, moved)
 	}
-	if removed > 0 {
-		t.Logf("note: %d baselined entries now name a resolution, are annotated, or are gone.", removed)
+	for _, key := range drift.resolved {
+		t.Logf("baselined refusal now names a resolution or is annotated: %s", key)
+	}
+	if len(drift.resolved) > 0 {
 		t.Logf("      Tighten the baseline with: GENTLE_AI_REFUSAL_RATCHET_UPDATE=1 go test ./internal/cli -run TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign -count=1")
+	}
+}
+
+// refusalRatchetFieldCarriedCeiling freezes the field-carried refusal debt
+// discovered when #2416's carrier was added to the walk. It is a CEILING, not
+// a per-site baseline, and that is a deliberate, disclosed compromise:
+//
+//   - Freezing 70 unexamined sentences into .refusal-ratchet-baseline.txt
+//     would launder unreviewed debt into the same artifact that holds reviewed
+//     debt, and that file's only value is that every line in it was looked at.
+//   - Leaving the carrier out entirely keeps the escape open, which is the
+//     defect.
+//   - The set is not clean. Measured on the day it landed, 2 of the 70 are
+//     ALLOW explanations wearing a refusal-shaped field name -- sddstatus
+//     review_gate.go's "approved receipt exactly matches authoritative native
+//     state and the current repository" and status.go's "explicit bound
+//     compact authority exactly matches the current repository". Demanding
+//     that those name a `gentle-ai` command would be the checker inventing a
+//     refusal. Field name alone is not the criterion, and nothing static can
+//     separate the two here: both sit next to a `Result:` whose value is a
+//     variable. Per-site freezing would carve that error into the baseline.
+//
+// So the class is walked, every offender is listed on failure, and the count
+// may only go down. What this does NOT do is stop one field refusal being
+// swapped for another at the same count. Burning this down site by site is the
+// second pass, and until it happens this number is the honest statement of how
+// much of the carrier is governed: none of it individually, all of it in bulk.
+const refusalRatchetFieldCarriedCeiling = 70
+
+func refusalRatchetReportFieldCarriedRefusals(t *testing.T, analysis refusalRatchetAnalysis) {
+	t.Helper()
+	sort.Slice(analysis.fieldViolations, func(i, j int) bool {
+		if analysis.fieldViolations[i].file != analysis.fieldViolations[j].file {
+			return analysis.fieldViolations[i].file < analysis.fieldViolations[j].file
+		}
+		return analysis.fieldViolations[i].line < analysis.fieldViolations[j].line
+	})
+	t.Logf("field-carried refusals (#2416): %d name no exit, %d satisfied; ceiling %d",
+		len(analysis.fieldViolations), analysis.fieldSatisfied, refusalRatchetFieldCarriedCeiling)
+	for _, site := range analysis.fieldViolations {
+		t.Logf("field-carried refusal names no exit: %s:%d %s = %q", site.file, site.line, site.constructor, site.message)
+	}
+	if len(analysis.fieldViolations) > refusalRatchetFieldCarriedCeiling {
+		t.Errorf("field-carried refusals with no named exit grew from %d to %d.\n"+
+			"  Every offender is listed above. Name the runnable continuation in the new one\n"+
+			"  (`gentle-ai ...`), or annotate it:\n"+
+			"    // refusal:by-design <operator-knowledge|world-action|human-authority>: <why>\n"+
+			"  Raising refusalRatchetFieldCarriedCeiling is not one of the exits.",
+			refusalRatchetFieldCarriedCeiling, len(analysis.fieldViolations))
 	}
 }
 
@@ -415,6 +816,13 @@ var refusalRatchetProductionDirs = []struct{ dir, prefix string }{
 	{".", "internal/cli"},
 	{filepath.Join("..", "reviewtransaction"), "internal/reviewtransaction"},
 	{filepath.Join("..", "sddstatus"), "internal/sddstatus"},
+}
+
+// refusalRatchetFile is one production source, labelled by its
+// repository-root-relative slash path.
+type refusalRatchetFile struct {
+	label  string
+	source string
 }
 
 func refusalRatchetAnalyzeProductionSources(t *testing.T) refusalRatchetAnalysis {
@@ -434,22 +842,21 @@ func refusalRatchetAnalyzeProductionSources(t *testing.T) refusalRatchetAnalysis
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		files := make([]refusalRatchetFile, 0, len(names))
 		for _, name := range names {
 			source, err := os.ReadFile(filepath.Join(target.dir, name))
 			if err != nil {
 				t.Fatal(err)
 			}
-			analysis, err := refusalRatchetAnalyzeSource(path.Join(target.prefix, name), string(source))
-			if err != nil {
-				t.Fatalf("parse %s: %v", path.Join(target.prefix, name), err)
-			}
-			merged.violations = append(merged.violations, analysis.violations...)
-			merged.satisfiedNamed += analysis.satisfiedNamed
-			merged.satisfiedAnnotated += analysis.satisfiedAnnotated
-			merged.exemptWraps += analysis.exemptWraps
-			merged.unanalyzable = append(merged.unanalyzable, analysis.unanalyzable...)
-			merged.problems = append(merged.problems, analysis.problems...)
+			files = append(files, refusalRatchetFile{label: path.Join(target.prefix, name), source: string(source)})
 		}
+		// One package at a time, because guidance composed in from a helper
+		// is only resolvable within the package that declares it.
+		analysis, err := refusalRatchetAnalyzePackage(files)
+		if err != nil {
+			t.Fatalf("parse %s: %v", target.prefix, err)
+		}
+		merged.merge(analysis)
 	}
 	return merged
 }
@@ -472,15 +879,38 @@ type refusalRatchetMarker struct {
 	consumed  bool
 }
 
-// refusalRatchetAnalyzeSource parses one production source file and classifies
-// every errors.New / fmt.Errorf call in it.
+// refusalRatchetAnalyzeSource classifies a single source file as a
+// one-file package.
 func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalysis, error) {
+	return refusalRatchetAnalyzePackage([]refusalRatchetFile{{label: fileLabel, source: source}})
+}
+
+// refusalRatchetAnalyzePackage parses every production source of one package
+// and classifies its refusal-origin sites. The package, not the file, is the
+// unit because the text an operator reads can be composed from a helper
+// declared in a sibling file, and a message half-resolved is a message
+// misjudged.
+func refusalRatchetAnalyzePackage(files []refusalRatchetFile) (refusalRatchetAnalysis, error) {
 	var analysis refusalRatchetAnalysis
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, fileLabel, source, parser.ParseComments)
-	if err != nil {
-		return analysis, err
+	parsed := make([]*ast.File, 0, len(files))
+	for _, file := range files {
+		syntax, err := parser.ParseFile(fset, file.label, file.source, parser.ParseComments)
+		if err != nil {
+			return analysis, err
+		}
+		parsed = append(parsed, syntax)
 	}
+	resolver := refusalRatchetNewTextResolver(parsed)
+	for index, syntax := range parsed {
+		analysis.merge(refusalRatchetAnalyzeFile(fset, syntax, files[index].label, resolver))
+	}
+	sort.Strings(analysis.problems)
+	return analysis, nil
+}
+
+func refusalRatchetAnalyzeFile(fset *token.FileSet, file *ast.File, fileLabel string, resolver *refusalRatchetTextResolver) refusalRatchetAnalysis {
+	var analysis refusalRatchetAnalysis
 
 	markers := map[int]*refusalRatchetMarker{}
 	for _, group := range file.Comments {
@@ -514,13 +944,7 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 		line := fset.Position(call.Pos()).Line
 		site := refusalRatchetSite{file: fileLabel, line: line, constructor: constructor}
 
-		marker := markers[line]
-		if marker == nil {
-			marker = markers[line-1]
-		}
-		if marker != nil {
-			marker.consumed = true
-		}
+		marker := refusalRatchetMarkerAt(markers, line)
 
 		message, literal := refusalRatchetLiteralString(call.Args[0])
 		if !literal {
@@ -533,6 +957,7 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 			return true
 		}
 		site.message = message
+		analysis.record(site.baselineKey())
 
 		if constructor == "fmt.Errorf" && strings.Contains(message, "%w") {
 			if marker != nil {
@@ -546,27 +971,12 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 			return true
 		}
 
-		named := refusalRatchetNamedContinuationRegexp.MatchString(message)
-		switch {
-		case marker != nil && marker.malformed != "":
-			analysis.problems = append(analysis.problems, marker.malformed)
-		case marker != nil && !refusalRatchetByDesignShapes[marker.shape]:
-			analysis.problems = append(analysis.problems, fmt.Sprintf(
-				"%s:%d declares by-design shape %q, which is not in the closed vocabulary (operator-knowledge, world-action, human-authority); an unrecognized shape is a corpus error, never a pass",
-				fileLabel, line, marker.shape))
-		case marker != nil && named:
-			analysis.problems = append(analysis.problems, fmt.Sprintf(
-				"%s:%d is contradictory: the message names a `gentle-ai` continuation AND the site declares by-design %q; a refusal either has a runnable exit or it does not -- the two claims are mutually exclusive",
-				fileLabel, line, marker.shape))
-		case marker != nil:
-			analysis.satisfiedAnnotated++
-		case named:
-			analysis.satisfiedNamed++
-		default:
-			analysis.violations = append(analysis.violations, site)
-		}
+		analysis.classify(&site, marker, message, refusalRatchetOperatorText(resolver, call.Args))
 		return true
 	})
+
+	refusalRatchetInspectErrorMethods(fset, file, fileLabel, resolver, markers, &analysis)
+	refusalRatchetInspectFieldCarriers(fset, file, fileLabel, resolver, markers, &analysis)
 
 	for _, marker := range markers {
 		if marker.consumed {
@@ -579,7 +989,322 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 		analysis.problems = append(analysis.problems, problem)
 	}
 	sort.Strings(analysis.problems)
-	return analysis, nil
+	return analysis
+}
+
+// classify applies the shared rules to one site whose message is statically
+// known. authored is the sentence written AT the site; operator is everything
+// the reader actually receives, helper-composed text included.
+func (a *refusalRatchetAnalysis) classify(site *refusalRatchetSite, marker *refusalRatchetMarker, authored, operator string) {
+	namedAtSite := refusalRatchetNamedContinuationRegexp.MatchString(authored)
+	namedToOperator := namedAtSite || refusalRatchetNamedContinuationRegexp.MatchString(operator)
+	switch {
+	case marker != nil && marker.malformed != "":
+		a.problems = append(a.problems, marker.malformed)
+	case marker != nil && !refusalRatchetByDesignShapes[marker.shape]:
+		a.problems = append(a.problems, fmt.Sprintf(
+			"%s:%d declares by-design shape %q, which is not in the closed vocabulary (operator-knowledge, world-action, human-authority); an unrecognized shape is a corpus error, never a pass",
+			site.file, site.line, marker.shape))
+	case marker != nil && namedAtSite:
+		// Judged on the AUTHORED sentence only. See the header: a shared
+		// helper appending a generic way out of the practice is a different
+		// claim, and making that combination illegal is what pushed guidance
+		// into shapes nothing could analyze.
+		a.problems = append(a.problems, fmt.Sprintf(
+			"%s:%d is contradictory: the message names a `gentle-ai` continuation AND the site declares by-design %q; a refusal either has a runnable exit or it does not -- the two claims are mutually exclusive",
+			site.file, site.line, marker.shape))
+	case marker != nil:
+		a.satisfiedAnnotated++
+	case namedToOperator:
+		a.satisfiedNamed++
+	default:
+		a.violations = append(a.violations, *site)
+	}
+}
+
+// refusalRatchetInspectErrorMethods collects the second carrier: a statically
+// known string RETURNED from an `Error() string` method. That value is the
+// refusal an operator reads, exactly like the argument of errors.New, and
+// #3471 is the record of what its absence cost.
+func refusalRatchetInspectErrorMethods(fset *token.FileSet, file *ast.File, fileLabel string, resolver *refusalRatchetTextResolver, markers map[int]*refusalRatchetMarker, analysis *refusalRatchetAnalysis) {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Body == nil || fn.Name.Name != "Error" {
+			continue
+		}
+		if fn.Type.Params != nil && len(fn.Type.Params.List) != 0 {
+			continue
+		}
+		if fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
+			continue
+		}
+		result, ok := fn.Type.Results.List[0].Type.(*ast.Ident)
+		if !ok || result.Name != "string" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			ret, ok := node.(*ast.ReturnStmt)
+			if !ok || len(ret.Results) != 1 {
+				return true
+			}
+			// An error constructed inside Error() is already the first
+			// carrier's business; counting it twice would double-report it.
+			if call, isCall := ret.Results[0].(*ast.CallExpr); isCall && refusalRatchetConstructorName(call) != "" {
+				return true
+			}
+			line := fset.Position(ret.Pos()).Line
+			site := refusalRatchetSite{file: fileLabel, line: line, constructor: refusalRatchetErrorMethodOrigin}
+			marker := refusalRatchetMarkerAt(markers, line)
+			message, literal := refusalRatchetLiteralString(ret.Results[0])
+			if !literal {
+				if marker != nil && marker.malformed == "" {
+					analysis.problems = append(analysis.problems, fmt.Sprintf(
+						"%s:%d carries a refusal:by-design marker on a runtime-built message; the marker exempts nothing it cannot see", fileLabel, line))
+				}
+				analysis.unanalyzable = append(analysis.unanalyzable, site)
+				return true
+			}
+			site.message = message
+			analysis.record(site.baselineKey())
+			analysis.classify(&site, marker, message, resolver.text(ret.Results[0], 0, map[string]bool{}))
+			return true
+		})
+	}
+}
+
+// refusalRatchetFieldCarriers is the closed allowlist of struct fields that
+// carry a refusal explanation to a consumer (#2416). It is an allowlist and
+// not a rule about field names, and the difference is load-bearing: lowercase
+// `reason` is deliberately absent because in these packages it names a
+// store-category description ("per-lineage preserved raw reviewer results"),
+// which is not a refusal and must never be asked to name a command. Field
+// NAME alone is not the criterion, which is also why this carrier is reported
+// and capped rather than frozen site by site -- see the ceiling below.
+var refusalRatchetFieldCarriers = map[string]bool{
+	"Reason":  true,
+	"Message": true,
+	"message": true,
+}
+
+// refusalRatchetInspectFieldCarriers collects the third carrier: refusal text
+// assigned to a refusal-explanation struct field. A consuming agent acts on
+// that field exactly as it acts on an error string, so a bare literal there is
+// the same dead end.
+func refusalRatchetInspectFieldCarriers(fset *token.FileSet, file *ast.File, fileLabel string, resolver *refusalRatchetTextResolver, markers map[int]*refusalRatchetMarker, analysis *refusalRatchetAnalysis) {
+	ast.Inspect(file, func(node ast.Node) bool {
+		pair, ok := node.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		key, ok := pair.Key.(*ast.Ident)
+		if !ok || !refusalRatchetFieldCarriers[key.Name] {
+			return true
+		}
+		// Only text the author fixed AT the assignment: a literal, a
+		// concatenation, or a named constant. A field whose value is a call is
+		// deliberately skipped -- the union of a helper's several returns is
+		// not a sentence any single consumer ever reads, and reporting it as
+		// one would be the analyzer inventing a refusal.
+		operator := refusalRatchetStaticFieldText(pair.Value, resolver)
+		if operator == "" {
+			return true
+		}
+		message, literal := refusalRatchetLiteralString(pair.Value)
+		if !literal {
+			message = operator
+		}
+		line := fset.Position(pair.Pos()).Line
+		site := refusalRatchetSite{file: fileLabel, line: line, constructor: key.Name + ": string", message: message}
+		if analysis.fieldCarried == nil {
+			analysis.fieldCarried = map[string]bool{}
+		}
+		analysis.fieldCarried[site.baselineKey()] = true
+		marker := refusalRatchetMarkerAt(markers, line)
+		if marker != nil || refusalRatchetNamedContinuationRegexp.MatchString(operator) {
+			analysis.fieldSatisfied++
+			return true
+		}
+		analysis.fieldViolations = append(analysis.fieldViolations, site)
+		return true
+	})
+}
+
+// refusalRatchetStaticFieldText renders a field value only when the author
+// spelled it out at the assignment: a literal, a concatenation of them, or a
+// named constant. Call expressions resolve to nothing here on purpose.
+func refusalRatchetStaticFieldText(expr ast.Expr, resolver *refusalRatchetTextResolver) string {
+	switch typed := expr.(type) {
+	case *ast.BasicLit, *ast.Ident:
+		return resolver.text(typed, 0, map[string]bool{})
+	case *ast.ParenExpr:
+		return refusalRatchetStaticFieldText(typed.X, resolver)
+	case *ast.BinaryExpr:
+		if typed.Op != token.ADD {
+			return ""
+		}
+		return refusalRatchetStaticFieldText(typed.X, resolver) + refusalRatchetStaticFieldText(typed.Y, resolver)
+	}
+	return ""
+}
+
+func refusalRatchetMarkerAt(markers map[int]*refusalRatchetMarker, line int) *refusalRatchetMarker {
+	marker := markers[line]
+	if marker == nil {
+		marker = markers[line-1]
+	}
+	if marker != nil {
+		marker.consumed = true
+	}
+	return marker
+}
+
+// --- Text resolution across the package ----------------------------------
+
+// refusalRatchetResolveDepth bounds helper composition. Guidance is composed
+// one or two helpers deep in practice; the bound exists so a cycle or a deep
+// chain cannot hang the walk.
+const refusalRatchetResolveDepth = 6
+
+// refusalRatchetTextResolver renders the compile-time-visible text of an
+// expression: string literals, concatenations, package-level string constants,
+// and calls to package-local functions that return strings. Runtime holes
+// render as nothing, so what remains is exactly the part of the sentence an
+// author fixed at compile time -- which is the only part a static ratchet can
+// honestly judge.
+type refusalRatchetTextResolver struct {
+	consts map[string]ast.Expr
+	funcs  map[string]*ast.FuncDecl
+}
+
+func refusalRatchetNewTextResolver(files []*ast.File) *refusalRatchetTextResolver {
+	resolver := &refusalRatchetTextResolver{consts: map[string]ast.Expr{}, funcs: map[string]*ast.FuncDecl{}}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			switch typed := decl.(type) {
+			case *ast.GenDecl:
+				if typed.Tok != token.CONST && typed.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range typed.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+						continue
+					}
+					resolver.consts[value.Names[0].Name] = value.Values[0]
+				}
+			case *ast.FuncDecl:
+				if typed.Recv != nil || typed.Body == nil {
+					continue
+				}
+				if typed.Type.Results == nil || len(typed.Type.Results.List) != 1 {
+					continue
+				}
+				ident, ok := typed.Type.Results.List[0].Type.(*ast.Ident)
+				if !ok || ident.Name != "string" {
+					continue
+				}
+				resolver.funcs[typed.Name.Name] = typed
+			}
+		}
+	}
+	return resolver
+}
+
+func (r *refusalRatchetTextResolver) text(expr ast.Expr, depth int, visiting map[string]bool) string {
+	if expr == nil || depth > refusalRatchetResolveDepth {
+		return ""
+	}
+	switch typed := expr.(type) {
+	case *ast.BasicLit:
+		if typed.Kind != token.STRING {
+			return ""
+		}
+		value, err := strconv.Unquote(typed.Value)
+		if err != nil {
+			return ""
+		}
+		return value
+	case *ast.ParenExpr:
+		return r.text(typed.X, depth, visiting)
+	case *ast.BinaryExpr:
+		if typed.Op != token.ADD {
+			return ""
+		}
+		// Concatenation is contiguous: `"run " + cmdConst` must be able to
+		// spell a command across the seam.
+		return r.text(typed.X, depth, visiting) + r.text(typed.Y, depth, visiting)
+	case *ast.Ident:
+		value, ok := r.consts[typed.Name]
+		if !ok || visiting[typed.Name] {
+			return ""
+		}
+		visiting[typed.Name] = true
+		defer delete(visiting, typed.Name)
+		return r.text(value, depth+1, visiting)
+	case *ast.CallExpr:
+		return r.callText(typed, depth, visiting)
+	}
+	return ""
+}
+
+func (r *refusalRatchetTextResolver) callText(call *ast.CallExpr, depth int, visiting map[string]bool) string {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		decl, ok := r.funcs[fun.Name]
+		if !ok || visiting[fun.Name] {
+			return ""
+		}
+		visiting[fun.Name] = true
+		defer delete(visiting, fun.Name)
+		return r.funcText(decl, depth+1, visiting)
+	case *ast.SelectorExpr:
+		// Only the two standard-library composers that assemble operator
+		// prose. Descending into arbitrary calls would drag in text the
+		// operator never reads.
+		pkg, ok := fun.X.(*ast.Ident)
+		if !ok || (pkg.Name != "fmt" && pkg.Name != "strings") {
+			return ""
+		}
+		return r.joinArguments(call.Args, depth, visiting)
+	}
+	return ""
+}
+
+// joinArguments separates arguments with a newline so no `gentle-ai <verb>`
+// can be spelled by accident across two unrelated values.
+func (r *refusalRatchetTextResolver) joinArguments(args []ast.Expr, depth int, visiting map[string]bool) string {
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		if rendered := r.text(arg, depth+1, visiting); rendered != "" {
+			parts = append(parts, rendered)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (r *refusalRatchetTextResolver) funcText(decl *ast.FuncDecl, depth int, visiting map[string]bool) string {
+	if decl == nil || decl.Body == nil {
+		return ""
+	}
+	parts := []string{}
+	ast.Inspect(decl.Body, func(node ast.Node) bool {
+		ret, ok := node.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 1 {
+			return true
+		}
+		if rendered := r.text(ret.Results[0], depth, visiting); rendered != "" {
+			parts = append(parts, rendered)
+		}
+		return true
+	})
+	return strings.Join(parts, "\n")
+}
+
+// refusalRatchetOperatorText is the sentence the operator actually reads for
+// one refusal-origin site: the author's own literal plus whatever the
+// arguments compose into it.
+func refusalRatchetOperatorText(resolver *refusalRatchetTextResolver, args []ast.Expr) string {
+	return resolver.joinArguments(args, -1, map[string]bool{})
 }
 
 func refusalRatchetConstructorName(call *ast.CallExpr) string {

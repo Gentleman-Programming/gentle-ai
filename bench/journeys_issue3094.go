@@ -14,6 +14,7 @@ import (
 func issue3094Journeys() []Journey {
 	return []Journey{{
 		ID:     "j103-sdd-interrupted-settlement-omits-evidence",
+		Review: reviewOptedIn,
 		Title:  "Interrupted runtime settlement omits evidence and replays without a second record",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3094",
 		Steps: []Step{

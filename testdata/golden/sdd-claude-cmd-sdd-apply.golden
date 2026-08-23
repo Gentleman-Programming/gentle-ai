@@ -48,19 +48,16 @@ For each task:
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 
 REVIEW ROUTING (post-verify, not post-apply):
-Return control to the parent orchestrator. Apply itself never routes to review — `nextRecommended` proceeds to `verify` once tasks are complete; the review offer is a post-verify decision (see sdd-verify.md's post-verify review offer). If the parent later observes a `reviewOffer` block in native status output, it—not the apply executor—begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition`. It routes only from the returned `next_transition`: for `execute`, it invokes the exact operation and ordered argument tokens unchanged; for `collect`, it satisfies only the exact named inputs and capture operations before querying STATUS again; for `stop`, it stops without running a lifecycle operation. The parent never substitutes direct START, and the apply executor never launches review.
+Return control to the parent orchestrator. Apply itself never routes to review — `nextRecommended` proceeds to `verify` once tasks are complete; the review offer is a post-verify decision (see sdd-verify.md's post-verify review offer). If the parent later observes a `reviewOffer` block, selectorless negotiated STATUS may preflight only the current worktree candidate. The parent executes only the exact returned START, then retains and reuses that transaction's lineage, revision, and target tokens for every subsequent STATUS, capture, and FINALIZE call. The parent never resumes ambient authority, substitutes direct START, or lets the apply executor launch review.
 
 ### Authority-First Terminal Procedure
 
-Use only the compact facade; it appends and reads back native authority before materializing existing compatibility artifacts.
+| Order | Operation | Required result |
+| --- | --- | --- |
+| 01 | canonical initial STATUS above | exactly one current-worktree START preflight; no authority discovery |
+| 02 | exact returned START | one compact lineage/worktree/target binding; retain lineage, revision, and target |
+| 03 | exact-lineage STATUS, collect, and FINALIZE | only returned transaction actions; no ambient resume, reuse, or delivery gate |
+| 04 | successful FINALIZE | native readback, exact authority/artifact burn, then `approved` |
+| 05 | terminal lifecycle stop | ordinary repository policy owns any later delivery decision |
 
-| Order | Operation | Required result | Terminal mirrors |
-|---|---|---|---|
-| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition` | one provider-owned `next_transition` returned | blocked |
-| 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
-| 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
-| 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
-
-After ambiguous output, query STATUS again; native discovery reports the committed authority and its next transition without another budget. Malformed or ambiguous lineage remains invalid.
-
-Reuse a valid receipt; never auto-launch Judgment Day or create another budget at commit/push/PR/release.
+Approval burns its exact review authority before returning. Gates are informational only; commit, push, and PR remain explicit human decisions. Never auto-launch Judgment Day.

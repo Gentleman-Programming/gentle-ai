@@ -130,7 +130,7 @@ Every persisted successor MUST satisfy transaction state invariants in addition 
 
 ### Requirement: Terminal receipt
 
-Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, counters, and terminal state. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state.
+Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, counters, and terminal state. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state. Every receipt is immutable review evidence only: it never authorizes or blocks commit, push, PR, release, or archive.
 
 #### Scenario: Post-fix receipt distinguishes trees
 
@@ -140,23 +140,24 @@ Only `approved | escalated` are terminal transaction states. An approved receipt
 - AND `final_candidate_tree` identifies the scoped-validated candidate
 - AND `fix_delta_hash` identifies only their correction delta
 
-### Requirement: Deterministic lifecycle validation
+### Requirement: Deterministic review-context validation
 
-Pre-commit, pre-push, pre-PR, and release MUST validate the same receipt and return `allow | scope-changed | invalidated | escalated`. Native validation MUST derive the current repository target and hash persisted policy, ledger, fix delta, verify evidence, and release artifacts instead of trusting caller-authored tree/hash assertions. Fabricated or nonexistent objects and stale artifacts MUST fail closed. Only `allow` returns process success; every denial still emits parseable machine JSON and returns non-success. Gates MUST NOT start a reviewer, create another budget, or silently start Judgment Day.
+Pre-commit, pre-push, pre-PR, and release review-context hooks MUST validate the same receipt and report `allow | scope-changed | invalidated | escalated` as machine-readable review evidence. Native validation MUST derive the current repository target and hash persisted policy, ledger, fix delta, verify evidence, and release artifacts instead of trusting caller-authored tree/hash assertions. Fabricated or nonexistent objects and stale artifacts MUST fail closed inside review integrity: they remain visible and repairable without fabricating approval. Every result emits parseable machine JSON, and no result authorizes, denies, blocks, or routes commit, push, PR, release, or archive delivery. Hooks MUST NOT start a reviewer, create another budget, or silently start Judgment Day.
 
-#### Scenario: Unchanged approved target is reused
+#### Scenario: Unchanged approved target is reported as review context
 
-- GIVEN the receipt and gate context match exactly
-- WHEN a lifecycle validator runs
-- THEN the result is `allow`
+- GIVEN the receipt and review context match exactly
+- WHEN a review-context validator runs
+- THEN the result is `allow` as immutable review evidence
 - AND zero reviewers run
+- AND ordinary repository policy remains the only delivery decision maker
 
-#### Scenario: External evidence changes
+#### Scenario: External evidence changes remain visible without reopening review
 
 - GIVEN unchanged reviewed code but new CI, vulnerability, base, policy, provenance, or release evidence
-- WHEN the lifecycle validator evaluates it
-- THEN the result may be `invalidated` or `escalated`
-- AND unchanged code review is not reopened
+- WHEN the review-context validator evaluates it
+- THEN the result may be `invalidated` or `escalated` for review repair
+- AND unchanged code review is not reopened or made a delivery prerequisite
 
 ### Requirement: Scope and incident boundaries
 
@@ -171,21 +172,22 @@ Unrelated content/path scope change MUST require a different lineage ID. No gene
 
 ### Requirement: Exact persistence references
 
-All artifact modes MUST use the repository-derived authoritative append-only CAS store at `<git-common-dir>/gentle-ai/review-transactions/v1/{lineage-id}/`. The lineage ID MUST be canonical lowercase kebab-case and MUST NOT permit path traversal or aliases. OpenSpec `transaction.json`, frozen `ledger.json`, `receipt.json`, `chain-bundle.json`, and `gate-context.json` artifacts and Engram `sdd/{change-name}/review/{transaction,ledger,receipt,chain-bundle,gate-context}` topics are non-authoritative mirrors. Each append MUST require the expected revision and one legal semantic successor. Each load MUST prove the complete content-addressed predecessor chain from exact HEAD to one valid `review/start` genesis, rejecting missing predecessors, cycles, hash or schema mismatches, immutable-field changes, illegal or reordered transitions, semantically incomplete finding routing, and incoherent counters. Archive readiness MUST cross-check the trusted terminal revision and complete chain against the transaction mirror, frozen ledger, verify evidence, receipt, portable bundle, gate identity, and current repository target; missing, stale, or mismatched artifacts block archive.
+All artifact modes MUST use the repository-derived authoritative append-only CAS store at `<git-common-dir>/gentle-ai/review-transactions/v1/{lineage-id}/`. The lineage ID MUST be canonical lowercase kebab-case and MUST NOT permit path traversal or aliases. OpenSpec `transaction.json`, frozen `ledger.json`, `receipt.json`, `chain-bundle.json`, and `gate-context.json` artifacts and Engram `sdd/{change-name}/review/{transaction,ledger,receipt,chain-bundle,gate-context}` topics are non-authoritative mirrors. Each append MUST require the expected revision and one legal semantic successor. Each load MUST prove the complete content-addressed predecessor chain from exact HEAD to one valid `review/start` genesis, rejecting missing predecessors, cycles, hash or schema mismatches, immutable-field changes, illegal or reordered transitions, semantically incomplete finding routing, and incoherent counters. Missing, stale, or mismatched artifacts MUST be retained as visible review-integrity evidence with applicable repair guidance; they MUST NOT block archive or delivery. Archive readiness remains owned by ordinary SDD requirements, tasks, and verification policy.
 
-#### Scenario: Archive sees pending receipt
+#### Scenario: Archive sees a pending receipt as review context
 
 - GIVEN tasks and verification pass but the receipt is missing or non-terminal
 - WHEN native SDD status evaluates archive
-- THEN archive remains blocked with deterministic review action
+- THEN archive readiness is determined by tasks and verification under ordinary SDD policy
+- AND the missing or non-terminal receipt is reported only as review context with any applicable repair guidance
 
 #### Scenario: Caller supplies an approved alternate store
 
 - GIVEN a caller-selected temporary store contains a hash-valid approved terminal event
 - AND the repository-derived lineage store is missing, truncated, or non-terminal
-- WHEN archive or a lifecycle gate validates the receipt
-- THEN the result is machine-readable `invalidated`
-- AND the alternate store cannot influence the authoritative decision
+- WHEN review context validates the receipt
+- THEN the result is machine-readable `invalidated` review evidence
+- AND the alternate store cannot influence authoritative review state or any delivery decision
 
 ### Requirement: Crash-safe bounded writer ownership
 

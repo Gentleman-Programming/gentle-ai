@@ -27,6 +27,33 @@ func ParseOpenCodeBackgroundIntent(raw string) (OpenCodeBackgroundIntent, error)
 	return "", fmt.Errorf("invalid OpenCode background-subagent intent %q (valid values: auto, on, off)", raw)
 }
 
+// PiBackgroundIntent is Pi's unresolved auto/on/off background-subagent
+// preference. It deliberately mirrors OpenCodeBackgroundIntent instead of
+// generalizing it: each type's JSON state key is baked into persisted state
+// files, so sharing one type would couple two independent persistence
+// contracts.
+type PiBackgroundIntent string
+
+const (
+	PiBackgroundAuto PiBackgroundIntent = "auto"
+	PiBackgroundOn   PiBackgroundIntent = "on"
+	PiBackgroundOff  PiBackgroundIntent = "off"
+)
+
+func (i PiBackgroundIntent) Valid() bool {
+	return i == PiBackgroundAuto || i == PiBackgroundOn || i == PiBackgroundOff
+}
+
+// ParsePiBackgroundIntent validates the persisted and user-supplied control
+// vocabulary without selecting a runtime behavior.
+func ParsePiBackgroundIntent(raw string) (PiBackgroundIntent, error) {
+	intent := PiBackgroundIntent(raw)
+	if intent.Valid() {
+		return intent, nil
+	}
+	return "", fmt.Errorf("invalid Pi background-subagent intent %q (valid values: auto, on, off)", raw)
+}
+
 const (
 	AgentClaudeCode    AgentID = "claude-code"
 	AgentOpenCode      AgentID = "opencode"

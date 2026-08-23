@@ -26,7 +26,7 @@ var reviewContinuationPattern = regexp.MustCompile("`([^`]+)`")
 // message the product emitted, builds an invocation from it, runs that
 // invocation for real, and requires the block to be gone afterwards.
 func TestReviewStartInABareRepositoryNamesAWorkingTreeThatActuallyWorks(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	checkout := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(checkout, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestReviewStartOutsideAnyRepositoryStillSurfacesItsCause(t *testing.T) {
 // directory. It must never be mistaken for the bare case, because the recovery
 // the bare message names would be wrong advice there.
 func TestReviewStartInALinkedWorktreeIsNotTreatedAsBare(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	linked := filepath.Join(t.TempDir(), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "-q", linked, "-b", "linked-branch")

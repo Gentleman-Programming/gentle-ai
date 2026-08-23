@@ -52,6 +52,9 @@ type SyncFlags struct {
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
+
+	PiBackgroundSubagents    string
+	PiBackgroundSubagentsSet bool
 	// Profiles holds named SDD profiles parsed from --profile flags.
 	// Each entry is populated by parseProfileFlag and augmented by
 	// parseProfilePhaseFlag.
@@ -90,6 +93,8 @@ type SyncResult struct {
 
 	Background              OpenCodeBackgroundResolution
 	BackgroundPolicyEnabled bool
+
+	PiBackground PiBackgroundResolution
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -115,6 +120,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
+	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
@@ -147,6 +153,8 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 			opts.themeSet = true
 		case "opencode-background-subagents":
 			opts.OpenCodeBackgroundSubagentsSet = true
+		case "pi-background-subagents":
+			opts.PiBackgroundSubagentsSet = true
 		}
 	})
 
@@ -189,6 +197,9 @@ FLAGS
   --opencode-background-subagents=auto|on|off
                                      Resolve OpenCode capability and manage a launcher when eligible; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
                                      auto inherits managed on/off, unsupported/unknown stays foreground, off removes only owned launchers
+  --pi-background-subagents=auto|on|off
+                                     Project the resolved Pi background-subagent policy for gentle-pi; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS
+                                     auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
 `)
@@ -489,6 +500,8 @@ type syncRuntime struct {
 	backgroundPolicy     bool
 	backgroundActivation *opencodeactivation.ActivationPlan
 	runtimeReady         bool
+
+	piBackgroundProjection *piBackgroundProjectionPlan
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
@@ -536,6 +549,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 	if r.backgroundActivation != nil {
 		apply = append(apply, openCodeBackgroundActivationStep{id: "sync:opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
+	}
+	if r.piBackgroundProjection != nil {
+		apply = append(apply, piBackgroundProjectionStep{id: "sync:pi:background-projection", plan: r.piBackgroundProjection})
 	}
 
 	for _, component := range r.selection.Components {
@@ -1515,10 +1531,15 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if err != nil {
 		return SyncResult{Agents: selection.Agents, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err)
 	}
-	return runSyncWithSelection(homeDir, selection, background)
+	piBackground, err := resolvePiBackgroundCLI(false, "", persistedState)
+	if err != nil {
+		return SyncResult{Agents: selection.Agents, Selection: selection, Background: background}, err
+	}
+	preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(selection.Agents, model.AgentPi))
+	return runSyncWithSelection(homeDir, selection, background, piBackground)
 }
 
-func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution) (SyncResult, error) {
+func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
 	// below must not rewrite state it could not read. Managed-asset provenance
@@ -1549,9 +1570,10 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	}
 
 	result := SyncResult{
-		Agents:     agentIDs,
-		Selection:  selection,
-		Background: background,
+		Agents:       agentIDs,
+		Selection:    selection,
+		Background:   background,
+		PiBackground: piBackground,
 	}
 
 	result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
@@ -1573,6 +1595,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		// supplies an activation plan; direct callers do not.
 		rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
 	}
+	rt.piBackgroundProjection = piBackground.projectionPlan
 
 	stagePlan := rt.stagePlan()
 	result.Plan = stagePlan
@@ -1599,6 +1622,9 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	result.ChangedFiles = dedupPaths(append(result.ChangedFiles, compatibilityChanged...))
 	if background.activationPlan != nil {
 		result.ChangedFiles = dedupPaths(append(result.ChangedFiles, background.activationPlan.ChangedPaths()...))
+	}
+	if piBackground.projectionPlan != nil {
+		result.ChangedFiles = dedupPaths(append(result.ChangedFiles, piBackground.projectionPlan.ChangedPaths()...))
 	}
 	result.FilesChanged = len(result.ChangedFiles)
 
@@ -1630,7 +1656,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist); err != nil {
+	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
 		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
@@ -1642,7 +1668,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	return result, nil
 }
 
-func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent) error {
+func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent) error {
 	return withInstallStateLock(homeDir, func() error {
 		latest, err := state.Read(homeDir)
 		if errors.Is(err, os.ErrNotExist) {
@@ -1672,6 +1698,10 @@ func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.
 		}
 		if background != "" && latest.BackgroundIntent != background {
 			latest.BackgroundIntent = background
+			shouldWrite = true
+		}
+		if piBackground != "" && latest.PiBackgroundIntent != piBackground {
+			latest.PiBackgroundIntent = piBackground
 			shouldWrite = true
 		}
 		if !shouldWrite {
@@ -1721,6 +1751,10 @@ func RunSync(args []string) (SyncResult, error) {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
 	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	if err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	}
+	piBackground, err := resolvePiBackgroundCLI(flags.PiBackgroundSubagentsSet, flags.PiBackgroundSubagents, persistedState)
 	if err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
@@ -1804,10 +1838,11 @@ func RunSync(args []string) (SyncResult, error) {
 	if flags.DryRun {
 		// Build the plan for inspection, skip execution.
 		result := SyncResult{
-			Agents:     agentIDs,
-			Selection:  selection,
-			DryRun:     true,
-			Background: background,
+			Agents:       agentIDs,
+			Selection:    selection,
+			DryRun:       true,
+			Background:   background,
+			PiBackground: piBackground,
 		}
 		result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
 		if err != nil || noOp {
@@ -1828,6 +1863,8 @@ func RunSync(args []string) (SyncResult, error) {
 		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 		result.Background = background
 		result.BackgroundPolicyEnabled = rt.backgroundPolicy
+		rt.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
+		result.PiBackground = piBackground
 		result.Plan = rt.stagePlan()
 		for _, step := range result.Plan.Prepare {
 			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
@@ -1842,7 +1879,8 @@ func RunSync(args []string) (SyncResult, error) {
 		return SyncResult{Agents: agentIDs, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err)
 	}
 	background.activationPlan = backgroundActivation
-	result, err := runSyncWithSelection(homeDir, selection, background)
+	preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
+	result, err := runSyncWithSelection(homeDir, selection, background, piBackground)
 	if err != nil {
 		return result, err
 	}
@@ -1916,6 +1954,14 @@ func hasManagedPiCodeGraphManifest(homeDir string) bool {
 func RenderSyncReport(result SyncResult) string {
 	var b strings.Builder
 	backgroundReport := func() {
+		if containsAgent(result.Agents, model.AgentPi) && result.PiBackground.Intent != "" {
+			fmt.Fprintf(&b, "Pi background intent: %s (policy effective: %s)\n", result.PiBackground.Intent, result.PiBackground.Effective)
+			if !result.PiBackground.managed {
+				fmt.Fprintln(&b, "Pi background projection: unmanaged (no explicit policy)")
+			} else if plan := result.PiBackground.projectionPlan; plan != nil && plan.skipReason != "" {
+				fmt.Fprintln(&b, "Pi background projection skipped: "+plan.skipReason)
+			}
+		}
 		if !containsAgent(result.Agents, model.AgentOpenCode) || result.Background.Intent == "" {
 			return
 		}

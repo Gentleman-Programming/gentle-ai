@@ -11,7 +11,11 @@
   "properties": {
     "schema": {"const": "gentle-ai.review-integration.failure/v2"},
     "contract": {"const": "gentle-ai.review-integration/v2"},
-    "operation": {"$ref": "../../v1/schemas/failure.schema.json#/properties/operation"},
+    "operation": {"enum": [
+      "review.capabilities", "review.start", "review.status", "review.finalize", "review.repair",
+      "review.retry_final_verification", "review.validate", "review.bind_sdd",
+      "review.capture-result", "review.capture-evidence", "review.capture-refuter", "review.capture-validation"
+    ]},
     "phase": {"$ref": "../../v1/schemas/failure.schema.json#/properties/phase"},
     "code": {"$ref": "../../v1/schemas/failure.schema.json#/properties/code"},
     "message": {"$ref": "../../v1/schemas/failure.schema.json#/properties/message"},
@@ -20,7 +24,8 @@
     "retry_safe": {"type": "boolean"},
     "replayability": {"$ref": "../../v1/schemas/failure.schema.json#/properties/replayability"},
     "lineage_id": {"$ref": "../../v1/schemas/failure.schema.json#/properties/lineage_id"},
-    "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
+    "target_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/target_identity"},
+        "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
     "progress_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/progress_identity"},
     "required_inputs": {"$ref": "../../v1/schemas/failure.schema.json#/properties/required_inputs"},
     "next_action": {"$ref": "../../v1/schemas/failure.schema.json#/properties/next_action"},
@@ -30,6 +35,7 @@
   },
   "allOf": [
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
-    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"},
+        {"$ref": "../../v1/schemas/failure.schema.json#/allOf/2"}
   ]
 }

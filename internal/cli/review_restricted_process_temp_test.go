@@ -98,6 +98,7 @@ func dirtyTrackedCandidate(t *testing.T, repo string) {
 // asserted because reporters confirmed v1 returns the byte-equivalent failure,
 // so selecting the older contract was never a workaround.
 func TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
 		t.Run(contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
@@ -133,6 +134,7 @@ func TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContra
 // through a named ref rather than the current index, so it is a distinct
 // snapshot-derivation path and needs its own proof.
 func TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--abbrev-ref", "HEAD"))
 	dirtyTrackedCandidate(t, repo)
@@ -167,10 +169,18 @@ func TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBase
 // no-authority proof above is not sufficient on its own -- this path also
 // derives a live snapshot to compare against the frozen target.
 func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const candidatePath = "internal/candidate.go"
 	writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
-	started := runNegotiatedReviewStart(t, repo, "restricted-temp-correction-continuation")
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", "restricted-temp-correction-continuation",
+	})
+	if err != nil {
+		t.Fatalf("start compact correction fixture: %v", err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
 	if len(started.SelectedLenses) == 0 {
 		t.Fatalf("review start selected no lenses: %#v", started)
 	}
@@ -231,6 +241,7 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 // unreadable authority, so the temporary index must already have been removed
 // by the time the typed failure is published.
 func TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	dirtyTrackedCandidate(t, repo)
 
@@ -257,7 +268,8 @@ func TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure(t *testing.T)
 	unavailableProcessTemp(t)
 
 	var output bytes.Buffer
-	if err := RunReview(negotiatedStatusArgs(repo, ReviewIntegrationContractV2), &output); err == nil {
+	if err := RunReview(negotiatedStatusArgs(repo, ReviewIntegrationContractV2,
+		"--lineage", started.LineageID), &output); err == nil {
 		t.Fatalf("negotiated status converted unreadable authority into semantic output: %s", output.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())

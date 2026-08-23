@@ -16,6 +16,7 @@ import (
 )
 
 func TestPR1588RevalidationNamedFIFOCancellation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record, _ := capturedArtifacts(t, false)
 	path := t.TempDir() + "/manifest.fifo"
 	if err := unix.Mkfifo(path, 0o600); err != nil {
@@ -64,6 +65,7 @@ func TestPR1588RevalidationNamedFIFOCancellation(t *testing.T) {
 }
 
 func TestReviewFinalizeRejectsNonRegularArtifactFilePaths(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name string
 		path func(*testing.T) string

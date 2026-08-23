@@ -2,7 +2,9 @@ package reviewtransaction
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -361,7 +363,8 @@ func TestRARAuthorityReadsExactHistoricalV1Receipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiptRef := sha256Ref(payload)
+	receiptDigest := sha256.Sum256(payload)
+	receiptRef := fmt.Sprintf("sha256:%x", receiptDigest)
 	subject, err := VerificationSubjectFromSnapshot(transaction.Snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -422,10 +425,11 @@ func TestRARAuthorityNeverDowngradesPresentCompactAuthorityToHistoricalV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	receiptDigest := sha256.Sum256(receiptPayload)
 	request := rarPublicationForSubject(
 		t,
 		transaction.LineageID,
-		sha256Ref(receiptPayload),
+		fmt.Sprintf("sha256:%x", receiptDigest),
 		subject,
 		transaction.PolicyHash,
 		verificationTestHash("no-downgrade-result"),
@@ -522,7 +526,8 @@ func newRARCompactFixture(t *testing.T, lineage string) rarCompactFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiptRef := sha256Ref(payload)
+	receiptDigest := sha256.Sum256(payload)
+	receiptRef := fmt.Sprintf("sha256:%x", receiptDigest)
 	subject, err := VerificationSubjectFromSnapshot(state.CurrentSnapshot)
 	if err != nil {
 		t.Fatal(err)

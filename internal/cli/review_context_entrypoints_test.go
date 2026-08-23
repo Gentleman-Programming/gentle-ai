@@ -17,7 +17,7 @@ var (
 	RunReviewBindSDD                = reviewContextEntrypointForTest(runReviewBindSDD)
 	RunReviewFacadeFinalize         = reviewContextEntrypointForTest(runReviewFacadeFinalize)
 	RunReviewFacadeStart            = reviewContextEntrypointForTest(runReviewFacadeStart)
-	RunReviewFacadeValidate         = reviewContextEntrypointForTest(runReviewFacadeValidate)
+	RunReviewFacadeValidate         = reviewContextEntrypointForTest(runReviewFacadeValidateNonDeciding)
 	RunReviewStatus                 = reviewContextEntrypointForTest(runReviewStatus)
 	RunReviewRetryFinalVerification = reviewContextEntrypointForTest(runReviewRetryFinalVerification)
 	RunReviewRepair                 = reviewContextEntrypointForTest(runReviewRepair)

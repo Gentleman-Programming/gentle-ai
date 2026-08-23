@@ -381,6 +381,7 @@ func finalVerificationRetrySuccessor(predecessor CompactRecord, request FinalVer
 		Incident: request.Incident, IncidentDigest: FinalVerificationIncidentDigest(request.Incident), SourceFinalizeAttempt: source.attempt,
 	}
 	successor.LineageID = request.SuccessorLineageID
+	successor.InitialAtomicStart = nil
 	successor.Generation = predecessor.State.Generation + 1
 	successor.State = StateValidating
 	successor.EvidenceHash = ""
@@ -456,7 +457,7 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 	if err != nil {
 		return err
 	}
-	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery
+	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery, want.InitialAtomicStart = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery, nil
 	want.EvidenceRecordDigest, want.EvidenceOutcome, want.EvidenceTargetIdentity, want.EvidenceAuthorityRevision = "", "", "", ""
 	validLifecycle := successor.Validate() == nil && (successor.State == StateValidating && successor.EvidenceHash == "" ||
 		(successor.State == StateApproved || successor.State == StateEscalated) && validSHA256(successor.EvidenceHash))

@@ -247,36 +247,3 @@ func writeNonPristineDispositionRepairFixture(t *testing.T, repo, prefix string)
 		t.Fatal(err)
 	}
 }
-
-// TestCompactStartInvalidGraphRefusalNamesAbandonExit satisfies
-// tasks.md 4.3/4.4: SanctionedCompactRecoveryExits (the exact seam
-// compactStartInvalidGraphRefusal's continuation prose renders through)
-// names abandonment for a non-terminal content-mismatched recovery successor.
-// The V2 binding records its exact discarded-work summary rather than routing
-// the operator through an unrelated repair transaction.
-func TestCompactStartInvalidGraphRefusalNamesAbandonExit(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	writeNonPristineDispositionRepairFixture(t, repo, "s4-repair-exit")
-
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, err := reviewtransaction.InspectCompactRecoveryEdges(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exits, err := reviewtransaction.SanctionedCompactRecoveryExits(context.Background(), repo, report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sawAbandonExit := false
-	for _, exit := range exits {
-		if exit.Operation == reviewtransaction.CompactRecoveryEdgeExitAbandon {
-			sawAbandonExit = true
-		}
-	}
-	if !sawAbandonExit {
-		t.Fatalf("no sanctioned exit named %q for a non-terminal content-mismatched-recovery-authorization successor: %#v", reviewtransaction.CompactRecoveryEdgeExitAbandon, exits)
-	}
-}

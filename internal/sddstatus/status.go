@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -291,26 +292,10 @@ type ResolveOptions struct {
 	ChangeName          string
 	IncludeInstructions bool
 	// ReviewDisabled records that the user's receipt-driven-development kill
-	// switch is off for this clone. While it is off receipt-driven development
-	// does not exist, so it must have no implications: the archive gate never
-	// demands a terminal review receipt the operator could not obtain anyway
-	// (review/start is refused while the switch is off), which would otherwise
-	// loop an orchestrator forever on `nextRecommended: "resolve-review"`.
-	//
-	// Corrective verify cycle CRITICAL-1 (rdd-post-verify-review-offer's
-	// "Kill-Switch-Off Is Structural Absence" requirement, ratified text:
-	// "zero review code MUST execute on any SDD path ... archive consults no
-	// reviewGate structured status") tightened this: while the switch is off,
-	// applyReviewGate does not run at all — not even to validate an explicit
-	// review receipt artifact. That narrower "implicit demand only" carve-out
-	// predates this wave's ratified requirement and no longer holds: nothing
-	// here approves, advances, or invents review authority, but nothing here
-	// blocks on review grounds either.
-	//
-	// The zero value enforces, so any caller that does not resolve the switch
-	// keeps today's behavior. The switch itself is read in the CLI layer, which
-	// owns the single source of truth for both of its sources; an unreadable
-	// switch is not a disabled switch and resolves to false.
+	// switch is off for this clone. Disabled status skips review discovery and
+	// leaves review context structurally absent; it never fabricates approval.
+	// When enabled, review context remains informational and cannot decide
+	// archive readiness or routing. The CLI owns the switch's source of truth.
 	ReviewDisabled bool
 	// ReviewDisabledForWorkspace lets the composition root resolve the switch
 	// against the exact workspace normalized by Resolve. When set, it is called
@@ -406,6 +391,44 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 	return changes, nil
 }
 
+// selectableOpenSpecChanges filters exploration-only directories out of the
+// auto-selection candidates (#3278 claim C). A stale sdd-explore directory
+// holding only exploration.md is not an active change: counting it made
+// selection ambiguous beside the one genuinely active change, and the SDD
+// task-failure continuation (which carries no selector) could never resolve
+// that ambiguity. Exploration-only directories stay addressable when
+// explicitly named — listActiveOpenSpecChanges still returns them — and
+// directories with no SDD artifacts at all keep their historical behavior as
+// candidates.
+func selectableOpenSpecChanges(changesDir string, changes []string) []string {
+	selectable := make([]string, 0, len(changes))
+	for _, change := range changes {
+		if explorationOnlyChangeDir(filepath.Join(changesDir, change)) {
+			continue
+		}
+		selectable = append(selectable, change)
+	}
+	return selectable
+}
+
+// explorationOnlyChangeDir reports whether the change directory's only SDD
+// artifact is an exploration artifact: exploration.md is present and none of
+// proposal.md, design.md, tasks.md, or specs/ exist. Only os.ErrNotExist
+// proves a marker absent; any other stat error makes the classification
+// unprovable, so the directory stays an active-change candidate (failing
+// toward visibility, never toward silent exclusion from selection).
+func explorationOnlyChangeDir(changeRoot string) bool {
+	if _, err := os.Stat(filepath.Join(changeRoot, "exploration.md")); err != nil {
+		return false
+	}
+	for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs"} {
+		if _, err := os.Stat(filepath.Join(changeRoot, marker)); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return true
+}
+
 func Resolve(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
@@ -427,16 +450,30 @@ func Resolve(options ResolveOptions) (Status, error) {
 
 	changeName := strings.TrimSpace(options.ChangeName)
 	if changeName == "" {
-		switch len(activeChanges) {
+		candidates := selectableOpenSpecChanges(changesDir, activeChanges)
+		switch len(candidates) {
 		case 0:
+			if len(activeChanges) > 0 {
+				// Every directory is exploration-only. This is an OpenSpec
+				// workspace mid-exploration, not an empty one, so do not fall
+				// through to Engram: report it honestly and keep the
+				// directories addressable by explicit name.
+				return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{
+					"No active OpenSpec changes found under openspec/changes.",
+					fmt.Sprintf(
+						"Exploration-only directories are not active changes: %s. Run `gentle-ai sdd-status <change-name> --cwd %s` to inspect one explicitly.",
+						strings.Join(activeChanges, ", "), workspaceRoot,
+					),
+				}, options.IncludeInstructions), nil
+			}
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
-			changeName = activeChanges[0]
+			changeName = candidates[0]
 		default:
-			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, activeChanges), options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, candidates), options.IncludeInstructions), nil
 		}
 	}
 
@@ -487,7 +524,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
+	runtimeStatus, runtimeAttemptTokens, _, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
 	var grantedRoots []string
 	if runtimeStatus != nil {
 		grantedRoots = runtimeStatus.GrantedRoots
@@ -496,6 +533,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
+		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
+	}
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
 	if len(unauthorizedRoots) != 0 {
@@ -524,51 +564,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 			runtimeStatusErr = fmt.Errorf("read native SDD runtime binding: %w", refErr)
 		}
 	}
-	// Stale evidence under a live allow authority needs a fresh verification,
-	// not legacy remediation classification against a missing transaction.
-	// Corrective verify cycle 3, CRITICAL-B: this whole review-authority
-	// consultation (discovery walk, compact remediation lookup, and explicit
-	// governingRef validation/blocking) is gated behind !reviewDisabled,
-	// consulted once here, mirroring applyReviewGate's own fix. Without this,
-	// a stale-verify-totals fixture reached resolveReviewAuthority's
-	// discovery walk and appended "... run the fresh full review ... with
-	// gentle-ai review start" as a blocked reason while the switch was OFF —
-	// a command the switch itself refuses to run, and archive blocking on
-	// review grounds while OFF at all, both violations of the ratified
-	// "archive consults no reviewGate structured status ... archive cannot
-	// fail or block for review reasons" requirement.
-	staleEvidenceCandidate := governingRef == nil && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale
-	var staleReviewAuthority *reviewAuthorityEvaluation
-	var staleAllowAuthority *reviewAuthorityEvaluation
-	staleAuthorityBlocked := false
-	// staleEvidenceUnmanaged is the disabled-mode analogue of
-	// staleAllowAuthority: internally-complete, non-failing evidence whose
-	// only defect is a totals mismatch needs a fresh verification either
-	// way, but while the switch is off there is no review authority left to
-	// consult to justify that leniency -- so it is granted unconditionally,
-	// the same "please re-verify" outcome, with zero review consultation and
-	// zero blocked reasons. Without this, a disabled run fell through to the
-	// ordinary "no transaction, no compact authority" remediation reason,
-	// which named nextRecommended "resolve-review" for a fixture that has
-	// nothing to do with review governance.
-	staleEvidenceUnmanaged := reviewDisabled && staleEvidenceCandidate
-	if !reviewDisabled && staleEvidenceCandidate {
-		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, firstPath(artifactPaths.ReviewReceipt), "", changeName)
-		staleReviewAuthority = &evaluation
-		if evaluation.Result == reviewtransaction.GateAllow {
-			staleAllowAuthority = &evaluation
-		} else {
-			staleAuthorityBlocked = evaluation.Blocking
-			if staleAuthorityBlocked {
-				blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
-			}
-		}
-	}
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult, reviewDisabled)
-	// A complete non-FAIL report with only stale totals needs fresh verification,
-	// not remediation for failed evidence.
-	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale
-	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && verifyReportCurrent && !verifyResult.Passing && applyState == ApplyAllDone
+	// Stale or incomplete evidence always re-enters independent SDD verification.
+	// Review context is not consulted before verification completes.
+	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale && !verifyResult.Incomplete
+	remediationRequired := !runtimeRemediationComplete && verifyReportCurrent && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
 		compactRemediation = resolveCompactRemediationAuthority(
@@ -587,67 +587,22 @@ func Resolve(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
-	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
-		dependencies.Verify = DependencyReady
-		dependencies.Archive = DependencyBlocked
-		nextRecommended = "verify"
-		if runtimeRemediationComplete {
-			remediationState = RemediationState{}
-		}
-	}
-	if staleAuthorityBlocked {
-		dependencies.Verify = DependencyBlocked
-		dependencies.Archive = DependencyBlocked
-		nextRecommended = "resolve-review"
-	}
-	var boundGate *ReviewGateState
-	bridge := compactPreVerifyBridge{}
-	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
-	if governingRef != nil {
-		if !reviewDisabled {
-			result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
-			if err == nil && result == reviewtransaction.GateAllow {
-				staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
-				if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
-					dependencies.Verify = DependencyReady
-					dependencies.Archive = DependencyBlocked
-					nextRecommended = "verify"
-					if staleEvidence || runtimeRemediationComplete {
-						remediationState = RemediationState{}
-					}
-				}
-				boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
-			} else {
-				dependencies.Verify = DependencyBlocked
-				dependencies.Archive = DependencyBlocked
-				nextRecommended = "resolve-review"
-				failureReason := reason
-				if err != nil {
-					failureReason = err.Error()
-				}
-				blockedReasons.genuine = append(blockedReasons.genuine, failureReason)
-			}
-		}
-	} else if !reviewDisabled && applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
-		// Corrective verify cycle 4, W-b: discoverCompactPreVerifyAuthority
-		// walks CompactAuthorityLeaves (a full review-store sweep) reached
-		// in the common "apply done, no verify report yet" state. It could
-		// not fail or block on its own (bridge.Relevant/Reason are dead --
-		// see sddStatusIgnoresCorruptCompactAuthorityPreVerify's doc
-		// comment in bench/journeys_sdd.go -- only the unrelated Eligible
-		// field is read, behind `recoverable`), so this was a WARNING, not
-		// a CRITICAL. Gated anyway: the ratified "zero review code MUST
-		// execute on any SDD path ... no status consultation" prose
-		// sentence is unconditional, and this walk was one edit away from
-		// becoming load-bearing again.
-		fields, _ := authorityFailureFields(readText(firstPath(artifactPaths.VerifyReport)))
-		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, fields["observed_authority_revision"])
-	}
-	if governingRef == nil && recoverable && bridge.Eligible && authorityChangedSinceReport(readText(firstPath(artifactPaths.VerifyReport)), bridge.Revision) {
+	if runtimeRemediationComplete {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
+	}
+	var boundGate *ReviewGateState
+	if governingRef != nil {
+		if !reviewDisabled {
+			result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
+			if err != nil {
+				boundGate = &ReviewGateState{Result: reviewtransaction.GateInvalidated, Reason: err.Error()}
+			} else {
+				boundGate = &ReviewGateState{Result: result, Reason: reason}
+			}
+		}
 	}
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
@@ -665,17 +620,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	if governingRef == nil {
-		if staleReviewAuthority != nil {
-			applyReviewGateEvaluation(&status, *staleReviewAuthority)
-		} else {
-			applyReviewGate(
-				&status,
-				workspaceRoot,
-				firstPath(artifactPaths.ReviewReceipt),
-				"",
-				reviewDisabled,
-			)
-		}
+		applyReviewGate(
+			&status,
+			workspaceRoot,
+			firstPath(artifactPaths.ReviewReceipt),
+			"",
+			reviewDisabled,
+		)
 	}
 	if boundGate != nil {
 		status.ReviewGate = boundGate
@@ -683,7 +634,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	applyEnabledUnmanagedRemediationAuthorityRouting(&status, reviewDisabled)
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
@@ -707,32 +658,34 @@ func Resolve(options ResolveOptions) (Status, error) {
 // attempt's own token as the caller's continuation (#2463). A non-empty
 // instance binds the read to one change-instance identity (#2563, S4b of
 // #2540) so replay projects that instance's granted roots; an empty instance
-// keeps #2557's conservative containment and projects none.
-func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, error) {
+// keeps #2557's conservative containment and projects none. The resolved
+// repository root rides along (empty without Git) to avoid re-deriving it.
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, string, error) {
 	// SDD status remains useful for non-Git planning fixtures and repositories.
 	// A native runtime chain cannot exist without a Git common-dir, so the
 	// absence of a repository means there is no runtime authority to embed.
-	if _, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx); err != nil {
+	repositoryRoot, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx)
+	if err != nil {
 		if workspaceHasGitMetadata(workspaceRoot) {
-			return nil, nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
+			return nil, nil, "", fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
 		}
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+		return nil, nil, "", fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
 	if instance != "" {
 		if store, err = store.ForInstance(instance); err != nil {
-			return nil, nil, fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
+			return nil, nil, "", fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
 		}
 	}
 	replay, err := store.load()
 	if err != nil {
-		return nil, nil, fmt.Errorf("read native SDD runtime authority: %w", err)
+		return nil, nil, "", fmt.Errorf("read native SDD runtime authority: %w", err)
 	}
 	status := replay.Status
-	return &status, replay.AttemptTokens, nil
+	return &status, replay.AttemptTokens, repositoryRoot, nil
 }
 
 func workspaceHasGitMetadata(workspaceRoot string) bool {
@@ -782,8 +735,9 @@ func nativeRuntimeCompletedUnmanagedCorrection(runtimeStatus *RuntimeStatus) boo
 }
 
 // applyEnabledUnmanagedRemediationAuthorityRouting preserves a disabled-mode
-// correction and its fresh verification, but never promotes it into enabled
-// receipt authority. A valid existing gate remains authoritative on its own.
+// correction and its fresh verification without promoting it into review
+// authority. Review context remains informational; ordinary repository policy
+// decides delivery.
 func applyEnabledUnmanagedRemediationAuthorityRouting(status *Status, reviewDisabled bool) {
 	if reviewDisabled || status == nil || status.Dependencies.Verify != DependencyAllDone || status.ReviewGate != nil ||
 		!nativeRuntimeCompletedUnmanagedCorrection(status.RuntimeStatus) {
@@ -795,8 +749,10 @@ func applyEnabledUnmanagedRemediationAuthorityRouting(status *Status, reviewDisa
 	if !terminal || readiness.State != CompactStateComplete {
 		return
 	}
-	blockReviewGate(status, reviewtransaction.GateInvalidated,
-		"a disabled/unmanaged correction repaired failed evidence without a bounded review transaction or receipt; enabled receipt-driven delivery requires bounded review authority for the corrected candidate; "+reviewGateFreshReviewContinuation)
+	applyReviewGateEvaluation(status, reviewAuthorityEvaluation{
+		Result: reviewtransaction.GateInvalidated,
+		Reason: "a disabled/unmanaged correction repaired failed evidence without a bounded review transaction or receipt; the review context for the corrected candidate is stale; ordinary repository policy decides delivery",
+	})
 }
 
 func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
@@ -882,25 +838,6 @@ func applyNativeRuntimeRouting(status *Status) {
 	}
 }
 
-func authorityOnlyFailedReport(report string) bool {
-	fields, ok := authorityFailureFields(report)
-	return ok && fields["authority_only_failure"] == "true" && fields["missing_review_authority"] == "true" &&
-		fields["substantive_failure"] == "false" && fields["command_failed"] == "false"
-}
-
-func authorityChangedSinceReport(report, revision string) bool {
-	fields, ok := authorityFailureFields(report)
-	return ok && fields["observed_authority_revision"] != revision
-}
-
-func authorityFailureFields(report string) (map[string]string, bool) {
-	parsed, reason := parseVerifyReport(report)
-	if reason != "" || !parsed.AuthorityOnly {
-		return nil, false
-	}
-	return parsed.Fields, true
-}
-
 func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions, reviewDisabled bool) (Status, bool, error) {
 	if !shouldTryEngram(workspaceRoot) {
 		return Status{}, false, nil
@@ -953,11 +890,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	// resurrection hazard. The Engram path therefore keeps S1's honest block
 	// (naming both exits) without a consent envelope, and its runtime read
 	// stays instance-less, projecting no granted roots (#2563).
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
+	runtimeStatus, runtimeAttemptTokens, _, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
+		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
+	}
 	applyState, _ = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	var governingRef *reviewtransaction.SDDReceiptRef
 	if runtimeStatusErr == nil {
@@ -967,34 +907,11 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 			runtimeStatusErr = fmt.Errorf("read native SDD runtime binding: %w", refErr)
 		}
 	}
-	// Stale evidence under a live allow authority needs a fresh verification,
-	// not legacy remediation classification against a missing transaction.
-	// Corrective verify cycle 3, CRITICAL-B (symmetric with Resolve() above,
-	// including staleEvidenceUnmanaged: the disabled-mode analogue of
-	// staleAllowAuthority granting the same "please re-verify" leniency with
-	// zero review consultation and zero blocked reasons).
-	staleEvidenceCandidate := governingRef == nil && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale
-	var staleReviewAuthority *reviewAuthorityEvaluation
-	var staleAllowAuthority *reviewAuthorityEvaluation
-	staleAuthorityBlocked := false
-	staleEvidenceUnmanaged := reviewDisabled && staleEvidenceCandidate
-	if !reviewDisabled && staleEvidenceCandidate {
-		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content, changeName)
-		staleReviewAuthority = &evaluation
-		if evaluation.Result == reviewtransaction.GateAllow {
-			staleAllowAuthority = &evaluation
-		} else {
-			staleAuthorityBlocked = evaluation.Blocking
-			if staleAuthorityBlocked {
-				blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
-			}
-		}
-	}
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult, reviewDisabled)
-	// A complete non-FAIL report with only stale totals needs fresh verification,
-	// not remediation for failed evidence.
-	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale
-	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && verifyReportCurrent && !verifyResult.Passing && applyState == ApplyAllDone
+	// Stale or incomplete evidence always re-enters independent SDD verification.
+	// Review context is not consulted before verification completes.
+	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale && !verifyResult.Incomplete
+	remediationRequired := !runtimeRemediationComplete && verifyReportCurrent && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
 		compactRemediation = resolveCompactRemediationAuthority(
@@ -1016,42 +933,19 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
-	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
+	if runtimeRemediationComplete {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
-		if runtimeRemediationComplete {
-			remediationState = RemediationState{}
-		}
-	}
-	if staleAuthorityBlocked {
-		dependencies.Verify = DependencyBlocked
-		dependencies.Archive = DependencyBlocked
-		nextRecommended = "resolve-review"
+		remediationState = RemediationState{}
 	}
 	var boundGate *ReviewGateState
 	if !reviewDisabled && governingRef != nil {
 		result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
-		if err == nil && result == reviewtransaction.GateAllow {
-			staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
-			if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
-				dependencies.Verify = DependencyReady
-				dependencies.Archive = DependencyBlocked
-				nextRecommended = "verify"
-				if staleEvidence || runtimeRemediationComplete {
-					remediationState = RemediationState{}
-				}
-			}
-			boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
+		if err != nil {
+			boundGate = &ReviewGateState{Result: reviewtransaction.GateInvalidated, Reason: err.Error()}
 		} else {
-			dependencies.Verify = DependencyBlocked
-			dependencies.Archive = DependencyBlocked
-			nextRecommended = "resolve-review"
-			failureReason := reason
-			if err != nil {
-				failureReason = err.Error()
-			}
-			blockedReasons.genuine = append(blockedReasons.genuine, failureReason)
+			boundGate = &ReviewGateState{Result: result, Reason: reason}
 		}
 	}
 
@@ -1069,17 +963,13 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	if governingRef == nil {
-		if staleReviewAuthority != nil {
-			applyReviewGateEvaluation(&status, *staleReviewAuthority)
-		} else {
-			applyReviewGate(
-				&status,
-				workspaceRoot,
-				"",
-				artifactsByType["review/receipt"].Content,
-				reviewDisabled,
-			)
-		}
+		applyReviewGate(
+			&status,
+			workspaceRoot,
+			"",
+			artifactsByType["review/receipt"].Content,
+			reviewDisabled,
+		)
 	}
 	if boundGate != nil {
 		status.ReviewGate = boundGate
@@ -1087,7 +977,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	applyEnabledUnmanagedRemediationAuthorityRouting(&status, reviewDisabled)
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
@@ -1103,10 +993,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		status.PhaseInstructions = &instructions
 	}
 	return status, true, nil
-}
-
-func compactBridgeableReviewArtifact(state ArtifactState, reason string) bool {
-	return state == ArtifactMissing || reason == incompatibleReviewTransactionReason
 }
 
 func blockedEngramStatus(workspaceRoot string, changeName *string, next string, reasons []string, includeInstructions bool) Status {
@@ -1562,13 +1448,21 @@ func absOrCWD(path string) (string, error) {
 // that listed options and named no command. The list stays first because it is
 // what a human scanning the refusal wants; the commands follow because that is
 // what makes the refusal runnable.
+//
+// The selector is positional: ParseCommandArgs has no --change flag, so the
+// emitted spelling must be `gentle-ai sdd-status <change> --cwd <root>`. The
+// first shipped spelling used `--change` and every emitted command was
+// rejected by the very parser it targets (#3278, #2790), burning the
+// operator's single sanctioned observation on a syntax error. The guard test
+// in selection_continuation_test.go feeds every emitted continuation back
+// through ParseCommandArgs so the spelling cannot drift from the parser again.
 func ambiguousChangeSelectionReasons(subject, workspaceRoot string, changes []string) []string {
 	reasons := make([]string, 0, len(changes)+1)
 	reasons = append(reasons, fmt.Sprintf("%s selection is ambiguous: %s.", subject, strings.Join(changes, ", ")))
 	for _, change := range changes {
 		reasons = append(reasons, fmt.Sprintf(
-			"Run `gentle-ai sdd-status --cwd %s --change %s` to continue with %s.",
-			workspaceRoot, change, change,
+			"Run `gentle-ai sdd-status %s --cwd %s` to continue with %s.",
+			change, workspaceRoot, change,
 		))
 	}
 	return reasons
@@ -1962,14 +1856,14 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	if dependencies.Apply == DependencyReady {
 		return string(PhaseApply)
 	}
+	if remediation.Required {
+		return "remediate"
+	}
 	if dependencies.Verify == DependencyReady {
 		return string(PhaseVerify)
 	}
 	if applyState == ApplyAllDone && verifyReportDone && dependencies.Verify != DependencyAllDone {
-		if remediation.Required {
-			return "remediate"
-		}
-		return "resolve-review"
+		return string(PhaseVerify)
 	}
 	if dependencies.Verify == DependencyAllDone && applyState == ApplyAllDone {
 		return string(PhaseArchive)
@@ -2113,20 +2007,12 @@ func liveRuntimeAttemptInstructions(status Status) []string {
 // nonPhaseRoutingInstructions renders actionable continuations for
 // next_recommended values that are routing states rather than SDD phases.
 // nextRecommendedPhase() only recognizes real phases, so without this every
-// routing-only next value (e.g. "resolve-review", "select-change") would
+// routing-only next value (for example, "select-change") would
 // render its blocked reason with no way out — the blocked reason IS the
 // entire guidance. Where a continuation already exists elsewhere in this
 // file (the "review" operation block), it is reused rather than duplicated.
 func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 	switch status.NextRecommended {
-	case "review", "resolve-review":
-		return []string{
-			"",
-			"### Next Review Operation",
-			fmt.Sprintf("- Run `gentle-ai review start --cwd %s`; the facade derives intended untracked scope, lineage, tier, lenses, and correction budget from live Git.", pathquote.Quote(status.ActionContext.WorkspaceRoot)),
-			"- Pass reviewer result and verification evidence to `gentle-ai review finalize`; do not hand-author lifecycle operation JSON.",
-			"- Continue discovered authority instead of starting another budget, and reconcile existing terminal mirrors only after `gentle-ai review validate --gate post-apply` allows.",
-		}, true
 	case "select-change":
 		return []string{
 			"",
