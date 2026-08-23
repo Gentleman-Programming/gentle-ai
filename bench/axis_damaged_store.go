@@ -81,6 +81,7 @@ func init() {
 		Name:     damagedStoreAxis,
 		Title:    "Journeys that start from a compact-v2 review store already damaged on disk",
 		BlackBox: false,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Fixtures author `review-state.json` directly. The core corpus reaches every state it measures through the CLI; these states cannot be reached that way, because the product validates the recovery edge at write time and refuses to create them.",
 			"Because they are coupled to a persisted format rather than to a CLI, these journeys are NOT portable across builds the way the core is. Against a build whose store format has moved they report `failed` or `unsupported`; they will not report a clean number for a state they no longer built.",
@@ -1737,6 +1738,7 @@ func damagedStoreJourneys() []Journey {
 	return append([]Journey{
 		{
 			ID:     "ds01-two-recovery-edges-neither-admitted",
+			Review: reviewOptedIn,
 			Title:  "The reported shape: two recovery edges, both correctly prefixed, neither admitted by anything",
 			Source: "community report (damaged compact-v2 store) + shape 4",
 			// This is the state the report describes and the triage
@@ -1798,6 +1800,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds02-damaged-edge-pristine-successor",
+			Review: reviewOptedIn,
 			Title:  "One damaged edge over a pristine successor: an exit exists and nothing names it",
 			Source: "community report + triage finding (abandon clears it) + shape 4",
 			// The triage's finding was that this shape is recoverable. The
@@ -1833,6 +1836,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds03-damaged-edge-successor-holds-results",
+			Review: reviewOptedIn,
 			Title:  "The same edge under a successor that captured a lens result: the pristineness rule refuses",
 			Source: "community report + triage finding (abandon refuses non-pristine) + shape 3",
 			// Same damage, one difference: the successor holds a reviewer
@@ -1887,6 +1891,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds04-recovery-edge-with-no-predecessor",
+			Review: reviewOptedIn,
 			Title:  "A successor whose predecessor entry is gone: the edge is never classified at all",
 			Source: "damaged store by partial restore + shape 4",
 			// A different product path from the three above: the successor's
@@ -1915,6 +1920,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds05-half-written-successor-record",
+			Review: reviewOptedIn,
 			Title:  "A record truncated mid-write: the refusal names the diagnosis, not a command that cannot load it",
 			Source: "interrupted write + shape 4",
 			// The third distinct path: the entry never parses, so it never
@@ -1954,6 +1960,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds06-content-mismatched-leaf-repaired-via-disposition-plan",
+			Review: reviewOptedIn,
 			Title:  "A non-pristine content-mismatched leaf: the leaf authority disposition plan repairs it black-box, and the rest of the graph never moves",
 			Source: "rdd-root-simplification-wave2 Slice S2/S3 + community report shape 3",
 			// ds03 above proves the guards around this exact shape are each
@@ -1995,6 +2002,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds07-two-content-mismatched-edges-repaired-sequentially",
+			Review: reviewOptedIn,
 			Title:  "Two closed content-mismatch edges in one chain: preflight enumerates an exact leaf selector and repair proceeds one edge at a time",
 			Source: "issue 1892 accepted sequential repair scope",
 			Steps: []Step{
@@ -2022,6 +2030,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds08-content-mismatched-leaf-forged-authorization-refuses",
+			Review: reviewOptedIn,
 			Title:  "The same eligible leaf, an authorization bound to the wrong repository: execution refuses and quarantines nothing",
 			Source: "rdd-root-simplification-wave2 tasks.md 2.4 (mandatory obligation (b)) + shape 3",
 			// The same single-edge, non-pristine shape ds06 above repairs
@@ -2048,6 +2057,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds13-damaged-entry-does-not-govern-unrelated-work",
+			Review: reviewOptedIn,
 			Title:  "One damaged entry, and work that has nothing to do with it: the store still answers about the candidate",
 			Source: "issues 1892, 2014, 2167, 2234, 2270, 2456 (repository-global authority validation)",
 			// Every other journey in this axis measures what an operator can do
@@ -2082,6 +2092,7 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds14-finalize-authorization-mismatch-is-typed",
+			Review: reviewOptedIn,
 			Title:  "A real FINALIZE over a schema-prefixed authorization mismatch is typed before mutation and names review repair",
 			Source: "issue #1928: review finalize must classify pre-native recovery authorization failures and expose the current review.repair route",
 			// The fixture reproduces the issue's original boundary: the successor

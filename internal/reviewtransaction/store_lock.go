@@ -144,6 +144,7 @@ type StoreLockPreAcquisitionError struct {
 
 func (err *StoreLockPreAcquisitionError) Error() string {
 	if err == nil || err.Err == nil {
+		// refusal:by-design world-action: this sentence renders only for a degenerately constructed error with no cause, which no operator command can reach; the exit is a code fix at the construction site.
 		return "review store lock could not be acquired"
 	}
 	return fmt.Sprintf("review store lock could not be acquired: %v", err.Err)

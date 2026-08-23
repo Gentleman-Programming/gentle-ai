@@ -3,14 +3,20 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
-const lensContextBudgetCandidatePaths = 33
+// lensContextBudgetCandidatePaths is two paths, not thirty-three. Path count
+// stopped deciding representability with issue #3367: the bound is the
+// aggregate byte budget the reviewer block has to fit inside, so an
+// unrepresentable candidate is made of bytes now.
+const lensContextBudgetCandidatePaths = 2
 
 func oversizedLensContextCandidate(sandbox *Sandbox) error {
+	body := strings.Repeat("oversized evidence line\n", 100_000)
 	for index := range lensContextBudgetCandidatePaths {
-		path := filepath.Join(sandbox.Repo, fmt.Sprintf("candidate/path-%02d.txt", index))
-		if err := sandbox.write(path, "candidate evidence\n"); err != nil {
+		path := filepath.Join(sandbox.Repo, fmt.Sprintf("candidate/bulk-%02d.txt", index))
+		if err := sandbox.write(path, body); err != nil {
 			return err
 		}
 		if err := sandbox.git(sandbox.Repo, "add", "--", path); err != nil {
@@ -42,17 +48,23 @@ func stopOversizedLensContextReview(r *journeyRun) error {
 		return fmt.Errorf("oversized candidate START did not request consent: %q", start.NextTransition.Execute.Command)
 	}
 	started := r.run(args, false)
-	if started.ExitCode != 0 {
-		return fmt.Errorf("printed oversized candidate START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	if started.ExitCode == 0 {
+		return fmt.Errorf("oversized candidate START succeeded and left authority STATUS could only refuse: %s", firstLine(started.Stdout))
+	}
+	if !strings.Contains(started.Stdout+started.Stderr, "lens_context_budget_exceeded") {
+		return fmt.Errorf("oversized candidate START refused without naming its budget: %s", firstLine(started.Stderr))
 	}
 
+	// Nothing was persisted, so the repository is exactly where it was: STATUS
+	// still offers the same start, rather than a permanent stop on a lineage
+	// no reviewer action can ever advance.
 	status, err := readStatusForContract(r, reviewContractV2)
 	if err != nil {
 		return err
 	}
-	if status.Authority.State != "reviewing" || len(status.Projection.Paths) != lensContextBudgetCandidatePaths ||
-		status.NextTransition.Kind != "stop" || status.NextTransition.ReasonCode != "lens_context_budget_exceeded" {
-		return fmt.Errorf("oversized candidate STATUS = authority=%+v paths=%d transition=%+v", status.Authority, len(status.Projection.Paths), status.NextTransition)
+	if status.Authority.LineageID != "" || status.NextTransition.Kind != "execute" ||
+		status.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("refused oversized candidate STATUS = authority=%+v transition=%+v", status.Authority, status.NextTransition)
 	}
 	return nil
 }
@@ -60,13 +72,14 @@ func stopOversizedLensContextReview(r *journeyRun) error {
 func lensContextBudgetJourneys() []Journey {
 	return []Journey{{
 		ID:     "j102-status-stops-oversized-lens-context",
-		Title:  "Oversized immutable reviewer context stops instead of reoffering an impossible reviewer slot",
-		Source: "issue #2773: a frozen candidate exceeding the native evidence capacity must end STATUS with lens_context_budget_exceeded",
+		Review: reviewOptedIn,
+		Title:  "An unrepresentable immutable reviewer context is refused by START instead of becoming a dead lineage",
+		Source: "issues #2773 and #3367: a frozen candidate whose complete reviewer evidence exceeds the native budget must be refused before any authority is created",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "fixture: 33 staged reviewer-evidence paths", Fixture: oversizedLensContextCandidate},
-			{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
-			{Name: "negotiated STATUS starts the review then stops the oversized frozen reviewer context", Requires: frozenLineageStatusCapability, Composite: stopOversizedLensContextReview},
+			{Name: "fixture: staged reviewer evidence beyond the byte budget", Fixture: oversizedLensContextCandidate},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "negotiated START refuses the oversized frozen reviewer context without persisting authority", Requires: frozenLineageStatusCapability, Composite: stopOversizedLensContextReview},
 		},
 	}}
 }

@@ -15,13 +15,18 @@ import (
 // invocation, and the `agent: <id>` field of the consent envelope.
 var reviewRuntimeIdentityBindingRegexp = regexp.MustCompile(`(?:--agent|agent:) +([A-Za-z0-9._-]+)`)
 
+func expectedReviewLifecycleRuntime(agent model.AgentID) bool {
+	return agent == model.AgentClaudeCode ||
+		agent == model.AgentOpenCode ||
+		agent == model.AgentCodex ||
+		agent == model.AgentPi
+}
+
 // knownRuntimeIdentities is every compiled runtime identity the review
 // transport gate can be handed. A generated instruction that names one of
 // these while a DIFFERENT runtime is executing is a gate bypass, not a
-// cosmetic defect: internal/cli/review_transport_capability.go admits
-// claude-code alone, so a Codex or OpenCode orchestrator that follows its own
-// installed instructions passes a false identity straight through the
-// admission check built to refuse it (issue #2440).
+// cosmetic defect: it can make an unadvertised runtime impersonate one of the
+// four receipt-review runtimes and bypass the admission boundary.
 func knownRuntimeIdentities() map[string]bool {
 	identities := map[string]bool{}
 	for _, agent := range catalog.AllAgents() {
@@ -81,17 +86,25 @@ func assertReviewInstructionsBindRuntime(t *testing.T, agent model.AgentID, labe
 	}
 }
 
-// TestGeneratedOrchestratorInstructionsNameTheExecutingRuntime is the RED-first
-// proof for issue #2440. Codex and OpenCode are named explicitly because they
-// are the two runtimes the bypass actually affects: both resolve to the
-// `unsupported` transport, so the refusal they are supposed to receive is the
-// exact protection the hardcoded `claude-code` identity walks around.
+// TestGeneratedOrchestratorInstructionsNameTheExecutingRuntime keeps the
+// lifecycle contract bound to the four runtimes that advertise it and absent
+// from every other SDD composition.
 func TestGeneratedOrchestratorInstructionsNameTheExecutingRuntime(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
-			assertReviewInstructionsBindRuntime(t, agent.ID, "orchestrator", renderSDDOrchestratorAsset(agent.ID))
+			content := renderSDDOrchestratorAsset(agent.ID)
+			if expectedReviewLifecycleRuntime(agent.ID) {
+				assertReviewInstructionsBindRuntime(t, agent.ID, "orchestrator", content)
+				return
+			}
+			if strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2") {
+				t.Fatal("non-RDD runtime received negotiated review lifecycle instructions")
+			}
+			if !strings.Contains(content, "## SDD Workflow") {
+				t.Fatal("non-RDD runtime lost its normal SDD workflow")
+			}
 		})
 	}
 
@@ -103,6 +116,29 @@ func TestGeneratedOrchestratorInstructionsNameTheExecutingRuntime(t *testing.T) 
 			}
 			if !strings.Contains(content, "--agent "+string(agent)+" --next-transition") {
 				t.Errorf("%s orchestrator instructions never bind its own identity on the negotiated STATUS route", agent)
+			}
+		})
+	}
+}
+
+func TestAdvertisedRenderedReviewProtocolsBindRuntimeOnce(t *testing.T) {
+	for _, agent := range catalog.AllAgents() {
+		if !expectedReviewLifecycleRuntime(agent.ID) {
+			continue
+		}
+		t.Run(string(agent.ID), func(t *testing.T) {
+			content := renderSDDOrchestratorAsset(agent.ID)
+			bindings := regexp.MustCompile(`--agent[= ]+[A-Za-z0-9._-]+`).FindAllString(content, -1)
+			if len(bindings) != 1 {
+				t.Fatalf("rendered review protocol carries %d raw runtime bindings, want exactly one: %v", len(bindings), bindings)
+			}
+			if bindings[0] != "--agent "+string(agent.ID) {
+				t.Fatalf("rendered review protocol binds %q, want %q", bindings[0], "--agent "+string(agent.ID))
+			}
+
+			status := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent.ID) + " --next-transition"
+			if got := strings.Count(content, status); got != 1 {
+				t.Fatalf("rendered review protocol contains %d canonical STATUS commands, want exactly one", got)
 			}
 		})
 	}

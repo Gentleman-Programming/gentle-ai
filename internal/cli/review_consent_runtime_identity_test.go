@@ -23,7 +23,7 @@ import (
 func TestNegotiatedConsentEnvelopeBindsTheDeclaredRuntimeIdentity(t *testing.T) {
 	for _, agent := range []string{"opencode", "codex", "claude-code"} {
 		t.Run(agent, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			stubReviewConsole(t, false, "")
 			writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)

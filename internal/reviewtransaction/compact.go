@@ -43,6 +43,29 @@ var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction alrea
 // parseCompactRecord's call to Validate() (compact_store.go) constructs this
 // type, so errors.As matching it is exact: never a checksum/IO/parse failure
 // (issue-1813).
+// CompactFrozenPolicyUnavailableError denies a targeted validator request when
+// legacy compact authority retained only the policy hash. Reconstructing policy
+// material from a mutable source would change the provider-bound semantics.
+type CompactFrozenPolicyUnavailableError struct {
+	LineageID  string
+	PolicyHash string
+}
+
+func (err *CompactFrozenPolicyUnavailableError) Error() string {
+	return fmt.Sprintf("compact lineage %q has policy hash %q but no frozen policy content; start a new review authority before targeted validation", err.LineageID, err.PolicyHash)
+}
+
+// CompactFrozenPolicyIntegrityError denies use of frozen content that does not
+// match the existing compact policy hash.
+type CompactFrozenPolicyIntegrityError struct {
+	LineageID  string
+	PolicyHash string
+}
+
+func (err *CompactFrozenPolicyIntegrityError) Error() string {
+	return fmt.Sprintf("compact lineage %q frozen policy content does not match policy hash %q", err.LineageID, err.PolicyHash)
+}
+
 type CompactSemanticStateError struct {
 	LineageID string
 	State     State
@@ -55,6 +78,12 @@ type CompactSemanticStateError struct {
 	// damaged: diagnostics classify it historical instead of malformed, and
 	// no scoped walk lets it block another lineage's operation.
 	OutdatedIdentity bool
+	// PriorSchemaPredecessorLineageID names the recovery predecessor an
+	// OutdatedIdentity record froze, recovered through the same read-only
+	// forensic parse that proved the prior-schema classification. It lets a
+	// scoped ancestry audit keep walking past inert prior-schema history; it
+	// is forensic classification only and never live authority.
+	PriorSchemaPredecessorLineageID string
 }
 
 func (err *CompactSemanticStateError) Error() string {
@@ -84,14 +113,20 @@ func compactLineageQuarantinable(err error) (*CompactSemanticStateError, bool) {
 }
 
 type CompactState struct {
-	Schema                       string                       `json:"schema"`
-	LineageID                    string                       `json:"lineage_id"`
-	Generation                   int                          `json:"generation"`
-	State                        State                        `json:"state"`
-	InitialSnapshot              Snapshot                     `json:"initial_snapshot"`
-	CurrentSnapshot              Snapshot                     `json:"current_snapshot"`
-	GenesisPaths                 []string                     `json:"genesis_paths"`
-	PolicyHash                   string                       `json:"policy_hash"`
+	Schema               string   `json:"schema"`
+	LineageID            string   `json:"lineage_id"`
+	Generation           int      `json:"generation"`
+	State                State    `json:"state"`
+	InitialSnapshot      Snapshot `json:"initial_snapshot"`
+	CurrentSnapshot      Snapshot `json:"current_snapshot"`
+	GenesisPaths         []string `json:"genesis_paths"`
+	CorrectionAddedPaths []string `json:"correction_added_paths,omitempty"`
+	PolicyHash           string   `json:"policy_hash"`
+	// FrozenPolicyContent is the exact policy text START read before it derived
+	// PolicyHash. A non-nil empty string intentionally represents an empty policy;
+	// nil remains readable historical authority and fails closed only when a
+	// targeted validator needs this semantic context.
+	FrozenPolicyContent          *string                      `json:"frozen_policy_content,omitempty"`
 	RiskLevel                    RiskLevel                    `json:"risk_level"`
 	SelectedLenses               []string                     `json:"selected_lenses"`
 	OriginalChangedLines         int                          `json:"original_changed_lines"`
@@ -122,6 +157,182 @@ type CompactState struct {
 	ResultDispositions           []CompactResultDisposition   `json:"result_dispositions,omitempty"`
 	ResultReopens                []CompactResultReopen        `json:"result_reopens,omitempty"`
 	ReviewerContextLevel         ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
+	// InitialAtomicStart is the optional immutable binding written only by the
+	// exact worktree-bound atomic START API. Its absence keeps historical compact
+	// records readable, but makes them ineligible for atomic START replay.
+	InitialAtomicStart *CompactAtomicStartBinding `json:"initial_atomic_start,omitempty"`
+}
+
+// CompactAtomicStartBinding is the immutable compact-v2 START identity. It
+// binds one exact worktree and frozen snapshot to the policy, tier, lenses, and
+// bounded-correction inputs that created the authority.
+type CompactAtomicStartBinding struct {
+	LineageID              string    `json:"lineage_id"`
+	WorktreeIdentity       string    `json:"worktree_identity"`
+	TargetIdentity         string    `json:"target_identity"`
+	Selector               Target    `json:"selector"`
+	PolicyHash             string    `json:"policy_hash"`
+	Tier                   RiskLevel `json:"tier"`
+	SelectedLenses         []string  `json:"selected_lenses"`
+	OriginalChangedLines   int       `json:"original_changed_lines"`
+	CorrectionBudget       int       `json:"correction_budget"`
+	CorrectionBudgetPolicy string    `json:"correction_budget_policy"`
+}
+
+// Validate rejects a structurally non-canonical binding. Its equality to the
+// compact state is checked separately so a conflicting replay can report the
+// exact immutable field without rewriting authority.
+func (binding CompactAtomicStartBinding) Validate() error {
+	if err := validateLineageID(binding.LineageID); err != nil {
+		return err
+	}
+	if !validSHA256(binding.WorktreeIdentity) {
+		return errors.New("compact atomic START requires a canonical worktree identity") // refusal:by-design world-action: a malformed provider-built worktree binding must be rebuilt before it can create authority
+	}
+	if !validSHA256(binding.TargetIdentity) {
+		return errors.New("compact atomic START requires a canonical target identity") // refusal:by-design world-action: a malformed provider-built target binding must be rebuilt before it can create authority
+	}
+	if !validSHA256(binding.PolicyHash) {
+		return errors.New("compact atomic START requires a canonical policy hash") // refusal:by-design world-action: a malformed provider-built policy binding must be rebuilt before it can create authority
+	}
+	selector, err := canonicalCompactAtomicStartSelector(binding.Selector)
+	if err != nil {
+		return err
+	}
+	if !equalCompactAtomicStartSelector(selector, binding.Selector) {
+		return errors.New("compact atomic START selector must be canonical") // refusal:by-design world-action: a provider-built selector must be canonicalized before it can create authority
+	}
+	switch binding.Tier {
+	case RiskLow, RiskMedium, RiskHigh:
+	default:
+		return errors.New("compact atomic START tier must be a native risk classification") // refusal:by-design world-action: an unsupported provider-built risk tier requires a code fix before it can create authority
+	}
+	seen := make(map[string]bool, len(binding.SelectedLenses))
+	for _, lens := range binding.SelectedLenses {
+		if strings.TrimSpace(lens) != lens || !isSupportedLens(lens) || seen[lens] {
+			return errors.New("compact atomic START selected lenses must be canonical and unique") // refusal:by-design world-action: a malformed provider-built lens selection must be rebuilt before it can create authority
+		}
+		seen[lens] = true
+	}
+	if binding.OriginalChangedLines < 0 || binding.CorrectionBudget < 0 {
+		return errors.New("compact atomic START changed lines and correction budget cannot be negative") // refusal:by-design world-action: invalid provider-built budget inputs must be recalculated before they can create authority
+	}
+	if _, err := CompactExpectedBudget(binding.OriginalChangedLines, binding.CorrectionBudgetPolicy); err != nil {
+		return errors.New("compact atomic START correction budget policy is unsupported") // refusal:by-design world-action: an unsupported provider-built budget policy requires a code fix before it can create authority
+	}
+	return nil
+}
+
+func canonicalCompactAtomicStartSelector(selector Target) (Target, error) {
+	switch selector.Kind {
+	case TargetCurrentChanges, TargetBaseDiff, TargetBaseWorkspaceOverlay, TargetExactRevision, TargetFixDiff:
+	default:
+		return Target{}, fmt.Errorf("unsupported compact atomic START target kind %q", selector.Kind) // refusal:by-design world-action: an unsupported provider-built target kind requires a code fix before it can create authority
+	}
+	selector = CanonicalTarget(selector)
+	projection, err := canonicalProjection(selector.Projection)
+	if err != nil {
+		return Target{}, err
+	}
+	selector.Projection = projection
+	intended, err := canonicalPaths(selector.IntendedUntracked)
+	if err != nil {
+		return Target{}, err
+	}
+	ledgerIDs, err := canonicalStrings(selector.LedgerIDs, "ledger id")
+	if err != nil {
+		return Target{}, err
+	}
+	selector.IntendedUntracked, selector.LedgerIDs = intended, ledgerIDs
+	for _, value := range []string{selector.BaseRef, selector.Revision} {
+		if strings.TrimSpace(value) != value || strings.ContainsRune(value, '\x00') {
+			return Target{}, errors.New("compact atomic START selector values must be canonical") // refusal:by-design world-action: malformed provider-built selector values must be canonicalized before they can create authority
+		}
+	}
+	return selector, nil
+}
+
+func equalCompactAtomicStartSelector(left, right Target) bool {
+	return left.Kind == right.Kind && left.Projection == right.Projection && left.BaseRef == right.BaseRef &&
+		left.Revision == right.Revision && equalStrings(left.IntendedUntracked, right.IntendedUntracked) &&
+		equalStrings(left.LedgerIDs, right.LedgerIDs)
+}
+
+func (binding CompactAtomicStartBinding) mismatchState(state CompactState) string {
+	snapshot := state.InitialSnapshot
+	switch {
+	case binding.LineageID != state.LineageID:
+		return "lineage_id"
+	case binding.TargetIdentity != snapshot.Identity:
+		return "target_identity"
+	case binding.Selector.Kind != snapshot.Kind || binding.Selector.Projection != snapshot.Projection ||
+		!equalStrings(binding.Selector.IntendedUntracked, snapshot.IntendedUntracked) ||
+		!equalStrings(binding.Selector.LedgerIDs, snapshot.LedgerIDs):
+		return "selector"
+	case binding.PolicyHash != state.PolicyHash:
+		return "policy_hash"
+	case binding.Tier != state.RiskLevel:
+		return "tier"
+	case !equalStrings(binding.SelectedLenses, state.SelectedLenses):
+		return "selected_lenses"
+	case binding.OriginalChangedLines != state.OriginalChangedLines:
+		return "original_changed_lines"
+	case binding.CorrectionBudget != state.CorrectionBudget:
+		return "correction_budget"
+	case binding.CorrectionBudgetPolicy != state.CorrectionBudgetPolicy:
+		return "correction_budget_policy"
+	default:
+		return ""
+	}
+}
+
+func cloneCompactAtomicStartBinding(binding CompactAtomicStartBinding) CompactAtomicStartBinding {
+	binding.Selector.IntendedUntracked = append([]string(nil), binding.Selector.IntendedUntracked...)
+	binding.Selector.LedgerIDs = append([]string(nil), binding.Selector.LedgerIDs...)
+	binding.SelectedLenses = append([]string(nil), binding.SelectedLenses...)
+	return binding
+}
+
+func equalCompactAtomicStartBinding(left, right *CompactAtomicStartBinding) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return compactAtomicStartMismatch(*left, *right) == ""
+}
+
+func compactAtomicStartMismatch(existing, requested CompactAtomicStartBinding) string {
+	switch {
+	case existing.LineageID != requested.LineageID:
+		return "lineage_id"
+	case existing.WorktreeIdentity != requested.WorktreeIdentity:
+		return "worktree_identity"
+	case existing.TargetIdentity != requested.TargetIdentity:
+		return "target_identity"
+	case !equalCompactAtomicStartSelector(existing.Selector, requested.Selector):
+		return "selector"
+	case existing.PolicyHash != requested.PolicyHash:
+		return "policy_hash"
+	case existing.Tier != requested.Tier:
+		return "tier"
+	case !equalStrings(existing.SelectedLenses, requested.SelectedLenses):
+		return "selected_lenses"
+	case existing.OriginalChangedLines != requested.OriginalChangedLines:
+		return "original_changed_lines"
+	case existing.CorrectionBudget != requested.CorrectionBudget:
+		return "correction_budget"
+	case existing.CorrectionBudgetPolicy != requested.CorrectionBudgetPolicy:
+		return "correction_budget_policy"
+	default:
+		return ""
+	}
+}
+
+func cloneCompactStateInitialAtomicStart(state CompactState) CompactState {
+	if state.InitialAtomicStart != nil {
+		binding := cloneCompactAtomicStartBinding(*state.InitialAtomicStart)
+		state.InitialAtomicStart = &binding
+	}
+	return state
 }
 
 // CorrectionBudgetExceededError identifies a repository-derived correction
@@ -294,14 +505,23 @@ type CompactRecoveredEvidence struct {
 }
 
 type CompactReceipt struct {
-	Schema                    string              `json:"schema"`
-	LineageID                 string              `json:"lineage_id"`
-	Projection                Projection          `json:"projection,omitempty"`
-	Generation                int                 `json:"generation"`
-	BaseTree                  string              `json:"base_tree"`
-	InitialReviewTree         string              `json:"initial_review_tree"`
-	FinalCandidateTree        string              `json:"final_candidate_tree"`
-	PathsDigest               string              `json:"paths_digest"`
+	Schema             string     `json:"schema"`
+	LineageID          string     `json:"lineage_id"`
+	Projection         Projection `json:"projection,omitempty"`
+	Generation         int        `json:"generation"`
+	BaseTree           string     `json:"base_tree"`
+	InitialReviewTree  string     `json:"initial_review_tree"`
+	FinalCandidateTree string     `json:"final_candidate_tree"`
+	PathsDigest        string     `json:"paths_digest"`
+	// CorrectionAddedPaths discloses the companion test paths one admitted
+	// bounded correction added beyond the reviewed genesis manifest (issue
+	// #3375). PathsDigest already covers them, so delivery works; this field
+	// exists so an auditor can see WHICH delivered paths no lens inspected
+	// rather than having to infer it. It is omitempty, and absence means the
+	// correction stayed inside the reviewed manifest — which is every receipt
+	// issued before this field existed, so each of those stays byte-identical
+	// under re-derivation.
+	CorrectionAddedPaths      []string            `json:"correction_added_paths,omitempty"`
 	FixDeltaHash              string              `json:"fix_delta_hash"`
 	PolicyHash                string              `json:"policy_hash"`
 	EvidenceHash              string              `json:"evidence_hash"`
@@ -352,6 +572,14 @@ func NewCompactState(start Start) (CompactState, error) {
 	if !validSHA256(start.PolicyHash) {
 		return CompactState{}, errors.New("policy_hash must be a lowercase SHA-256 identity")
 	}
+	var frozenPolicy *string
+	if start.PolicyContent != nil {
+		content := *start.PolicyContent
+		if compactPolicyContentHash(content) != start.PolicyHash {
+			return CompactState{}, errors.New("frozen policy content does not match policy_hash") // refusal:by-design world-action: frozen policy content and its immutable hash disagree, so safe repair requires replacing the authority
+		}
+		frozenPolicy = &content
+	}
 	lenses, err := validateSelectedLenses(start.Mode, start.RiskLevel, start.SelectedLenses)
 	if err != nil {
 		return CompactState{}, err
@@ -364,7 +592,7 @@ func NewCompactState(start Start) (CompactState, error) {
 		Schema: CompactStateSchema, LineageID: start.LineageID, Generation: start.Generation,
 		State: StateReviewing, InitialSnapshot: start.Snapshot, CurrentSnapshot: start.Snapshot,
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...), PolicyHash: start.PolicyHash,
-		RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
+		FrozenPolicyContent: frozenPolicy, RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
 		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
 		LensResults: []LensResult{}, Findings: []Finding{},
 		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
@@ -483,11 +711,21 @@ func (state CompactState) Validate() error {
 	if err != nil || !equalStrings(paths, state.GenesisPaths) || !equalStrings(state.GenesisPaths, state.InitialSnapshot.Paths) {
 		return errors.New("compact genesis paths must exactly match the canonical initial scope")
 	}
-	if err := pathsAreSubset(state.CurrentSnapshot.Paths, state.GenesisPaths); err != nil {
+	if err := validateCompactCorrectionAddedPaths(state); err != nil {
+		return err
+	}
+	candidateScope, err := compactCorrectionCandidateScope(state)
+	if err != nil {
+		return err
+	}
+	if err := pathsAreSubset(state.CurrentSnapshot.Paths, candidateScope); err != nil {
 		return err
 	}
 	if !validSHA256(state.PolicyHash) || !validSHA256(state.FixDeltaHash) {
 		return errors.New("compact policy and fix delta hashes must be lowercase SHA-256 identities")
+	}
+	if state.FrozenPolicyContent != nil && compactPolicyContentHash(*state.FrozenPolicyContent) != state.PolicyHash {
+		return errors.New("compact frozen policy content does not match policy_hash") // refusal:by-design world-action: frozen policy content and its immutable hash disagree, so safe repair requires replacing the authority
 	}
 	selected, err := validateSelectedLenses(ModeOrdinaryBounded, state.RiskLevel, state.SelectedLenses)
 	if err != nil || !equalStrings(selected, state.SelectedLenses) {
@@ -500,6 +738,14 @@ func (state CompactState) Validate() error {
 	}
 	if state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
 		return errors.New("compact correction budget does not match original changed lines")
+	}
+	if state.InitialAtomicStart != nil {
+		if err := state.InitialAtomicStart.Validate(); err != nil {
+			return fmt.Errorf("compact initial atomic START binding: %w", err)
+		}
+		if field := state.InitialAtomicStart.mismatchState(state); field != "" {
+			return fmt.Errorf("compact initial atomic START binding does not match state at %s", field) // refusal:by-design world-action: contradictory persisted atomic authority requires code or storage repair
+		}
 	}
 	if state.LensResults == nil || state.Findings == nil || state.Classifications == nil || state.Outcomes == nil || state.FixFindingIDs == nil || state.FollowUps == nil {
 		return errors.New("compact review collections must be explicit arrays or objects")
@@ -789,10 +1035,14 @@ func validateCompactCorrection(state CompactState) error {
 		return errors.New("compact cumulative correction lines require persisted attempts")
 	}
 	if len(state.CorrectionAttempts) > 0 {
+		candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+		if scopeErr != nil {
+			return errors.New("compact correction attempt is outside frozen scope")
+		}
 		base, cumulative := state.InitialSnapshot.CandidateTree, 0
 		for _, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
-				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, candidateScope) != nil ||
 				validateCompactSnapshot(attempt.Snapshot) != nil || validateCompactSnapshotMetadata(attempt.Snapshot) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
@@ -840,7 +1090,7 @@ func validateCompactCorrection(state CompactState) error {
 			state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.FixDeltaHash != EmptyFixDeltaHash ||
 			target.Kind != TargetFixDiff || target.Projection != state.InitialSnapshot.Projection ||
 			target.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(target.LedgerIDs, state.FixFindingIDs) ||
-			pathsAreSubset(target.Paths, state.GenesisPaths) != nil {
+			correctionScopeRefused(target.Paths, state.GenesisPaths) {
 			return errors.New("procedural correction verification target is invalid") // refusal:by-design world-action: persisted terminal evidence targets an invalid correction snapshot and cannot authorize continuation
 		}
 		if err := validateCompactSnapshot(*target); err != nil {
@@ -909,11 +1159,15 @@ func validateCompactCorrection(state CompactState) error {
 
 func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) error {
 	current, initial := state.CurrentSnapshot, state.InitialSnapshot
+	candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+	if scopeErr != nil {
+		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
+	}
 	if current.Kind != initial.Kind || current.Projection != initial.Projection || current.UnbornHead != correction.UnbornHead ||
 		current.BaseTree != initial.BaseTree || current.CandidateTree != correction.CandidateTree ||
 		current.IntendedUntrackedProof != correction.IntendedUntrackedProof ||
 		!equalStrings(current.IntendedUntracked, initial.IntendedUntracked) || !equalStrings(current.LedgerIDs, initial.LedgerIDs) ||
-		pathsAreSubset(current.Paths, state.GenesisPaths) != nil {
+		pathsAreSubset(current.Paths, candidateScope) != nil {
 		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
 	}
 	return nil
@@ -939,7 +1193,17 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 		attempt.Snapshot.CandidateTree != state.InitialSnapshot.CandidateTree ||
 		attempt.Snapshot.Projection != state.InitialSnapshot.Projection ||
 		!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) ||
-		pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+		// The imported attempt is measured the way every other attempt-facing
+		// check measures one (validateCompactCorrection, correctionTargetFrozen,
+		// targetedValidationRequestForCorrection): against the frozen genesis
+		// manifest THROUGH the correction admission, not against the delivery
+		// scope. The delivery scope is rolled back when a correction escalates,
+		// and an accounting-only escalation is exactly what this recovery
+		// imports, so measuring against it would refuse a companion test path
+		// the correction was entitled to add and leave the attempt with no way
+		// to be revalidated. Admission still refuses everything a correction
+		// could not have added, so nothing unreviewed enters here.
+		correctionScopeRefused(attempt.Snapshot.Paths, state.GenesisPaths) ||
 		attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) || state.FixDeltaHash != attempt.FixDeltaHash ||
 		state.OriginalCriteria == nil || state.CorrectionRegression == nil ||
 		*state.OriginalCriteria != attempt.OriginalCriteria || *state.CorrectionRegression != attempt.CorrectionRegression ||
@@ -1385,6 +1649,23 @@ func (state CompactState) CorrectionAttemptConsumed() bool {
 	return consumed >= MaxCompactCorrectionAttempts
 }
 
+// FrozenPolicyForTargetedValidation returns the immutable policy material a
+// validator needs without consulting any live policy artifact.
+func (state CompactState) FrozenPolicyForTargetedValidation() (string, error) {
+	if state.FrozenPolicyContent == nil {
+		return "", &CompactFrozenPolicyUnavailableError{LineageID: state.LineageID, PolicyHash: state.PolicyHash}
+	}
+	if compactPolicyContentHash(*state.FrozenPolicyContent) != state.PolicyHash {
+		return "", &CompactFrozenPolicyIntegrityError{LineageID: state.LineageID, PolicyHash: state.PolicyHash}
+	}
+	return *state.FrozenPolicyContent, nil
+}
+
+func compactPolicyContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func (state *CompactState) BeginCorrection(proposed int) error {
 	if state.CorrectionAttemptConsumed() {
 		return ErrCompactCorrectionConsumed
@@ -1416,10 +1697,11 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if snapshot.CandidateTree == snapshot.BaseTree {
 		return errors.New("compact correction has an unchanged candidate tree")
 	}
-	if err := pathsAreSubset(snapshot.Paths, state.GenesisPaths); err != nil {
+	added, err := admitCorrectionScope(snapshot.Paths, state.GenesisPaths)
+	if err != nil {
 		return err
 	}
-	if actual < 0 {
+	if actual < 0 || state.CumulativeCorrectionLines+actual > state.CorrectionBudget {
 		return fmt.Errorf("actual correction is %d changed lines, exceeding the frozen budget of %d", actual, state.CorrectionBudget)
 	}
 	fixHash := FixDeltaHashForSnapshot(snapshot)
@@ -1442,10 +1724,19 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
 	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
 	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
-	if state.CumulativeCorrectionLines > state.CorrectionBudget || !original.Passed || !regression.Passed {
+	if !original.Passed || !regression.Passed {
+		// The correction did not complete, so it never earned the widened
+		// delivery scope. The attempt stays on record -- it consumed the one
+		// correction, and its snapshot still names every path it touched --
+		// but CorrectionScopePaths keeps the frozen reviewed manifest, so a
+		// companion path an escalated correction merely attempted can never
+		// ride out through a delivery gate.
 		state.State = StateEscalated
 	} else {
 		state.State = StateValidating
+		if len(added) > 0 {
+			state.CorrectionAddedPaths = added
+		}
 	}
 	return state.Validate()
 }
@@ -1473,6 +1764,15 @@ func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, act
 	if err := next.CompleteCorrection(snapshot, actual, validation); err != nil {
 		return err
 	}
+	if !validation.OriginalCriteria.Passed || !validation.CorrectionRegression.Passed {
+		if next.State == StateEscalated {
+			// A conclusive failed validator verdict spends the one correction attempt
+			// and must become terminal even though the separately captured repository
+			// verification passed. It never consumes that evidence as approval proof.
+			*state = next
+			return nil
+		}
+	}
 	if next.State != StateValidating {
 		return errors.New("compact correction checks and budget must pass before repository verification acceptance") // refusal:by-design operator-knowledge: the atomic caller must adjust the candidate or validation result without consuming the open correction
 	}
@@ -1495,7 +1795,7 @@ func (state *CompactState) EscalateCorrectionVerification(snapshot Snapshot, rec
 	}
 	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection ||
 		snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) ||
-		pathsAreSubset(snapshot.Paths, state.GenesisPaths) != nil {
+		correctionScopeRefused(snapshot.Paths, state.GenesisPaths) {
 		return errors.New("procedural correction verification target is outside the open correction transaction") // refusal:by-design world-action: candidate mutation invalidated the captured correction target and requires a fresh stable evidence capture
 	}
 	if err := record.ValidatePayload(payload); err != nil {
@@ -1645,14 +1945,23 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 	}
 	pathsDigest := state.CurrentSnapshot.PathsDigest
 	if state.CurrentSnapshot.Kind == TargetFixDiff {
+		// A fix diff names only the correction's own paths, so the reviewed
+		// manifest is the authority for what was delivered. When an admitted
+		// correction widened that manifest, the digest must cover the widened
+		// scope or delivery would refuse the very file the correction was
+		// granted. With no added paths the two expressions are identical.
 		pathsDigest = state.InitialSnapshot.PathsDigest
+		if len(state.CorrectionAddedPaths) > 0 {
+			pathsDigest = digestPaths(state.CorrectionScopePaths())
+		}
 	}
 	receipt := CompactReceipt{
 		Schema: CompactReceiptSchema, LineageID: state.LineageID, Generation: state.Generation,
 		Projection: state.InitialSnapshot.Projection,
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
 		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: pathsDigest,
-		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
+		CorrectionAddedPaths: append([]string(nil), state.CorrectionAddedPaths...),
+		FixDeltaHash:         state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
 		EvidenceRecordDigest: state.EvidenceRecordDigest, EvidenceOutcome: state.EvidenceOutcome,
 		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
@@ -1735,6 +2044,13 @@ func (receipt CompactReceipt) Validate() error {
 	ids, err := canonicalStrings(receipt.ResolvedFindingIDs, "resolved finding id")
 	if err != nil || !equalStrings(ids, receipt.ResolvedFindingIDs) {
 		return errors.New("compact receipt resolved finding IDs must be canonical")
+	}
+	if len(receipt.CorrectionAddedPaths) > 0 {
+		added, addedErr := canonicalPaths(receipt.CorrectionAddedPaths)
+		if addedErr != nil || !equalStrings(added, receipt.CorrectionAddedPaths) {
+			// refusal:by-design world-action: an immutably published receipt carrying non-canonical bytes requires storage repair, not an operator command
+			return errors.New("compact receipt correction added paths must be canonical")
+		}
 	}
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")

@@ -78,23 +78,6 @@ func TestCompactStoreLoadsHistoricalOutOfGenesisCausalityWithoutRewrite(t *testi
 	}
 }
 
-func TestCompactStartIgnoresUnrelatedHistoricalOutOfGenesisCausality(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
-	historicalStore, _, historicalPayload := persistHistoricalOutOfGenesisCompactState(t, repo, "historical-causal-scope")
-	writeSnapshotFile(t, repo, "tracked.txt", "base\n")
-	writeSnapshotFile(t, repo, "deleted.txt", "advanced base\n")
-	gitSnapshot(t, repo, "add", "--", "tracked.txt", "deleted.txt")
-	gitSnapshot(t, repo, "commit", "-m", "advance unrelated base")
-	writeSnapshotFile(t, repo, "deleted.txt", "new unrelated target\n")
-	requested := newCompactTestState(t, repo, "new-causal-scope")
-	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	after, readErr := os.ReadFile(historicalStore.StatePath())
-	if startErr != nil || readErr != nil || !bytes.Equal(after, historicalPayload) || started.Action != CompactStartCreated || started.Record.State.LineageID != requested.LineageID {
-		t.Fatalf("unrelated START = %#v, start=%v read=%v bytes changed=%v", started, startErr, readErr, !bytes.Equal(after, historicalPayload))
-	}
-}
-
 func persistHistoricalOutOfGenesisCompactState(t *testing.T, repo, lineage string) (CompactStore, CompactRecord, []byte) {
 	t.Helper()
 	state := newCompactTestState(t, repo, lineage)

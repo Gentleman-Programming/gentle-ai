@@ -13,7 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func TestRuntimeRemediationFinishAtomicallyChargesEvidenceAndBinding(t *testing.T) {
+func TestRuntimeFailedEvidenceFinishChargesSDDEvidenceWithoutAdvancingReviewBinding(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)
 	beforeRecords := countRuntimeRecords(t, fixture.store.Dir)
 	request := fixture.finishRequest("finish-remediation")
@@ -25,12 +25,12 @@ func TestRuntimeRemediationFinishAtomicallyChargesEvidenceAndBinding(t *testing.
 	if completed.ActiveAttempt != nil || !completed.Complete || completed.NextAction != RuntimeActionComplete {
 		t.Fatalf("completed remediation status = %#v", completed)
 	}
-	if completed.Binding == nil || completed.Binding.Lineage != fixture.successor.State.LineageID ||
-		completed.BindingRevision == fixture.predecessorBinding.Revision {
-		t.Fatalf("atomic successor binding = %#v", completed.Binding)
+	if completed.Binding == nil || completed.Binding.Revision != fixture.predecessorBinding.Revision ||
+		completed.Binding.Lineage != fixture.predecessorBinding.Lineage {
+		t.Fatalf("failed-evidence finish rewrote review metadata = %#v", completed.Binding)
 	}
 	if completed.EvidenceRevision != request.EvidenceRevision || completed.CumulativeChangedLines == 0 {
-		t.Fatalf("atomic remediation charge/evidence = %#v", completed)
+		t.Fatalf("failed-evidence remediation charge/evidence = %#v", completed)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]
 	if last.Outcome != AttemptPassed || last.RemediatesEvidenceRevision != fixture.failedEvidence ||
@@ -38,38 +38,22 @@ func TestRuntimeRemediationFinishAtomicallyChargesEvidenceAndBinding(t *testing.
 		t.Fatalf("completed remediation attempt = %#v", last)
 	}
 	if countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
-		t.Fatalf("atomic finish appended %d records, want one", countRuntimeRecords(t, fixture.store.Dir)-beforeRecords)
+		t.Fatalf("finish appended %d records, want one", countRuntimeRecords(t, fixture.store.Dir)-beforeRecords)
 	}
 	record, err := fixture.store.loadRecord(completed.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Operation != runtimeOperationFinishRemediation || record.Finish == nil || record.Binding == nil ||
-		record.Binding.LegacyImport != nil || record.Binding.ExpectedRevision != fixture.predecessorBinding.Revision ||
-		record.Binding.Current.Lineage != fixture.successor.State.LineageID {
-		t.Fatalf("atomic remediation record = %#v", record)
-	}
-
-	// Exact request replay is native-ledger-only. Once the single HEAD CAS is
-	// committed, a later compact artifact failure cannot turn it into a second
-	// external validation or append another record.
-	successorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), fixture.repo, fixture.successor.State.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(successorStore.ReceiptPath()); err != nil {
-		t.Fatal(err)
+	if record.Operation != runtimeOperationFinish || record.Finish == nil || record.Binding != nil {
+		t.Fatalf("failed-evidence finish record = %#v", record)
 	}
 	replayed, err := fixture.store.Finish(context.Background(), request)
-	if err != nil {
-		t.Fatalf("exact remediation replay revalidated compact authority: %v", err)
-	}
-	if replayed.Revision != completed.Revision || countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
-		t.Fatalf("exact remediation replay = %#v records=%d", replayed, countRuntimeRecords(t, fixture.store.Dir))
+	if err != nil || replayed.Revision != completed.Revision || countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
+		t.Fatalf("exact failed-evidence replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, fixture.store.Dir))
 	}
 }
 
-func TestRuntimeRemediationFinishImportsLegacyBindingInTheSameAtomicRecord(t *testing.T) {
+func TestRuntimeFailedEvidenceFinishDoesNotReadLegacyBinding(t *testing.T) {
 	fixture := newRuntimeRemediationFixtureWithBinding(t, true, false)
 	probe, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), fixture.repo, "legacy-remediation-probe")
 	if err != nil {
@@ -82,46 +66,35 @@ func TestRuntimeRemediationFinishImportsLegacyBindingInTheSameAtomicRecord(t *te
 	}
 	beforeRecords := countRuntimeRecords(t, fixture.store.Dir)
 	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-legacy-remediation"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !completed.Complete || completed.Binding == nil || completed.Binding.Lineage != fixture.successor.State.LineageID {
-		t.Fatalf("legacy atomic remediation status = %#v", completed)
+	if err != nil || !completed.Complete || completed.Binding != nil {
+		t.Fatalf("legacy-independent remediation status = %#v err=%v", completed, err)
 	}
 	record, err := fixture.store.loadRecord(completed.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.Operation != runtimeOperationFinishRemediation || record.Binding == nil || record.Binding.LegacyImport == nil ||
-		record.Binding.LegacyImport.Binding.Revision != fixture.predecessorBinding.Revision ||
-		record.Binding.Current.Lineage != fixture.successor.State.LineageID || countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
-		t.Fatalf("legacy atomic remediation record = %#v records=%d", record, countRuntimeRecords(t, fixture.store.Dir))
+	if err != nil || record.Operation != runtimeOperationFinish || record.Binding != nil || countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
+		t.Fatalf("legacy-independent remediation record = %#v err=%v records=%d", record, err, countRuntimeRecords(t, fixture.store.Dir))
 	}
 	legacyAfter, readErr := os.ReadFile(legacyPath)
 	if readErr != nil || string(legacyAfter) != string(legacyBefore) {
-		t.Fatalf("legacy remediation dual-wrote compatibility binding: %q err=%v", legacyAfter, readErr)
+		t.Fatalf("failed-evidence settlement touched legacy metadata: %q err=%v", legacyAfter, readErr)
 	}
 }
 
-func TestRuntimeRemediationFinishSupportsEngramWithoutOpenSpecRoot(t *testing.T) {
+func TestRuntimeFailedEvidenceFinishSupportsEngramWithoutOpenSpecRoot(t *testing.T) {
 	fixture := newRuntimeEngramRemediationFixture(t)
 	if _, err := os.Stat(filepath.Join(fixture.repo, "openspec")); !os.IsNotExist(err) {
 		t.Fatalf("pure Engram fixture unexpectedly has an OpenSpec root: %v", err)
 	}
 	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-engram-remediation"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !completed.Complete || completed.Binding == nil || completed.Binding.Lineage != fixture.successor.State.LineageID ||
-		completed.BindingRevision == fixture.predecessorBinding.Revision {
-		t.Fatalf("pure Engram remediation status = %#v", completed)
+	if err != nil || !completed.Complete || completed.Binding == nil ||
+		completed.Binding.Revision != fixture.predecessorBinding.Revision {
+		t.Fatalf("pure Engram remediation status = %#v err=%v", completed, err)
 	}
 	if _, err := os.Stat(filepath.Join(fixture.repo, "openspec")); !os.IsNotExist(err) {
 		t.Fatalf("runtime remediation created or required an OpenSpec root: %v", err)
 	}
 }
 
-func TestRuntimeRemediationRejectsSymlinkedOpenSpecInsteadOfEngramFallback(t *testing.T) {
+func TestRuntimeFailedEvidenceFinishDoesNotReadOpenSpecSuccessor(t *testing.T) {
 	fixture := newRuntimeEngramRemediationFixture(t)
 	outside := t.TempDir()
 	seedReadyChange(t, outside, "engram-runtime", "- [x] linked\n")
@@ -129,11 +102,10 @@ func TestRuntimeRemediationRejectsSymlinkedOpenSpecInsteadOfEngramFallback(t *te
 		t.Skipf("symlink fixture unavailable: %v", err)
 	}
 	before := countRuntimeRecords(t, fixture.store.Dir)
-	_, err := fixture.store.Finish(context.Background(), fixture.finishRequest("reject-symlinked-openspec"))
-	if err == nil || !strings.Contains(err.Error(), "outside repository") {
-		t.Fatalf("symlinked OpenSpec successor error = %v", err)
+	status, err := fixture.store.Finish(context.Background(), fixture.finishRequest("ignore-symlinked-openspec"))
+	if err != nil || !status.Complete || countRuntimeRecords(t, fixture.store.Dir) != before+1 {
+		t.Fatalf("failed-evidence settlement read OpenSpec successor state: status=%#v err=%v", status, err)
 	}
-	assertRuntimeRemediationUnchanged(t, fixture, before)
 }
 
 func TestRuntimeRemediationFinishChargesButDoesNotSelectAnOverBudgetSuccessor(t *testing.T) {
@@ -159,83 +131,32 @@ func TestRuntimeRemediationFinishChargesButDoesNotSelectAnOverBudgetSuccessor(t 
 		t.Fatalf("over-budget remediation records=%d want=%d", countRuntimeRecords(t, fixture.store.Dir), beforeRecords+1)
 	}
 	record, err := fixture.store.loadRecord(status.Revision)
-	if err != nil || record.Operation != runtimeOperationFinishRemediation || record.Binding == nil || !record.Finish.ChangedLineBudgetExceeded {
+	if err != nil || record.Operation != runtimeOperationFinish || record.Binding != nil || !record.Finish.ChangedLineBudgetExceeded {
 		t.Fatalf("over-budget remediation record = %#v err=%v", record, err)
 	}
 }
 
-func TestRuntimeRemediationFinishRejectsIncompleteStaleAndUnrelatedAuthority(t *testing.T) {
-	t.Run("no successor is required for a changed bound passing attempt", func(t *testing.T) {
+func TestRuntimeFailedEvidenceFinishRejectsMissingAndMismatchedEvidence(t *testing.T) {
+	t.Run("missing failed evidence", func(t *testing.T) {
 		fixture := newRuntimeRemediationFixture(t, true)
-		request := fixture.finishRequest("finish-without-successor")
-		request.ExpectedBindingRevision = ""
-		request.SuccessorLineageID = ""
+		request := fixture.finishRequest("finish-without-remediation-evidence")
 		request.RemediatesEvidenceRevision = ""
-		if _, err := fixture.store.Finish(context.Background(), request); err != nil {
-			t.Fatalf("finish without a successor = %T %v; review acts after implementation, so the ledger closes on its own evidence", err, err)
-		}
-	})
-
-	t.Run("stale populated binding revision", func(t *testing.T) {
-		fixture := newRuntimeRemediationFixture(t, true)
-		request := fixture.finishRequest("finish-stale-binding")
-		request.ExpectedBindingRevision = runtimeTestHash('9')
 		before := countRuntimeRecords(t, fixture.store.Dir)
 		_, err := fixture.store.Finish(context.Background(), request)
-		var conflict *BindingRevisionConflictError
-		if !errors.As(err, &conflict) || conflict.Current != fixture.predecessorBinding.Revision {
-			t.Fatalf("stale populated binding error = %T %#v", err, err)
+		if err == nil || !strings.Contains(err.Error(), "requires --remediates-evidence-revision") {
+			t.Fatalf("missing failed evidence error = %v", err)
 		}
 		assertRuntimeRemediationUnchanged(t, fixture, before)
 	})
 
-	t.Run("failed evidence mismatch", func(t *testing.T) {
+	t.Run("mismatched failed evidence", func(t *testing.T) {
 		fixture := newRuntimeRemediationFixture(t, true)
 		request := fixture.finishRequest("finish-wrong-evidence")
 		request.RemediatesEvidenceRevision = runtimeTestHash('8')
 		before := countRuntimeRecords(t, fixture.store.Dir)
 		_, err := fixture.store.Finish(context.Background(), request)
-		if err == nil || !strings.Contains(err.Error(), "failed evidence revision") {
+		if err == nil || !strings.Contains(err.Error(), "chain's unremediated failure") {
 			t.Fatalf("mismatched failed evidence error = %v", err)
-		}
-		assertRuntimeRemediationUnchanged(t, fixture, before)
-	})
-
-	t.Run("unapproved recovery descendant", func(t *testing.T) {
-		fixture := newRuntimeRemediationFixture(t, false)
-		before := countRuntimeRecords(t, fixture.store.Dir)
-		_, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-unapproved-successor"))
-		if err == nil || !strings.Contains(err.Error(), "not approved") {
-			t.Fatalf("unapproved successor error = %v", err)
-		}
-		assertRuntimeRemediationUnchanged(t, fixture, before)
-	})
-
-	t.Run("approved authority outside recovery chain", func(t *testing.T) {
-		fixture := newRuntimeRemediationFixture(t, true)
-		unrelated := createApprovedRuntimeAuthority(t, fixture.repo, "unrelated-approved", 1)
-		request := fixture.finishRequest("finish-unrelated-successor")
-		request.SuccessorLineageID = unrelated.State.LineageID
-		before := countRuntimeRecords(t, fixture.store.Dir)
-		_, err := fixture.store.Finish(context.Background(), request)
-		if err == nil || !strings.Contains(err.Error(), "recovery descendant") {
-			t.Fatalf("unrelated successor error = %v", err)
-		}
-		assertRuntimeRemediationUnchanged(t, fixture, before)
-	})
-
-	t.Run("candidate changes during final authorization", func(t *testing.T) {
-		fixture := newRuntimeRemediationFixture(t, true)
-		before := countRuntimeRecords(t, fixture.store.Dir)
-		originalHook := runtimeRemediationFinalAuthorizationHook
-		runtimeRemediationFinalAuthorizationHook = func() {
-			write(t, filepath.Join(fixture.changeRoot, "tasks.md"), "- [x] 1.1 Done\n# bounded remediation\n# authorization race\n")
-		}
-		t.Cleanup(func() { runtimeRemediationFinalAuthorizationHook = originalHook })
-		_, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-authorization-race"))
-		runtimeRemediationFinalAuthorizationHook = originalHook
-		if err == nil || !strings.Contains(err.Error(), "changed before native commit") {
-			t.Fatalf("final authorization race error = %v", err)
 		}
 		assertRuntimeRemediationUnchanged(t, fixture, before)
 	})
@@ -323,7 +244,7 @@ func TestRuntimeRemediationFinishCrashWindowsRemainAtomicAndReplayable(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !completed.Complete || completed.Binding == nil || completed.Binding.Lineage != fixture.successor.State.LineageID ||
+		if !completed.Complete || completed.Binding == nil || completed.Binding.Revision != fixture.predecessorBinding.Revision ||
 			countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 			t.Fatalf("pre-HEAD exact retry = %#v records=%d", completed, countRuntimeRecords(t, fixture.store.Dir))
 		}
@@ -352,7 +273,7 @@ func TestRuntimeRemediationFinishCrashWindowsRemainAtomicAndReplayable(t *testin
 		}
 		committed, statusErr := fixture.store.Status()
 		if statusErr != nil || !committed.Complete || committed.Binding == nil ||
-			committed.Binding.Lineage != fixture.successor.State.LineageID || countRuntimeRecords(t, fixture.store.Dir) != before+1 {
+			committed.Binding.Revision != fixture.predecessorBinding.Revision || countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 			t.Fatalf("post-HEAD committed status = %#v err=%v", committed, statusErr)
 		}
 		replayed, err := fixture.store.Finish(context.Background(), request)
@@ -399,7 +320,7 @@ func TestRuntimeRemediationFinishCASAllowsOnlyOneAtomicSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Complete || status.Binding == nil || status.Binding.Lineage != fixture.successor.State.LineageID ||
+	if !status.Complete || status.Binding == nil || status.Binding.Revision != fixture.predecessorBinding.Revision ||
 		countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 		t.Fatalf("concurrent atomic remediation status = %#v records=%d", status, countRuntimeRecords(t, fixture.store.Dir))
 	}
@@ -600,8 +521,6 @@ func (fixture runtimeRemediationFixture) finishRequest(requestID string) FinishA
 		EvidenceRevision: runtimeTestHash('5'), Diagnosis: "bounded remediation passed successor verification",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "remediation cleanup completed",
 		ProcessEvidence:            "remediation process scan found no descendants",
-		ExpectedBindingRevision:    fixture.predecessorBinding.Revision,
-		SuccessorLineageID:         fixture.successor.State.LineageID,
 		RemediatesEvidenceRevision: fixture.failedEvidence,
 	}
 }

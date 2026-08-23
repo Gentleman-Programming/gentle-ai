@@ -100,6 +100,7 @@ func TestDiscoverCustomAgentsExcludesReservedRolesAndDeduplicates(t *testing.T) 
     "gentle-reviewer": { "model": "openai/gpt-5" },
     "gentle-worker": { "model": "openai/gpt-5-mini" },
     "sdd-orchestrator": { "model": "openai/gpt-5" },
+    "review-validator": { "model": "openai/gpt-5-mini" },
     "a-custom-agent": { "model": "openai/gpt-5-mini" },
     "z-custom-agent": { "model": "openai/gpt-5" },
     "a-custom-agent": { "model": "openai/gpt-5" }
@@ -135,6 +136,7 @@ func TestReadCurrentModelAssignmentsIncludesReviewAgentsFromJSONC(t *testing.T) 
     "review-reliability": { "model": "openai/gpt-5" },
     "review-resilience": { "model": "anthropic/claude-sonnet-4" },
     "review-refuter": { "model": "openai/gpt-5", "variant": "high" },
+    "review-validator": { "model": "openai/gpt-5-mini" },
   },
 }`
 	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
@@ -145,7 +147,7 @@ func TestReadCurrentModelAssignmentsIncludesReviewAgentsFromJSONC(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
 	}
-	for _, agent := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, agent := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		if got[agent].ProviderID == "" || got[agent].ModelID == "" {
 			t.Errorf("review assignment %q missing: %v", agent, got)
 		}

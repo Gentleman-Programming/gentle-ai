@@ -45,6 +45,7 @@ func TestNegotiatedStatusWithoutRuntimeIdentityIsAnswered(t *testing.T) {
 // answers, and the exact provider-returned START it names must execute
 // rather than refuse the same undeclared identity one step later.
 func TestNegotiatedRouteWithoutRuntimeIdentityReachesStart(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
 

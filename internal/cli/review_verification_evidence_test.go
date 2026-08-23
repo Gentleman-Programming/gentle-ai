@@ -12,6 +12,7 @@ import (
 )
 
 func TestFailedCapturedEvidenceDrivesNegotiatedEscalationWithoutCallerBoolean(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -89,6 +90,7 @@ func TestFailedCapturedEvidenceDrivesNegotiatedEscalationWithoutCallerBoolean(t 
 }
 
 func TestLegacyRawEvidenceWithoutMetadataFailsClosed(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -120,7 +122,9 @@ func TestLegacyRawEvidenceWithoutMetadataFailsClosed(t *testing.T) {
 }
 
 func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
@@ -228,17 +232,15 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 		"--validation", validationPath, "--captured-evidence"}, &finalized); err != nil {
 		t.Fatalf("atomic correction finalize: %v\n%s", err, finalized.String())
 	}
-	terminal, err := store.Load()
-	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 ||
-		terminal.State.EvidenceOutcome != reviewtransaction.VerificationOutcomePassed || terminal.State.EvidenceTargetIdentity != secondTarget {
-		t.Fatalf("atomic correction terminal = %#v, %v", terminal, err)
+	result := decodeFacadeFinalize(t, finalized.Bytes())
+	if result.State != reviewtransaction.StateApproved || result.Action != reviewApprovedCompactBurnedFinalizeAction || result.ReceiptPath != "" {
+		t.Fatalf("atomic correction terminal = %#v", result)
 	}
-	if still, err := filepath.Glob(filepath.Join(firstCandidateDir, "*", reviewtransaction.CompactFinalEvidenceFile)); err != nil || len(still) != len(retained) {
-		t.Fatalf("accepted candidate replaced prior failed evidence under %s: %v", firstCandidateDir, err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func TestProceduralCorrectionEvidenceEscalatesBeforeRetryEligibility(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)

@@ -138,7 +138,7 @@ func reviewStartAssessmentForFrozenAuthority(legacy ReviewFacadeStartResult, ass
 	if assessment.Level == legacy.RiskLevel {
 		return assessment, nil
 	}
-	if legacy.Action == string(reviewtransaction.CompactStartResumed) && legacy.RiskLevel == reviewtransaction.RiskMedium &&
+	if (legacy.Action == "resumed" || legacy.Action == "replayed") && legacy.RiskLevel == reviewtransaction.RiskMedium &&
 		assessment.Level == reviewtransaction.RiskHigh && len(assessment.Reasons) > 0 && assessment.Reasons[0].Path != "" &&
 		validateReviewStartLenses(legacy.RiskLevel, legacy.SelectedLenses) == nil {
 		assessment.Level, assessment.DominantLens = legacy.RiskLevel, ""
@@ -169,11 +169,19 @@ func (result ReviewIntegrationStartResult) Validate() error {
 	if strings.TrimSpace(result.LineageID) == "" || result.SelectedLenses == nil || result.RiskReasons == nil || result.ArtifactSubjects == nil {
 		return errors.New("negotiated START response is incomplete")
 	}
-	switch result.Action {
-	case string(reviewtransaction.CompactStartCreated), string(reviewtransaction.CompactStartResumed),
-		string(reviewtransaction.CompactStartReuseReceipt), string(reviewtransaction.CompactStartBlocked):
-	default:
-		return fmt.Errorf("unsupported negotiated START action %q", result.Action)
+	switch {
+	case legacyTransport:
+		switch result.Action {
+		case "created", "resumed", "reuse-receipt", "blocked-scope-action":
+		default:
+			return fmt.Errorf("unsupported negotiated v1 START action %q", result.Action) // refusal:by-design world-action: a provider-built v1 START action outside the published enum is a contract implementation defect; only a code fix can make it representable
+		}
+	case nativeGitTransport:
+		switch result.Action {
+		case "created", "replayed":
+		default:
+			return fmt.Errorf("unsupported negotiated v2 START action %q", result.Action) // refusal:by-design world-action: a provider-built v2 START action outside the published enum is a contract implementation defect; only a code fix can make it representable
+		}
 	}
 	if result.Projection != reviewtransaction.ProjectionWorkspace && result.Projection != reviewtransaction.ProjectionStaged {
 		return fmt.Errorf("unsupported negotiated START projection %q", result.Projection)
@@ -217,7 +225,7 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		return errors.New("negotiated START selected lenses require frozen candidate context")
 	}
 	needsRepositoryContext := result.State == reviewtransaction.StateReviewing &&
-		(result.Action == string(reviewtransaction.CompactStartCreated) || result.Action == string(reviewtransaction.CompactStartResumed))
+		(result.Action == "created" || result.Action == "resumed" || result.Action == "replayed")
 	if needsRepositoryContext != (result.RepositoryContext != nil) {
 		return errors.New("negotiated START repository context does not match the active reviewing authority")
 	}

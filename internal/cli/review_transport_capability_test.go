@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -27,7 +28,7 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		{name: "Claude prompt carried fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
 		{name: "OpenCode provider relay", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
 		{name: "Codex subprocess boundary", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportCodexAdvisoryScratchProcess, supported: true},
-		{name: "Kilo has no native executor", runtime: string(model.AgentKilocode), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "Kilo has no immutable transport", runtime: string(model.AgentKilocode), transport: reviewImmutableTransportUnsupported},
 		{name: "Pi host relay", runtime: string(model.AgentPi), eligible: true, transport: reviewImmutableTransportPiHostRelay, supported: true},
 		{name: "unknown", runtime: "unknown-runtime", transport: reviewImmutableTransportUnsupported},
 		{name: "alias", runtime: "open-code", transport: reviewImmutableTransportUnsupported},
@@ -52,6 +53,34 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 	}
 }
 
+func TestImmutableReviewRuntimeCapabilityIsClosedCatalogSet(t *testing.T) {
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+
+	const wantExposed = 4
+	exposed := 0
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			capability := reviewImmutableRuntimeCapability(agent.ID)
+			want := agent.ID == model.AgentClaudeCode ||
+				agent.ID == model.AgentOpenCode ||
+				agent.ID == model.AgentCodex ||
+				agent.ID == model.AgentPi
+			if capability.Eligible != want || capability.supportsImmutableReceiptReview() != want {
+				t.Fatalf("runtime capability = %#v, supported = %t, want exposed = %t", capability, capability.supportsImmutableReceiptReview(), want)
+			}
+			if !want && capability.Transport != reviewImmutableTransportUnsupported {
+				t.Fatalf("unsupported runtime transport = %q, want %q", capability.Transport, reviewImmutableTransportUnsupported)
+			}
+			if want {
+				exposed++
+			}
+		})
+	}
+	if exposed != wantExposed {
+		t.Fatalf("immutable review runtimes = %d, want %d", exposed, wantExposed)
+	}
+}
+
 func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *testing.T) {
 	const target = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	missingRepository := t.TempDir() + "/missing"
@@ -60,17 +89,14 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		name    string
 		runtime string
 		// startCode is the failure code a "start"-operation invocation
-		// expects. Wave 4 S4 (design.md decision 5) added the broader
-		// review-transport-capability admission gate, which now runs
-		// before this narrower immutable-transport check on `review
-		// start` specifically: a runtime absent from or unrecognised by
-		// the canonical capability manifest (unknown) is now caught
-		// by the broader gate first. `review status` is unaffected — the
-		// new gate only runs in `review start` — so its expected code
-		// stays reviewImmutableTransportUnsupportedCode for every runtime.
+		// expects. The review-transport-capability admission gate runs
+		// before the immutable-transport check on `review start`, so a
+		// known runtime that remains dormant (Kilo) and an unrecognized
+		// identity both fail there. `review status` remains typed
+		// immutable-transport unavailable.
 		startCode string
 	}{
-		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
+		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "logical orchestrator role", runtime: "gentle-orchestrator", startCode: reviewTransportCapabilityUnsupportedCode},
 		//

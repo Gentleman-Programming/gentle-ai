@@ -105,11 +105,14 @@ func (counters *Counters) UnmarshalJSON(payload []byte) error {
 }
 
 type Start struct {
-	LineageID            string
-	Mode                 Mode
-	Generation           int
-	Snapshot             Snapshot
-	PolicyHash           string
+	LineageID  string
+	Mode       Mode
+	Generation int
+	Snapshot   Snapshot
+	PolicyHash string
+	// PolicyContent preserves the exact bytes START already read and hashed when
+	// creating compact authority. Nil is retained only for historical authority.
+	PolicyContent        *string
 	RiskLevel            RiskLevel
 	SelectedLenses       []string
 	OriginalChangedLines *int

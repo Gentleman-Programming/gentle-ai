@@ -2,27 +2,19 @@ package cli
 
 import (
 	"os"
-	"regexp"
 	"strings"
 	"testing"
 )
 
-// reviewStopReasonDocsRowTextRegexp extracts both the reason code and its
-// full continuation text from one row of the "Continue after a stop reason
-// code" table in docs/review-integration.md (reviewStopReasonDocsSection
-// already scopes the search to that table only). The docs table's own prose
-// defines the operative signal this file cross-checks against: "the table
-// below names ... the exact continuation for consumers that hold --cwd
-// access, and `terminal` where no flag-driven continuation exists ...
-// `terminal` never means 'contact support with no further detail'; each
-// terminal row states the concrete precondition that would unblock it." A
-// row is only ever written with that literal leading word "Terminal" when no
-// flag-driven continuation exists — every other row leads with the concrete
-// command or condition itself.
-var reviewStopReasonDocsRowTextRegexp = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| (.+) \\|$")
+// The stop-reason table may group codes with the same continuation. Its
+// shared parser expands that grouped inventory into one continuation per code.
+// The docs table's own prose defines the operative signal this file
+// cross-checks: a continuation starts with "Terminal" only when no
+// flag-driven in-lineage continuation exists; otherwise it starts with the
+// concrete command or condition itself.
 
 // reviewStopReasonDocsTerminalPrefix is the exact literal marker
-// docs/review-integration.md uses to open a row that has no caller-side,
+// docs/review-integration.md uses to open an entry that has no caller-side,
 // flag-driven continuation. See reviewStopReasonDocsRowTextRegexp.
 const reviewStopReasonDocsTerminalPrefix = "Terminal"
 
@@ -149,10 +141,6 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: receipt-driven development is disabled; run `gentle-ai review mode enable` to turn it back on, then re-run the exact `review status --next-transition --contract <contract> <selector-args>` command that produced this stop — a concrete, flag-driven continuation; the same typed error the start gate already names",
 	},
-	"staged_delivery_candidate_required": {
-		Terminal:      false,
-		Justification: "caller-continuable: stage every reviewed path to restore the exact pre-commit candidate, then re-run explicit-lineage STATUS with `--projection staged`; the documented command is concrete and the index change neither mutates nor extends approval",
-	},
 }
 
 type reviewStopDisposition struct {
@@ -252,13 +240,12 @@ func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := reviewStopReasonDocsSection(t, string(docs))
-	rows := reviewStopReasonDocsRowTextRegexp.FindAllStringSubmatch(section, -1)
-	if len(rows) == 0 {
-		t.Fatal("found no rows in the \"Continue after a stop reason code\" table in docs/review-integration.md; the table heading or row shape moved")
+	continuations := reviewStopReasonDocsContinuations(t, section)
+	if len(continuations) == 0 {
+		t.Fatal("found no codes in the \"Continue after a stop reason code\" table in docs/review-integration.md; the table heading or row shape moved")
 	}
 	docsTerminal := map[string]bool{}
-	for _, row := range rows {
-		code, text := row[1], row[2]
+	for code, text := range continuations {
 		docsTerminal[code] = strings.HasPrefix(text, reviewStopReasonDocsTerminalPrefix)
 	}
 
@@ -298,15 +285,9 @@ func TestReviewStopInvariantTerminalClassificationAgreesWithShippedContract(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := map[string]string{}
-	for _, match := range reviewStopReasonDocsRowTextRegexp.FindAllStringSubmatch(string(contract), -1) {
-		if _, dup := rows[match[1]]; dup {
-			t.Errorf("shipped contract carries two rows for %q", match[1])
-		}
-		rows[match[1]] = match[2]
-	}
+	rows := reviewStopReasonDocsContinuations(t, string(contract))
 	if len(rows) == 0 {
-		t.Fatal("found no stop-reason rows in the shipped review-ledger contract; the table shape moved")
+		t.Fatal("found no stop-reason codes in the shipped review-ledger contract; the table shape moved")
 	}
 	for code := range rows {
 		if _, ok := reviewStopInvariantClassification[code]; !ok {

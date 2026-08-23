@@ -165,7 +165,9 @@ func TestAmbiguousChangeSelectionNamesARunnableCommandPerChange(t *testing.T) {
 
 	reasons := strings.Join(status.BlockedReasons, "\n")
 	for _, change := range []string{"first", "second"} {
-		want := "gentle-ai sdd-status --cwd " + root + " --change " + change
+		// The selector is positional: ParseCommandArgs has no --change flag
+		// (#3278, #2790), so this is the only runnable spelling.
+		want := "gentle-ai sdd-status " + change + " --cwd " + root
 		if !strings.Contains(reasons, want) {
 			t.Fatalf("blocked reasons named no runnable command for %q; a refusal that lists options and no command is the shape this project does not ship.\ngot:\n%s", change, reasons)
 		}
@@ -776,23 +778,29 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 				t.Fatalf("Resolve() error = %v", err)
 			}
 
+			wantVerify, wantNext, wantBlocked := tt.wantVerify, tt.wantNext, tt.wantBlocked
+			// Legacy fixtures with no strict envelope used to route to review.
+			// They now represent incomplete verification evidence and rerun verify.
+			if wantNext == "resolve-review" {
+				wantVerify, wantNext, wantBlocked = DependencyReady, "verify", ""
+			}
 			if status.ApplyState != tt.wantApply {
 				t.Fatalf("ApplyState = %q, want %q", status.ApplyState, tt.wantApply)
 			}
 			if status.Dependencies.Apply != tt.wantApplyD {
 				t.Fatalf("Dependencies.Apply = %q, want %q", status.Dependencies.Apply, tt.wantApplyD)
 			}
-			if status.Dependencies.Verify != tt.wantVerify {
-				t.Fatalf("Dependencies.Verify = %q, want %q", status.Dependencies.Verify, tt.wantVerify)
+			if status.Dependencies.Verify != wantVerify {
+				t.Fatalf("Dependencies.Verify = %q, want %q", status.Dependencies.Verify, wantVerify)
 			}
 			if status.Dependencies.Archive != tt.wantArchive {
 				t.Fatalf("Dependencies.Archive = %q, want %q", status.Dependencies.Archive, tt.wantArchive)
 			}
-			if status.NextRecommended != tt.wantNext {
-				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, tt.wantNext)
+			if status.NextRecommended != wantNext {
+				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, wantNext)
 			}
-			if tt.wantBlocked != "" && !strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlocked) {
-				t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, tt.wantBlocked)
+			if wantBlocked != "" && !strings.Contains(strings.Join(status.BlockedReasons, "\n"), wantBlocked) {
+				t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, wantBlocked)
 			}
 			if tt.wantBlockedAbsent != "" && strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlockedAbsent) {
 				t.Fatalf("BlockedReasons = %v, want not containing %q", status.BlockedReasons, tt.wantBlockedAbsent)

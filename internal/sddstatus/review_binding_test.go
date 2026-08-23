@@ -429,12 +429,13 @@ func TestBindingFailsClosedForLedgerDriftAndChangedLiveEvidence(t *testing.T) {
 func TestResolveRejectsCorruptOrChangedBoundEvidence(t *testing.T) {
 	for _, tt := range []struct {
 		name, wantNext, wantReason string
+		wantVerify                 DependencyState
 		mutate                     func(t *testing.T, root string, store reviewtransaction.CompactStore, binding ReviewBinding)
 	}{
-		{name: "corrupt binding", wantNext: "resolve-blockers", wantReason: "native SDD runtime authority is unreadable", mutate: func(t *testing.T, root string, _ reviewtransaction.CompactStore, _ ReviewBinding) {
+		{name: "corrupt binding", wantNext: "resolve-blockers", wantVerify: DependencyBlocked, wantReason: "native SDD runtime authority is unreadable", mutate: func(t *testing.T, root string, _ reviewtransaction.CompactStore, _ ReviewBinding) {
 			corruptNativeRuntimeBinding(t, mustRuntimeStore(t, root, "thin"))
 		}},
-		{name: "changed receipt", wantNext: "resolve-review", wantReason: "receipt", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore, _ ReviewBinding) {
+		{name: "changed receipt", wantNext: "verify", wantVerify: DependencyReady, wantReason: "receipt", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore, _ ReviewBinding) {
 			if err := os.WriteFile(store.ReceiptPath(), []byte("{}\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -454,10 +455,14 @@ func TestResolveRejectsCorruptOrChangedBoundEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status.NextRecommended != tt.wantNext || status.Dependencies.Verify != DependencyBlocked {
+			if status.NextRecommended != tt.wantNext || status.Dependencies.Verify != tt.wantVerify {
 				t.Fatalf("%s status = %#v", tt.name, status)
 			}
-			if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantReason) {
+			if tt.name == "changed receipt" {
+				if status.ReviewGate == nil || !strings.Contains(status.ReviewGate.Reason, tt.wantReason) {
+					t.Fatalf("%s ReviewGate = %#v, want containing %q", tt.name, status.ReviewGate, tt.wantReason)
+				}
+			} else if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantReason) {
 				t.Fatalf("%s BlockedReasons = %v, want containing %q", tt.name, status.BlockedReasons, tt.wantReason)
 			}
 		})

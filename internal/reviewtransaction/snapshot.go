@@ -74,7 +74,10 @@ type SnapshotBuilder struct {
 	unbornHead bool
 }
 
-var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
+var (
+	exactObjectPattern            = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
+	errUnbornStagedCandidateEmpty = errors.New("unborn repository has no staged changes; stage the review candidate with git add")
+)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
 	// Canonicalization makes a staged base diff committed-only. Validate the
@@ -1164,7 +1167,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
 	if unborn && projection == ProjectionStaged && candidateTree == baseTree {
-		return "", "", "", errors.New("unborn repository has no staged changes; stage the review candidate with git add")
+		return "", "", "", errUnbornStagedCandidateEmpty
 	}
 	if allowStagedIntended && projection != ProjectionStaged {
 		if _, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--cached", "--quiet", candidateTree, "--"); err != nil {

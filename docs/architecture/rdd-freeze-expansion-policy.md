@@ -24,7 +24,7 @@ For a contributor whose change touches a surface listed under **Scope**:
 
 ## Scope
 
-Frozen: any inventory row in `docs/architecture/rdd-ownership-inventory.md` whose **Target disposition** is `REMOVE`, `MERGE`, or `DERIVE` — i.e., every surface the target architecture consolidates or deletes, not the two `KEEP` artifacts or the five `KEEP` gates that already match the target model.
+Frozen: any inventory row in `docs/architecture/rdd-ownership-inventory.md` whose **Target disposition** is `REMOVE`, `MERGE`, or `DERIVE` — i.e., every surface the target architecture consolidates or deletes, not the two `KEEP` review-lifecycle artifacts or the five `KEEP` review-context hooks that already match the target model. None of those hooks is delivery authority; ordinary repository policy owns delivery.
 
 | Row ID(s) | Surface | Path glob |
 |---|---|---|
@@ -44,7 +44,7 @@ Frozen: any inventory row in `docs/architecture/rdd-ownership-inventory.md` whos
 - Documentation of any kind.
 - Tests that pin *existing* behavior (regression coverage on a `KEEP` row or on already-shipped behavior).
 - Wave work on the tracker chain (`feature/rdd-root-simplification` and its child PRs) — that work builds the *replacement*, it is not additive old-facade growth.
-- The two `KEEP` artifacts (ART-01 authority record, ART-02 terminal receipt) and the five `KEEP` gates (CON-01–CON-05) — ordinary maintenance and bugfixes on already-target-shaped surfaces continue.
+- The two `KEEP` review-lifecycle artifacts (ART-01 authority record, ART-02 terminal receipt) and the five `KEEP` review-context hooks (CON-01–CON-05) — ordinary maintenance and bugfixes on already-target-shaped surfaces continue. Their outputs remain informational and never govern delivery or archive.
 - CON-08 (SDD attempt-ledger) and CON-09–CON-11 (adapter dispatch) — flagged findings, not frozen surfaces; fixing their split-ownership is itself wave work.
 
 ## Proven security defect

@@ -30,7 +30,7 @@ func TestLegacyCloneOverrideStillDecides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := cloneLocalRDDModeLegacyRoot(ctx, repo)
+	legacy, err := cloneLocalRDDModeLegacyRoot(ctx, repo, false)
 	if err != nil {
 		// The legacy tree is created lazily; build it with the same helpers.
 		identity, idErr := cloneLocalRDDModeIdentity(ctx, repo)
@@ -253,7 +253,7 @@ func legacyCloneOverrideForTest(t *testing.T, ctx context.Context, repo string, 
 	if err != nil {
 		t.Fatalf("current root: %v", err)
 	}
-	legacy, err := cloneLocalRDDModeLegacyRoot(ctx, repo)
+	legacy, err := cloneLocalRDDModeLegacyRoot(ctx, repo, false)
 	if err != nil {
 		identity, identityErr := cloneLocalRDDModeIdentity(ctx, repo)
 		if identityErr != nil {

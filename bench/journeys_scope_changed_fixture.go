@@ -29,6 +29,7 @@ func scopeChangedFixtureJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j76-scope-changed-four-lens-successor",
+			Review: reviewOptedIn,
 			Title:  "Scope-changed high-risk successor: all four exact lens slots admit and reach approval",
 			Source: "issue #2618: a bounded correction recovery must not strand resilience or readability capture slots",
 			Steps: []Step{

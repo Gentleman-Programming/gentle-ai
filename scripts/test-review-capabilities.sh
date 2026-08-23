@@ -29,9 +29,9 @@ result_path = pathlib.Path(sys.argv[1])
 outside = pathlib.Path(sys.argv[2])
 document = json.loads(result_path.read_text(encoding="utf-8"))
 
-assert document["schema"] == "gentle-ai.review-integration.capabilities/v1.4"
+assert document["schema"] == "gentle-ai.review-integration.capabilities/v1.5"
 assert document["contract"] == "gentle-ai.review-integration/v1"
-assert document["protocol"] == {"major": 1, "minor": 4}
+assert document["protocol"] == {"major": 1, "minor": 5}
 assert document["gates"] == ["post-apply", "pre-commit", "pre-push", "pre-pr", "release"]
 assert document["projections"] == ["staged", "workspace"]
 assert document["executable"]["evidence"] == "self-reported"
@@ -47,6 +47,11 @@ assert features["one_shot_final_verification_retry"] == {
     "name": "one_shot_final_verification_retry",
     "supported": True,
     "requires": ["compact_v2_authority", "exact_receipt_replay", "native_next_transition"],
+}
+assert features["outcome_bound_verification_evidence"] == {
+    "name": "outcome_bound_verification_evidence",
+    "supported": True,
+    "requires": ["compact_v2_authority", "native_next_transition"],
 }
 assert features["native_frozen_candidate_context"] == {
     "name": "native_frozen_candidate_context",
@@ -84,6 +89,7 @@ assert "gentle-ai.review-targeted-validation-request/v1" in document["schemas"]
 assert "gentle-ai.review-authority-repair-assessment/v1" in document["schemas"]
 assert "gentle-ai.review-integration.repair/v1" in document["schemas"]
 assert "gentle-ai.review-final-verification-incident/v1" in document["schemas"]
+assert "gentle-ai.review-verification-evidence/v2" in document["schemas"]
 assert "review.repair" in document["operations"]
 assert "review.retry_final_verification" in document["operations"]
 assert list(outside.iterdir()) == []

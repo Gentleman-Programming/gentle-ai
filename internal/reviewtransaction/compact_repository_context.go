@@ -23,28 +23,6 @@ type CompactRepositoryContextResult struct {
 	Outcome CompactRepositoryContextOutcome
 }
 
-func compactRepositoryContextIntent(ctx context.Context, repo string, state CompactState) (CompactEffectIntent, error) {
-	statePayload, err := json.Marshal(state)
-	if err != nil {
-		return CompactEffectIntent{}, err
-	}
-	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: compactStateRevision(statePayload)}
-	identity, err := reviewRepositoryIdentity(ctx, repo)
-	if err != nil {
-		return CompactEffectIntent{}, err
-	}
-	handle := reviewRepositoryContextHandle(binding, identity)
-	payload, err := json.Marshal(reviewRepositoryContextFile{
-		Schema: ReviewRepositoryContextSchema, Handle: handle, LineageID: binding.LineageID,
-		TargetIdentity: binding.TargetIdentity, Revision: binding.Revision, RepositoryIdentity: identity.RepositoryIdentity,
-		RepositoryRoot: identity.RepositoryRoot, GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
-	})
-	if err != nil {
-		return CompactEffectIntent{}, err
-	}
-	return CompactEffectIntent{Class: CompactEffectClassRepositoryContext, Destination: handle, PayloadHash: hashPayloadBytes(payload)}, nil
-}
-
 func ReconcileCompactRepositoryContext(ctx context.Context, store CompactStore, record CompactRecord) (CompactRepositoryContextResult, error) {
 	var selected *CompactEffectIntent
 	for index := range record.EffectIntents {

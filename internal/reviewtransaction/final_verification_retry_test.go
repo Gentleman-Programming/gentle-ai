@@ -56,6 +56,9 @@ func TestRetryCompactFinalVerificationCreatesOnlyOneFrozenValidatingSuccessor(t 
 		t.Fatal(err)
 	}
 	assertFinalVerificationRetrySuccessor(t, fixture, record)
+	if _, err := createAtomicCompactAuthority(t, context.Background(), fixture.repo, record.State); !errors.Is(err, ErrInvalidSuccessor) {
+		t.Fatalf("atomic START successor claim error = %T %v", err, err)
+	}
 
 	replayed, err := RetryCompactFinalVerification(context.Background(), fixture.repo, fixture.request)
 	if err != nil || replayed.Revision != record.Revision || !compactStateEqual(replayed.State, record.State) {
@@ -658,8 +661,16 @@ func newFinalVerificationRetryFixture(t *testing.T, predecessorLineage, successo
 	t.Helper()
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, predecessorLineage)
-	store := storeCompactStartAuthority(t, repo, state)
-	entry := mustLoadCompactRecord(t, store)
+	started, err := createAtomicCompactAuthority(t, context.Background(), repo, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, predecessorLineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := started.Record
+	state = entry.State
 	if err := state.CompleteReview(CompactReviewInput{LensResults: []LensResult{}, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
 		t.Fatal(err)
 	}
@@ -887,12 +898,12 @@ func assertFinalVerificationRetrySuccessor(t *testing.T, fixture finalVerificati
 	t.Helper()
 	predecessor := fixture.predecessor.State
 	state := record.State
-	if state.LineageID != fixture.request.SuccessorLineageID || state.Generation != predecessor.Generation+1 || state.State != StateValidating || state.EvidenceHash != "" || state.Recovery == nil ||
+	if state.LineageID != fixture.request.SuccessorLineageID || state.Generation != predecessor.Generation+1 || state.State != StateValidating || state.EvidenceHash != "" || state.InitialAtomicStart != nil || state.Recovery == nil ||
 		state.Recovery.Disposition != RecoveryFinalVerificationRetry || state.Recovery.FinalVerificationRetry == nil {
 		t.Fatalf("retry successor identity/state = %#v", state)
 	}
 	want := predecessor
-	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = state.LineageID, state.Generation, StateValidating, "", state.Recovery
+	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery, want.InitialAtomicStart = state.LineageID, state.Generation, StateValidating, "", state.Recovery, nil
 	want.EvidenceRecordDigest, want.EvidenceOutcome, want.EvidenceTargetIdentity, want.EvidenceAuthorityRevision = "", "", "", ""
 	if !compactStateEqual(state, want) {
 		t.Fatalf("retry successor changed frozen authority\ngot=%#v\nwant=%#v", state, want)

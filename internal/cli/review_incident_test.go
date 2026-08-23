@@ -80,6 +80,7 @@ func TestReviewCaptureResultPreflightVerifiesBindingWithoutMutation(t *testing.T
 }
 
 func TestReviewCaptureResultInputPreflightValidatesWithoutPersistence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	wantSubject := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
@@ -190,6 +191,7 @@ func assertReviewResultDryRunMatchesPublishedSchema(t *testing.T, response []byt
 }
 
 func TestReviewCaptureResultNestedRepositoryFailsActionablyAndStaysRetriable(t *testing.T) {
+	reviewEnabledHome(t)
 	parent, child := initNestedReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(child, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -236,6 +238,7 @@ func TestReviewCaptureResultNestedRepositoryFailsActionablyAndStaysRetriable(t *
 }
 
 func TestReviewPreserveResultDurableIncidentArtifact(t *testing.T) {
+	reviewEnabledHome(t)
 	parent, child := initNestedReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(child, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -316,6 +319,7 @@ func TestReviewPreserveResultDurableIncidentArtifact(t *testing.T) {
 // held in output.output before extraction) is rejected by the strict replay
 // decoder and is not a recoverable artifact.
 func TestReviewPreservedResultReplaysThroughCaptureAndFinalize(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	extracted := string(admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0))
 	envelope := "<task id=\"lens-1\" state=\"completed\">\n<task_result>\n" + extracted + "\n</task_result>\n</task>"
@@ -423,6 +427,7 @@ func TestReviewPreserveResultRejectsUnsafeClass(t *testing.T) {
 }
 
 func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	preserve := func(t *testing.T, class string) reviewIncidentArtifact {
 		t.Helper()
@@ -488,6 +493,7 @@ func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
 // recovery capture for the same slot must be idempotent through the existing
 // store-lock + CAS in CaptureReviewerResult, with no new revision minted.
 func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	rawInput := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(rawInput, []byte("raw reviewer output\nthat is not JSON"), 0o600); err != nil {
@@ -542,6 +548,7 @@ func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 // payload) must not consume or corrupt the slot, so a subsequent retry of the
 // identical binding with the correct extracted payload succeeds and finalizes.
 func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	rawInput := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(rawInput, []byte("raw reviewer output\nthat is not JSON"), 0o600); err != nil {

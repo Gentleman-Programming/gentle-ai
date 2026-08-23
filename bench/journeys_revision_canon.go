@@ -89,6 +89,7 @@ func revisionCanonJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j62-sdd-settle-canonicalizes-unambiguous-evidence-revision",
+			Review: reviewOptedIn,
 			Title:  "Compact settle: the PowerShell uppercase digest and the canonical form settle identically",
 			Source: "issue #2523 + the maintainer scoping comment on PR #2308 (idea: @decode2; uppercase report: @adgarboc on #2294)",
 			// Expected: before the CLI-boundary canonicalization, the uppercase

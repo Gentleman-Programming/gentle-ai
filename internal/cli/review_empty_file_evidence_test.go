@@ -15,7 +15,7 @@ import (
 // real classification input -- an actual empty blob in an actual repository --
 // rather than the phrasing function in isolation.
 func TestStartDescribesAZeroByteFileAsEmptyRatherThanExecutable(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	empty := filepath.Join(repo, "EMPTY")
 	if err := os.WriteFile(empty, nil, 0o644); err != nil {

@@ -31,6 +31,7 @@ func zeroDeltaJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j72-direct-review-start-refuses-empty-candidate",
+			Review: reviewOptedIn,
 			Title:  "Direct (non-negotiated) `review start` on a clean, fully-committed worktree refuses instead of minting a zero-delta receipt",
 			Source: "issue #2586: a plain `review start` (no --contract) on a clean worktree used to create a lineage and finalize an approved receipt that inspected nothing; the empty-candidate refusal was previously negotiated-route-only",
 			Steps: []Step{
@@ -41,6 +42,7 @@ func zeroDeltaJourneys() []Journey {
 		},
 		{
 			ID:     "j101-zero-path-base-diff-stops-before-start",
+			Review: reviewOptedIn,
 			Title:  "Committed-only STATUS stops an empty base-diff instead of offering a START that preflight rejects",
 			Source: "issue #3102: #1641's authorized empty-root bootstrap reaches a base-diff whose selected base can equal the candidate; STATUS must return typed STOP, not fresh_target_ready",
 			Steps: []Step{

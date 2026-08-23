@@ -43,6 +43,7 @@ func mismatchedSubjectReviewerPayload(t *testing.T, repo string, record reviewtr
 // binding actually expects, because that is the one value the operator cannot
 // derive from the failure alone.
 func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 

@@ -16,6 +16,7 @@ import (
 )
 
 func TestReviewRetryFinalVerificationIncidentNamedFIFOCancellation(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedFinalVerificationCLIFixture(t)
 	fifo := filepath.Join(t.TempDir(), "incident.fifo")
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {

@@ -202,25 +202,6 @@ func TestApprovedStagedScopeRecoveryRejectsInvalidRequestsWithoutMutation(t *tes
 	}
 }
 
-func TestStartCompactAuthorityRejectsStagedWorkspaceOverlayRoot(t *testing.T) {
-	repo, base, predecessor, _, _ := approvedBaseDiffScopeRecoveryFixture(t, "staged-start-predecessor")
-	stageStagedScopeExtra(t, repo)
-	snapshot, err := (SnapshotBuilder{Repo: repo}).BuildStagedWorkspaceOverlayRecovery(context.Background(), Target{
-		Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := newCompactStateForStagedScopeRecovery(t, repo, predecessor, snapshot, "staged-start-root")
-	if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state}); err == nil {
-		t.Fatal("direct compact START persisted a staged workspace-overlay root")
-	}
-	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if _, err := os.Stat(store.StatePath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rejected staged root state = %v", err)
-	}
-}
-
 func TestCompactTransportRejectsStagedRecoveryFork(t *testing.T) {
 	repo, base, predecessor, _, predecessorRecord := approvedBaseDiffScopeRecoveryFixture(t, "staged-import-predecessor")
 	stageStagedScopeExtra(t, repo)
@@ -352,14 +333,11 @@ func TestCorrectionRequiredScopeRecoveryAcceptsPureGenesisContraction(t *testing
 func TestCompactStartAndStatusAdvertiseRecoverForPureGenesisContraction(t *testing.T) {
 	repo, predecessor, _, _ := correctionContractionRecoveryFixture(t, "contraction-start-predecessor")
 	writeSnapshotFile(t, repo, "deleted.txt", "delete me\n")
-	requested := newCompactTestState(t, repo, "contraction-start-probe")
-	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
 	status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
 		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: predecessor.LineageID,
 	})
-	if startErr != nil || statusErr != nil || started.Action != CompactStartRecover ||
-		status.Action != TargetStatusActionRecover || status.Replayability != ReplayabilityManualActionRequired {
-		t.Fatalf("contraction START=%#v status=%#v errors=%v/%v", started, status, startErr, statusErr)
+	if statusErr != nil || status.Action != TargetStatusActionRecover || status.Replayability != ReplayabilityManualActionRequired {
+		t.Fatalf("contraction status=%#v error=%v", status, statusErr)
 	}
 }
 
@@ -381,22 +359,17 @@ func TestCompactStartAndStatusAgreeOnApprovedScopeChangedCandidate(t *testing.T)
 			requested.InitialSnapshot.Paths, predecessor.GenesisPaths)
 	}
 
-	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
 	status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
 		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
 	})
-	if startErr != nil || statusErr != nil {
-		t.Fatalf("start error = %v, status error = %v", startErr, statusErr)
-	}
-	if started.Action != CompactStartRecover || started.Record.State.LineageID != predecessor.LineageID {
-		t.Fatalf("start = %q against %q, want %q against the approved predecessor",
-			started.Action, started.Record.State.LineageID, CompactStartRecover)
+	if statusErr != nil {
+		t.Fatalf("status error = %v", statusErr)
 	}
 	if status.Applicability != TargetApplicabilityCurrent || status.LineageID != predecessor.LineageID ||
 		status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryScopeChanged ||
 		status.Replayability != ReplayabilityManualActionRequired {
 		t.Fatalf("status routed %q/%q disposition %q lineage %q while START answers %q: the issue #1826 closed loop",
-			status.Applicability, status.Action, status.ActionDisposition, status.LineageID, started.Action)
+			status.Applicability, status.Action, status.ActionDisposition, status.LineageID, TargetStatusActionRecover)
 	}
 	selected, selectedErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
 		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: predecessor.LineageID,
@@ -431,13 +404,9 @@ func TestCompactStartAndStatusDiscoverApprovedRebasedPredecessor(t *testing.T) {
 		t.Fatalf("fixture is not a rebased equivalent target: live=%#v predecessor=%#v", requested.InitialSnapshot, predecessor.InitialSnapshot)
 	}
 
-	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
 	status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
-	if startErr != nil || statusErr != nil {
-		t.Fatalf("rebased START/STATUS errors = %v/%v", startErr, statusErr)
-	}
-	if started.Action != CompactStartRecover || started.Record.State.LineageID != predecessor.LineageID {
-		t.Fatalf("rebased START = %q lineage %q, want recovery of %q", started.Action, started.Record.State.LineageID, predecessor.LineageID)
+	if statusErr != nil {
+		t.Fatalf("rebased STATUS error = %v", statusErr)
 	}
 	if status.Applicability != TargetApplicabilityCurrent || status.Action != TargetStatusActionRecover ||
 		status.ActionDisposition != RecoveryScopeChanged || status.LineageID != predecessor.LineageID {
@@ -486,9 +455,9 @@ func TestCompactStartAndStatusIgnoreApprovedRebasedPredecessorWithPrunedCandidat
 	if beforeErr != nil || before.Applicability != TargetApplicabilityUnrelated || before.Action != TargetStatusActionStart {
 		t.Fatalf("STATUS before new review = %#v, %v", before, beforeErr)
 	}
-	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	if startErr != nil || started.Action != CompactStartCreated || started.Record.State.LineageID != requested.LineageID {
-		t.Fatalf("START = %#v, %v", started, startErr)
+	started, startErr := createAtomicCompactAuthority(t, context.Background(), repo, requested)
+	if startErr != nil || started.Replayed || started.Record.State.LineageID != requested.LineageID || started.Record.State.InitialAtomicStart == nil {
+		t.Fatalf("atomic START = %#v, %v", started, startErr)
 	}
 	after, afterErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target})
 	if afterErr != nil || after.Applicability != TargetApplicabilityCurrent || after.LineageID != requested.LineageID ||
@@ -641,12 +610,12 @@ func TestCorrectionRequiredLineageDoesNotCaptureDisjointCandidate(t *testing.T) 
 		t.Fatalf("fixture no longer shares a base tree with the predecessor")
 	}
 
-	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	started, err := createAtomicCompactAuthority(t, context.Background(), repo, requested)
 	if err != nil {
-		t.Fatalf("StartCompactAuthority() error = %v", err)
+		t.Fatalf("atomic START error = %v", err)
 	}
-	if started.Action != CompactStartCreated {
-		t.Fatalf("disjoint candidate start action = %q, want %q", started.Action, CompactStartCreated)
+	if started.Replayed {
+		t.Fatal("disjoint candidate atomic START replayed an absent lineage")
 	}
 	if started.Record.State.LineageID != requested.LineageID {
 		t.Fatalf("start bound lineage %q, want the caller's %q", started.Record.State.LineageID, requested.LineageID)

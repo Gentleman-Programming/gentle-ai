@@ -31,6 +31,7 @@ func init() {
 		Name:     compatibilityAxis,
 		Title:    "Non-negotiated, legacy-facing surfaces a real user (or a script, or an old integration) can still reach directly",
 		BlackBox: true,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Black-box: every journey drives the product's own CLI only, exactly like the core corpus; nothing product-owned is read or written.",
 			"Opt-in anyway: the core and every prior axis measure the NEGOTIATED lifecycle exclusively. This axis measures the DIRECT/manual compatibility surfaces the execution contract explicitly keeps alongside it. \"N core journeys\" and \"N plus compatibility\" must never look alike, because the whole point of #2447 is that the two populations are not interchangeable.",
@@ -217,6 +218,7 @@ func compatibilityJourneys() []Journey {
 	journeys := []Journey{
 		{
 			ID:     "cw01-direct-start-refuses-uncompletable-base-diff",
+			Review: reviewOptedIn,
 			Title:  "Direct `review start --base-ref ... --committed-only` over a real candidate refuses up front and names the negotiated exit",
 			Source: "issue #2447: the direct route created a lineage no reviewer lens could ever capture a result against, because its own response type never carries repository_context and the negotiated facade never rediscovers a lineage it did not create",
 			Steps: []Step{
@@ -227,6 +229,7 @@ func compatibilityJourneys() []Journey {
 		},
 		{
 			ID:     "cw02-hyphenated-review-start-always-refuses",
+			Review: reviewOptedIn,
 			Title:  "The hyphenated `review-start` v1-compatibility verb refuses unconditionally and names `gentle-ai review start`",
 			Source: "internal/cli/review.go RunReviewStart: \"Read-only legacy v1 compatibility command. New authority is created with gentle-ai review start.\"",
 			Steps: []Step{
@@ -237,6 +240,7 @@ func compatibilityJourneys() []Journey {
 		},
 		{
 			ID:     "cw03-negotiated-start-then-direct-cwd-capture-completes",
+			Review: reviewOptedIn,
 			Title:  "A negotiated-started review completes end to end through the direct --cwd capture/finalize path, never touching a repository-context handle",
 			Source: "review-ledger-contract.md: \"Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need --cwd\" -- the surface issue #2447's fix deliberately leaves open for direct/manual callers",
 			Steps: []Step{

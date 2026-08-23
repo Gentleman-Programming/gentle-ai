@@ -12,17 +12,14 @@ import (
 const VerifyResultSchema = "gentle-ai.verify-result/v1"
 const RemediationResultSchema = "gentle-ai.remediation-result/v1"
 const MaxVerifyReportBytes = 1 << 20
-const VerifyEmptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // VerifyReportContract is the stable, user-facing shape validated before an
 // SDD verify report is admitted. It contains no artifact or repository state.
 type VerifyReportContract struct {
-	Schema              string
-	MaxBytes            int
-	RequiredFields      []string
-	Verdicts            []string
-	AuthorityOnlyFields []string
-	EmptyOutputHash     string
+	Schema         string
+	MaxBytes       int
+	RequiredFields []string
+	Verdicts       []string
 }
 
 var verifyReportRequiredFields = []string{
@@ -31,21 +28,18 @@ var verifyReportRequiredFields = []string{
 	"build_command", "build_exit_code", "build_output_hash",
 }
 
-var verifyReportAuthorityOnlyFields = []string{
-	"authority_only_failure", "missing_review_authority", "substantive_failure",
-	"command_failed", "observed_authority_revision",
-}
+// verifyReportLegacyFields are decoder-only compatibility inputs. They are not
+// part of the current verification contract and never affect review routing.
+var verifyReportLegacyFields = []string{"missing_review_authority"}
 
 var verifyReportVerdicts = []string{"pass", "pass_with_warnings", "fail"}
 
 func VerifyReportValidationContract() VerifyReportContract {
 	return VerifyReportContract{
-		Schema:              VerifyResultSchema,
-		MaxBytes:            MaxVerifyReportBytes,
-		RequiredFields:      append([]string(nil), verifyReportRequiredFields...),
-		Verdicts:            append([]string(nil), verifyReportVerdicts...),
-		AuthorityOnlyFields: append([]string(nil), verifyReportAuthorityOnlyFields...),
-		EmptyOutputHash:     VerifyEmptyOutputHash,
+		Schema:         VerifyResultSchema,
+		MaxBytes:       MaxVerifyReportBytes,
+		RequiredFields: append([]string(nil), verifyReportRequiredFields...),
+		Verdicts:       append([]string(nil), verifyReportVerdicts...),
 	}
 }
 
@@ -61,6 +55,9 @@ type verifyCompletion struct {
 
 type verifyResultEvaluation struct {
 	Passing bool
+	// Incomplete marks evidence that did not run independent SDD test and build
+	// verification. It must re-enter verify rather than route to review.
+	Incomplete bool
 	// Stale marks internally complete evidence whose only defect is a totals
 	// mismatch against the current spec counts.
 	Stale            bool
@@ -81,7 +78,7 @@ type verifyReport struct {
 	Verdict, EvidenceRevision               string
 	Blockers, Critical, TestExit, BuildExit int
 	Requirements, Scenarios                 verifyCompletion
-	AuthorityOnly                           bool
+	LegacyMissingReview                     bool
 }
 
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -100,9 +97,18 @@ func countSpecRequirementsAndScenarios(specs []string) SpecCounts {
 func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation {
 	report, reason := parseVerifyReport(text)
 	if reason != "" {
-		return verifyResultEvaluation{Reason: reason, EvidenceRevision: report.EvidenceRevision}
+		return verifyResultEvaluation{
+			Incomplete:       true,
+			Reason:           "verification evidence is incomplete: " + reason,
+			EvidenceRevision: report.EvidenceRevision,
+		}
 	}
 	evaluation := verifyResultEvaluation{EvidenceRevision: report.EvidenceRevision}
+	if report.LegacyMissingReview {
+		evaluation.Incomplete = true
+		evaluation.Reason = "independent test and build execution evidence is incomplete; rerun SDD verification"
+		return evaluation
+	}
 	if report.TestExit != 0 {
 		evaluation.Reason = "test_exit_code must be zero for archive readiness"
 		return evaluation
@@ -174,15 +180,9 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 			result.Reason = "passing verdict contradicts failing or incomplete evidence"
 			return result
 		}
-	} else if !report.AuthorityOnly {
-		if report.TestExit == 125 || report.BuildExit == 125 {
-			result.Reason = "exit code 125 requires the exact authority-only extension"
-			return result
-		}
-		if report.TestExit == 0 && report.BuildExit == 0 && report.Blockers == 0 && report.Critical == 0 && complete {
-			result.Reason = "fail verdict is contradictory with all-green evidence"
-			return result
-		}
+	} else if report.TestExit == 0 && report.BuildExit == 0 && report.Blockers == 0 && report.Critical == 0 && complete {
+		result.Reason = "fail verdict is contradictory with all-green evidence"
+		return result
 	}
 	result.Valid, result.Reason = true, ""
 	return result
@@ -193,8 +193,8 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields))
-	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...) {
+	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportLegacyFields))
+	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportLegacyFields...) {
 		allowed[field] = true
 	}
 	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
@@ -210,15 +210,6 @@ func parseVerifyReport(text string) (verifyReport, string) {
 			return report, fmt.Sprintf("missing %s in verify result envelope", required)
 		}
 	}
-	extensionCount := 0
-	for _, field := range verifyReportAuthorityOnlyFields {
-		if _, ok := fields[field]; ok {
-			extensionCount++
-		}
-	}
-	if extensionCount != 0 && extensionCount != len(verifyReportAuthorityOnlyFields) {
-		return report, fmt.Sprintf("authority-only extension must contain exactly %d fields", len(verifyReportAuthorityOnlyFields))
-	}
 	if fields["schema"] != VerifyResultSchema {
 		return report, fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
 	}
@@ -230,7 +221,13 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {
 		return report, "test_command and build_command require concrete current execution evidence"
 	}
-	report.Verdict, report.AuthorityOnly = fields["verdict"], extensionCount != 0
+	report.Verdict = fields["verdict"]
+	if legacy, ok := fields["missing_review_authority"]; ok {
+		if legacy != "true" && legacy != "false" {
+			return report, "invalid legacy missing_review_authority field"
+		}
+		report.LegacyMissingReview = legacy == "true"
+	}
 	for _, target := range []struct {
 		name  string
 		value *int
@@ -250,16 +247,6 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	}
 	if !validVerifyReportVerdict(report.Verdict) {
 		return report, fmt.Sprintf("invalid verdict %s", report.Verdict)
-	}
-	if report.AuthorityOnly {
-		for _, pair := range [][2]string{{"authority_only_failure", "true"}, {"missing_review_authority", "true"}, {"substantive_failure", "false"}, {"command_failed", "false"}} {
-			if fields[pair[0]] != pair[1] {
-				return report, "invalid authority-only extension"
-			}
-		}
-		if report.Verdict != "fail" || report.TestExit != 125 || report.BuildExit != 125 || report.Blockers == 0 || report.Critical == 0 || fields["test_output_hash"] != VerifyEmptyOutputHash || fields["build_output_hash"] != VerifyEmptyOutputHash || !sha256IdentityPattern.MatchString(fields["observed_authority_revision"]) {
-			return report, "invalid authority-only extension"
-		}
 	}
 	return report, ""
 }

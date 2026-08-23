@@ -35,7 +35,9 @@ func TestReviewCaptureEvidenceRepositoryResolverDiagnostics(t *testing.T) {
 }
 
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
@@ -98,6 +100,7 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 }
 
 func TestReviewCaptureResultAdmitsOneJSONEnvelopeInsideProse(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	payload := admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	input := filepath.Join(t.TempDir(), "result.txt")
@@ -173,6 +176,7 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 }
 
 func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "support.go"), []byte("package support\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -252,6 +256,7 @@ func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testi
 // never match the canonical fallback ID (`R#-001`) that AdmitArtifact assigns
 // internally.
 func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	result.Findings = []facadeFinding{{
@@ -278,6 +283,7 @@ func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
 }
 
 func TestReviewCaptureResultCanonicalizesPublishedLensFormsAndRejectsExplicitInvalidValues(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("long form finding lens", func(t *testing.T) {
 		repo, started, _, record := newArtifactReview(t, false)
 		result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
@@ -330,6 +336,7 @@ func TestReviewCaptureResultCanonicalizesPublishedLensFormsAndRejectsExplicitInv
 }
 
 func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	result.Findings = []facadeFinding{{
@@ -357,7 +364,9 @@ func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *te
 }
 
 func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	tests := []struct {
 		name        string
@@ -414,6 +423,7 @@ func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) 
 }
 
 func TestReviewFinalizeArtifactFiles(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name     string
 		stdin    bool
@@ -470,7 +480,9 @@ func TestReviewFinalizeArtifactFiles(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFileSizeLimit(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	t.Run("exact limit", func(t *testing.T) {
 		repo, started, _, _, artifacts := capturedArtifacts(t, false)
@@ -492,6 +504,7 @@ func TestReviewFinalizeArtifactFileSizeLimit(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFileCancellationAndErrorPrivacy(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("active stdin read", func(t *testing.T) {
 		repo, started, store, record, artifacts := capturedArtifacts(t, false)
 		reader, writer, err := os.Pipe()
@@ -569,7 +582,9 @@ func TestReviewFinalizeArtifactFileCancellationAndErrorPrivacy(t *testing.T) {
 }
 
 func TestReviewFinalizeRejectsArtifactFileSourceMixing(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	result := filepath.Join(t.TempDir(), "result.json")
 	if err := os.WriteFile(result, []byte(`{"findings":[],"evidence":["checked"]}`), 0o600); err != nil {
@@ -598,6 +613,7 @@ func TestReviewFinalizeRejectsArtifactFileSourceMixing(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFileStdinAccounting(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifacts(t, false)
 	for _, args := range [][]string{
 		{"--result-artifact-file", "-", "--result-artifact-file", "-"},
@@ -611,7 +627,9 @@ func TestReviewFinalizeArtifactFileStdinAccounting(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFilePreservesStrictManifestValidation(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	t.Run("malformed", func(t *testing.T) {
 		repo, started, store, record := newArtifactReview(t, false)
@@ -658,7 +676,9 @@ func TestReviewFinalizeArtifactFilePreservesStrictManifestValidation(t *testing.
 }
 
 func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo, started, store, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
@@ -694,6 +714,7 @@ func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
 	}
 }
 func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	mutations := []struct {
 		name string
 		run  func(*reviewResultArtifact)
@@ -754,6 +775,7 @@ func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {
 	}
 }
 func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, true)
 	manifests := make([]string, len(record.State.SelectedLenses))
 	var wg sync.WaitGroup
@@ -868,6 +890,7 @@ func capturedArtifact(t *testing.T) (string, ReviewFacadeStartResult, reviewtran
 }
 
 func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name, wantKind, wantReason string
 		capture                    bool
@@ -1090,6 +1113,7 @@ func TestValidateReviewerResultPayloadDistinguishesErrorCodes(t *testing.T) {
 }
 
 func TestReviewCaptureResultRejectsEmptyPayload(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
 	validArgs := []string{"--cwd", repo, "--lineage", started.LineageID, "--target",
@@ -1110,6 +1134,7 @@ func TestReviewCaptureResultRejectsEmptyPayload(t *testing.T) {
 }
 
 func TestReviewCaptureResultRejectsNestedEnvelope(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
 	validArgs := []string{"--cwd", repo, "--lineage", started.LineageID, "--target",

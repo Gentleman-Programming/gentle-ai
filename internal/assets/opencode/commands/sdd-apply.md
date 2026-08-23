@@ -37,8 +37,8 @@ If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
 
 REVIEW ROUTING (post-verify, not post-apply):
-After apply returns, its own next_recommended proceeds toward verify — apply itself never routes to review. The review offer is a post-verify decision (see sdd-verify.md): once verify passes, native status may carry a `reviewOffer` block. If the parent orchestrator observes one, it begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition`. Read only `next_transition` and route only from the returned `next_transition`: for `execute`, invoke its exact operation and ordered argument tokens unchanged; for `collect`, satisfy only its exact named inputs and capture operations, then query STATUS again; for `stop`, stop without running a lifecycle operation. The parent never substitutes direct START, and the apply executor never launches review.
+After apply returns, its own next_recommended proceeds toward verify — apply itself never routes to review. The review offer is a post-verify decision (see sdd-verify.md). If the parent observes one, selectorless negotiated STATUS may preflight only the current worktree candidate. The parent executes only the exact returned START, then retains and reuses that transaction's lineage, revision, and target tokens for every subsequent STATUS, capture, and FINALIZE call. It never substitutes direct START, resumes ambient authority, or launches review from the apply executor.
 
 {{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
 
-Reuse a valid receipt; later commit/push/PR/release events only validate it.
+Approval burns its exact review authority before returning. Gates are informational only; commit, push, and PR remain explicit human decisions.

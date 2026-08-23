@@ -22,7 +22,7 @@ func TestTransitionCorpusRequiresRescopeCapability(t *testing.T) {
 			"now change the scope of the handed-off objective": false,
 		},
 		"tr10-scope-change-after-the-review-is-bound": {
-			"now move the objective the binding names": false,
+			"now move the unbound objective": false,
 		},
 	}
 

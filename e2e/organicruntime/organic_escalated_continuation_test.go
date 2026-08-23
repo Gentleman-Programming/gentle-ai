@@ -96,44 +96,23 @@ func fixOrganicEscalatedCandidate(harness *organicHarness) {
 	harness.git("add", "-A")
 }
 
-// TestOrganicEscalatedGateDenialNamesARunnableContinuation is block 1. A
-// lifecycle gate on an escalated lineage used to answer "run review.status",
-// which is both an internal identifier and a dead end: with the candidate
-// unchanged, `review status` reports action "stop" and resolves nothing.
-//
-// The denial must instead name the state honestly and hand over the one
-// continuation that exists, and this test proves it by running exactly that
-// continuation and requiring the gate to then pass.
+// TestOrganicEscalatedGateDenialNamesARunnableContinuation keeps the escalated
+// safety boundary after gates became informational. An escalated authority may
+// remain for diagnosis, but validate cannot authorize or veto delivery; changed
+// work starts a distinct transaction instead of relying on gate routing.
 func TestOrganicEscalatedGateDenialNamesARunnableContinuation(t *testing.T) {
 	harness := newOrganicHarness(t)
 	escalateOrganicCandidate(t, harness, "escalated-gate-denial")
 
-	_, stderr, err := harness.gentleAllowFailure("review", "validate", "--gate", "pre-commit")
-	if err == nil {
-		t.Fatalf("pre-commit allowed an escalated lineage")
+	gate := harness.gate("pre-commit")
+	harness.assertInvalidatedUnmanagedGate(gate)
+	if gate.Context.Denial != nil {
+		t.Fatalf("informational escalated gate retained deciding denial context: %#v", gate)
 	}
-	message := strings.TrimSpace(stderr)
-	if !strings.Contains(message, "change the candidate") {
-		t.Fatalf("escalated denial does not say the candidate has to change:\n%s", message)
-	}
-	arguments, placeholders := organicNamedCommand(t, message)
-	if len(placeholders) != 1 {
-		t.Fatalf("escalated denial named %d operator-supplied placeholders, want exactly the successor name: %v\n%s",
-			len(placeholders), placeholders, message)
-	}
-	arguments = organicFillPlaceholder(arguments, placeholders[0], "escalated-gate-denial-successor")
 
-	// Follow the message end to end: change the candidate, then run exactly
-	// what it named.
 	fixOrganicEscalatedCandidate(harness)
-	if stdout, recoverStderr, recoverErr := harness.gentleAllowFailure(arguments...); recoverErr != nil {
-		t.Fatalf("the continuation the escalated denial named failed: gentle-ai %v: %v\nstdout:\n%s\nstderr:\n%s",
-			arguments, recoverErr, stdout, recoverStderr)
-	}
-	harness.finalize("escalated-gate-denial-successor")
-	if allowed := harness.gate("pre-commit"); allowed.Result != organicGateAllow || !allowed.Allowed {
-		t.Fatalf("gate still denies after the continuation the message named: %#v", allowed)
-	}
+	fresh, _ := harness.startReview("escalated-gate-denial-fresh")
+	harness.approveReview("escalated-gate-denial-fresh", fresh)
 }
 
 // TestOrganicEscalatedRecoveryRefusalNamesWhatToChange is block 2. Recovering
@@ -179,8 +158,7 @@ func TestOrganicEscalatedRecoveryRefusalNamesWhatToChange(t *testing.T) {
 		t.Fatalf("the command the unchanged-target refusal named failed: gentle-ai %v: %v\nstdout:\n%s\nstderr:\n%s",
 			arguments, recoverErr, stdout, recoverStderr)
 	}
-	harness.finalize(lineage + "-successor")
-	if allowed := harness.gate("pre-commit"); allowed.Result != organicGateAllow || !allowed.Allowed {
-		t.Fatalf("gate still denies after the command the refusal named: %#v", allowed)
-	}
+	approved := harness.finalize(lineage + "-successor")
+	harness.assertReviewBurned(lineage+"-successor", approved)
+	harness.assertInvalidatedUnmanagedGate(harness.gate("pre-commit"))
 }

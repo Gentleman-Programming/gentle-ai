@@ -362,6 +362,7 @@ func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (s
 type reviewRepositoryContextIdentityError struct{ cause error }
 
 func (err *reviewRepositoryContextIdentityError) Error() string {
+	// refusal:by-design world-action: same claim as the errors.New twin above -- the bound Git worktree was replaced outside this product and only restoring or re-creating that exact repository resolves it.
 	return "review repository context identity changed"
 }
 

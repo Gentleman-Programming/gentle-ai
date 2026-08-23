@@ -4,13 +4,14 @@
 
 Replace the runtime-specific reviewer-transport implementations with one provider-owned Go contract for prompt construction, frozen evidence, result schema, raw-result validation, and native admission. Claude Code, OpenCode, Codex, and a future compatible runtime use thin adapters that invoke a reviewer with that contract and return its raw output. The runtime/model boundary is advisory: a runtime cannot create RDD authority, mutate a review state, mint a receipt, or decide a gate.
 
-Native Go remains the authority. After Go validates and admits a result, the existing RDD pipeline continues to decide causality, severity, blocking, refutation, correction, verification, terminal receipts, and delivery gates.
+Native Go remains the authority. After Go validates and admits a result, the existing RDD pipeline continues to decide review-lifecycle causality, severity, blocking, refutation, correction, verification, terminal receipts, and review-context evaluation. Those outputs govern review lifecycle only; ordinary repository policy and independent SDD verification govern delivery and archive.
 
 This proposal intentionally removes the OpenCode-specific premise that receipt-grade model transport requires a restarted process, a special user-visible session, an isolated child, or either `OPENCODE_DISABLE_PROJECT_CONFIG` or `OPENCODE_DISABLE_EXTERNAL_SKILLS`. Those mechanisms exist only to establish a stronger runtime transport claim than the confirmed advisory boundary requires.
 
 ### Non-goals
 
-- Do not weaken frozen-candidate construction, schema admission, candidate-causality checks, refutation, correction limits, terminal receipt authority, or delivery gates.
+- Do not weaken frozen-candidate construction, schema admission, candidate-causality checks, refutation, correction limits, terminal receipt integrity, or review-context evaluation.
+- Do not create delivery authority: review receipts, gate/context outputs, and candidate identity remain review-lifecycle evidence only.
 - Do not let a model or runtime select a lens, change a severity, accept a finding, consume a correction budget, or create a receipt.
 - Do not turn all built-in agents into supported RDD runtimes. Capability advertisement remains evidence-based.
 - Do not replace ReviewCore or rewrite the RDD lifecycle.
@@ -33,7 +34,7 @@ capture/preserve/retry]
   X --> M
   M --> A[Native capture and admission]
   A --> S[Severity, causality, refuter,
-correction, receipt, gates]
+correction, receipt, review context]
 ```
 
 The native provider already owns most of the evidence and validation. The problem is that each runtime also interprets binding data, rebuilds or carries prompt/evidence, applies its own budget/refusal rules, and sometimes captures or preserves output. OpenCode additionally establishes a process-isolation claim before it will launch a reviewer.
@@ -71,7 +72,7 @@ The following are explicit invariants, not intentions. This change must preserve
 6. Bounded correction remains bounded by the frozen correction budget and attempt rules. Transport failures do not consume correction authority.
 7. Verification planning, consent, execution, evidence, and retry rules remain unchanged.
 8. Terminal receipt issuance remains native, bound to the exact authority, candidate, results, and terminal state.
-9. Commit, push, PR, release, and other delivery gates continue to consume native receipt/gate decisions; no runtime result directly opens a gate.
+9. Commit, push, PR, release, and other ordinary delivery actions may surface native receipt/gate context as informational review evidence only; no review result or runtime result authorizes, denies, blocks, or routes delivery or archive.
 10. Fail-closed behavior remains: malformed, incomplete, mismatched, over-budget, or unavailable reviewer input produces no admitted result and no fabricated clean receipt.
 11. Historical receipt records remain readable. Existing `provider_command` and `runtime_interception` values are non-gating descriptors and must not be rewritten.
 
@@ -140,7 +141,7 @@ Delete only after the provider contract has a complete test matrix and the insta
 | `REQUIRED_ISOLATION_ENVIRONMENT`, `missingIsolationEnvironment`, `remoteInstructionsEntries`, and related docs/tests | They exist solely to sustain an immutable runtime transport claim. | Remove. Normal runtime configuration is not an admission authority under advisory transport. |
 | `ReviewerContextLevelRuntimeInterception` as a new-write path | There is no longer an adapter that replaces a caller-created context. | Keep historical read support. Decide a new non-gating common descriptor before writing new receipts. |
 
-Do not delete `reviewLensContextBlock` behavior, `ReviewerResultSchema`, `AdmitArtifact`, `CaptureAdmittedReviewerResult`, candidate-causality checks, `CompactState.CompleteReview`, verification contracts, receipt storage, or gate evaluation. Those are the native semantic pipeline, not transport duplication.
+Do not delete `reviewLensContextBlock` behavior, `ReviewerResultSchema`, `AdmitArtifact`, `CaptureAdmittedReviewerResult`, candidate-causality checks, `CompactState.CompleteReview`, verification contracts, receipt storage, or review-context evaluation. Those are the native semantic pipeline, not transport duplication; their receipts and context outputs never become delivery authority.
 
 ## Migration slices
 
@@ -175,8 +176,8 @@ No slice may advertise a runtime as shared-contract-capable while it still relie
 3. Assert candidate-caused `BLOCKER` and `CRITICAL` findings block; pre-existing, base-only, and unknown severe findings do not become candidate blockers.
 4. Assert a refuter result reaches the same native adjudication outcomes through the shared contract. Include both accepted and rejected inferential findings.
 5. Assert correction budget, correction attempt count, re-verification, and correction exhaustion are unchanged. A failed adapter call must not consume a correction budget or create a correction attempt.
-6. Assert completed review produces the same terminal receipt shape and exact gate outcomes for commit, push, PR, and release paths.
-7. Assert malformed/unavailable transport cannot issue a receipt, produce a clean result, unblock a gate, or strand a new lineage after a pre-mutation capability refusal.
+6. Assert completed review produces the same terminal receipt shape and informational review-context output for commit, push, PR, and release paths, without changing ordinary delivery or archive decisions.
+7. Assert malformed/unavailable transport cannot issue a receipt, produce a clean result, create delivery authority, or strand a new lineage after a pre-mutation capability refusal.
 
 ### Organic runtime proof
 
@@ -186,7 +187,7 @@ Run one positive and one fail-closed scenario for each advertised runtime using 
 - OpenCode: ordinary already-running session; no restart, child process, special user-visible session, or `OPENCODE_DISABLE_*` variable; valid raw result is admitted.
 - Codex: remains unavailable until a real compatible-runtime test passes both positive admission and negative malformed/stale/timeout cases.
 
-Each positive scenario must continue through receipt issuance and at least one delivery gate. Each negative scenario must prove no source, authority, correction, receipt, commit, push, PR, or release mutation.
+Each positive scenario must continue through receipt issuance and at least one informational review-context hook, then prove that its result does not control ordinary delivery or SDD archive. Each negative scenario must prove no source, authority, correction, receipt, commit, push, PR, or release mutation.
 
 ## Risks, stop conditions, and empirical questions
 
@@ -194,7 +195,7 @@ Each positive scenario must continue through receipt issuance and at least one d
 |---|---|
 | Context size differs by runtime/model | Measure request and output limits for every advertised adapter. Keep one Go budget and refuse before invocation; never silently truncate or create per-runtime hidden budgets. |
 | Adapter cannot expose raw output | Stop activation for that runtime. Do not restore an adapter-local artifact parser/capture bridge as a workaround. |
-| Shared prompt changes semantic outcomes | Stop if any lens-selection, severity, causality, refuter, correction, receipt, or gate regression differs from baseline. |
+| Shared prompt changes semantic outcomes | Stop if any lens-selection, severity, causality, refuter, correction, receipt, or review-context regression differs from baseline. |
 | Ambiguous receipt descriptor | Stop new receipt writes until the team decides whether the non-gating context-level field is omitted or extended. Preserve old values on read. |
 | OpenCode configuration injects model context | This becomes an output-quality concern, not a receipt-authority claim. It must not bypass Go validation. Do not reintroduce global disable variables merely to restore a stronger claim. |
 | Transport failure retry | Move exactly-once/retry accounting to Go. Stop if a failed invocation can consume a slot, duplicate a capture, or make a raw result unrecoverable. |
@@ -213,5 +214,5 @@ Open empirical questions:
 - [ ] Every advertised runtime has only a thin invoke-and-return-raw adapter.
 - [ ] No adapter can mint RDD authority or publish a reviewer result.
 - [ ] OpenCode uses an ordinary session with no restart, child, special session, or global disable variables.
-- [ ] Native RDD semantics and delivery gates have regression proof, including refuter and correction flows.
+- [ ] Native RDD semantics and review-context hooks have regression proof, including refuter and correction flows; no receipt or hook output controls delivery or archive.
 - [ ] Codex remains unadvertised until the shared adapter passes organic positive and negative evidence.

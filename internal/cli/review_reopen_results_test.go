@@ -17,6 +17,7 @@ import (
 )
 
 func TestReviewReopenResultsQuarantinesLegacyUnadmittedArtifactAndReplacesSlot(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, initial := newArtifactReview(t, false)
 	lens := initial.State.SelectedLenses[0]
 	legacy := facadeReviewerResult{
@@ -147,7 +148,9 @@ func TestReviewReopenResultsQuarantinesLegacyUnadmittedArtifactAndReplacesSlot(t
 }
 
 func TestReviewReopenResultsRetainsAdmittedSlotsAndRejectsCleanAuthority(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo, started, store, initial := newArtifactReview(t, true)
 	if len(initial.State.SelectedLenses) != 4 {
@@ -271,6 +274,7 @@ func TestReviewReopenResultsRetainsAdmittedSlotsAndRejectsCleanAuthority(t *test
 }
 
 func TestReviewReopenResultsQuarantinesTamperedAdmittedResultBytes(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, initial, artifact := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", mustReviewJSON(t, artifact),

@@ -2124,6 +2124,11 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agents plugin"), 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	seed := `{"theme":"user-theme","agent":{"user-helper":{"mode":"subagent","description":"preserve me"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -2151,9 +2156,35 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	}
 
 	// SDD assets should exist.
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(settingsPath); err != nil {
 		t.Errorf("expected SDD inject to create %q: %v", settingsPath, err)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	if root["theme"] != "user-theme" {
+		t.Fatalf("sync discarded unrelated theme: %#v", root["theme"])
+	}
+	agentsMap := root["agent"].(map[string]any)
+	if helper, ok := agentsMap["user-helper"].(map[string]any); !ok || helper["description"] != "preserve me" {
+		t.Fatalf("sync discarded unrelated user agent: %#v", agentsMap["user-helper"])
+	}
+	if _, ok := agentsMap["review-validator"].(map[string]any); !ok {
+		t.Fatalf("sync did not add review-validator: %#v", agentsMap)
+	}
+	orchestrator := agentsMap["gentle-orchestrator"].(map[string]any)
+	permission := orchestrator["permission"].(map[string]any)
+	allowlist := permission["task"].(map[string]any)
+	if replacement, ok := allowlist["__replace__"].(map[string]any); ok {
+		allowlist = replacement
+	}
+	if allowlist["review-validator"] != "allow" {
+		t.Fatalf("sync did not authorize gentle-orchestrator -> review-validator: %#v", allowlist)
 	}
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
 		t.Errorf("expected sync to remove legacy OpenCode plugin %q; stat err = %v", legacyPluginPath, err)
@@ -3070,16 +3101,19 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read synced OpenCode apply command: %v", err)
 	}
+	orchestrator := settings.Agent["gentle-orchestrator"].Prompt
+	postApply := string(applyPayload)
+	canonicalStatus := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition"
+
+	// Only the parent orchestrator owns canonical STATUS negotiation. It must
+	// declare OpenCode's own identity, never Claude Code's.
+	if !strings.Contains(orchestrator, canonicalStatus) {
+		t.Error("synced OpenCode orchestrator does not use canonical STATUS routing under its own runtime identity")
+	}
 	for name, content := range map[string]string{
-		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
-		"post-apply":   string(applyPayload),
+		"orchestrator": orchestrator,
+		"post-apply":   postApply,
 	} {
-		// The identity must be OpenCode's own: these are the exact bytes an
-		// OpenCode user installs, and telling them to declare claude-code is
-		// what let a false identity through the transport gate (issue #2440).
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
-			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing under its own runtime identity", name)
-		}
 		if strings.Contains(content, "--agent "+string(model.AgentClaudeCode)) {
 			t.Errorf("synced OpenCode %s controller tells an OpenCode user to declare Claude Code's identity", name)
 		}
@@ -3092,6 +3126,20 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 				t.Errorf("synced OpenCode %s controller restored direct START route %q", name, stale)
 			}
 		}
+	}
+
+	// post-apply consumes the parent's exact START and retained transaction
+	// bindings. It must not negotiate canonical STATUS a second time.
+	for _, required := range []string{
+		"parent executes only the exact returned START",
+		"retains and reuses that transaction's lineage, revision, and target tokens",
+	} {
+		if !strings.Contains(postApply, required) {
+			t.Errorf("synced OpenCode post-apply controller is missing parent-owned routing clause %q", required)
+		}
+	}
+	if strings.Contains(postApply, canonicalStatus) {
+		t.Error("synced OpenCode post-apply controller repeats canonical STATUS instead of consuming parent routing")
 	}
 }
 

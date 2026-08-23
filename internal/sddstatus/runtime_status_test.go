@@ -158,8 +158,8 @@ func TestResolveRoutesAtomicRuntimeRemediationSuccessorToFreshVerify(t *testing.
 		t.Fatal(err)
 	}
 	assertRuntimeStatusRevision(t, status, completed.Revision)
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
-		t.Fatalf("review gate = %#v, want live successor allow", status.ReviewGate)
+	if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
+		t.Fatalf("review gate = %#v, want unchanged historical review routing", status.ReviewGate)
 	}
 	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
 		t.Fatalf("atomic remediation routing: verify=%q archive=%q next=%q reasons=%v", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
@@ -293,8 +293,8 @@ func TestResolveRoutesPureEngramRuntimeRemediationSuccessorToFreshVerify(t *test
 		t.Fatalf("artifact store = %q, want Engram", status.ArtifactStore)
 	}
 	assertRuntimeStatusRevision(t, status, completed.Revision)
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow {
-		t.Fatalf("Engram review gate = %#v, want live successor allow", status.ReviewGate)
+	if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
+		t.Fatalf("Engram review gate = %#v, want unchanged historical review routing", status.ReviewGate)
 	}
 	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
 		t.Fatalf("Engram remediation routing: verify=%q archive=%q next=%q reasons=%v", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
@@ -321,8 +321,8 @@ func TestResolveDoesNotBypassMalformedFailedEvidenceWithACompletedRuntime(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.NextRecommended == "verify" || status.Dependencies.Verify == DependencyReady {
-		t.Fatalf("malformed failed evidence bypassed strict parser: %#v", status)
+	if status.NextRecommended != "verify" || status.Dependencies.Verify != DependencyReady {
+		t.Fatalf("malformed failed evidence = %#v, want independent verification retry", status)
 	}
 	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "evidence_revision") {
 		t.Fatalf("blocked reasons = %v, want preserved evidence_revision diagnostic", status.BlockedReasons)
@@ -337,7 +337,7 @@ func TestMissingEvidenceRevisionPreservesStrictParserReasonBeforeLegacyTransacti
 	verify := parseVerifyResult(report, SpecCounts{Requirements: 1, Scenarios: 1})
 	transaction := &reviewtransaction.Transaction{FailedEvidenceRevision: runtimeTestHash('e')}
 	remediation := resolveBoundedRemediation(true, false, verify, transaction, nil, "", "")
-	const want = "verify evidence cannot enter remediation: missing evidence_revision in verify result envelope"
+	const want = "verify evidence cannot enter remediation: verification evidence is incomplete: missing evidence_revision in verify result envelope"
 	if remediation.Reason != want {
 		t.Fatalf("missing evidence remediation reason = %q, want %q", remediation.Reason, want)
 	}
