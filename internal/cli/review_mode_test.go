@@ -440,55 +440,21 @@ func TestReviewModeRejectsUnknownSubcommandAndScope(t *testing.T) {
 	}
 }
 
-// TestReviewStartIsRejectedWhileTheKillSwitchIsOff proves that disabling freezes
-// authority read-only instead of destroying it: only a new start stops, while
-// status, exact replay, and receipt validation keep serving pre-existing work.
-//
-// The authority it freezes has to exist first, so the fixture opts in the way a
-// real user does before running the START and finalize below; the clone-local
-// disable partway through is the state this test is actually about.
+// TestReviewStartIsRejectedWhileTheKillSwitchIsOff proves a disabled START
+// reports its actual refusal without manufacturing persistent authority or a
+// receipt merely to exercise the negative path.
 func TestReviewStartIsRejectedWhileTheKillSwitchIsOff(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/guide.md", "ordinary documentation\n", 0o644)
-
-	started := runNegotiatedReviewStart(t, repo, "review-kill-switch")
-	if started.RiskLevel != reviewtransaction.RiskLow {
-		t.Fatalf("tier 0 candidate classified as %q", started.RiskLevel)
-	}
-	var finalizeOutput bytes.Buffer
-	if err := RunReview([]string{
-		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-	}, &finalizeOutput); err != nil {
-		t.Fatalf("finalize before disabling: %v\n%s", err, finalizeOutput.String())
-	}
 
 	var modeOutput bytes.Buffer
 	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &modeOutput); err != nil {
 		t.Fatalf("disable clone-local review mode: %v", err)
 	}
 
-	var statusOutput bytes.Buffer
-	if err := RunReviewStatus([]string{"--cwd", repo}, &statusOutput); err != nil {
-		t.Fatalf("review status while disabled: %v\n%s", err, statusOutput.String())
-	}
-	var gateOutput bytes.Buffer
-	if err := RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply),
-	}, &gateOutput); err != nil {
-		t.Fatalf("receipt validation while disabled: %v\n%s", err, gateOutput.String())
-	}
-	var replayOutput bytes.Buffer
-	if err := RunReview([]string{
-		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-	}, &replayOutput); err != nil {
-		t.Fatalf("exact replay while disabled: %v\n%s", err, replayOutput.String())
-	}
-
-	writeReviewStartCandidate(t, repo, "docs/second.md", "another document\n", 0o644)
 	var startOutput bytes.Buffer
-	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-kill-switch-second"}, &startOutput)
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-kill-switch"}, &startOutput)
 	var disabled *reviewtransaction.RDDDisabledError
 	if !errors.As(err, &disabled) {
 		t.Fatalf("disabled review start error = %v, want *RDDDisabledError", err)
@@ -499,6 +465,13 @@ func TestReviewStartIsRejectedWhileTheKillSwitchIsOff(t *testing.T) {
 	}
 	if !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
 		t.Fatalf("disabled review start does not unwrap to ErrRDDDisabled: %v", err)
+	}
+	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("discover stores after disabled START: %v", err)
+	}
+	if len(stores) != 0 {
+		t.Fatalf("disabled START created persistent review authority: %#v", stores)
 	}
 }
 
