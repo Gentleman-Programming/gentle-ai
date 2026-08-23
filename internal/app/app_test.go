@@ -1389,6 +1389,96 @@ func TestHelpCommand(t *testing.T) {
 	}
 }
 
+func TestRunArgsNoTTYRefusesBeforeTUIEffects(t *testing.T) {
+	origIsatty := isattyFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		isattyFn = origIsatty
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	tests := []struct {
+		name           string
+		stdinTerminal  bool
+		stdoutTerminal bool
+	}{
+		{name: "non-terminal stdin", stdoutTerminal: true},
+		{name: "non-terminal stdout", stdinTerminal: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var effects []string
+			isattyFn = func(fd uintptr) bool {
+				switch fd {
+				case os.Stdin.Fd():
+					return tt.stdinTerminal
+				case os.Stdout.Fd():
+					return tt.stdoutTerminal
+				default:
+					return false
+				}
+			}
+			ensureCurrentOSSupported = func() error {
+				effects = append(effects, "OS support")
+				return nil
+			}
+			detectSystem = func(context.Context) (system.DetectionResult, error) {
+				effects = append(effects, "system detection")
+				return system.DetectionResult{}, nil
+			}
+			runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+				effects = append(effects, "TUI launch")
+				return m, nil
+			}
+			deferredSyncFn = func() error {
+				effects = append(effects, "deferred sync")
+				return nil
+			}
+
+			err := RunArgs(nil, io.Discard)
+			if !errors.Is(err, ErrNoTTYForTUI) {
+				t.Fatalf("RunArgs(nil) error = %v, want ErrNoTTYForTUI", err)
+			}
+			if err != ErrNoTTYForTUI {
+				t.Fatalf("RunArgs(nil) error = %v, want exact ErrNoTTYForTUI sentinel", err)
+			}
+			for _, guidance := range []string{"--version", "gentle-ai update", "--help"} {
+				if !strings.Contains(err.Error(), guidance) {
+					t.Fatalf("RunArgs(nil) error = %q, want %q guidance", err, guidance)
+				}
+			}
+			if len(effects) != 0 {
+				t.Fatalf("RunArgs(nil) effects = %v, want none", effects)
+			}
+		})
+	}
+}
+
+func TestRunArgsInfoCommandsBypassTTYGuard(t *testing.T) {
+	origIsatty := isattyFn
+	t.Cleanup(func() { isattyFn = origIsatty })
+	isattyFn = func(uintptr) bool { return false }
+
+	for _, arg := range []string{"version", "--version", "-v", "help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunArgs([]string{arg}, &output); err != nil {
+				t.Fatalf("RunArgs(%q) error = %v", arg, err)
+			}
+			if output.Len() == 0 {
+				t.Fatalf("RunArgs(%q) produced no output", arg)
+			}
+		})
+	}
+}
+
 // TestUnknownCommandSuggestsHelp verifies that an unrecognised command returns
 // an error whose message suggests running 'gentle-ai help'.
 func TestUnknownCommandSuggestsHelp(t *testing.T) {
@@ -1532,8 +1622,16 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 	}
 }
 
+func withTerminalStreams(t *testing.T) {
+	t.Helper()
+	origIsatty := isattyFn
+	isattyFn = func(uintptr) bool { return true }
+	t.Cleanup(func() { isattyFn = origIsatty })
+}
+
 func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	// NOTE: modifies package-level vars; must not run in parallel.
+	withTerminalStreams(t)
 	origSelfUpdate := selfUpdateFn
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
@@ -2023,6 +2121,7 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	withTerminalStreams(t)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
@@ -2064,6 +2163,7 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 // state.json has PendingSync=true, RunArgs (TUI path / no args) calls
 // the deferred sync runner and writes PendingSync=false on success.
 func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2127,6 +2227,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2192,6 +2293,7 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2255,6 +2357,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2313,6 +2416,7 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 // post-upgrade state. Per #1901, this reuses the existing PendingSync signal
 // rather than introducing a new persisted flag.
 func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2366,6 +2470,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
 // the doctor advisory is printed regardless of deferred sync outcome. The
 // advisory is informational and complements the sync outcome (not a replacement).
 func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2419,6 +2524,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T)
 // doctor advisory is NOT printed on a normal launch where PendingSync=false.
 // The advisory is gated strictly on the post-upgrade signal.
 func TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory(t *testing.T) {
+	withTerminalStreams(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 

@@ -892,6 +892,29 @@ func TestDefaultPromptForUpdate_NonTTY_AutoDeclines(t *testing.T) {
 	}
 }
 
+func TestRecognizedTerminal(t *testing.T) {
+	tests := []struct {
+		name   string
+		native bool
+		cygwin bool
+		want   bool
+	}{
+		{name: "neither terminal"},
+		{name: "native terminal", native: true, want: true},
+		{name: "Cygwin or MSYS2 terminal", cygwin: true, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			native := func(uintptr) bool { return tt.native }
+			cygwin := func(uintptr) bool { return tt.cygwin }
+			if got := recognizedTerminal(0, native, cygwin); got != tt.want {
+				t.Fatalf("recognizedTerminal() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDefaultPromptForUpdate_EmptyInput_AcceptsDefault verifies that pressing Enter
 // (empty input) accepts the default Y. Task 5.6.
 func TestDefaultPromptForUpdate_EmptyInput_AcceptsDefault(t *testing.T) {

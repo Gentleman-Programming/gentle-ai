@@ -31,6 +31,10 @@ import (
 // Version is set from main via ldflags at build time.
 var Version = "dev"
 
+// ErrNoTTYForTUI is returned when the interactive route cannot use both
+// process streams as terminals.
+var ErrNoTTYForTUI = errors.New("gentle-ai: interactive mode requires terminal stdin and stdout; use --version, 'gentle-ai update', or --help instead")
+
 var (
 	updateCheckAll            = update.CheckAll
 	updateCheckFiltered       = update.CheckFiltered
@@ -56,6 +60,10 @@ var (
 		return err
 	}
 )
+
+func tuiStreamsAreTerminals() bool {
+	return isattyFn(os.Stdin.Fd()) && isattyFn(os.Stdout.Fd())
+}
 
 func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
@@ -133,6 +141,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 				return nil
 			}
 		}
+	}
+
+	// No arguments select the interactive TUI. Refuse before parsing, platform
+	// detection, persisted effects, or model construction when either process
+	// stream cannot support that route.
+	if len(args) == 0 && !tuiStreamsAreTerminals() {
+		return ErrNoTTYForTUI
 	}
 
 	// Issue #535: parse the upgrade command's arguments exactly once, before
