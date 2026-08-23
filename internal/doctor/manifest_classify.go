@@ -15,8 +15,7 @@ import (
 // ErrUnknownClassification is returned by RunDoctor when the manifest cannot
 // be read or Classify reports "unknown" — the only classification that
 // indicates a real failure mode (legacy install, missing data, interrupted
-// run). The CLI maps this to a non-zero exit code per design "Exit code
-// mapping".
+// run). The CLI maps this to a non-zero exit code.
 var ErrUnknownClassification = errors.New("managed assets classification is unknown")
 
 // Kind enumerates the five doctor classification outcomes. Exactly one is
@@ -34,7 +33,7 @@ const (
 // Classification is the read-only outcome of classifying the binary-vs-bundle
 // state. Hint is non-nil only when classification + ownership make the remedy
 // safe to advertise. An overwrite hint MUST NEVER accompany UserModified or
-// Unknown per AC7.
+// Unknown.
 type Classification struct {
 	Kind Kind
 	Hint *Remedy
@@ -44,16 +43,11 @@ type Classification struct {
 // against the running binary version. Pure: it never mutates the manifest,
 // the on-disk resources, or the journal.
 //
-// Decision order (matches design.md "Doctor Classification Algorithm"):
-//  1. No manifest → Unknown ("legacy install; run `gentle-ai sync`"). (AC10)
-//  2. Journal shows an interrupted run → Unknown ("never `aligned`"). (AC8)
-//  3. Any user-owned resource with a digests mismatch → UserModified,
-//     no hint (AC7).
-//  4. Binary is newer than manifest producer AND owned-extent digests all
-//     match desired → Mixed (AC5: Refresh 8 binary over 2.1.10 bundle).
-//  5. Binary equals manifest producer AND owned-extent digests all match
-//     desired → Aligned.
-//  6. Otherwise → Stale (older bytes on disk; sync would re-place them).
+// The first two checks return Unknown with a sync hint (the only hint that
+// is safe to advertise). Otherwise the kind is derived from the digest and
+// version comparison below. UserModified always wins over Mixed/Aligned/Stale
+// when any user-owned resource has drifted, and never carries an overwrite
+// hint — sync must not rewrite what the user owns.
 func Classify(m state.Manifest, journal []state.JournalEntry, binaryVersion string) Classification {
 	if isAbsentManifest(m) {
 		return Classification{Kind: Unknown, Hint: NewRemedy(RemedySync, "legacy install: no manifest; run `gentle-ai sync`")}
@@ -85,7 +79,7 @@ func Classify(m state.Manifest, journal []state.JournalEntry, binaryVersion stri
 	}
 
 	if anyUserModified {
-		// AC7: never advertise an overwrite for user-owned resources.
+		// Never advertise an overwrite for user-owned resources.
 		return Classification{Kind: UserModified}
 	}
 

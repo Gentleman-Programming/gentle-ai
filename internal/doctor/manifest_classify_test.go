@@ -15,7 +15,7 @@ import (
 )
 
 // oneResourceManifest builds a manifest with a single ManifestResource entry
-// for the AC11-classification tests. The bundle digest is computed from the
+// for the classification tests. The bundle digest is computed from the
 // canonicalised producer + resource so it stays stable across runs.
 func oneResourceManifest(producerVersion, id, adapter, target string, ext state.OwnedExtent, desiredDigest string) state.Manifest {
 	return state.Manifest{
@@ -38,7 +38,7 @@ func sha256Hex(content []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// TestClassify_FullFileAligned covers AC11 — full-file shape where the owned
+// TestClassify_FullFileAligned asserts the full-file shape where the owned
 // extent (the entire file) matches the desired digest yields "aligned".
 func TestClassify_FullFileAligned(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "managed.md")
@@ -55,9 +55,9 @@ func TestClassify_FullFileAligned(t *testing.T) {
 	}
 }
 
-// TestClassify_MarkerBlockAlignedWithUserEditsOutside covers AC11 — a
-// marker-block managed region whose block digest matches desired is "aligned"
-// even when the surrounding file differs from desired.
+// TestClassify_MarkerBlockAlignedWithUserEditsOutside asserts a marker-block
+// managed region whose block digest matches desired is "aligned" even when
+// the surrounding file differs from desired.
 func TestClassify_MarkerBlockAlignedWithUserEditsOutside(t *testing.T) {
 	const preamble = "PREAMBLE\n"
 	const managed = "managed-block-bytes\n"
@@ -83,7 +83,7 @@ func TestClassify_MarkerBlockAlignedWithUserEditsOutside(t *testing.T) {
 	}
 }
 
-// TestClassify_SharedJsonUserModified covers AC11 — when ownership is "user"
+// TestClassify_SharedJsonUserModified asserts that when ownership is "user"
 // and the on-disk bytes differ from desired, classification is "user_modified".
 func TestClassify_SharedJsonUserModified(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "shared.json")
@@ -103,8 +103,8 @@ func TestClassify_SharedJsonUserModified(t *testing.T) {
 	}
 }
 
-// TestClassify_UserEditedOwnedExtentUserModified covers AC11 — user-edited
-// owned extent on a user-owned resource is "user_modified", not "stale".
+// TestClassify_UserEditedOwnedExtentUserModified asserts a user-edited owned
+// extent on a user-owned resource is "user_modified", not "stale".
 func TestClassify_UserEditedOwnedExtentUserModified(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "user-edited.md")
 	if err := os.WriteFile(target, []byte("user-edited"), 0o644); err != nil {
@@ -124,9 +124,9 @@ func TestClassify_UserEditedOwnedExtentUserModified(t *testing.T) {
 	}
 }
 
-// TestClassify_Refresh8Over2_1_10IsMixed covers AC5 — Refresh 8 binary over a
-// 2.1.10 managed bundle, with all owned-extent digests matching desired,
-// MUST classify as "mixed", never "aligned".
+// TestClassify_Refresh8Over2_1_10IsMixed asserts that a Refresh 8 binary over
+// a 2.1.10 managed bundle, with all owned-extent digests matching desired,
+// classifies as "mixed", never "aligned".
 func TestClassify_Refresh8Over2_1_10IsMixed(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "managed.md")
 	const content = "managed-bytes"
@@ -139,14 +139,14 @@ func TestClassify_Refresh8Over2_1_10IsMixed(t *testing.T) {
 
 	got := Classify(m, nil, "2.2.0-refresh.8").Kind
 	if got == Aligned {
-		t.Fatalf("Kind = aligned, want NOT aligned (Refresh 8 binary over 2.1.10 managed bundle per AC5)")
+		t.Fatalf("Kind = aligned, want NOT aligned (Refresh 8 binary over 2.1.10 managed bundle)")
 	}
 	if got != Mixed {
 		t.Errorf("Kind = %q, want mixed (owned-extent digests match desired; new binary)", got)
 	}
 }
 
-// TestClassify_NoManifestUnknown covers AC10 — when no manifest is present,
+// TestClassify_NoManifestUnknown asserts that when no manifest is present,
 // classification is "unknown" with a sync migration hint, never "aligned".
 func TestClassify_NoManifestUnknown(t *testing.T) {
 	got := Classify(state.Manifest{}, nil, "2.2.0")
@@ -158,7 +158,7 @@ func TestClassify_NoManifestUnknown(t *testing.T) {
 	}
 }
 
-// TestClassify_InterruptedJournalUnknownNotAligned covers AC8 — a journal
+// TestClassify_InterruptedJournalUnknownNotAligned asserts that a journal
 // with an "intent" entry that has no matching "complete" signals an
 // interrupted run; classification is "unknown", never "aligned".
 func TestClassify_InterruptedJournalUnknownNotAligned(t *testing.T) {
@@ -173,16 +173,16 @@ func TestClassify_InterruptedJournalUnknownNotAligned(t *testing.T) {
 
 	got := Classify(m, []state.JournalEntry{{Op: "intent", RunID: "sync-123"}}, "2.2.0").Kind
 	if got == Aligned {
-		t.Fatalf("Kind = aligned, want NOT aligned (interrupted journal per AC8)")
+		t.Fatalf("Kind = aligned, want NOT aligned (interrupted journal)")
 	}
 	if got != Unknown {
 		t.Errorf("Kind = %q, want unknown", got)
 	}
 }
 
-// TestClassify_ReadOnly_NoWriteHelpersExported covers AC6 — the doctor
-// package must NOT expose any Write/Append helpers. Statically scans the
-// package's exported FuncDecls.
+// TestClassify_ReadOnly_NoWriteHelpersExported asserts the doctor package
+// does NOT expose any Write/Append helpers. Statically scans the package's
+// exported FuncDecls.
 func TestClassify_ReadOnly_NoWriteHelpersExported(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ParseComments)
@@ -207,8 +207,8 @@ func TestClassify_ReadOnly_NoWriteHelpersExported(t *testing.T) {
 	}
 }
 
-// TestClassify_RemedySuppressedForUserModified covers AC7 — user_modified
-// MUST NOT emit a remediation hint.
+// TestClassify_RemedySuppressedForUserModified asserts that user_modified
+// does NOT emit a remediation hint.
 func TestClassify_RemedySuppressedForUserModified(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "user-edited.md")
 	if err := os.WriteFile(target, []byte("user-edited"), 0o644); err != nil {
@@ -224,19 +224,19 @@ func TestClassify_RemedySuppressedForUserModified(t *testing.T) {
 		t.Fatalf("Kind = %q, want user_modified", c.Kind)
 	}
 	if c.Hint != nil {
-		t.Errorf("Hint must be nil for user_modified (AC7); got %+v", c.Hint)
+		t.Errorf("Hint must be nil for user_modified; got %+v", c.Hint)
 	}
 }
 
-// TestClassify_RemedySuppressedForUnknown covers AC7 + AC10 — unknown MUST
-// NOT emit an overwrite hint that would clobber unclassified bytes.
+// TestClassify_RemedySuppressedForUnknown asserts that unknown does NOT
+// emit an overwrite hint that would clobber unclassified bytes.
 func TestClassify_RemedySuppressedForUnknown(t *testing.T) {
 	c := Classify(state.Manifest{}, nil, "2.2.0")
 	if c.Kind != Unknown {
 		t.Fatalf("Kind = %q, want unknown", c.Kind)
 	}
 	// "unknown" must not guarantee that a sync is ownership-safe; any hint
-	// present is informational and may be the migration hint from AC10.
+	// present is informational and may be the migration hint.
 	if c.Hint != nil && c.Hint.Category == "" {
 		t.Errorf("unknown hint missing category: %+v", c.Hint)
 	}

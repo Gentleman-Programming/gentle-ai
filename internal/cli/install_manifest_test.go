@@ -8,9 +8,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
-// TestInstallWritesManifestOnDurableSuccess covers AC1 — a successful
-// install MUST persist the gentle-ai.managed-assets/v1 manifest with
-// producer identity matching the running binary version.
+// TestInstallWritesManifestOnDurableSuccess asserts a successful install
+// persists the gentle-ai.managed-assets/v1 manifest with producer identity
+// matching the running binary version.
 func TestInstallWritesManifestOnDurableSuccess(t *testing.T) {
 	home := t.TempDir()
 	swapPackageVars(t, "2.2.0-test", "abc1234")
@@ -38,9 +38,9 @@ func TestInstallWritesManifestOnDurableSuccess(t *testing.T) {
 	}
 }
 
-// TestInstallJournalIntentPrecedesMutation covers AC8 — the journal MUST
-// record the "intent" entry before any resource is mutated, and the
-// "complete" entry only after the publish succeeds.
+// TestInstallJournalIntentPrecedesMutation asserts the journal records
+// the "intent" entry before any resource is mutated, and the "complete"
+// entry only after the publish succeeds.
 func TestInstallJournalIntentPrecedesMutation(t *testing.T) {
 	home := t.TempDir()
 	swapPackageVars(t, "2.2.0-test", "")

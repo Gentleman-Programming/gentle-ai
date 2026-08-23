@@ -12,10 +12,10 @@ import (
 var ProducerCommit = "unknown"
 
 // PublishInstallManagedAssetsManifest executes the install-side slice of the
-// atomic-commit protocol described in design.md: persist install state,
-// write the gentle-ai.managed-assets/v1 manifest, and journal intent + complete
-// entries around the work so a crash between the two never reports a false
-// `aligned` to doctor (AC1, AC8).
+// atomic-commit protocol: persist install state, write the
+// gentle-ai.managed-assets/v1 manifest, and journal intent + complete entries
+// around the work so a crash between the two never reports a false `aligned`
+// to doctor.
 //
 // The caller passes a unique runID so a parallel or repeated install does not
 // conflate journal entries across runs.
@@ -33,7 +33,7 @@ func PublishInstallManagedAssetsManifest(homeDir string, newState state.InstallS
 // wiring: it journals intent, persists the sync state with the resolved
 // OpenCode/Pi background intents, writes the manifest, and journals
 // complete. Used by RunSync so the sync state AND the manifest are
-// published as a single durably-committed unit (#1884, AC1, AC8).
+// published as a single durably-committed unit.
 func PublishSyncManagedAssetsManifestWithBackground(homeDir string, selection model.Selection, writer, runID string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent) error {
 	if err := state.AppendJournal(homeDir, "intent", runID, ""); err != nil {
 		return err

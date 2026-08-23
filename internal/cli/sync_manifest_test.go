@@ -7,9 +7,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
-// TestSyncWritesManifestOnDurableSuccess covers AC1 — a successful sync MUST
-// persist the gentle-ai.managed-assets/v1 manifest with producer identity
-// matching the running binary version.
+// TestSyncWritesManifestOnDurableSuccess asserts a successful sync persists
+// the gentle-ai.managed-assets/v1 manifest with producer identity matching
+// the running binary version.
 func TestSyncWritesManifestOnDurableSuccess(t *testing.T) {
 	home := t.TempDir()
 	swapPackageVars(t, "2.2.0-test", "feedbeef")
@@ -28,9 +28,9 @@ func TestSyncWritesManifestOnDurableSuccess(t *testing.T) {
 	}
 }
 
-// TestSyncInterruptedNeverPublishesAligned covers AC8 — when a sync run is
+// TestSyncInterruptedNeverPublishesAligned asserts that when a sync run is
 // interrupted (journal has an "intent" with no matching "complete"), doctor
-// MUST classify the bundle as "unknown", never "aligned".
+// classifies the bundle as "unknown", never "aligned".
 func TestSyncInterruptedNeverPublishesAligned(t *testing.T) {
 	home := t.TempDir()
 	swapPackageVars(t, "2.2.0-test", "")
@@ -51,8 +51,8 @@ func TestSyncInterruptedNeverPublishesAligned(t *testing.T) {
 	}
 }
 
-// TestSyncLegacyNoManifestWritesOneShot covers AC10 — a sync run on a legacy
-// install (state.json present but no manifest) MUST write the manifest on
+// TestSyncLegacyNoManifestWritesOneShot asserts a sync run on a legacy
+// install (state.json present but no manifest) writes the manifest on
 // durable success, never corrupting prior state.
 func TestSyncLegacyNoManifestWritesOneShot(t *testing.T) {
 	home := t.TempDir()
@@ -97,8 +97,8 @@ func readJournalForTest(t *testing.T, home string) []state.JournalEntry {
 	return entries
 }
 
-// interruptedRunDetected mirrors the doctor-level heuristic for AC8: any
-// "intent" without a matching "complete" on the same run_id, OR any explicit
+// interruptedRunDetected mirrors the doctor-level heuristic: any "intent"
+// without a matching "complete" on the same run_id, OR any explicit
 // "interrupted" marker.
 func interruptedRunDetected(entries []state.JournalEntry) bool {
 	intent, complete, interrupted := map[string]bool{}, map[string]bool{}, false

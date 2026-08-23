@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// TestManifestRoundTrip covers AC1 (manifest persisted), AC2 (identity
-// reproducible), AC3 (resources carry stable ID, owned_extent, desired and
-// observed digests).
+// TestManifestRoundTrip asserts the manifest round-trips through Read/Write
+// with the producer identity preserved and resources carrying stable ID,
+// owned_extent, desired and observed digests.
 func TestManifestRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	original := Manifest{
@@ -39,8 +39,9 @@ func TestManifestRoundTrip(t *testing.T) {
 	}
 }
 
-// TestBundleDigestExcludesObserved covers AC2 — observed digest updates must
-// not change the bundle identity (only desired is part of the canonical identity).
+// TestBundleDigestExcludesObserved asserts that observed digest updates
+// do not change the bundle identity (only desired is part of the
+// canonical identity).
 func TestBundleDigestExcludesObserved(t *testing.T) {
 	base := Manifest{
 		Schema: ManifestSchema, Producer: Producer{BinaryVersion: "2.2.0"},
@@ -62,8 +63,8 @@ func TestBundleDigestExcludesObserved(t *testing.T) {
 	}
 }
 
-// TestBundleDigestChangesWhenDesiredChanges covers AC2 — bundle digest MUST
-// change when owned_extent or desired changes.
+// TestBundleDigestChangesWhenDesiredChanges asserts the bundle digest
+// changes when owned_extent or desired changes.
 func TestBundleDigestChangesWhenDesiredChanges(t *testing.T) {
 	base := Manifest{
 		Schema: ManifestSchema, Producer: Producer{BinaryVersion: "2.2.0"},
@@ -86,7 +87,7 @@ func TestBundleDigestChangesWhenDesiredChanges(t *testing.T) {
 	}
 }
 
-// TestJournalAppendAndRead covers AC8 — co-located journal records
+// TestJournalAppendAndRead asserts the co-located journal records
 // intent/complete entries for atomic-commit tracking.
 func TestJournalAppendAndRead(t *testing.T) {
 	home := t.TempDir()
@@ -119,7 +120,7 @@ func TestJournalAppendAndRead(t *testing.T) {
 	}
 }
 
-// TestJournalCapTruncates covers AC8 — journal capped at 1 MiB with a
+// TestJournalCapTruncates asserts the journal is capped at 1 MiB with a
 // single "truncated" marker replacing older entries.
 func TestJournalCapTruncates(t *testing.T) {
 	home := t.TempDir()
