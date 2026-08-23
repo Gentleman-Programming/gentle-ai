@@ -23,6 +23,7 @@ func init() {
 		Name:     openCodeNativeFallbackAxis,
 		Title:    "OpenCode native fallback model persistence and delegation",
 		BlackBox: false,
+		Review:   reviewUntouched,
 		Properties: []string{
 			"Seeds isolated install state, drives candidate sync, then invokes gentle-orchestrator through OpenCode's native task boundary without a call-site model override.",
 			"Requires a PATH-visible pinned OpenCode 1.18.4 runtime; it is unsupported rather than silently substituting another runtime.",
@@ -34,6 +35,7 @@ func init() {
 func openCodeNativeFallbackJourneys() []Journey {
 	return []Journey{{
 		ID:     "oc01-native-fallback-model-persistence",
+		Review: reviewUntouched,
 		Title:  "Sync persists sdd-mid defaults and gentle-orchestrator delegates to native general and explore roles",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2104",
 		Steps: []Step{
