@@ -127,7 +127,9 @@ mem_search(query: "sdd/{change-name}/", project: "{project}")
 
 ## Project Name Resolution (engram v1.11.0+)
 
-Follow `engram-project-identity.md`: before explicit project-scoped Engram work, call `mem_current_project` once when it is callable and reuse its returned canonical `project`. Do not derive this value from the workspace basename. Engram auto-detects the project name from the Git remote at MCP startup; the `--project` flag and `ENGRAM_PROJECT` environment variable can override detection. All project names are normalized to lowercase and trimmed.
+Follow `engram-project-identity.md`: before explicit project-scoped Engram work, call `mem_current_project` once when it is callable and reuse its returned canonical `project`. Do not derive this value from the workspace basename. `ENGRAM_PROJECT`, `--project`, and lowercase/trim normalization are resolver inputs or behavior only before `mem_current_project` returns.
+
+After canonical resolution, every explicit Engram call and phase handoff MUST reuse the cached project unchanged. Do not re-override, renormalize, rediscover, or substitute the workspace basename.
 
 If the agent saves a memory under a project name that doesn't match existing observations, engram warns about potential name drift. Use `mem_merge_projects` (MCP tool) or `engram projects consolidate` (CLI) to merge variants.
 
