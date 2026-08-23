@@ -110,9 +110,9 @@ Before starting work, check for existing apply-progress:
 
 #### Remediation Context
 
-Review-derived or verification-derived remediation runs in a fresh provider executor/model context. Use the forwarded change name; spec, design, and tasks references; full merged apply-progress; exact findings and affected paths; and exact remediation binding as the continuity source. Do not request the prior provider context or `task_id`.
+Review-derived or verification-derived remediation runs in a fresh provider executor/model context. Omit the prior provider `task_id` by default. Use the forwarded change name; spec, design, and tasks references; full merged apply-progress; exact findings and affected paths; and exact remediation binding as the continuity source.
 
-Fresh executor identity does not replace native authority: preserve `lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token` when they identify the same bounded remediation attempt. Review-triggered remediation does not resume by default. A resumed provider context is allowed only for an uninterrupted implementation work unit needing volatile unpersisted state, or an explicit user request, and its launch prompt must state the concrete reason. Providers without resumable delegated-task identity use this artifact-first handoff; add no synthetic task identity, state, flag, gate, or runtime verb.
+Fresh executor identity does not replace native authority: preserve `lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token` when they identify the same bounded remediation attempt. Forward or reuse the prior provider `task_id` only for a justified continuation of the exact same uninterrupted edit operation needing volatile unpersisted state, or an explicit user request; the launch prompt must state the concrete reason. Review-triggered remediation does not resume by default. Providers without resumable delegated-task identity use this artifact-first handoff; add no synthetic task identity, state, flag, gate, or runtime verb.
 
 ### Step 3: Read Testing Capabilities and Resolve Mode
 
@@ -311,9 +311,9 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
 - Focused remediation is the sole `all_done` exception and must bind both evidence blocks to the exact lineage_id, generation, fix_batch, and failed_evidence_revision from native status
-- Review-derived or verification-derived remediation uses a fresh provider executor/model context. If the provider exposes resumable task identity, do not request the prior apply `task_id`.
+- Review-derived or verification-derived remediation uses a fresh provider executor/model context. Omit the prior provider `task_id` by default.
 - Forward the change name; spec, design, and tasks references; full merged apply-progress; exact findings and affected paths; and exact remediation binding. Preserve `lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token` for the same bounded remediation attempt.
-- Resume a provider context only for an uninterrupted implementation work unit needing volatile unpersisted state, or an explicit user request, and the launch prompt must state the concrete reason. Review-triggered remediation does not resume by default.
+- Forward or reuse the prior provider `task_id` only for a justified continuation of the exact same uninterrupted edit operation needing volatile unpersisted state, or an explicit user request; the launch prompt must state the concrete reason. Review-triggered remediation does not resume by default.
 - The launch fingerprint includes the exact remediation binding, including `fix_batch` and `failed_evidence_revision`. Providers without resumable delegated-task identity use the artifact-first handoff; add no synthetic task identity, state, flag, gate, or runtime verb.
 
 ## Steps

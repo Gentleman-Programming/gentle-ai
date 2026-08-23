@@ -459,7 +459,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// nonterminal, preventing false task-result failures and session latches.
 	// #1013 adds fresh-remediation policy to the embedded OpenCode orchestrator,
 	// so Kilocode's rendered settings hash deliberately moves.
-	const want = "9816da6bb75aee8e0a5f5a0d4537de868eeb6b9d2ed1ee9084fe384fd9d0ffaa"
+	const want = "3609cc48f99d85ae1693ae677f25e0bd28e7f484011d5fc948e44a10e7d31149"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

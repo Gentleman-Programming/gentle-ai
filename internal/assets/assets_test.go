@@ -1302,23 +1302,28 @@ func TestSDDApplyRemediationUsesFreshExecutorContext(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.path, func(t *testing.T) {
-			content := MustRead(tc.path)
+			section := markdownSection(MustRead(tc.path), "Remediation Executor Context (MANDATORY)")
+			if section == "" {
+				t.Fatalf("%s missing remediation executor context section", tc.path)
+			}
 			for _, required := range []string{
 				"fresh provider executor/model context",
-				"do not forward the prior apply `task_id`",
+				"Omit the prior provider `task_id` by default",
 				"full merged apply-progress",
 				"exact findings and affected paths",
 				"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
-				"uninterrupted implementation work unit",
+				"Forward or reuse the prior provider `task_id` only for a justified continuation",
+				"justified continuation of the exact same uninterrupted edit operation",
 				"explicit user request",
 				"concrete reason",
 				"Review-triggered remediation does not resume by default",
 				"fix_batch",
 				"failed_evidence_revision",
 				"Providers without resumable delegated-task identity",
+				"Add no synthetic task identity, state, flag, gate, or runtime verb.",
 				tc.context,
 			} {
-				if !strings.Contains(content, required) {
+				if !strings.Contains(section, required) {
 					t.Fatalf("%s missing fresh-remediation executor policy %q", tc.path, required)
 				}
 			}
@@ -1326,21 +1331,33 @@ func TestSDDApplyRemediationUsesFreshExecutorContext(t *testing.T) {
 	}
 
 	applySkill := MustRead("skills/sdd-apply/SKILL.md")
-	for _, required := range []string{
-		"fresh provider executor/model context",
-		"task_id",
-		"full merged apply-progress",
-		"exact findings and affected paths",
-		"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
-		"uninterrupted implementation work unit",
-		"explicit user request",
-		"concrete reason",
-		"Review-triggered remediation does not resume by default",
-		"Providers without resumable delegated-task identity",
+	for _, tc := range []struct {
+		name, start, end string
+	}{
+		{"model-capable", "<!-- section:model-capable -->", "<!-- /section:model-capable -->"},
+		{"model-small", "<!-- section:model-small -->", "<!-- /section:model-small -->"},
 	} {
-		if got := strings.Count(applySkill, required); got != 2 {
-			t.Fatalf("skills/sdd-apply/SKILL.md fresh-remediation policy %q occurs %d times, want 2 model sections", required, got)
-		}
+		t.Run("skills/sdd-apply/"+tc.name, func(t *testing.T) {
+			section := markdownDelimitedSection(applySkill, tc.start, tc.end)
+			for _, required := range []string{
+				"fresh provider executor/model context",
+				"Omit the prior provider `task_id` by default",
+				"full merged apply-progress",
+				"exact findings and affected paths",
+				"lineage_id, generation, fix_batch, failed_evidence_revision, and exact active attempt token",
+				"Forward or reuse the prior provider `task_id` only for a justified continuation",
+				"justified continuation of the exact same uninterrupted edit operation",
+				"explicit user request",
+				"concrete reason",
+				"Review-triggered remediation does not resume by default",
+				"Providers without resumable delegated-task identity",
+				"add no synthetic task identity, state, flag, gate, or runtime verb",
+			} {
+				if !strings.Contains(section, required) {
+					t.Fatalf("skills/sdd-apply/%s missing fresh-remediation policy %q", tc.name, required)
+				}
+			}
+		})
 	}
 }
 
@@ -2232,6 +2249,19 @@ func markdownSection(content, heading string) string {
 		if next := strings.Index(section[len(heading):], levelHeading); next != -1 {
 			end = min(end, len(heading)+next)
 		}
+	}
+	return section[:end]
+}
+
+func markdownDelimitedSection(content, startMarker, endMarker string) string {
+	start := strings.Index(content, startMarker)
+	if start == -1 {
+		return ""
+	}
+	section := content[start+len(startMarker):]
+	end := strings.Index(section, endMarker)
+	if end == -1 {
+		return ""
 	}
 	return section[:end]
 }
