@@ -26,7 +26,7 @@ func TestReviewRetiredVerbAdvisoryIsUnknownCommand(t *testing.T) {
 		runReviewCLIGit(t, repo, "rev-parse", "HEAD"),
 		runReviewCLIGit(t, repo, "diff", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"),
 	}
-	authorityBefore := cliReviewAuthoritySnapshot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
 
 	tests := []struct {
 		name string
@@ -55,7 +55,7 @@ func TestReviewRetiredVerbAdvisoryIsUnknownCommand(t *testing.T) {
 			}; sourceAfter != sourceBefore {
 				t.Fatalf("retired verb advisory mutated tracked source: before=%q after=%q", sourceBefore, sourceAfter)
 			}
-			if authorityAfter := cliReviewAuthoritySnapshot(t, repo); !reflect.DeepEqual(authorityAfter, authorityBefore) {
+			if authorityAfter := snapshotAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(authorityAfter, authorityBefore) {
 				t.Fatalf("retired verb advisory mutated review authority: before=%#v after=%#v", authorityBefore, authorityAfter)
 			}
 		})

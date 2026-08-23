@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define how SDD consumes RDD review outcomes as a pure consumer: it persists nothing but a terminal `ReceiptRef` plus its own work-unit attempts, never re-derives gate meaning, and never mirrors review-authority state (`gentle-ai.sdd-review-binding/v1` retires as a write target).
+Define how SDD consumes RDD review outcomes as informational review context: it persists nothing but a terminal `ReceiptRef` plus its own work-unit attempts, never re-derives review-lifecycle meaning, and never mirrors review-authority state (`gentle-ai.sdd-review-binding/v1` retires as a write target). Receipt presence, absence, or validation does not govern archive or delivery readiness.
 
 ## Requirements
 
@@ -24,23 +24,23 @@ SDD MUST persist, per lineage attempt, only a terminal `ReceiptRef` as its revie
 - THEN SDD parses the file read-only for compatibility
 - AND SDD never writes to that file again
 
-### Requirement: No Re-Derived Gate Meaning
+### Requirement: No Re-Derived Review-Lifecycle Meaning
 
-SDD MUST NOT compute review-gate meaning (allow/deny/escalated/disabled) from local heuristics. SDD MUST request validity through one native validation entry point exposed by the RDD facade. (Issue #1204)
+SDD MUST NOT compute review-context meaning (such as exact, changed, escalated, or disabled) from local heuristics. SDD MUST request that context through one native validation entry point exposed by the RDD facade, report it separately, and leave archive and delivery readiness to ordinary SDD and repository policy. (Issue #1204)
 
-#### Scenario: Gate meaning requested via facade
+#### Scenario: Review context requested via facade
 
-- GIVEN an archive attempt that needs review disposition
-- WHEN SDD evaluates whether delivery is governed
+- GIVEN an archive attempt with a `ReceiptRef`
+- WHEN SDD gathers optional review context
 - THEN SDD calls the single native validation entry point with the `ReceiptRef`
-- AND SDD does not re-implement gate-result logic in `internal/sddstatus`
+- AND SDD does not re-implement result logic in `internal/sddstatus` or use the result to govern archive or delivery
 
 #### Scenario: No local re-derivation on stale receipt
 
 - GIVEN a `ReceiptRef` that no longer resolves to a valid receipt
-- WHEN SDD queries validity
-- THEN SDD surfaces the facade's typed answer verbatim
-- AND SDD does not substitute a locally computed gate result
+- WHEN SDD queries review context
+- THEN SDD surfaces the facade's typed answer verbatim for review repair
+- AND SDD does not substitute a locally computed result or turn the stale receipt into an archive or delivery block
 
 ### Requirement: Attempt Ledger Ownership Stays With SDD (Maintainer-Confirmed, 2026-08-02)
 
@@ -68,7 +68,7 @@ Decision 9 is RATIFIED (maintainer-confirmed, 2026-08-02): SDD retains ownership
 
 #### Scenario: Legacy field present when a review is discovered
 
-- GIVEN an unmigrated Pi client requests status v1 and a review was actually discovered for the candidate (a governing receipt that validates, or one that was discovered and failed validation)
+- GIVEN an unmigrated Pi client requests status v1 and a review was actually discovered for the candidate (a matching receipt that validates, or one that was discovered and failed validation)
 - WHEN status is serialized
 - THEN the legacy `reviewGate` field is populated for compatibility, carrying that receipt's own result
 

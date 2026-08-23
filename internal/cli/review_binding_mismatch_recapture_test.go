@@ -38,8 +38,8 @@ func mismatchedSubjectReviewerPayload(t *testing.T, repo string, record reviewtr
 //
 // This test proves the recovery is the SAME one, rather than assuming it: it
 // asserts the slot is unconsumed and authority unmoved after the mismatch, then
-// re-captures on the same lineage and lens and requires the lineage to finalize
-// normally. It also requires the rejection to hand back the subject hash the
+// re-captures on the same lineage and lens and requires terminal capture
+// closure. It also requires the rejection to hand back the subject hash the
 // binding actually expects, because that is the one value the operator cannot
 // derive from the failure alone.
 func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T) {
@@ -103,15 +103,13 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 	if err := RunReviewCaptureResult(correctedArgs, &captured); err != nil {
 		t.Fatalf("recapture after binding_mismatch was refused (named continuation dead-ends): %v", err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
-	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
-		t.Fatalf("recapture admission = %q, want completed", artifact.AdmissionDecision)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, captured.Bytes(), &terminal)
+	if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != "review/capture-result" ||
+		terminal.LineageID != started.LineageID || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("binding_mismatch recapture terminal result = %#v", terminal)
 	}
-	// The block is only cleared when the lineage completes.
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(captured.String()),
-	}, io.Discard); err != nil {
-		t.Fatalf("finalize after binding_mismatch recapture failed: %v", err)
+	if _, err := store.Load(); !os.IsNotExist(err) {
+		t.Fatalf("binding_mismatch recapture left durable approved authority: %v", err)
 	}
 }

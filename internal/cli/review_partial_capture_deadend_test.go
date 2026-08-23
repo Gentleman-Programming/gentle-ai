@@ -93,17 +93,11 @@ func TestAbandonQuarantinesPartialReviewWithV2Binding(t *testing.T) {
 	proof := result.Record.Abandonment
 	if proof == nil || proof.Schema != reviewtransaction.CompactAbandonAuthorizationSchema ||
 		strings.Join(proof.DiscardedWork.CapturedLensResults, ",") != strings.Join(eligibility.DiscardedWork.CapturedLensResults, ",") ||
-		proof.DiscardedWork.FindingsPresent != eligibility.DiscardedWork.FindingsPresent ||
-		proof.DiscardedWork.EvidenceRecordsPresent != eligibility.DiscardedWork.EvidenceRecordsPresent {
+		proof.DiscardedWork.FindingsPresent != eligibility.DiscardedWork.FindingsPresent {
 		t.Fatalf("v2 abandonment proof = %#v, want discarded work %#v", proof, eligibility.DiscardedWork)
 	}
 	if _, err := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage)); !os.IsNotExist(err) {
 		t.Fatalf("abandoned entry still present: %v", err)
-	}
-	if err := RunReview([]string{
-		"validate", "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply),
-	}, &bytes.Buffer{}); err == nil {
-		t.Fatal("post-apply gate allowed after a v2 abandonment")
 	}
 }
 

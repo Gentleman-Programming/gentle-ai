@@ -1,16 +1,7 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 )
@@ -27,16 +18,13 @@ const (
 type TargetStatusAction string
 
 const (
-	TargetStatusActionStart                  TargetStatusAction = "start"
-	TargetStatusActionFinalize               TargetStatusAction = "finalize"
-	TargetStatusActionValidate               TargetStatusAction = "validate"
-	TargetStatusActionRecover                TargetStatusAction = "recover"
-	TargetStatusActionRetryFinalVerification TargetStatusAction = "retry_final_verification"
-	TargetStatusActionMaintainer             TargetStatusAction = "maintainer_action"
-	TargetStatusActionSelectLineage          TargetStatusAction = "select_lineage"
-	TargetStatusActionRepairAuthority        TargetStatusAction = "repair_authority"
-	TargetStatusActionReconcileFinalize      TargetStatusAction = "reconcile_finalize"
-	TargetStatusActionStop                   TargetStatusAction = "stop"
+	TargetStatusActionStart           TargetStatusAction = "start"
+	TargetStatusActionValidate        TargetStatusAction = "validate"
+	TargetStatusActionRecover         TargetStatusAction = "recover"
+	TargetStatusActionMaintainer      TargetStatusAction = "maintainer_action"
+	TargetStatusActionSelectLineage   TargetStatusAction = "select_lineage"
+	TargetStatusActionRepairAuthority TargetStatusAction = "repair_authority"
+	TargetStatusActionStop            TargetStatusAction = "stop"
 )
 
 type Replayability string
@@ -82,27 +70,25 @@ type TargetStatusDecision struct {
 }
 
 type TargetStatusResult struct {
-	Applicability                      TargetApplicability                `json:"applicability"`
-	AuthorityVersion                   AuthorityVersion                   `json:"authority_version,omitempty"`
-	LineageID                          string                             `json:"lineage_id,omitempty"`
-	State                              State                              `json:"state,omitempty"`
-	Generation                         int                                `json:"generation,omitempty"`
-	Revision                           string                             `json:"revision,omitempty"`
-	ReceiptIdentity                    string                             `json:"receipt_identity,omitempty"`
-	Action                             TargetStatusAction                 `json:"action"`
-	ActionDisposition                  RecoveryDisposition                `json:"action_disposition,omitempty"`
-	Replayability                      Replayability                      `json:"replayability"`
-	OriginalChangedLines               int                                `json:"original_changed_lines,omitempty"`
-	Tier                               RiskLevel                          `json:"tier,omitempty"`
-	CorrectionBudget                   int                                `json:"correction_budget,omitempty"`
-	CorrectionBudgetPolicy             string                             `json:"correction_budget_policy,omitempty"`
-	SelectedLenses                     []string                           `json:"selected_lenses,omitempty"`
-	TargetIdentity                     string                             `json:"target_identity"`
-	AuthorityTargetIdentity            string                             `json:"authority_target_identity,omitempty"`
-	Projection                         TargetProjectionStatus             `json:"projection"`
-	CandidateLineageIDs                []string                           `json:"candidate_lineage_ids"`
-	FinalVerificationRetry             *FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
-	Decision                           TargetStatusDecision               `json:"-"`
+	Applicability                      TargetApplicability    `json:"applicability"`
+	AuthorityVersion                   AuthorityVersion       `json:"authority_version,omitempty"`
+	LineageID                          string                 `json:"lineage_id,omitempty"`
+	State                              State                  `json:"state,omitempty"`
+	Generation                         int                    `json:"generation,omitempty"`
+	Revision                           string                 `json:"revision,omitempty"`
+	Action                             TargetStatusAction     `json:"action"`
+	ActionDisposition                  RecoveryDisposition    `json:"action_disposition,omitempty"`
+	Replayability                      Replayability          `json:"replayability"`
+	OriginalChangedLines               int                    `json:"original_changed_lines,omitempty"`
+	Tier                               RiskLevel              `json:"tier,omitempty"`
+	CorrectionBudget                   int                    `json:"correction_budget,omitempty"`
+	CorrectionBudgetPolicy             string                 `json:"correction_budget_policy,omitempty"`
+	SelectedLenses                     []string               `json:"selected_lenses,omitempty"`
+	TargetIdentity                     string                 `json:"target_identity"`
+	AuthorityTargetIdentity            string                 `json:"authority_target_identity,omitempty"`
+	Projection                         TargetProjectionStatus `json:"projection"`
+	CandidateLineageIDs                []string               `json:"candidate_lineage_ids"`
+	Decision                           TargetStatusDecision   `json:"-"`
 	authorityTargetKind                TargetKind
 	authorityProjection                Projection
 	selectorFreeAccountingOnlyRecovery bool
@@ -115,11 +101,6 @@ type targetStatusCandidate struct {
 	compact                     *CompactRecord
 	legacy                      *ValidatedChain
 	legacyStore                 *Store
-	receiptIdentity             string
-	receiptPublished            bool
-	receiptCanonical            bool
-	receiptReplayable           bool
-	pendingFinalize             bool
 	correctionRecovery          bool
 	frozenReviewing             bool
 	frozenReviewingPendingSlots bool
@@ -130,8 +111,7 @@ type targetStatusCandidate struct {
 	// recoveryDisposition names the `review recover --disposition` value the
 	// recovery rules accept for this candidate. It is only set when the
 	// recommended action is recovery; guidance never invents a disposition.
-	recoveryDisposition    RecoveryDisposition
-	finalVerificationRetry *FinalVerificationRetryEligibility
+	recoveryDisposition RecoveryDisposition
 }
 
 // AssessTargetStatus classifies the selected live Git projection against
@@ -261,18 +241,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 			continue
 		}
-		if state.State == StateApproved && candidate.receiptPublished && candidate.receiptCanonical {
-			eligible, eligibilityErr := compactApprovedStagedScopeRecovery(ctx, repo, state, live)
-			if eligibilityErr != nil {
-				return targetStatusFailure(base, eligibilityErr)
-			}
-			if eligible {
-				candidate.correctionRecovery = true
-				candidate.recoveryDisposition = RecoveryScopeChanged
-				candidates = append(candidates, candidate)
-				continue
-			}
-		}
 		if state.State == StateCorrectionRequired {
 			_, eligible, eligibilityErr := compactCorrectionRequiredStagedScopeRecovery(ctx, repo, state, live)
 			if eligibilityErr != nil {
@@ -282,29 +250,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidate.correctionRecovery, candidate.recoveryDisposition = true, RecoveryScopeChanged
 				candidates = append(candidates, candidate)
 				continue
-			}
-		}
-		// The same predicates START uses to refuse a fresh lineage against an
-		// approved predecessor: either the frozen delivery scope has a changed
-		// candidate, or a disjoint base advance preserves the exact feature patch.
-		// Classifying either relationship more weakly makes negotiated status emit
-		// a START the store then refuses while recovery authorization stays unreachable.
-		// Like the staged scope-expansion edge above, only a published
-		// canonical receipt may bind an approved predecessor for recovery; a
-		// receiptless approved authority keeps its publication-repair routing.
-		// Collection stays separate from governing candidates: the sole such
-		// predecessor mirrors START's single-recovery-candidate answer below,
-		// while plural matches keep the Phase 3e "nothing governs" listing.
-		if candidate.receiptPublished && candidate.receiptCanonical {
-			rebasedRecovery, rebasedErr := compactApprovedRebasedScopeRecovery(ctx, repo, state, live)
-			if rebasedErr != nil {
-				return targetStatusFailure(base, rebasedErr)
-			}
-			if compactApprovedScopeChangedRecovery(state, live) || rebasedRecovery {
-				recovery := candidate
-				recovery.correctionRecovery = true
-				recovery.recoveryDisposition = RecoveryScopeChanged
-				approvedScopeRecovery = append(approvedScopeRecovery, recovery)
 			}
 		}
 		if state.State == StateEscalated {
@@ -327,10 +272,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 					candidate.correctionRecovery = true
 					candidate.recoveryDisposition = RecoveryEscalated
 					candidate.selectorFreeAccountingOnlyRecovery = true
-				} else if eligibility, ok, inspectErr := InspectCompactFinalVerificationRetrySource(ctx, repo, state.LineageID, candidate.compact.Revision); inspectErr != nil {
-					return targetStatusFailure(base, inspectErr)
-				} else if ok {
-					candidate.finalVerificationRetry = &eligibility
 				}
 				candidates = append(candidates, candidate)
 				continue
@@ -350,22 +291,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidates = append(candidates, candidate)
 				continue
 			}
-		} else if proof := compactLocalBaseAdvanceCompatibility(ctx, repo, state, request.Target, live); proof != nil &&
-			classifyCompactTargetRelation(state.CurrentSnapshot, live, state.CorrectionScopePaths(),
-				compactTargetRelationEvidence{CompatibleAdvance: proof}).Kind == compactTargetCompatibleAdvance {
-			candidates = append(candidates, candidate)
-			continue
 		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
-			if !compactPrePRContentCompatible(ctx, repo, state, live, request.PrePR) {
-				continue
-			}
 			candidates = append(candidates, candidate)
 			continue
 		}
-		if request.LineageID == "" && candidate.receiptPublished && (state.State == StateApproved || state.State == StateEscalated) {
-			if projectCompactTerminalHistory(state, live) == compactTerminalHistoryScopeChanged {
-				scopeChangedCandidates = append(scopeChangedCandidates, candidate)
-			}
+		if request.LineageID == "" && (state.State == StateApproved || state.State == StateEscalated) &&
+			projectCompactTerminalHistory(state, live) == compactTerminalHistoryScopeChanged {
+			scopeChangedCandidates = append(scopeChangedCandidates, candidate)
 		}
 	}
 	for lineage, candidate := range view.legacy {
@@ -375,17 +307,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		chain := *candidate.legacy
 		transaction := chain.Records[len(chain.Records)-1].Transaction
 		if legacyLiveTargetMatchesValidatedSnapshot(transaction, live) {
-			if transaction.State == StateApproved {
-				if candidate.legacyStore == nil {
-					return corruptedTargetStatus(base), nil
-				}
-				identity, receiptErr := inspectLegacyTargetReceipt(*candidate.legacyStore, transaction)
-				if receiptErr != nil {
-					return targetStatusFailure(base, receiptErr)
-				}
-				candidate.receiptIdentity = identity
-				candidate.receiptPublished = identity != ""
-			}
 			candidates = append(candidates, candidate)
 		}
 	}
@@ -519,6 +440,7 @@ func frozenReviewingCandidateDrifted(ctx context.Context, repo string, state Com
 	return err != nil || live.CandidateTree != frozen.CandidateTree
 }
 
+/*
 func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
 	if state.CurrentSnapshot.Kind != TargetBaseDiff || state.Recovery != nil || target.Kind != TargetBaseDiff || strings.TrimSpace(target.BaseRef) == "" {
 		return nil
@@ -556,6 +478,8 @@ func compactPrePRContentCompatible(ctx context.Context, repo string, state Compa
 	return err == nil
 }
 
+*/
+
 func corruptedTargetStatus(result TargetStatusResult) TargetStatusResult {
 	result.Applicability = TargetApplicabilityCorrupted
 	result.Action = TargetStatusActionRepairAuthority
@@ -581,24 +505,8 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		result.OriginalChangedLines, result.Tier, result.CorrectionBudget, result.CorrectionBudgetPolicy = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget, state.CorrectionBudgetPolicy
 		result.SelectedLenses = append([]string{}, state.SelectedLenses...)
 		result.Projection = targetProjectionFromCompact(state, result.Projection)
-		result.ReceiptIdentity = candidate.receiptIdentity
-		if candidate.pendingFinalize {
-			result.Action, result.Replayability = TargetStatusActionReconcileFinalize, ReplayabilityStatusRequired
-			return result
-		}
-		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots {
-			if candidate.frozenReviewingDrifted {
-				result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
-				return result
-			}
-			result.Action, result.Replayability = TargetStatusActionFinalize, ReplayabilityNotReplayable
-			return result
-		}
-		if candidate.finalVerificationRetry != nil {
-			eligibility := *candidate.finalVerificationRetry
-			result.FinalVerificationRetry = &eligibility
-			result.Action, result.Replayability = TargetStatusActionRetryFinalVerification, ReplayabilityManualActionRequired
-			result.ActionDisposition = RecoveryFinalVerificationRetry
+		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots && candidate.frozenReviewingDrifted {
+			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
 		}
 		if candidate.correctionRecovery {
@@ -609,10 +517,6 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		}
 		if state.State == StateEscalated || state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
-			return result
-		}
-		if !candidate.receiptPublished && candidate.receiptReplayable {
-			result.Action, result.Replayability = TargetStatusActionFinalize, ReplayabilityExactReplaySafe
 			return result
 		}
 		result.Action, result.Replayability, result.ActionDisposition = targetStatusAction(state.State)
@@ -630,7 +534,6 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 	result.Tier = transaction.RiskLevel
 	result.authorityTargetKind, result.authorityProjection = transaction.Snapshot.Kind, transaction.Snapshot.Projection
 	result.Projection = targetProjectionFromLegacy(transaction, result.Projection)
-	result.ReceiptIdentity = candidate.receiptIdentity
 	if transaction.State == StateApproved {
 		result.Action, result.Replayability = TargetStatusActionValidate, ReplayabilityNotReplayable
 	} else {
@@ -720,105 +623,20 @@ func bindTargetStatusDecisionBaseRef(result TargetStatusResult, requested Target
 	return result
 }
 
-func inspectLegacyTargetReceipt(store Store, transaction Transaction) (string, error) {
-	payload, err := os.ReadFile(filepath.Join(store.Dir, "artifacts", "receipt.json"))
-	if err != nil {
-		return "", fmt.Errorf("read legacy target receipt: %w", err)
-	}
-	existing, err := ParseReceipt(payload)
-	if err != nil {
-		return "", fmt.Errorf("parse legacy target receipt: %w", err)
-	}
-	expected, err := transaction.Receipt()
-	if err != nil {
-		return "", fmt.Errorf("derive terminal legacy receipt: %w", err)
-	}
-	if !reflect.DeepEqual(existing, expected) {
-		return "", errors.New("legacy target receipt does not equal the canonical derived receipt")
-	}
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
-}
-
-type compactTargetArtifactObservation struct {
-	exists    bool
-	identity  string
-	content   []byte
-	canonical []byte
-}
-
-func newCompactTargetArtifactObservation(payload, canonical []byte) compactTargetArtifactObservation {
-	sum := sha256.Sum256(payload)
-	return compactTargetArtifactObservation{
-		exists: true, identity: "sha256:" + hex.EncodeToString(sum[:]),
-		content: append([]byte(nil), payload...), canonical: append([]byte(nil), canonical...),
-	}
-}
-
-func compactTargetArtifactObservationsEqual(left, right compactTargetArtifactObservation) bool {
-	return left.exists == right.exists && left.identity == right.identity &&
-		bytes.Equal(left.content, right.content) && bytes.Equal(left.canonical, right.canonical)
-}
-
-type compactTargetReceiptObservation struct {
-	artifact   compactTargetArtifactObservation
-	published  bool
-	replayable bool
-}
-
-func inspectCompactTargetReceipt(store CompactStore, state CompactState) (compactTargetReceiptObservation, error) {
-	payload, readErr := os.ReadFile(store.ReceiptPath())
-	if errors.Is(readErr, os.ErrNotExist) {
-		if state.State != StateApproved && state.State != StateEscalated {
-			return compactTargetReceiptObservation{}, nil
-		}
-		if _, deriveErr := state.Receipt(); deriveErr != nil {
-			return compactTargetReceiptObservation{}, fmt.Errorf("derive terminal compact receipt replay proof: %w", deriveErr)
-		}
-		return compactTargetReceiptObservation{replayable: true}, nil
-	}
-	if readErr != nil {
-		return compactTargetReceiptObservation{}, fmt.Errorf("read compact target receipt: %w", readErr)
-	}
-	observation := compactTargetReceiptObservation{
-		artifact: newCompactTargetArtifactObservation(payload, nil),
-	}
-	expected, deriveErr := state.Receipt()
-	if deriveErr != nil {
-		return observation, errors.New("non-terminal compact authority has a published receipt")
-	}
-	existing, parseErr := ParseCompactReceipt(payload)
-	if parseErr != nil {
-		return observation, fmt.Errorf("parse compact target receipt: %w", parseErr)
-	}
-	if !CompactReceiptEqual(existing, expected) {
-		return observation, errors.New("compact target receipt does not equal the derived receipt")
-	}
-	canonical, marshalErr := json.MarshalIndent(existing, "", "  ")
-	if marshalErr != nil {
-		return observation, fmt.Errorf("canonicalize compact target receipt: %w", marshalErr)
-	}
-	observation.artifact.canonical = append(canonical, '\n')
-	observation.published = true
-	return observation, nil
-}
-
 // targetStatusAction maps a state to the single operation that state accepts.
 // When that operation is recovery it also names the disposition the recovery
 // rules accept, so guidance never routes an operator to a bare `recover` whose
 // --disposition they must guess.
 func targetStatusAction(state State) (TargetStatusAction, Replayability, RecoveryDisposition) {
 	switch state {
-	case StateReviewing, StateCorrectionRequired, StateValidating:
-		return TargetStatusActionFinalize, ReplayabilityNotReplayable, ""
-	case StateApproved:
-		return TargetStatusActionValidate, ReplayabilityNotReplayable, ""
+	case StateReviewing, StateCorrectionRequired, StateValidating, StateApproved:
+		return TargetStatusActionStop, ReplayabilityManualActionRequired, ""
 	case StateInvalidated:
 		return TargetStatusActionRecover, ReplayabilityManualActionRequired, RecoveryInvalidated
 	case StateEscalated:
 		return TargetStatusActionMaintainer, ReplayabilityManualActionRequired, ""
 	default:
-		return TargetStatusActionFinalize, ReplayabilityNotReplayable, ""
+		return TargetStatusActionStop, ReplayabilityManualActionRequired, ""
 	}
 }
 
