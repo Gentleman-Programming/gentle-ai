@@ -35,7 +35,7 @@ func openCodeHostEchoedMaterialization(t *testing.T, materialized string) string
 // Go materialization, with none of the echoed bytes -- and it must capture.
 func TestOpenCodeReviewTransportMaterializesHostEchoedLensFrame(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, _, store, record := newArtifactReview(t, false)
+	repo, _, store, record := newArtifactReview(t, true)
 	lens := record.State.SelectedLenses[0]
 	primary := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, lens))
 	issued := primary.prompt.Prompt
@@ -77,7 +77,7 @@ func TestOpenCodeReviewTransportMaterializesHostEchoedLensFrame(t *testing.T) {
 // classification on the provider-role lane.
 func TestOpenCodeReviewTransportMaterializesHostEchoedRoleFrame(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, lineage, request := providerCorrectionReady(t)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	store, _, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
 	if err != nil {
@@ -106,13 +106,15 @@ func TestOpenCodeReviewTransportMaterializesHostEchoedRoleFrame(t *testing.T) {
 	completed, err := relay.complete(openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
 	})
-	if err != nil || completed.Output == nil || !strings.Contains(*completed.Output, `"captured":true`) {
+	if err != nil || completed.Output == nil {
 		t.Fatalf("host-echoed role completion = %#v, %v", completed, err)
 	}
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("host-echoed role capture slot = %#v, %v", slot, err)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
+	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("host-echoed role terminal completion = %#v", terminal)
 	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
 // TestOpenCodeReviewTransportPassesThroughOnlyByteExactMaterialization pins the

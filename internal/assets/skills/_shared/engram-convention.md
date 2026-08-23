@@ -31,6 +31,10 @@ Set `capture_prompt: false` when the Engram tool schema supports it; if an older
 | `archive-report` | sdd-archive | Archive closure with lineage |
 | `state` | orchestrator | DAG state for recovery after compaction |
 
+### Research artifacts
+
+Use `sdd/{change-name}/research` for exact `gentle-ai.sdd-research/v1` bytes and `sdd/{change-name}/preproposal` for exact `gentle-ai.sdd-preproposal/v1` bytes. In hybrid mode, neither topic is authoritative alone: compare its revision and bytes with OpenSpec before proposal admission.
+
 
 
 ### State Artifact

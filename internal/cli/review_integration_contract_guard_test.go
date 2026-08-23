@@ -154,7 +154,7 @@ func TestEveryTestingGuideTransitionFieldIsEmitted(t *testing.T) {
 	}
 	for _, match := range matches {
 		segments := strings.Split(match[1], ".")
-		// next_transition is the STATUS/FINALIZE property name whose value is a
+		// next_transition is the STATUS property whose value is a
 		// ReviewNextTransition; the walk starts inside that struct.
 		structName := "ReviewNextTransition"
 		for _, segment := range segments[1:] {
@@ -454,11 +454,8 @@ func reviewIntegrationNegotiationCallSites(t *testing.T) []string {
 //     start`), so the fix is an additive hint field naming the exact
 //     negotiated rerun.
 var reviewIntegrationModeCompletenessClassification = map[string]string{
-	"runReviewFacadeStart":            "hinted",
-	"runReviewFacadeFinalize":         "explicit-refusal",
-	"runReviewFacadeValidate":         "vacuous",
-	"runReviewBindSDD":                "vacuous",
-	"runReviewRetryFinalVerification": "vacuous",
+	"runReviewFacadeStart":               "hinted",
+	"runReviewFacadeValidateNonDeciding": "vacuous",
 }
 
 // TestReviewIntegrationDualModeCommandsAreClassified is Guard C's enumeration
@@ -492,22 +489,19 @@ var reviewIntegrationEncodeOperationCallRegexp = regexp.MustCompile(`encodeRevie
 
 // TestReviewIntegrationVacuousModeClassificationIsProvenBySource is Guard C's
 // evidence half for the "vacuous" classification: it re-derives, from every
-// encodeReviewIntegrationOperation(...) call site in review_facade.go and
-// review_final_verification_retry.go, whether the legacy and public result
-// arguments are the literal same identifier. Any command classified
+// encodeReviewIntegrationOperation(...) call site in review_facade.go,
+// whether the legacy and public result arguments are the literal same
+// identifier. Any command classified
 // "vacuous" above whose call site(s) pass two DIFFERENT identifiers fails
 // closed -- the structural proof no longer holds and the classification must
 // be revisited (most likely to "hinted" or "explicit-refusal").
 func TestReviewIntegrationVacuousModeClassificationIsProvenBySource(t *testing.T) {
 	operationToFunc := map[string]string{
-		"ReviewIntegrationOperationValidate":               "runReviewFacadeValidate",
-		"ReviewIntegrationOperationBindSDD":                "runReviewBindSDD",
-		"ReviewIntegrationOperationRetryFinalVerification": "runReviewRetryFinalVerification",
-		"ReviewIntegrationOperationFinalize":               "runReviewFacadeFinalize",
+		"ReviewIntegrationOperationValidate": "runReviewFacadeValidateNonDeciding",
 	}
 	vacuousByOperation := map[string]bool{}
 	sawOperation := map[string]bool{}
-	for _, file := range []string{"review_facade.go", "review_final_verification_retry.go"} {
+	for _, file := range []string{"review_facade.go"} {
 		payload, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -554,16 +548,10 @@ func TestReviewIntegrationNonVacuousModeClassificationsAreEvidenced(t *testing.T
 		file     string
 		evidence string
 	}{
-		// Issue #2447 replaced the named reviewStartNegotiateContractHint
-		// constant with an up-front refusal for base-diff/workspace-overlay
-		// candidates that select lenses (see runReviewFacadeStart's refusal
-		// at reviewPreflightDirectRouteUncompletableReason). The additive
-		// Hint field survives for the one shape #2447 left untouched --
-		// workspace-mode candidates whose selected lenses still need the
-		// negotiated form's repository_context -- so the evidence now points
-		// at that call site instead of the removed constant.
-		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "reviewNegotiatedStartCommand(authority.InitialSnapshot, *runtimeAgent)"},
-		{fn: "runReviewFacadeFinalize", file: "review_facade.go", evidence: "reviewContractRequiredForActionEligibilityReason"},
+		// Shipped START must route through the compact atomic boundary. Its
+		// implementation, checked below, can only create or replay compact
+		// authority and cannot reach either legacy or v3 creation.
+		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "runReviewFacadeCompactAtomicStart(ctx, root, request)"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.fn, func(t *testing.T) {
@@ -577,6 +565,26 @@ func TestReviewIntegrationNonVacuousModeClassificationsAreEvidenced(t *testing.T
 			body := reviewExtractFuncBody(t, string(payload), testCase.fn)
 			if !strings.Contains(body, testCase.evidence) {
 				t.Errorf("%s no longer references %q; its mode-completeness classification is unproven", testCase.fn, testCase.evidence)
+			}
+			if testCase.fn != "runReviewFacadeStart" {
+				return
+			}
+
+			atomicPayload, err := os.ReadFile("review_facade_new_lineage.go")
+			if err != nil {
+				t.Fatal(err)
+			}
+			atomicBody := reviewExtractFuncBody(t, string(atomicPayload), "runReviewFacadeCompactAtomicStart")
+			if !strings.Contains(atomicBody, "store.CreateOrReplayAtomicStart(ctx, request)") {
+				t.Error("compact atomic START boundary no longer calls CreateOrReplayAtomicStart")
+			}
+			for _, creator := range []string{
+				"reviewtransaction.AuthoritativeStore(",
+				"reviewtransaction.NewLineageAuthorityStore(",
+			} {
+				if strings.Contains(body, creator) || strings.Contains(atomicBody, creator) {
+					t.Errorf("shipped START can reach retired authority creator %q", creator)
+				}
 			}
 		})
 	}
