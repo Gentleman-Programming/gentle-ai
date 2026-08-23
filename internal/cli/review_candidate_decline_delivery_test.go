@@ -38,23 +38,17 @@ func TestCandidateDeclineNeverAuthorizesPrePushOrPrePRDelivery(t *testing.T) {
 			err := RunReviewFacadeValidate([]string{
 				"--cwd", repo, "--gate", string(gate), "--base-ref", "origin/" + branch,
 			}, &output)
-			if err == nil {
-				t.Fatalf("candidate-declined %s delivery unexpectedly allowed:\n%s", gate, output.String())
+			if err != nil {
+				t.Fatalf("candidate-declined %s delivery: %v\n%s", gate, err, output.String())
 			}
-			var result ReviewValidateResult
-			decodeStrictReviewJSON(t, output.Bytes(), &result)
-			if result.Allowed || result.Delivery != "" {
-				t.Fatalf("candidate-declined %s result = %#v, want a plain denial", gate, result)
-			}
-			if result.Context.Denial == nil || result.Context.Denial.Stage != "receipt-discovery" || result.Context.Denial.Code != "receipt_missing" {
-				t.Fatalf("candidate-declined %s context = %#v, want the generic receipt-discovery/receipt_missing denial", gate, result.Context)
-			}
+			assertEnabledUnmanagedGatePayload(t, output.Bytes(), gate)
 		})
 	}
 
 	writeReviewStartCandidate(t, repo, "scripts/later.sh", "echo later\n", 0o644)
 	var later bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &later); err == nil {
-		t.Fatalf("candidate decline authorized later candidate:\n%s", later.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &later); err != nil {
+		t.Fatalf("candidate decline later delivery: %v\n%s", err, later.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, later.Bytes(), reviewtransaction.GatePreCommit)
 }

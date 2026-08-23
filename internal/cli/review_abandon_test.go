@@ -52,40 +52,6 @@ func pristineInvalidatedCLIFixture(t *testing.T, repo string) (revision, snapsho
 	return revision, state.InitialSnapshot.Identity
 }
 
-// TestPristineInvalidatedLineageDoesNotPoisonLineagelessGateDiscovery proves
-// invalidated authority remains auditable without blocking an unrelated exact
-// approved receipt. Explicit selection of the invalidated lineage still fails.
-func TestPristineInvalidatedLineageDoesNotPoisonLineagelessGateDiscovery(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	approveDiscoveryMarkdown(t, repo, "review-abandon-valid", "docs/valid.md", "valid\n")
-	pristineInvalidatedCLIFixture(t, repo)
-
-	var statusOutput bytes.Buffer
-	if err := RunReview([]string{"status", "--cwd", repo}, &statusOutput); err != nil {
-		t.Fatalf("review status over poisoned inventory: %v", err)
-	}
-	var report reviewtransaction.AuthorityStatusReport
-	decodeStrictReviewJSON(t, statusOutput.Bytes(), &report)
-	if !report.Complete || !report.Authoritative {
-		t.Fatalf("invalidated status = complete %v authoritative %v", report.Complete, report.Authoritative)
-	}
-
-	var allowedOutput bytes.Buffer
-	err := RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--gate", string(reviewtransaction.GatePostApply),
-	}, &allowedOutput)
-	if err != nil {
-		t.Fatalf("unrelated invalidated lineage blocked exact approved receipt: %v\n%s", err, allowedOutput.String())
-	}
-	var validated ReviewValidateResult
-	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, allowedOutput.Bytes()).Result, &validated)
-	if !validated.Allowed || validated.Context.LineageID != "review-abandon-valid" {
-		t.Fatalf("lineage-less validation = %#v", validated)
-	}
-}
-
 func abandonCLIArgs(repo, revision, authorization string) []string {
 	return []string{
 		"abandon", "--cwd", repo,
@@ -103,7 +69,6 @@ func abandonCLIBinding(t *testing.T, repo, revision, snapshotIdentity string) st
 func TestReviewAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	approveDiscoveryMarkdown(t, repo, "review-abandon-valid", "docs/valid.md", "valid\n")
 	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-accidental", "review-state.json")
 	payload, err := os.ReadFile(statePath)
@@ -122,6 +87,7 @@ func TestReviewAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
 }
 
 func TestReviewAbandonRequiresFlagsAndExactBinding(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")

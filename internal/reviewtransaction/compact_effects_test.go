@@ -314,14 +314,34 @@ func newCompactEffectMarkerFixture(t *testing.T, lineage string) (compactEffectM
 	return repository, compactEffectMarker{Schema: compactEffectMarkerSchema, LineageID: lineage, AuthorityRevision: hash("a"), EventID: hash("b"), State: compactEffectPending, Observation: compactEffectPendingTransient}
 }
 
+func historicalCompactRepositoryContextIntent(t *testing.T, repo string, state CompactState) CompactEffectIntent {
+	t.Helper()
+	statePayload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: compactStateRevision(statePayload)}
+	identity, err := reviewRepositoryIdentity(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := reviewRepositoryContextHandle(binding, identity)
+	payload, err := json.Marshal(reviewRepositoryContextFile{
+		Schema: ReviewRepositoryContextSchema, Handle: handle, LineageID: binding.LineageID,
+		TargetIdentity: binding.TargetIdentity, Revision: binding.Revision, RepositoryIdentity: identity.RepositoryIdentity,
+		RepositoryRoot: identity.RepositoryRoot, GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CompactEffectIntent{Class: CompactEffectClassRepositoryContext, Destination: handle, PayloadHash: hashPayloadBytes(payload)}
+}
+
 func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "repository-context-contract")
-	intent, err := compactRepositoryContextIntent(context.Background(), repo, state)
-	if err != nil {
-		t.Fatal(err)
-	}
+	intent := historicalCompactRepositoryContextIntent(t, repo, state)
 	if intent.Class != CompactEffectClassRepositoryContext || intent.Destination == "" || !validSHA256(intent.PayloadHash) {
 		t.Fatalf("intent = %#v", intent)
 	}
@@ -350,10 +370,7 @@ func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
 	}
 
 	blockedState := newCompactTestState(t, repo, "repository-context-blocked")
-	blockedIntent, err := compactRepositoryContextIntent(context.Background(), repo, blockedState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	blockedIntent := historicalCompactRepositoryContextIntent(t, repo, blockedState)
 	blockedRecord, _, err := makeCompactRecordWithIntents(blockedState, []CompactEffectIntent{blockedIntent})
 	if err != nil {
 		t.Fatal(err)
@@ -366,10 +383,7 @@ func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
 	}
 
 	conflictState := newCompactTestState(t, repo, "repository-context-conflict")
-	conflictIntent, err := compactRepositoryContextIntent(context.Background(), repo, conflictState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	conflictIntent := historicalCompactRepositoryContextIntent(t, repo, conflictState)
 	conflictRecord, _, err := makeCompactRecordWithIntents(conflictState, []CompactEffectIntent{conflictIntent})
 	if err != nil {
 		t.Fatal(err)
@@ -401,10 +415,7 @@ func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
 	}
 
 	pendingState := newCompactTestState(t, repo, "repository-context-pending")
-	pendingIntent, err := compactRepositoryContextIntent(context.Background(), repo, pendingState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pendingIntent := historicalCompactRepositoryContextIntent(t, repo, pendingState)
 	pendingRecord, pendingPayload, err := makeCompactRecordWithIntents(pendingState, []CompactEffectIntent{pendingIntent})
 	if err != nil {
 		t.Fatal(err)
