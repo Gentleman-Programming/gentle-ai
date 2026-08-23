@@ -6,6 +6,7 @@ Executor boundary: every SDD phase agent is an EXECUTOR, not an orchestrator. Do
 
 ## A. Skill Loading
 
+0. Read and follow `skills/_shared/engram-project-identity.md`. The orchestrator supplies its cached canonical Engram project to every phase; use it for all explicit Engram `project` arguments and project-scoped topics.
 1. Check if the orchestrator injected a `## Skills to load before work` block in your launch prompt. If yes, read those exact `SKILL.md` files before task-specific work.
 2. If no skills block was provided, check for `SKILL: Load` instructions. If present, load those exact skill files.
 3. If neither was provided, search for the skill registry as a fallback:

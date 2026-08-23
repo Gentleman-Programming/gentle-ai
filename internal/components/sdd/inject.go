@@ -702,6 +702,9 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectLanguageContractIntoPrompt(contentStr)
+				if strings.HasPrefix(entry.Name(), "sdd-") {
+					contentStr = injectEngramProjectIdentityContract(contentStr)
+				}
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
@@ -2504,7 +2507,7 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 		return InjectionResult{}, nil
 	}
 
-	content := assets.MustRead("claude/sdd-orchestrator-workflow.md")
+	content := injectEngramProjectIdentityContract(assets.MustRead("claude/sdd-orchestrator-workflow.md"))
 	if len(legacyAssignments) > 0 || len(phaseAssignments) > 0 {
 		var err error
 		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)

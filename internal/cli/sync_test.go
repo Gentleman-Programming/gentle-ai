@@ -3001,6 +3001,44 @@ func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t 
 	}
 }
 
+func TestSyncRollbackRestoresSharedPromptsForEffectiveMultiMode(t *testing.T) {
+	home := t.TempDir()
+	original := []byte("custom shared prompt\n")
+	promptDir := filepath.Join(home, ".config", "opencode", "prompts", "sdd")
+	for _, phase := range sdd.SharedPromptPhases() {
+		mustWriteFile(t, filepath.Join(promptDir, phase+".md"), original)
+	}
+	selection := model.Selection{
+		Agents:             []model.AgentID{model.AgentOpenCode},
+		Components:         []model.ComponentID{model.ComponentSDD},
+		SDDMode:            model.SDDModeSingle,
+		SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive,
+	}
+
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	plan := rt.stagePlan()
+	for _, phase := range sdd.SharedPromptPhases() {
+		promptPath := filepath.Join(promptDir, phase+".md")
+		if !containsPath(rt.managedPaths, promptPath) {
+			t.Fatalf("sync backup targets missing effective multi-mode shared prompt %q", promptPath)
+		}
+	}
+	plan.Apply = append(plan.Apply, failingSyncStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("sync execution = %#v, want a successful rollback after forced failure", result)
+	}
+	for _, phase := range sdd.SharedPromptPhases() {
+		promptPath := filepath.Join(promptDir, phase+".md")
+		if got := readTextFile(t, promptPath); got != string(original) {
+			t.Fatalf("restored shared prompt %q = %q, want %q", phase, got, original)
+		}
+	}
+}
+
 // containsAny returns true if s contains any of the given substrings (case-insensitive).
 func containsAny(s string, subs ...string) bool {
 	lower := strings.ToLower(s)

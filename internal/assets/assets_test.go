@@ -345,6 +345,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/judgment-day/references/prompts-and-formats.md",
 		"skills/_shared/persistence-contract.md",
 		"skills/_shared/engram-convention.md",
+		"skills/_shared/engram-project-identity.md",
 		"skills/_shared/openspec-convention.md",
 		"skills/_shared/sdd-phase-common.md",
 		"skills/_shared/sdd-status-contract.md",
@@ -1505,6 +1506,19 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEngramConventionReusesResolvedProjectUnchanged(t *testing.T) {
+	content := MustRead("skills/_shared/engram-convention.md")
+	for _, want := range []string{
+		"`ENGRAM_PROJECT`, `--project`, and lowercase/trim normalization are resolver inputs or behavior only before `mem_current_project` returns.",
+		"every explicit Engram call and phase handoff MUST reuse the cached project unchanged.",
+		"Do not re-override, renormalize, rediscover, or substitute the workspace basename.",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("engram convention missing canonical-project reuse contract %q", want)
+		}
 	}
 }
 

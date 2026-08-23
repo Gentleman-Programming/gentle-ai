@@ -10,7 +10,7 @@ ALL SDD artifacts persisted to Engram MUST follow this deterministic naming:
 title:     sdd/{change-name}/{artifact-type}
 topic_key: sdd/{change-name}/{artifact-type}
 type:      architecture
-project:   {detected or current project name}
+project:   {canonical project returned by mem_current_project}
 scope:     project
 capture_prompt: false
 ```
@@ -127,7 +127,9 @@ mem_search(query: "sdd/{change-name}/", project: "{project}")
 
 ## Project Name Resolution (engram v1.11.0+)
 
-Engram auto-detects the project name from the git remote at MCP startup. The `--project` flag and `ENGRAM_PROJECT` env var can override detection. All project names are normalized to lowercase and trimmed.
+Follow `engram-project-identity.md`: before explicit project-scoped Engram work, call `mem_current_project` once when it is callable and reuse its returned canonical `project`. Do not derive this value from the workspace basename. `ENGRAM_PROJECT`, `--project`, and lowercase/trim normalization are resolver inputs or behavior only before `mem_current_project` returns.
+
+After canonical resolution, every explicit Engram call and phase handoff MUST reuse the cached project unchanged. Do not re-override, renormalize, rediscover, or substitute the workspace basename.
 
 If the agent saves a memory under a project name that doesn't match existing observations, engram warns about potential name drift. Use `mem_merge_projects` (MCP tool) or `engram projects consolidate` (CLI) to merge variants.
 

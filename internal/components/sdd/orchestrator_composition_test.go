@@ -15,7 +15,7 @@ func TestCanonicalCompositionPreservesHistoricalOrchestratorBytes(t *testing.T) 
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			path := sddOrchestratorAsset(agent.ID)
-			before := renderBoundedReviewAsset(agent.ID, path)
+			before := injectEngramProjectIdentityContract(renderBoundedReviewAsset(agent.ID, path))
 			after := composeOrchestratorPrompt(agent.ID)
 			if after != before {
 				t.Fatalf("canonical composition changed %s orchestrator bytes", agent.ID)

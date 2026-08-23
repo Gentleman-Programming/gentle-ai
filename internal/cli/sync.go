@@ -633,7 +633,11 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
+		componentSelection := selection
+		if component == model.ComponentSDD {
+			_, _, componentSelection.SDDMode = resolveSyncSDDProfileMode(homeDir, selection, adapters)
+		}
+		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, componentSelection, adapters, component) {
 			paths[path] = struct{}{}
 		}
 		if component == model.ComponentContext7 {
@@ -1056,39 +1060,7 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentSDD:
-		profileStrategy := sdd.ResolveProfileStrategy(s.homeDir, s.selection.SDDProfileStrategy)
-
-		// Resolve profiles for injection:
-		// - When profiles are explicitly provided (TUI/CLI), use them directly.
-		// - On a regular sync (no explicit profiles), detect existing named profiles
-		//   from disk so their orchestrator prompts are refreshed from updated embedded
-		//   assets while model assignments are preserved.
-		profiles := s.selection.Profiles
-		if len(profiles) == 0 && profileStrategy != model.SDDProfileStrategyExternalSingleActive {
-			settingsPath := ""
-			for _, adapter := range adapters {
-				if adapter.Agent() == model.AgentOpenCode {
-					settingsPath = adapter.SettingsPath(s.homeDir)
-					break
-				}
-			}
-			if settingsPath != "" {
-				detected, detectErr := sdd.DetectProfiles(settingsPath)
-				if detectErr == nil {
-					profiles = detected
-				}
-				// If detect fails (e.g. file missing), silently skip — no profiles to refresh.
-			}
-		}
-
-		// If profiles exist (explicit or detected), SDDModeMulti is required:
-		// shared prompt files must be written and {file:...} refs must resolve.
-		sddMode := s.selection.SDDMode
-		if profileStrategy == model.SDDProfileStrategyExternalSingleActive {
-			sddMode = model.SDDModeMulti
-		} else if len(profiles) > 0 && sddMode == "" {
-			sddMode = model.SDDModeMulti
-		}
+		profiles, profileStrategy, sddMode := resolveSyncSDDProfileMode(s.homeDir, s.selection, adapters)
 
 		for _, adapter := range adapters {
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
@@ -1232,6 +1204,32 @@ func (s componentSyncStep) Run() error {
 	default:
 		return fmt.Errorf("component %q is not supported in sync runtime", s.component)
 	}
+}
+
+// resolveSyncSDDProfileMode preserves sync's profile detection and effective
+// SDD-mode rules so backup targets and injection agree on shared prompt writes.
+func resolveSyncSDDProfileMode(homeDir string, selection model.Selection, adapters []agents.Adapter) ([]model.Profile, model.SDDProfileStrategyID, model.SDDModeID) {
+	profileStrategy := sdd.ResolveProfileStrategy(homeDir, selection.SDDProfileStrategy)
+	profiles := selection.Profiles
+	if len(profiles) == 0 && profileStrategy != model.SDDProfileStrategyExternalSingleActive {
+		for _, adapter := range adapters {
+			if adapter.Agent() != model.AgentOpenCode {
+				continue
+			}
+			if settingsPath := adapter.SettingsPath(homeDir); settingsPath != "" {
+				if detected, err := sdd.DetectProfiles(settingsPath); err == nil {
+					profiles = detected
+				}
+			}
+			break
+		}
+	}
+
+	sddMode := selection.SDDMode
+	if profileStrategy == model.SDDProfileStrategyExternalSingleActive || (len(profiles) > 0 && sddMode == "") {
+		sddMode = model.SDDModeMulti
+	}
+	return profiles, profileStrategy, sddMode
 }
 
 // countChanged records candidate changed paths from an aggregate injector result.
