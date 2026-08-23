@@ -98,3 +98,62 @@ func TestPiModelInspectionMessagesBackReentryAndKeys(t *testing.T) {
 		t.Fatal("tab did not switch target")
 	}
 }
+func TestPiModelValidationKeysAndStaleMessages(t *testing.T) {
+	original := piModelValidationLoadFn
+	t.Cleanup(func() { piModelValidationLoadFn = original })
+	calls := 0
+	piModelValidationLoadFn = func(context.Context, string, string, pi.ModelRoutingTarget, pi.ModelRoutingDraft) (pi.ModelRoutingValidationResult, error) {
+		calls++
+		return pi.ModelRoutingValidationResult{OK: true, Diagnostics: []pi.ModelRoutingDiagnostic{{Code: "W", Message: "warning", Severity: pi.ModelRoutingDiagnosticSeverityWarning}}}, nil
+	}
+	m := piScreenModel()
+	m.Screen = ScreenPiModelInspection
+	m.PiModelInspection = screens.NewPiModelInspectionState()
+	m.PiModelInspection.SetResult(pi.ModelRoutingInspection{
+		Targets: map[pi.ModelRoutingTarget]pi.ModelRoutingTargetInspection{pi.ModelRoutingTargetProject: {}},
+		Agents:  []pi.ModelRoutingAgent{{Name: "worker", Configurable: true}},
+	}, nil)
+	updated, firstCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	m, ok := updated.(Model)
+	if !ok || m.PiModelInspection.Mode != screens.PiModelInspectionModeValidating || firstCmd == nil {
+		t.Fatalf("start validation = %#v/%v", updated, firstCmd != nil)
+	}
+	firstMsg := firstCmd().(piModelValidationMsg)
+	firstID := firstMsg.requestID
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeAgents || m.PiModelInspection.ValidationErr != nil {
+		t.Fatalf("esc from validation = %#v", m.PiModelInspection)
+	}
+	updated, secondCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	m = updated.(Model)
+	secondID := m.piModelValidationRequest
+	if secondID <= firstID || m.PiModelInspection.Mode != screens.PiModelInspectionModeValidating || secondCmd == nil {
+		t.Fatalf("revalidate = %d/%d/%#v", firstID, secondID, m.PiModelInspection)
+	}
+	m = piKey(m, firstMsg)
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeValidating {
+		t.Fatal("stale validation message changed current validation")
+	}
+	m = piKey(m, secondCmd().(piModelValidationMsg))
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeReviewReady || calls != 2 {
+		t.Fatalf("validation result = %#v, calls=%d", m.PiModelInspection, calls)
+	}
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeProviders {
+		t.Fatalf("edit did not enter editor = %#v", m.PiModelInspection)
+	}
+	m = piKey(m, piModelValidationMsg{requestID: secondID, result: pi.ModelRoutingValidationResult{OK: true}})
+	if m.PiModelInspection.Mode != screens.PiModelInspectionModeProviders {
+		t.Fatal("editing did not invalidate validation message")
+	}
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = piKey(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.Screen != ScreenModelConfig {
+		t.Fatal("agent escape did not leave inspection")
+	}
+	m = piKey(m, piModelValidationMsg{requestID: secondID, result: pi.ModelRoutingValidationResult{OK: true}})
+	if m.Screen != ScreenModelConfig {
+		t.Fatal("left-screen validation message was accepted")
+	}
+}

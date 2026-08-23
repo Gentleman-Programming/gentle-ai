@@ -101,3 +101,46 @@ func TestPiModelInspectionStateRowsScrollAndSafeError(t *testing.T) {
 		t.Fatalf("unsafe error render: %q", out)
 	}
 }
+func TestPiModelInspectionValidationStatesRenderSafely(t *testing.T) {
+	state := NewPiModelInspectionState()
+	state.SetResult(pi.ModelRoutingInspection{}, nil)
+	model := "provider/model"
+	state.Draft = pi.ModelRoutingDraft{"worker": {Model: &model}}
+	if !state.BeginValidation() || state.Mode != PiModelInspectionModeValidating || state.ValidationErr != nil {
+		t.Fatalf("begin validation = %#v", state)
+	}
+	if out := RenderPiModelInspection(state, 10); !strings.Contains(out, "Validating") || strings.Contains(out, "No changes were applied") {
+		t.Fatalf("validating render = %q", out)
+	}
+	warning := "warning\x1b\nmessage"
+	state.SetValidationResult(pi.ModelRoutingValidationResult{OK: true, Diagnostics: []pi.ModelRoutingDiagnostic{{Code: "W", Message: warning, Severity: pi.ModelRoutingDiagnosticSeverityWarning}}}, nil)
+	out := RenderPiModelInspection(state, 10)
+	if state.Mode != PiModelInspectionModeReviewReady || !strings.Contains(out, "No changes were applied") || !strings.Contains(out, "warningmessage") || strings.ContainsAny(out, "\x1b\t") {
+		t.Fatalf("review-ready = %#v/%q", state, out)
+	}
+	state.ClearValidation()
+	state.BeginValidation()
+	err := &pi.ModelRoutingClientError{Kind: pi.ModelRoutingClientErrorSemantic, ExitClass: "invalid-input", Cause: errors.New("provider-secret")}
+	state.SetValidationResult(pi.ModelRoutingValidationResult{Diagnostics: []pi.ModelRoutingDiagnostic{{Code: "E", Message: "bad\x1b\ninput", Severity: pi.ModelRoutingDiagnosticSeverityError}}}, err)
+	out = RenderPiModelInspection(state, 10)
+	if state.Mode != PiModelInspectionModeValidationResult || state.ValidationErr != err || !strings.Contains(out, "invalid") || !strings.Contains(out, "badinput") || strings.Contains(out, "provider-secret") || strings.ContainsAny(out, "\x1b\t") {
+		t.Fatalf("invalid result = %#v/%q", state, out)
+	}
+	for _, tt := range []struct {
+		name, want string
+		err        error
+	}{
+		{name: "unsupported", want: "does not support", err: &pi.ModelRoutingClientError{Kind: pi.ModelRoutingClientErrorSemantic, ExitClass: "unsupported-contract"}},
+		{name: "unavailable", want: "unavailable", err: &pi.ModelRoutingClientError{Kind: pi.ModelRoutingClientErrorSemantic, ExitClass: "unavailable-runtime"}},
+		{name: "timeout", want: "timed out", err: &pi.TransportError{Kind: pi.TransportErrorTimeout, Cause: errors.New("private timeout")}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state.ClearValidation()
+			state.BeginValidation()
+			state.SetValidationResult(pi.ModelRoutingValidationResult{}, tt.err)
+			if out := RenderPiModelInspection(state, 10); !strings.Contains(out, tt.want) || strings.Contains(out, "private timeout") {
+				t.Fatalf("error render = %q", out)
+			}
+		})
+	}
+}

@@ -1,6 +1,8 @@
 package screens
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"strings"
 
@@ -17,6 +19,9 @@ const (
 	PiModelInspectionModeProviders
 	PiModelInspectionModeModels
 	PiModelInspectionModeThinking
+	PiModelInspectionModeValidating
+	PiModelInspectionModeValidationResult
+	PiModelInspectionModeReviewReady
 )
 
 const (
@@ -34,6 +39,8 @@ type PiModelInspectionState struct {
 	Target            pi.ModelRoutingTarget
 	Inspection        pi.ModelRoutingInspection
 	Draft             pi.ModelRoutingDraft
+	ValidationResult  pi.ModelRoutingValidationResult
+	ValidationErr     error
 	Mode              PiModelInspectionMode
 	SelectedAgent     string
 	SelectedProvider  string
@@ -47,12 +54,44 @@ func NewPiModelInspectionState() PiModelInspectionState {
 }
 func (s *PiModelInspectionState) SetResult(i pi.ModelRoutingInspection, err error) {
 	s.Inspection, s.Err, s.Cursor, s.Scroll = i, err, 0, 0
+	s.ValidationResult, s.ValidationErr = pi.ModelRoutingValidationResult{}, nil
 	s.Mode, s.SelectedAgent, s.SelectedProvider = PiModelInspectionModeAgents, "", ""
 	s.PendingAssignment = pi.ModelRoutingDraftAssignment{}
 	s.Status = PiModelInspectionSuccess
 	if err != nil {
 		s.Status = PiModelInspectionError
 	}
+}
+func (s *PiModelInspectionState) BeginValidation() bool {
+	if s.Status != PiModelInspectionSuccess || s.Mode != PiModelInspectionModeAgents {
+		return false
+	}
+	s.ValidationResult, s.ValidationErr = pi.ModelRoutingValidationResult{}, nil
+	s.Mode = PiModelInspectionModeValidating
+	return true
+}
+func (s *PiModelInspectionState) SetValidationResult(result pi.ModelRoutingValidationResult, err error) {
+	s.ValidationResult = clonePiValidationResult(result)
+	s.ValidationErr = err
+	if err == nil && result.OK {
+		s.Mode = PiModelInspectionModeReviewReady
+	} else {
+		s.Mode = PiModelInspectionModeValidationResult
+	}
+}
+func (s *PiModelInspectionState) ClearValidation() {
+	s.ValidationResult, s.ValidationErr = pi.ModelRoutingValidationResult{}, nil
+	s.Mode = PiModelInspectionModeAgents
+}
+func clonePiValidationResult(result pi.ModelRoutingValidationResult) pi.ModelRoutingValidationResult {
+	result.Diagnostics = append([]pi.ModelRoutingDiagnostic(nil), result.Diagnostics...)
+	for i := range result.Diagnostics {
+		if result.Diagnostics[i].Path != nil {
+			path := *result.Diagnostics[i].Path
+			result.Diagnostics[i].Path = &path
+		}
+	}
+	return result
 }
 func (s *PiModelInspectionState) SelectTarget(target pi.ModelRoutingTarget) {
 	if s.Target != target {
@@ -368,6 +407,9 @@ func renderPiModelEditor(state PiModelInspectionState, height int) string {
 	return b.String()
 }
 func RenderPiModelInspection(state PiModelInspectionState, height int) string {
+	if state.Mode >= PiModelInspectionModeValidating {
+		return renderPiDraftValidation(state)
+	}
 	var b strings.Builder
 	b.WriteString(styles.TitleStyle.Render("Configure Pi Models") + "\n\n")
 	switch state.Status {
@@ -415,9 +457,91 @@ func RenderPiModelInspection(state PiModelInspectionState, height int) string {
 	if state.Status == PiModelInspectionSuccess && state.Mode != PiModelInspectionModeAgents {
 		b.WriteString("\n" + styles.HelpStyle.Render("j/k or up/down: navigate • enter/space: select • esc: back"))
 	} else {
-		b.WriteString("\n" + styles.HelpStyle.Render("j/k or up/down: scroll • g: global • p: project • tab: switch • enter: edit • esc: back • q: quit"))
+		b.WriteString("\n" + styles.HelpStyle.Render("j/k or up/down: scroll • g: global • p: project • tab: switch • enter: edit • v: validate • esc: back • q: quit"))
 	}
 	return styles.FrameStyle.Render(b.String())
+}
+func renderPiDraftValidation(state PiModelInspectionState) string {
+	var b strings.Builder
+	b.WriteString(styles.TitleStyle.Render("Configure Pi Models") + "\n\n")
+	switch state.Mode {
+	case PiModelInspectionModeValidating:
+		b.WriteString(styles.SubtextStyle.Render("Validating the current Pi model draft..."))
+	case PiModelInspectionModeReviewReady:
+		b.WriteString(styles.SuccessStyle.Render("Pi draft validated and ready for review."))
+	default:
+		b.WriteString(styles.ErrorStyle.Render("Pi draft validation did not pass."))
+	}
+	b.WriteString("\n" + renderPiDraftSummary(state.Draft))
+	if state.Mode == PiModelInspectionModeReviewReady {
+		b.WriteString("\n" + styles.SubtextStyle.Render("No changes were applied."))
+	} else if state.Mode == PiModelInspectionModeValidationResult {
+		b.WriteString("\n" + styles.SubtextStyle.Render(piValidationErrorText(state.ValidationResult, state.ValidationErr)))
+	}
+	renderPiDiagnostics(&b, state.ValidationResult.Diagnostics)
+	help := "esc: cancel • q: quit"
+	if state.Mode != PiModelInspectionModeValidating {
+		help = "esc: back • q: quit"
+	}
+	b.WriteString("\n" + styles.HelpStyle.Render(help))
+	return styles.FrameStyle.Render(b.String())
+}
+func renderPiDraftSummary(draft pi.ModelRoutingDraft) string {
+	if len(draft) == 0 {
+		return styles.SubtextStyle.Render("Draft: empty (inherit current settings)")
+	}
+	names := make([]string, 0, len(draft))
+	for name := range draft {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	b.WriteString("Draft overrides:")
+	for _, name := range names {
+		assignment := draft[name]
+		model, thinking := "inherited", "inherited"
+		if assignment.Model != nil {
+			model = piSafeText(*assignment.Model)
+		}
+		if assignment.Thinking != nil {
+			thinking = piSafeText(string(*assignment.Thinking))
+		}
+		b.WriteString("\n  " + piSafeText(name) + ": model=" + model + " thinking=" + thinking)
+	}
+	return styles.SubtextStyle.Render(b.String())
+}
+func piValidationErrorText(result pi.ModelRoutingValidationResult, err error) string {
+	if err == nil {
+		if !result.OK {
+			return "Pi rejected this draft. Review diagnostics and edit the draft."
+		}
+		return ""
+	}
+	var clientErr *pi.ModelRoutingClientError
+	if errors.As(err, &clientErr) && clientErr != nil {
+		switch clientErr.ExitClass {
+		case "invalid-input":
+			return "Pi rejected this draft as invalid. Review diagnostics and edit the draft."
+		case "unsupported-contract":
+			return "Pi does not support this validation contract. Update Pi or choose a compatible client."
+		case "unavailable-runtime":
+			return "Pi validation is unavailable. Check the Pi runtime and try again."
+		}
+		if clientErr.TransportKind == pi.TransportErrorTimeout {
+			return "Pi draft validation timed out. Check the Pi runtime and try again."
+		}
+	}
+	var transportErr *pi.TransportError
+	if errors.As(err, &transportErr) && transportErr != nil && transportErr.Kind == pi.TransportErrorTimeout {
+		return "Pi draft validation timed out. Check the Pi runtime and try again."
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Pi draft validation timed out. Check the Pi runtime and try again."
+	}
+	if errors.Is(err, errors.ErrUnsupported) {
+		return "Pi does not support this validation operation. Update Pi or choose a compatible client."
+	}
+	return "Pi draft validation could not be completed. Check the Pi runtime and try again."
 }
 func piSafeText(value string) string {
 	return strings.Map(func(r rune) rune {

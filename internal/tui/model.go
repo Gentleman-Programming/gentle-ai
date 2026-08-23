@@ -561,6 +561,7 @@ type Model struct {
 	// is allowed to update the current picker state.
 	codexModelDiscoveryRequest uint64
 	piModelInspectionRequest   uint64
+	piModelValidationRequest   uint64
 
 	// TUI operations — set by startUpgrade / startSync / startUpgradeSync goroutines.
 
@@ -1038,6 +1039,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.PiModelInspection.SetResult(msg.inspection, msg.err)
+		return m, nil
+	case piModelValidationMsg:
+		if m.Screen != ScreenPiModelInspection || msg.requestID != m.piModelValidationRequest || m.PiModelInspection.Mode != screens.PiModelInspectionModeValidating {
+			return m, nil
+		}
+		m.PiModelInspection.SetValidationResult(msg.result, msg.err)
 		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {

@@ -18,10 +18,12 @@ func restorePiModelInspectionFns(t *testing.T) {
 	getwd, home, env := piModelInspectionGetwdFn, piModelInspectionHomeDirFn, piModelInspectionEnvFn
 	dir, enumerate := piModelInspectionAgentDirFn, piModelInspectionEnumerateFn
 	selectCandidate, inspect, load := piModelInspectionSelectFn, piModelInspectionInspectFn, piModelInspectionLoadFn
+	validate, validateLoad := piModelValidationFn, piModelValidationLoadFn
 	t.Cleanup(func() {
 		piModelInspectionGetwdFn, piModelInspectionHomeDirFn, piModelInspectionEnvFn = getwd, home, env
 		piModelInspectionAgentDirFn, piModelInspectionEnumerateFn = dir, enumerate
 		piModelInspectionSelectFn, piModelInspectionInspectFn, piModelInspectionLoadFn = selectCandidate, inspect, load
+		piModelValidationFn, piModelValidationLoadFn = validate, validateLoad
 	})
 }
 
@@ -232,7 +234,83 @@ func TestPiModelInspectionLoaderHasNoMutationOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(source), "Validate") || strings.Contains(string(source), "Apply") {
-		t.Fatal("loader contains a mutation operation seam or call")
+	text := string(source)
+	start := strings.Index(text, "func loadPiModelInspection")
+	end := strings.Index(text[start:], "func inspectPiModelRoutingClient")
+	if start < 0 || end < 0 {
+		t.Fatal("inspection loader boundaries not found")
+	}
+	if strings.Contains(text[start:start+end], "Validate") || strings.Contains(text[start:start+end], "Apply") {
+		t.Fatal("inspection loader contains an operation seam or call")
+	}
+}
+func TestPiModelValidationCommandCapturesInputsBeforeExecution(t *testing.T) {
+	restorePiModelInspectionFns(t)
+	ctx := context.WithValue(context.Background(), struct{}{}, "request")
+	target := pi.ModelRoutingTargetGlobal
+	model := "provider/model"
+	draft := pi.ModelRoutingDraft{"worker": {Model: &model}}
+	piModelInspectionGetwdFn = func() (string, error) { return "/before/project", nil }
+	piModelInspectionAgentDirFn = func() (string, error) { return "/before/agent", nil }
+	var gotContext context.Context
+	var gotCWD, gotAgentDir string
+	var gotTarget pi.ModelRoutingTarget
+	var gotDraft pi.ModelRoutingDraft
+	piModelValidationLoadFn = func(gotCtx context.Context, cwd, agentDir string, gotTargetValue pi.ModelRoutingTarget, gotDraftValue pi.ModelRoutingDraft) (pi.ModelRoutingValidationResult, error) {
+		gotContext, gotCWD, gotAgentDir, gotTarget, gotDraft = gotCtx, cwd, agentDir, gotTargetValue, gotDraftValue
+		return pi.ModelRoutingValidationResult{OK: true}, nil
+	}
+	cmd := piModelValidationCmd(ctx, 42, target, draft)
+	model = "mutated"
+	draft["worker"] = pi.ModelRoutingDraftAssignment{}
+	msg, ok := cmd().(piModelValidationMsg)
+	if !ok {
+		t.Fatalf("message type = %T", cmd())
+	}
+	assignment := gotDraft["worker"]
+	if msg.requestID != 42 || msg.err != nil || !msg.result.OK || gotContext != ctx || gotCWD != "/before/project" || gotAgentDir != "/before/agent" || gotTarget != target || assignment.Model == nil || *assignment.Model != "provider/model" {
+		t.Fatalf("message/inputs = %+v/%v/%q/%q/%q/%#v", msg, gotContext, gotCWD, gotAgentDir, gotTarget, gotDraft)
+	}
+}
+func TestLoadPiModelValidationUsesExactInputsAndSupportsEmptyDrafts(t *testing.T) {
+	restorePiModelInspectionFns(t)
+	ctx := context.WithValue(context.Background(), "key", "value")
+	wantCandidate, wantCaps, wantTarget := pi.ModelRoutingCandidate{Path: "/selected"}, pi.Capabilities{Contract: "contract", Supported: true}, pi.ModelRoutingTargetGlobal
+	var gotCtx context.Context
+	var gotDraft pi.ModelRoutingDraft
+	piModelInspectionEnumerateFn = func(cwd, agentDir string) ([]pi.ModelRoutingCandidate, error) {
+		if cwd != "/project" || agentDir != "/agents" {
+			t.Fatalf("enumerate = %q/%q", cwd, agentDir)
+		}
+		return []pi.ModelRoutingCandidate{{Path: "/candidate"}}, nil
+	}
+	piModelInspectionSelectFn = func(got context.Context, candidates []pi.ModelRoutingCandidate) (pi.ModelRoutingCandidate, pi.Capabilities, error) {
+		gotCtx = got
+		if len(candidates) != 1 {
+			t.Fatalf("candidates = %#v", candidates)
+		}
+		return wantCandidate, wantCaps, nil
+	}
+	calls := 0
+	piModelValidationFn = func(got context.Context, candidate pi.ModelRoutingCandidate, caps pi.Capabilities, request pi.ModelRoutingRequestContext, draft pi.ModelRoutingDraft) (pi.ModelRoutingValidationResult, error) {
+		calls++
+		gotDraft = draft
+		if got != ctx || candidate != wantCandidate || !reflect.DeepEqual(caps, wantCaps) || request != (pi.ModelRoutingRequestContext{CWD: "/project", AgentDir: "/agents", Target: wantTarget}) {
+			t.Fatalf("validate inputs = %v/%#v/%#v/%#v", got, candidate, caps, request)
+		}
+		return pi.ModelRoutingValidationResult{OK: true}, nil
+	}
+	for _, tt := range []struct {
+		draft pi.ModelRoutingDraft
+		nilOK bool
+	}{{nil, true}, {pi.ModelRoutingDraft{}, false}} {
+		gotDraft = nil
+		got, err := loadPiModelValidation(ctx, "/project", "/agents", wantTarget, tt.draft)
+		if err != nil || !got.OK || gotCtx != ctx || (tt.nilOK != (gotDraft == nil)) || (!tt.nilOK && len(gotDraft) != 0) {
+			t.Fatalf("result/error/calls/inputs = %#v/%v/%d/%v/%#v", got, err, calls, gotCtx, gotDraft)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("validate calls = %d, want one per draft", calls)
 	}
 }
