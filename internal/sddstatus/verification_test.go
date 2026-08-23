@@ -1,7 +1,6 @@
 package sddstatus
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -46,14 +45,6 @@ func TestParseVerifyResultFailsClosedAndRequiresCurrentExecutionEvidence(t *test
 
 func TestValidateVerifyReportAdmission(t *testing.T) {
 	valid := testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0)
-	authority := strings.TrimSuffix(testVerifyEnvelope("fail", 1, 1, "0/2", "0/3", 125, 125), "```") + strings.Join([]string{
-		"authority_only_failure: true", "missing_review_authority: true", "substantive_failure: false", "command_failed: false",
-		"observed_authority_revision: sha256:" + strings.Repeat("d", 64), "```\n",
-	}, "\n")
-	authority = strings.Replace(authority, "test_exit_code: 1", "test_exit_code: 125", 1)
-	authority = strings.Replace(authority, "build_exit_code: 1", "build_exit_code: 125", 1)
-	authority = strings.ReplaceAll(authority, "sha256:"+strings.Repeat("b", 64), emptyOutputHash)
-	authority = strings.ReplaceAll(authority, "sha256:"+strings.Repeat("c", 64), emptyOutputHash)
 	tests := []struct {
 		name, report, reason string
 		valid                bool
@@ -66,7 +57,6 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 		{"critical", testVerifyEnvelope("fail", 0, 1, "2/2", "3/3", 0, 0), "", true},
 		{"incomplete requirement", testVerifyEnvelope("fail", 0, 0, "1/2", "3/3", 0, 0), "", true},
 		{"incomplete scenario", testVerifyEnvelope("fail", 0, 0, "2/2", "2/3", 0, 0), "", true},
-		{"authority-only denial", authority, "", true},
 		{"all-green failure", strings.Replace(valid, "verdict: pass", "verdict: fail", 1), "contradictory", false},
 		{"passing blocker", strings.Replace(valid, "blockers: 0", "blockers: 1", 1), "contradicts", false},
 		{"passing incomplete", strings.Replace(valid, "requirements: 2/2", "requirements: 1/2", 1), "contradicts", false},
@@ -80,9 +70,6 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 		{"missing", strings.Replace(valid, "build_command: go test ./cmd/gentle-ai\n", "", 1), "missing build_command", false},
 		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "invalid test_output_hash", false},
 		{"placeholder command", strings.Replace(valid, "test_command: go test ./internal/example", "test_command: placeholder", 1), "concrete", false},
-		{"partial authority extension", strings.TrimSuffix(valid, "```") + "authority_only_failure: true\n```", "authority-only", false},
-		{"invalid authority extension", strings.Replace(authority, "command_failed: false", "command_failed: true", 1), "invalid authority-only", false},
-		{"reserved exit without extension", strings.Replace(strings.Replace(valid, "verdict: pass", "verdict: fail", 1), "test_exit_code: 0", "test_exit_code: 125", 1), "requires the exact authority-only", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,14 +85,23 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 	}
 }
 
-func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
-	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
-	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})
-	contract := VerifyReportValidationContract()
-	want := fmt.Sprintf("authority-only extension must contain exactly %d fields", len(contract.AuthorityOnlyFields))
-	if admission.Valid || admission.Reason != want {
-		t.Fatalf("admission = %#v, want invalid reason %q", admission, want)
+func TestLegacyMissingReviewAuthorityIsInformationalAndIncomplete(t *testing.T) {
+	report := legacyMissingReviewReport()
+	admission := ValidateVerifyReportAdmission(report, SpecCounts{Requirements: 2, Scenarios: 3})
+	if !admission.Valid {
+		t.Fatalf("legacy report admission = %#v, want decoder compatibility", admission)
 	}
+	evaluation := parseVerifyResult(report, SpecCounts{Requirements: 2, Scenarios: 3})
+	if evaluation.Passing || !strings.Contains(evaluation.Reason, "independent test and build execution evidence is incomplete") {
+		t.Fatalf("legacy evaluation = %#v, want non-passing incomplete verification evidence", evaluation)
+	}
+}
+
+func legacyMissingReviewReport() string {
+	report := testVerifyEnvelope("fail", 1, 1, "0/2", "0/3", 1, 1)
+	report = strings.Replace(report, "test_exit_code: 1", "test_exit_code: 125", 1)
+	report = strings.Replace(report, "build_exit_code: 1", "build_exit_code: 125", 1)
+	return strings.TrimSuffix(report, "```") + "missing_review_authority: true\n```"
 }
 
 func TestCountSpecRequirementsAndScenariosUsesActualArtifacts(t *testing.T) {

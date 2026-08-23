@@ -22,7 +22,7 @@
     "schema": {"const": "gentle-ai.review-integration.failure/v1"},
     "contract": {"const": "gentle-ai.review-integration/v1"},
     "operation": {
-      "enum": ["review.capabilities", "review.start", "review.status", "review.finalize", "review.repair", "review.retry_final_verification", "review.validate", "review.bind_sdd"]
+      "enum": ["review.capabilities", "review.start", "review.status", "review.repair", "review.validate", "review.capture-correction-plan", "review.capture-result", "review.capture-refuter", "review.capture-validation"]
     },
     "phase": {"enum": ["preflight", "pre_native", "native_running", "native_committed", "reconciliation"]},
     "code": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
@@ -32,6 +32,7 @@
     "retry_safe": {"type": "boolean"},
     "replayability": {"enum": ["not_replayable", "exact_replay_safe", "status_required", "manual_action_required"]},
     "lineage_id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
     "request_digest": {"$ref": "#/$defs/sha256"},
     "progress_identity": {"$ref": "#/$defs/sha256"},
     "required_inputs": {
@@ -40,8 +41,6 @@
       "items": {
         "enum": [
           "lineage_id",
-          "change",
-          "expected_binding_revision",
           "predecessor_lineage_id",
           "expected_predecessor_revision",
           "successor_lineage_id",
@@ -54,7 +53,7 @@
         ]
       }
     },
-    "next_action": {"enum": ["correct_request", "retry", "retry_with_bounded_backoff", "review.status", "review.finalize", "review.repair", "review.bind_sdd", "explicit-maintainer-action", "stop"]},
+    "next_action": {"enum": ["correct_request", "retry", "retry_with_bounded_backoff", "review.status", "review.start", "review.repair", "explicit-maintainer-action", "stop"]},
     "cause_category": {"enum": ["inventory_io_or_layout", "lock_ambiguous", "reset_residue", "record_or_graph_invalid", "inventory_incomplete"]},
     "cause": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "^[^\\r\\n]+$"},
     "context": {"$ref": "#/$defs/gate_context"}
@@ -132,32 +131,13 @@
         }
       }
     },
-    "optional_sha256": {
-      "anyOf": [
-        {"const": ""},
-        {"$ref": "#/$defs/sha256"}
-      ]
-    },
-    "binding_revision": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["expected", "current"],
-      "properties": {
-        "expected": {"$ref": "#/$defs/optional_sha256"},
-        "current": {"$ref": "#/$defs/optional_sha256"}
-      }
-    },
     "gate_context": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["scope_change"],
       "properties": {
-        "scope_change": {"$ref": "#/$defs/scope_change"},
-        "binding_revision": {"$ref": "#/$defs/binding_revision"}
-      },
-      "oneOf": [
-        {"required": ["scope_change"]},
-        {"required": ["binding_revision"]}
-      ]
+        "scope_change": {"$ref": "#/$defs/scope_change"}
+      }
     }
   }
 }

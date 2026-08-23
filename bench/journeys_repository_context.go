@@ -11,8 +11,6 @@ type repositoryContextReference struct {
 	Handle         string `json:"handle"`
 	Revision       string `json:"revision"`
 	TargetIdentity string `json:"target_identity"`
-	EventID        string `json:"event_id"`
-	Outcome        string `json:"outcome"`
 }
 
 type repositoryContextStart struct {
@@ -52,8 +50,8 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 		return err
 	}
 	want := start.RepositoryContext
-	if start.LineageID == "" || want.Handle == "" || want.EventID == "" || want.Outcome != "applied" ||
-		want.Revision == "" || want.TargetIdentity == "" {
+	if start.LineageID == "" || want.Capability != "review.opaque_repository_context" ||
+		!strings.HasPrefix(want.Handle, "rctx1_") || want.Revision == "" || want.TargetIdentity == "" {
 		return fmt.Errorf("START repository context = %+v, lineage=%q", want, start.LineageID)
 	}
 	if leaksRepositoryPath(started.Stdout, r.sandbox.Repo) {
@@ -82,8 +80,11 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 	}
 
 	foreign := "gairc_v1_" + strings.Repeat("0", 64)
-	if capture.NextTransition.Kind != "collect" || len(capture.NextTransition.Collect.Inputs) != 1 {
-		return fmt.Errorf("STATUS did not publish one capture binding: %+v", capture.NextTransition)
+	if capture.NextTransition.Kind != "collect" || len(capture.NextTransition.Collect.Inputs) != 1 ||
+		capture.Authority.LineageID != start.LineageID || capture.TargetIdentity != want.TargetIdentity ||
+		capture.argument("lineage") != start.LineageID || capture.argument("target") != want.TargetIdentity ||
+		capture.argument("expected-revision") != want.Revision || capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash == "" {
+		return fmt.Errorf("STATUS did not preserve target, repository/worktree context, and subject binding: %+v", capture)
 	}
 	payload, err := synthesizeReviewerResult(capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, capture.paths())
 	if err != nil {
@@ -129,13 +130,12 @@ func repositoryContextJourneys() []Journey {
 	return []Journey{{
 		ID:     "j104-repository-context-survives-fresh-process",
 		Review: reviewOptedIn,
-		Title:  "Repository context reconciliation survives fresh START and STATUS processes",
-		Source: "issue #1875: one committed repository_context event must reconcile path-free and replay idempotently across native CLI processes",
+		Title:  "#3417: repository context preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
+		Source: "issue #1875 under #3417: the current path-free repository context binds target, repository/worktree, and reviewer subject integrity; retired event/outcome placeholders do not exist",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged ordinary-code candidate", Fixture: stageOrdinaryCode},
-			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
-			{Name: "drive START, fresh STATUS retries, and foreign-handle refusal", Requires: frozenLineageStatusCapability, Composite: driveRepositoryContextFreshProcesses},
+			{Name: "drive fresh START, exact active-lineage STATUS retries, and foreign-handle refusal", Requires: frozenLineageStatusCapability, Composite: driveRepositoryContextFreshProcesses},
 		},
 	}}
 }

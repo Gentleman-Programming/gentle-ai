@@ -254,7 +254,7 @@ func TestMaintenanceExclusiveBlocksReviewTransactionsLineageLock(t *testing.T) {
 
 func TestMaintenanceExclusiveBlocksDiscoveredCompactStoreReplace(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "maintenance-discovery")})
+	started, err := createAtomicCompactAuthority(t, context.Background(), repo, newCompactTestState(t, repo, "maintenance-discovery"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -106,7 +106,7 @@ func TestGoldenSDD_Claude(t *testing.T) {
 
 	for _, name := range []string{
 		"sdd-apply", "sdd-archive", "sdd-continue", "sdd-explore",
-		"sdd-ff", "sdd-init", "sdd-new", "sdd-onboard", "sdd-status", "sdd-verify",
+		"sdd-ff", "sdd-init", "sdd-new", "sdd-onboard", "sdd-research", "sdd-status", "sdd-verify",
 	} {
 		content := readTestFile(t, filepath.Join(home, ".claude", "commands", name+".md"))
 		assertGolden(t, "sdd-claude-cmd-"+name+".golden", content)
@@ -114,7 +114,7 @@ func TestGoldenSDD_Claude(t *testing.T) {
 
 	agentsDir := adapter.SubAgentsDir(home)
 	for _, name := range []string{
-		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design",
 		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
 	} {
 		agentContent := readTestFile(t, filepath.Join(agentsDir, name+".md"))
@@ -138,15 +138,19 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 	assertGolden(t, "sdd-opencode-cmd-sdd-init.golden", sddInit)
 	sddApply := readTestFile(t, filepath.Join(home, ".config", "opencode", "commands", "sdd-apply.md"))
 	assertGolden(t, "sdd-opencode-cmd-sdd-apply.golden", sddApply)
+	sddResearch := readTestFile(t, filepath.Join(home, ".config", "opencode", "commands", "sdd-research.md"))
+	assertGolden(t, "sdd-opencode-cmd-sdd-research.golden", sddResearch)
 
 	// Golden-check a representative SDD skill file.
 	skillInit := readTestFile(t, filepath.Join(home, ".config", "opencode", "skills", "sdd-init", "SKILL.md"))
 	assertGolden(t, "sdd-opencode-skill-sdd-init.golden", skillInit)
+	skillResearch := readTestFile(t, filepath.Join(home, ".config", "opencode", "skills", "sdd-research", "SKILL.md"))
+	assertGolden(t, "sdd-opencode-skill-sdd-research.golden", skillResearch)
 
 	// Verify ALL expected command files exist.
 	expectedCommands := []string{
 		"sdd-init.md", "sdd-apply.md", "sdd-archive.md", "sdd-continue.md",
-		"sdd-explore.md", "sdd-ff.md", "sdd-new.md", "sdd-onboard.md", "sdd-status.md", "sdd-verify.md",
+		"sdd-explore.md", "sdd-ff.md", "sdd-new.md", "sdd-onboard.md", "sdd-research.md", "sdd-status.md", "sdd-verify.md",
 	}
 	commandsDir := filepath.Join(home, ".config", "opencode", "commands")
 	for _, name := range expectedCommands {
@@ -213,7 +217,7 @@ func TestGoldenSDD_Cursor(t *testing.T) {
 	// Verify ALL expected SDD skill files exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".cursor", "skills")
@@ -247,7 +251,7 @@ func TestGoldenSDD_Gemini(t *testing.T) {
 	// Verify ALL expected SDD skill files exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".gemini", "skills")
@@ -286,7 +290,7 @@ func TestGoldenSDD_VSCode(t *testing.T) {
 	// Verify ALL expected SDD skill files exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".copilot", "skills")
@@ -323,7 +327,7 @@ func TestGoldenSDD_Codex(t *testing.T) {
 	// Verify ALL expected SDD skill files exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".codex", "skills")
@@ -394,7 +398,7 @@ func TestGoldenSDD_Windsurf(t *testing.T) {
 
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".codeium", "windsurf", "skills")
@@ -440,7 +444,7 @@ func TestGoldenSDD_Kiro(t *testing.T) {
 	// Verify all SDD skill files written by the SDD injector exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard", "judgment-day",
 	}
 	for _, name := range expectedSkills {
@@ -453,7 +457,7 @@ func TestGoldenSDD_Kiro(t *testing.T) {
 		t.Errorf("expected SDD shared marker %q not found: %v", filepath.Join("_shared", "SKILL.md"), err)
 	}
 
-	// Verify all 10 Kiro native SDD phase agent files with golden snapshots.
+	// Verify all Kiro native SDD phase agent files with golden snapshots.
 	// Type-assert to the concrete Kiro adapter so SubAgentsDir(home) drives
 	// the path — the test stays correct if the adapter path ever changes.
 	type subAgentDirProvider interface {
@@ -465,7 +469,7 @@ func TestGoldenSDD_Kiro(t *testing.T) {
 	}
 	agentsDir := kiro.SubAgentsDir(home)
 	for _, name := range []string{
-		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
 		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify",
 		"sdd-archive", "sdd-onboard",
 	} {
@@ -900,7 +904,7 @@ func TestGoldenSDD_Antigravity(t *testing.T) {
 	// Verify ALL expected SDD skill files exist.
 	expectedSkills := []string{
 		"sdd-init", "sdd-apply", "sdd-archive", "sdd-explore",
-		"sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
+		"sdd-propose", "sdd-research", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-verify",
 		"sdd-onboard",
 	}
 	skillsDir := filepath.Join(home, ".gemini", "antigravity-cli", "skills")
