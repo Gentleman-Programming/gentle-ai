@@ -577,7 +577,11 @@ func capturePassedCorrectionEvidence(r *journeyRun) error {
 }
 
 func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
-	status, err := readCorrectionStatusFor(r, lineage)
+	return capturePassedCorrectionEvidenceForContract(r, lineage, reviewContract)
+}
+
+func capturePassedCorrectionEvidenceForContract(r *journeyRun, lineage, contract string) error {
+	status, err := readCorrectionStatusForContract(r, lineage, contract)
 	if err != nil {
 		return err
 	}
@@ -603,6 +607,13 @@ func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
 
 func completeCorrectedReview(r *journeyRun) error {
 	return completeCorrectedReviewForContract(r, correctedDeliveryLineage, reviewContractV2)
+}
+
+func completeBurnedCorrectedReview(r *journeyRun) error {
+	if err := completeCorrectedReview(r); err != nil {
+		return err
+	}
+	return requireAtomicLineageBurned(r, correctedDeliveryLineage)
 }
 
 func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
@@ -1084,7 +1095,8 @@ func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error 
 // Absence" requirement): the disabled branch previously required a populated
 // "disabled/unmanaged" disposition; it now requires reviewGate's structural
 // ABSENCE instead -- no field, no ceremony, archive unfailable on review
-// grounds. The enabled branch is untouched.
+// grounds. With reviews enabled, a discovered scope change remains visible but
+// is equally informational: archive stays ready under ordinary policy.
 func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
 	return sddStatusAssertion("discovered scope-changed archive authority", func(status sddStatusV1) error {
 		if disabled {
@@ -1102,8 +1114,8 @@ func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) e
 		if !strings.Contains(status.ReviewGate.Reason, "review scope changed") {
 			return fmt.Errorf("reviewGate.reason = %q, want the changed candidate reason", status.ReviewGate.Reason)
 		}
-		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want scope-changed blocked/resolve-review",
+		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want informational scope-changed ready/archive",
 				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
 		}
 		return nil
@@ -1481,25 +1493,29 @@ func waveOneJourneys() []Journey {
 		{
 			ID:     "j51-negotiated-status-correction-continuation",
 			Review: reviewOptedIn,
-			Title:  "Negotiated status: fresh candidate starts, corrected candidate continues",
-			Source: "issue #2044: selector-free fresh status and post-correction continuation",
+			Title:  "#3587: selectorless STATUS starts only a fresh candidate; correction continues through its exact active lineage",
+			Source: "issue #2044 under #3587: selectorless STATUS is fresh by design, while every active correction continuation carries its exact lineage",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
 				{Name: "fixture: product process temp is unavailable", Fixture: unavailableProcessTemp},
 				{Name: "fresh negotiated status offers review start without authority history", Requires: statusCapability,
 					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition"), After: requireFreshNegotiatedStart},
-				{Name: "review start", Requires: startNamedCapability,
+				{Name: "review start with an exact active lineage", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", correctedDeliveryLineage), After: rememberLineage},
-				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: captureCorrectableFinding},
-				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
-					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
-					After: requireReviewState("correction_required", correctedDeliveryLineage)},
-				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
-					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "capture one blocking finding and finish the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, correctedDeliveryLineage, true)
+				}},
+				{Name: "capture the bounded correction plan from the exact STATUS binding", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, correctedDeliveryLineage, 2)
+				}},
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
-				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
-				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+				{Name: "post-correction exact active-lineage validator capture burns on completion", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+					return captureProviderValidatorSlotFor(r, correctedDeliveryLineage)
+				}},
+				{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageBurned(r, correctedDeliveryLineage)
+				}},
 			},
 		},
 		{

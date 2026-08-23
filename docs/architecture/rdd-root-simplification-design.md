@@ -4,14 +4,14 @@
 
 ## Decision
 
-Receipt-Driven Development (RDD) should be a thin, provider-owned, content-bound approval and delivery-control plane. It must not be the implementation workflow, an adapter-owned state machine, or an SDD lifecycle engine.
+Receipt-Driven Development (RDD) should be a thin, provider-owned, content-bound review-evidence and lifecycle-integrity plane. It must not be the implementation workflow, an adapter-owned state machine, an SDD lifecycle engine, or a delivery-control plane.
 
 For new review lineages, Gentle AI should consolidate RDD behind one native transition owner, one candidate relation algebra, and two active authority artifacts:
 
 1. A mutable CAS authority record.
 2. An immutable terminal receipt.
 
-Adapters, SDD, and delivery gates consume provider-issued decisions. They do not infer lifecycle transitions, construct recovery bindings, retain review budgets, or create authority state.
+Adapters and SDD consume provider-issued review context. They do not infer lifecycle transitions, construct recovery bindings, retain review budgets, or create authority state. Ordinary repository and SDD policy, not review context, decide commit, push, PR, release, and archive readiness.
 
 This is a consolidation and migration plan, not a rewrite. It preserves the current security kernel: content binding, atomic authority mutation, explicit consent, bounded correction, kill switch semantics, terminal receipts, and fail-closed behavior.
 
@@ -21,7 +21,7 @@ This is a consolidation and migration plan, not a rewrite. It preserves the curr
 2. Select zero, one, or four review lenses deterministically and freeze the tier and correction budget.
 3. Admit only candidate-causal findings; refute or retain non-causal observations without opening correction authority.
 4. Permit at most one bounded correction, then run targeted validation.
-5. Issue one terminal receipt. Delivery gates only validate that receipt against live boundaries.
+5. Issue one terminal receipt as immutable review evidence, then return delivery and archive decisions to ordinary repository and SDD policy.
 
 The intended lifecycle is:
 
@@ -34,7 +34,8 @@ implement and normalize
   -> candidate-causal admission or refutation
   -> at most one bounded correction
   -> targeted validation and terminal receipt
-  -> read-only delivery-gate validation
+  -> read-only review-context reporting
+  -> ordinary repository or SDD delivery policy
 ```
 
 ## Problem statement
@@ -71,7 +72,7 @@ The issue and PR mappings in this document are illustrative architecture coverag
 ## Goals
 
 - Make native RDD authority the only owner of lifecycle transitions and review budgets.
-- Use one deterministic candidate identity and relation algebra for start, recovery, SDD binding, and every delivery gate.
+- Use one deterministic candidate identity and relation algebra for start, recovery, SDD binding, and every optional review-context hook.
 - Reduce public state, operations, persisted authority artifacts, and compatibility paths without weakening safety invariants.
 - Make the normal public lifecycle `start`, `finalize`, and `validate`; expose status as a read-only view, not a second planner.
 - Make recovery a classified graph disposition rather than a growing taxonomy of public maintenance verbs.
@@ -101,7 +102,7 @@ The issue and PR mappings in this document are illustrative architecture coverag
 | Consent | Human consent is explicit and candidate-bound before a review authority is frozen. |
 | Bounded correction | Ordinary review permits one candidate-causal correction within the frozen budget. |
 | Receipt finality | A terminal receipt is immutable and never rewritten into a different approval. |
-| Gate scope | Delivery gates validate a receipt and live boundary evidence; they never start review or correction work. |
+| Review-context scope | Read-only review-context hooks validate receipt and live-boundary evidence; they never start review or correction work, and their results never govern delivery. |
 | Kill switch | Disabled RDD means unmanaged ordinary delivery, never synthetic approval. |
 | Corruption | Unknown, ambiguous, or unverifiable authority fails closed. |
 | Quarantine | Repair preserves bytes and provenance; it never deletes or rewrites history to make it appear valid. |
@@ -116,7 +117,7 @@ The issue and PR mappings in this document are illustrative architecture coverag
 | Transport mixed with lifecycle | Runtime support is represented inside consent, status, collection, and capture routes | A runtime limitation becomes a lifecycle state and a new contract version | Check capability before freeze; unavailable transport cannot create authority |
 | Public recovery taxonomy | Historical anomaly classes became separate verbs and authorization formats | Each anomaly adds a command users and adapters must understand | One classified `repair` disposition facade with private internal handlers |
 | RDD/SDD overlap | SDD persists review bindings, attempts, remediation state, and receipt selection behavior | Review changes require corresponding SDD state fixes | SDD stores only receipt references and its own work-unit attempts |
-| Delivery semantic branches | Receipts, candidate declines, kill-switch modes, chains, and invalidation writes all alter gate behavior | New delivery exception creates another gate-specific path | Gates validate receipt or report unmanaged ordinary policy only |
+| Review-lifecycle semantic branches | Receipts, candidate declines, kill-switch modes, chains, and invalidation writes all alter review-context behavior | New review exception creates another hook-specific path | Hooks report review context or repair guidance only; ordinary policy owns delivery |
 | Artifact proliferation | Results, evidence, journals, bundles, descriptors, and sidecars become operational dependencies | Recovery needs more files, handles, and mirror contracts | Two active RDD artifacts and immutable external evidence references |
 
 ## Current complexity snapshot
@@ -138,7 +139,7 @@ The following counts were measured at the design snapshot. They are not reposito
 | Review/CLI test functions | 1,825 | Prefix-based test-function count |
 | Legacy persisted states | 13 | Historical transaction state vocabulary |
 | Compact persisted states | 6 | Current compact vocabulary |
-| Delivery gates | 5 | `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, `release` |
+| Review-context hooks | 5 | `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, `release` |
 | Review operation forms | At least 28 | Compact facade, legacy compatibility, review mode, and bundle operations |
 
 The compact state currently contains 36 persisted fields. That count is not itself a defect, but it indicates that several concerns coexist in one authority record: candidate identity, findings, correction planning, validation, invalidation, recovery, result disposition, and historical compatibility.
@@ -153,7 +154,7 @@ The compact state currently contains 36 persisted fields. That count is not itse
 | `AuthorityStore` | CAS authority, exact replay identity, terminal receipt publication | Candidate relation policy, provider behavior |
 | `CandidateResolver` | Selector normalization, candidate identity, relation proof | Authority mutation, review execution |
 | `ReviewAdapter` | Consent presentation, reviewer invocation, evidence submission | Lineage creation, revisions, recovery classification, budget accounting |
-| `DeliveryGate` | Read-only receipt validation for a boundary | Start, correction, invalidation, repair |
+| `ReviewContext` | Read-only receipt and boundary evaluation for lifecycle visibility | Start, correction, invalidation, repair, or delivery decisions |
 | `SDD` | Work-unit attempts, artifacts, archive policy, terminal receipt reference | Review state, target algebra, review recovery |
 
 ### Component diagram
@@ -168,7 +169,7 @@ flowchart LR
     E -->|immutable evidence reference| C
     S --> ST[review-state.json]
     S --> RC[review-receipt.json]
-    G[Delivery gates] -->|validate receipt and boundary| C
+    G[Review-context hooks] -->|report receipt and boundary context| C
     D[SDD controller] -->|ReceiptRef only| C
     C -->|opaque transition or result| A
 ```
@@ -180,7 +181,7 @@ The adapter can execute a provider-issued transition or decline it. It cannot co
 | Artifact | Lifecycle role | Required contents |
 |---|---|---|
 | `review-state.json` | Mutable CAS authority | Candidate identity, lifecycle state, tier, selected lenses, one correction budget, admitted finding references, replay identity, current revision |
-| `review-receipt.json` | Immutable terminal authorization | Final candidate identity, policy digest, admitted-result/evidence digests, terminal outcome, receipt digest |
+| `review-receipt.json` | Immutable terminal review evidence | Final candidate identity, policy digest, admitted-result/evidence digests, terminal outcome, receipt digest |
 
 The authority record may retain the digest and reference of immutable external evidence. It does not own a separate result-file, proof-file, patch-file, chunk-file, bundle, or transport subsystem.
 
@@ -218,13 +219,13 @@ stateDiagram-v2
 | `approved` | Immutable terminal receipt exists | Terminal |
 | `escalated` | No safe automatic approval remains | Terminal |
 
-`invalidated`, `missing`, `scope_changed`, `ambiguous`, `repairable`, and `corrupted` are derived observations. A delivery gate must not mutate an approved record into an invalidated one. It returns a relation or authority-health result, and a later explicit start may create a new candidate authority.
+`invalidated`, `missing`, `scope_changed`, `ambiguous`, `repairable`, and `corrupted` are derived observations. A review-context hook must not mutate an approved record into an invalidated one. It returns review-integrity context or repair guidance, and a later explicit start may create a new candidate authority without changing delivery policy.
 
 ## Derived categories and reason taxonomy
 
 | Category | Closed vocabulary | Purpose |
 |---|---|---|
-| Candidate relation | `exact`, `compatible_base_advance`, `provable_contraction`, `changed`, `unrelated`, `ambiguous`, `unknown` | Shared selector, recovery, and gate decision |
+| Candidate relation | `exact`, `compatible_base_advance`, `provable_contraction`, `changed`, `unrelated`, `ambiguous`, `unknown` | Shared selector, recovery, and review-context evaluation |
 | Finding admission | `candidate_causal`, `not_candidate_causal`, `insufficient_evidence` | Determines whether correction authority can exist |
 | Authority health | `healthy`, `repairable`, `blocked` | Separates known disposition from unknown corruption |
 | Transition result | `continue`, `collect`, `approve`, `escalate`, `repair`, `stop` | Stable adapter-facing outcome |
@@ -251,9 +252,9 @@ The relation function compares a frozen candidate with a live candidate:
 
 | Relation | Proof requirement | Result |
 |---|---|---|
-| `exact` | Candidate and policy identity match | Continue or validate receipt |
-| `compatible_base_advance` | Per `deriveBaseAdvanceCompatibility` (`internal/reviewtransaction/prepr.go:73`): merge-base tree preservation, path digest identity, patch identity, path disjointness, conflict-free `merge-tree --write-tree`, issuer-bound CI attestation and trust root, and base/HEAD non-advance revalidation | Validate same receipt at the new boundary |
-| `provable_contraction` | Live delivery is a deterministic subset of reviewed content, and every admitted finding references no excluded path (otherwise degrade to `changed`) | Validate the constrained delivery only |
+| `exact` | Candidate and policy identity match | Report matching review evidence |
+| `compatible_base_advance` | Per `deriveBaseAdvanceCompatibility` (`internal/reviewtransaction/prepr.go:73`): merge-base tree preservation, path digest identity, patch identity, path disjointness, conflict-free `merge-tree --write-tree`, issuer-bound CI attestation and trust root, and base/HEAD non-advance revalidation | Report the same review evidence at the new boundary |
+| `provable_contraction` | The live candidate is a deterministic subset of reviewed content, and every admitted finding references no excluded path (otherwise degrade to `changed`) | Report constrained review evidence only |
 | `changed` | Any reviewed candidate component differs | Require a new candidate authority after consent |
 | `unrelated` | No candidate lineage governs this content | Start a new candidate authority only |
 | `ambiguous` | More than one authority is equally applicable | Stop until explicit selection resolves it |
@@ -275,7 +276,7 @@ This is normative semantics, not an illustrative example: a future change to `co
 
 **`provable_contraction` (Amendment B / Decision 6).** `provable_contraction` validates only when every admitted finding references no excluded path. If any admitted finding references a path outside the delivered candidate's live scope, the relation degrades to `changed` rather than validating as a contraction. This closes a soundness gap where a narrowed delivery could otherwise inherit approval for content it no longer includes.
 
-This function is the only place allowed to decide relation. `start`, recovery, SDD receipt binding, and all five delivery gates call it.
+This function is the only place allowed to decide relation. `start`, recovery, SDD receipt binding, and all five review-context hooks call it. Its result is never a delivery decision.
 
 ## Deterministic selector and discovery
 
@@ -292,7 +293,7 @@ Discovery rules:
 - Linked worktrees share local authority through the Git common directory.
 - Independent clones have no inherited local authority and must re-review unless a separate authenticated transport is explicitly designed and approved.
 - A selected lineage is never inferred from recency when more than one valid candidate applies.
-- A no-op candidate does not create a delivery-chain receipt. It has no review content to govern.
+- A no-op candidate does not create a review receipt. It has no review content to govern.
 - A selector does not scan or materialize unrelated repository content merely to admit bounded evidence references.
 
 ## Review, consent, correction, and kill-switch semantics
@@ -327,28 +328,30 @@ Procedural retry before mutation is exact replay. It is not an additional correc
 
 The user-owned kill switch has one meaning: RDD is disabled and delivery remains governed by ordinary repository policy. It does not fabricate approval, create a receipt, or reopen historic review authority.
 
-The current candidate-decline authorization is a separate delivery branch. The recommended default is to remove it from the RDD authority model: a declined review should produce an explicit unmanaged outcome and return control to ordinary policy, not persist a receipt-like delivery authorization. If product requirements require persistence, it must remain a narrowly scoped non-approval declaration with no release authority and no reuse across candidate changes.
+A candidate-decline authorization would be a separate review-authority branch. RDD must not create one: a declined review returns control to ordinary policy and does not persist a receipt-like authority record. If product requirements require persistence, it must remain a narrowly scoped non-approval declaration with no review authority or reuse across candidate changes.
 
-## Receipt-only delivery gates
+## Read-only review-context hooks
 
-Each gate calls the same read-only validation operation with a boundary descriptor:
+Each integration hook calls the same read-only review-context operation with a boundary descriptor:
 
-| Gate | Boundary evidence |
+| Hook | Boundary evidence |
 |---|---|
 | `post-apply` | Current implementation candidate |
 | `pre-commit` | Exact staged candidate |
-| `pre-push` | Delivery range and remote boundary |
+| `pre-push` | Candidate range and remote boundary |
 | `pre-pr` | Candidate and base relationship |
 | `release` | Exact release target, publication boundary, and release evidence |
 
-The gate either validates the terminal receipt against the live boundary or denies it with a derived relation. It never:
+The hook reports the terminal receipt's relation to the live boundary as review evidence, including any repairable mismatch. It never:
 
 - starts review;
 - creates correction authority;
 - consumes a budget;
 - invalidates a receipt by mutating authority;
 - creates a recovery lineage;
-- composes an unrelated receipt graph to invent delivery authority.
+- composes an unrelated receipt graph to invent review authority.
+
+The reported relation is informational. It neither authorizes nor blocks commit, push, PR, release, or archive; those decisions remain with ordinary repository and SDD policy.
 
 ## Recovery and quarantine algebra
 
@@ -418,7 +421,7 @@ The adapter receives an opaque transition reference. It does not receive a set o
 |---|---|---|
 | Candidate identity, path/mode binding, policy binding | KEEP | One canonical `CandidateIdentity` |
 | CAS, locks, atomic mutation | KEEP | Internal authority-store behavior only |
-| Immutable terminal receipt | KEEP | Sole RDD delivery authorization |
+| Immutable terminal receipt | KEEP | Immutable RDD review evidence with no delivery authority |
 | Explicit human consent | KEEP | Required before freeze |
 | One bounded correction | KEEP | Frozen budget and one consumption flag |
 | User-owned kill switch | KEEP | One mode; disabled means unmanaged, never approved |
@@ -427,7 +430,7 @@ The adapter receives an opaque transition reference. It does not receive a set o
 | Per-operation recovery verbs | MERGE | One classified repair/disposition facade |
 | Manually maintained schemas, fixtures, decoders, help copies | DERIVE | Generated projections from one contract model |
 | Candidate-decline authorization | DOWNGRADE | Ordinary unmanaged policy or a strictly non-approval declaration |
-| Gate invalidation writes | REMOVE | Gate returns a derived mismatch only |
+| Review-context invalidation writes | REMOVE | A hook returns a derived mismatch only |
 | Legacy mutation lifecycle | REMOVE | Read-only compatibility and offline migration only |
 | Result sidecars, public journals, bundles, proof/chunk persistence | REMOVE | Immutable external evidence references only |
 | Runtime-specific lifecycle routes | REMOVE | One pre-freeze capability decision |
@@ -444,15 +447,15 @@ Each wave is a dependency boundary, not a large PR. A wave must prove its exit e
 | 0. Freeze expansion | Stop additive old-facade recovery and transport work except proven security defects; inventory owners and consumers | No behavior change | Inventory maps each transition, artifact, and consumer to one owner | Prevent new state/verb growth |
 | 1. Shadow algebra | Read-only candidate resolver, relation algebra, and graph classifier | Disable shadow evaluation | Differential matrix covers all selector, base, contraction, ambiguity, and unknown cases — see `internal/reviewtransaction/testdata/shadow-differential-matrix.golden` (40-row covering array, generated by `TestShadowMatrixCoveringArrayGolden`): 16 agreement, 12 explained divergence (Amendment B degradation and the shadow-only `unrelated` vocabulary gap), 8 no-live-decision (`ambiguous`/`unknown`), 4 no-shadow-decision, 0 unexplained divergences on `exact`/`compatible_base_advance`/`provable_contraction` — clean exit bar. Operator-facing usage: `docs/architecture/rdd-shadow-evaluation.md` | None |
 | 2. Leaf disposition | Generic disposition plan with #1892 leaf-only executor | Disable this new classified repair | Black-box repair, replay, crash, concurrency, refusal, and retained-graph validation | Do not merge a dedicated repair-verb taxonomy as the target design |
-| 3. New-lineage facade | New `start/finalize/validate` authority flow with two artifacts | Disable new starts; historical authority remains readable, but per the coexistence precedence (Amendment C) it never authorizes delivery of a candidate that has a new lineage | End-to-end candidate, consent, 0/1/4 review, correction, receipt, and gate journeys | New lineages stop writing legacy state/artifacts |
+| 3. New-lineage facade | New `start/finalize/validate` authority flow with two artifacts | Disable new starts; historical authority remains readable but is never treated as matching review evidence for a candidate with a new lineage | End-to-end candidate, consent, 0/1/4 review, correction, receipt, and review-context journeys | New lineages stop writing legacy state/artifacts |
 | 4. Thin consumers | Move adapters and SDD to opaque transitions and `ReceiptRef` | Per-adapter unavailable mode; no unsafe fallback | Real runtime evidence for each declared supported transport | Remove client planners and SDD review-binding mirrors for migrated consumers |
-| 5. Gate cutover | All gates use shared relation algebra and read-only receipt validation | Gate may deny; it cannot revive legacy mutation | Exact and incompatible boundary matrix for all five gates | Remove gate invalidation writes and chain-specific delivery exceptions |
+| 5. Review-context cutover | All hooks use shared relation algebra and read-only receipt validation | A hook may report a review-integrity mismatch; it cannot revive legacy mutation | Exact and incompatible boundary matrix for all five hooks | Remove invalidation writes and chain-specific review-authority exceptions |
 | 6. Descendant closure | #2014 atomic closure disposition after leaf repair evidence | Disable closure executor while retaining inspection | Multi-chain closure, unchanged unrelated graph, replay, and crash-recovery evidence | Remove overlapping anomaly-specific repair paths |
 | 7. Compatibility retirement | Enforce the declared horizon and preserve read-only forensic access | Offline parser remains available | No supported consumer calls retired contract; historical parse/migration checks pass | Delete legacy mutation paths, bundle workflows, sidecars, and duplicate contract projections |
 
-**Coexistence precedence (Amendment C / Decision 7).** While Wave 3 is active, legacy readable authority and new-lineage authority coexist. Legacy readable authority never authorizes delivery of a candidate that has a new lineage; only a new-lineage receipt can authorize delivery for a new-lineage candidate. This precedence rule governs every gate during the coexistence window and is the basis for the `Coexistence precedence` row in the adversarial safety analysis below.
+**Coexistence evidence isolation (Amendment C / Decision 7).** While Wave 3 is active, legacy readable authority and new-lineage authority coexist. Legacy readable authority is never matching review evidence for a candidate that has a new lineage; a new-lineage receipt is the only receipt that may be reported as matching evidence for that new lineage. This review-lifecycle rule applies to every review-context hook during coexistence. It does not authorize or block delivery.
 
-**Wave 3 exit-evidence pointer.** The `End-to-end candidate, consent, 0/1/4 review, correction, receipt, and gate journeys` cell above is proven piecewise across Slices 1-5, not as one fixture: promotion/rename (`internal/reviewtransaction/candidate_readonly_guard_test.go`), the v3 `AuthorityStore` CAS/lock/replay/receipt model (`internal/reviewtransaction/authority_store_test.go`), `ReviewCore` start/finalize/validate with reused consent/tier/budget (`internal/reviewtransaction/review_core_test.go`), the Amendment C governing-authority matrix and switch-off byte-equivalence at all five gates (`internal/reviewtransaction/new_lineage_discovery_test.go`, `internal/cli/review_new_lineage_switch_off_golden_test.go`), rollback safety (`internal/cli/review_new_lineage_rollback_safety_test.go`), the reason-taxonomy regression (`internal/cli/review_reason_taxonomy_test.go`), the gate-accurate live-evidence selector (`internal/cli/review_new_lineage_gate_selector_test.go`), and black-box lifecycle coverage through the built binary (`bench/journeys_wave3.go`, `j59`/`j60`). Deferred, and documented rather than silently missing: `review finalize` is not yet CLI-wired for new lineages (only `start`/`validate` are), so a genuine tier 0/1/4 flow reaching receipt issuance through the product's CLI surface — as opposed to `ReviewCore`/`AuthorityStore`'s Go API, which the rollback-safety test already drives to a receipt — remains a later wave's work; `OfferReviewAfterVerify` (`internal/reviewtransaction/review_offer.go`) ships its Wave 4 shape unwired per design decision 8, with its one required behavior (kill-switch-off returns before any repository read) covered by `internal/reviewtransaction/review_offer_test.go`.
+**Wave 3 exit-evidence pointer.** The `End-to-end candidate, consent, 0/1/4 review, correction, receipt, and review-context journeys` cell above is proven piecewise across Slices 1-5, not as one fixture: promotion/rename (`internal/reviewtransaction/candidate_readonly_guard_test.go`), the v3 `AuthorityStore` CAS/lock/replay/receipt model (`internal/reviewtransaction/authority_store_test.go`), `ReviewCore` start/finalize/validate with reused consent/tier/budget (`internal/reviewtransaction/review_core_test.go`), the Amendment C governing-authority matrix (`internal/reviewtransaction/new_lineage_discovery_test.go`), unconditional atomic-v3 START controls (`TestReviewStartAlwaysCreatesV3Authority` and `TestReviewStartCreatesNoLegacySiblings` in `internal/cli/review_new_lineage_switch_test.go`), worktree isolation and exact no-mutation replay (`TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly` in `internal/cli/review_atomic_start_integration_test.go` and `TestAuthorityStoreCreateOrReplayAtomicStartReplaysExactActiveBindingWithoutMutation` in `internal/reviewtransaction/atomic_start_test.go`), rollback safety (`internal/cli/review_new_lineage_rollback_safety_test.go`), the reason-taxonomy regression (`internal/cli/review_reason_taxonomy_test.go`), the gate-accurate live-evidence selector (`internal/cli/review_new_lineage_gate_selector_test.go`), and black-box lifecycle coverage through the built binary (`bench/journeys_wave3.go`, `j59`/`j60`). Deferred, and documented rather than silently missing: `review finalize` is not yet CLI-wired for new lineages (only `start`/`validate` are), so a genuine tier 0/1/4 flow reaching receipt issuance through the product's CLI surface — as opposed to `ReviewCore`/`AuthorityStore`'s Go API, which the rollback-safety test already drives to a receipt — remains a later wave's work; `OfferReviewAfterVerify` (`internal/reviewtransaction/review_offer.go`) ships its Wave 4 shape unwired per design decision 8, with its one required behavior (kill-switch-off returns before any repository read) covered by `internal/reviewtransaction/review_offer_test.go`.
 
 ## Migration chain and delivery plan
 
@@ -476,7 +479,7 @@ This table describes where the target architecture would address known families.
 | Capability before lifecycle mutation | #2076, #2207, #2221, #2225, #2191 |
 | Classified authority disposition | #1656, #1892, #2014, open PR #2111 |
 | Thin RDD/SDD bridge | #1533, #1552, #1569, #1581, #1620, #1708, #1715, #2131 |
-| Receipt-only delivery validation | #1379, #1801, #2046, #2126, #2222, #2239 |
+| Read-only review-context validation | #1379, #1801, #2046, #2126, #2222, #2239 |
 | Bounded immutable candidate evidence | #1454, #1484, #1528, #1555, #2061 |
 | Retire legacy active paths | #1455, #1462, #1570 and legacy repair/quarantine command families |
 
@@ -490,7 +493,7 @@ This table describes where the target architecture would address known families.
 | Bundle import/export in the active lifecycle | Product explicitly documents independent clones as re-review; no supported consumer depends on local bundle transfer |
 | Legacy mutation state machine | New lineages cannot write it; historical records parse read-only; migration horizon has elapsed |
 | SDD review-binding and remediation mirrors | SDD consumes `ReceiptRef` and all review validity checks call native validation |
-| Gate invalidation writes and delivery graph exceptions | All five gates prove exact, compatible, contraction, changed, ambiguous, and unknown behavior through the shared algebra |
+| Hook invalidation writes and review-authority graph exceptions | All five review-context hooks prove exact, compatible, contraction, changed, ambiguous, and unknown behavior through the shared algebra |
 | Manually authored schema/fixture/decoder duplicates | Generated artifacts and production-parser conformance vectors are required in CI |
 | Candidate-decline authority records | Maintainer decides unmanaged semantics and proves ordinary policy cannot mistake a decline for approval |
 
@@ -509,21 +512,21 @@ Historical receipts, journals, bundles, and quarantined residue remain forensic 
 | Budget reset | Treat replay or procedural retry as a fresh correction | Store exact replay identity and a single correction-consumed flag in authority |
 | Consent bypass | Interpret absent, malformed, or stale consent as approval | Freeze only after explicit consent; unreadable state fails closed |
 | Unsupported transport loop | Freeze a review that a runtime cannot inspect or submit | Capability check before authority, tier, lens, or budget creation |
-| Gate-created state | Mutate receipt authority during delivery validation | Gates are read-only and return derived mismatch only |
+| Hook-created state | Mutate receipt authority during review-context evaluation | Review-context hooks are read-only and return derived mismatch only |
 | Unsound contraction (Amendment B) | Validate a contraction whose admitted findings reference an excluded path | The `provable_contraction` relation degrades to `changed` when any admitted finding references a path outside the delivered candidate's live scope |
-| Coexistence precedence (Amendment C) | Let legacy readable authority authorize delivery of a new-lineage candidate | Legacy readable authority never authorizes delivery of a candidate that has a new lineage; only the new-lineage receipt governs new-lineage delivery |
-| Cross-lineage receipt contamination (Amendment E, #1379) | Accept a receipt whose candidate identity or lineage does not match the live candidate under review — audit-flagged potentially severe | Receipt validation binds exact candidate identity per lineage and repository identity; a receipt issued for a different lineage never satisfies gate validation |
+| Coexistence evidence isolation (Amendment C) | Treat legacy readable authority as matching review evidence for a new-lineage candidate | Legacy readable authority never matches a new-lineage candidate; only a matching new-lineage receipt is reported as review evidence, and neither result governs delivery |
+| Cross-lineage receipt contamination (Amendment E, #1379) | Accept a receipt whose candidate identity or lineage does not match the live candidate under review — audit-flagged potentially severe | Receipt validation binds exact candidate identity per lineage and repository identity; a receipt issued for a different lineage never satisfies matching review-context evaluation |
 
 ## Unresolved maintainer and product decisions
 
 | Decision | Recommended default | Tradeoff |
 |---|---|---|
-| Declined review semantics | Return explicit unmanaged ordinary delivery; do not persist a receipt-like decline authorization | Less resumability, much smaller delivery state model |
+| Declined review semantics | Return control to ordinary repository policy; do not persist a receipt-like decline authorization | Less resumability, much smaller review-state model |
 | Unsupported runtime behavior | Fail RDD before freeze and let the user explicitly choose unmanaged ordinary delivery when policy allows | Some runtimes cannot use RDD until they provide a real immutable transport |
 | Repair authorization | Require a maintainer-bound disposition plan with repository, inventory revision, closure, actor, reason, and expiry | More authorization ceremony, but it is concentrated in one operation rather than every repair verb |
 | Compatibility horizon | Declare a short, version-pinned read-only compatibility horizon for legacy authority and clients | Older consumers must upgrade or use offline migration |
 | Receipt transport between clones | Do not provide it by default | Re-review costs time; authenticated transport requires repository identity, signing, expiry, revocation, and replay design |
-| Release evidence | Keep equivalent release provenance and boundary evidence outside a simplified receipt payload | Release validation remains strict even if the receipt is smaller |
+| Release evidence | Keep equivalent release provenance and boundary evidence outside a simplified receipt payload | Ordinary release policy remains independently strict even if review evidence is smaller |
 | External evidence retention horizon (Amendment D / Decision 8) | Retain digests indefinitely in authority; raw payloads are provider diagnostics with a declared expiry | Indefinite digest retention adds small storage cost; a declared payload expiry bounds forensic replay depth |
 | SDD attempt-ledger ownership (Amendment D / Decision 9) | Keep attempts in SDD only if its store gains durable cumulative CAS-like properties; otherwise move attempts to native authority | Conditional ownership avoids a premature commitment, but requires re-litigating placement once SDD's store properties are known |
 
@@ -531,12 +534,12 @@ Historical receipts, journals, bundles, and quarantined residue remain forensic 
 
 - [ ] One native owner is the only component that selects lifecycle transitions and mutates review authority.
 - [ ] New lineages persist only the authority record and terminal receipt as active RDD artifacts.
-- [ ] One candidate relation algebra is used by start, recovery, SDD receipt binding, and all five gates.
+- [ ] One candidate relation algebra is used by start, recovery, SDD receipt binding, and all five review-context hooks.
 - [ ] New-lineage state is limited to `reviewing`, `correcting`, `validating`, `approved`, and `escalated`.
 - [ ] Ordinary review permits exactly one candidate-causal bounded correction; exact replay does not consume it.
 - [ ] Adapters cannot construct lifecycle flags, revisions, recovery bindings, or budget state.
 - [ ] Unsupported transport fails before consented authority freeze and cannot create a collection loop.
-- [ ] Gates are read-only receipt validators and never create review or correction state.
+- [ ] Review-context hooks are read-only receipt validators, never create review or correction state, and never govern delivery.
 - [ ] #1892 leaf repair is separately proven before #2014 descendant-closure disposition is enabled.
 - [ ] Unknown corruption, ambiguous discovery, stale approvals, and incompatible base movement remain fail closed.
 - [ ] Every retired path has a measured consumer inventory, migration boundary, and deletion proof.
@@ -547,7 +550,7 @@ Historical receipts, journals, bundles, and quarantined residue remain forensic 
 The list below was originally proposed for maintainer approval. Per the Wave 0 proposal's default-adoption table, decisions 1–5 are adopted as specified, pending explicit maintainer amendment; decisions 6–9 are encoded directly into the sections above via Amendments B, C, and D.
 
 1. The five-state new-lineage model and two-active-artifact rule are adopted as specified.
-2. The shared candidate relation algebra and read-only gate rule are adopted; gates never mutate authority.
+2. The shared candidate relation algebra and read-only review-context rule are adopted; hooks never mutate authority or govern delivery.
 3. The declined-review and unsupported-runtime product semantics are adopted: unmanaged ordinary delivery applies, and the process fails before freeze.
 4. The repair-authorization shape and compatibility horizon are adopted: a maintainer-bound disposition plan and a short, version-pinned read-only compatibility horizon.
 5. The wave order is adopted: Wave 1 as a read-only equivalence exercise, followed by #1892 leaf-only disposition work; #2014 remains deferred until leaf repair has independent safety evidence.
@@ -558,6 +561,6 @@ The list below was originally proposed for maintainer approval. Per the Wave 0 p
 |---|---|---|
 | A | `Canonical candidate identity and relation algebra` (relation table `compatible_base_advance` row + new subsection) + `Adversarial safety analysis` (`Incompatible base advance` row) + `Evidence and scope` (new proof-source row) | Cites `internal/reviewtransaction/prepr.go` `deriveBaseAdvanceCompatibility` (line 73) as normative semantics for all seven conditions instead of re-deriving them |
 | B | Same relation table (`provable_contraction` row) + same new subsection + `Adversarial safety analysis` (new `Unsound contraction` row) + `Acceptance criteria` (one bullet) | `provable_contraction` degrades to `changed` when admitted findings reference an excluded path |
-| C | `Migration waves` (Wave 3 row, `Rollback boundary` cell) + new precedence note under the wave table + `Adversarial safety analysis` (new `Coexistence precedence` row) | Legacy readable authority never authorizes delivery of a candidate that has a new lineage |
+| C | `Migration waves` (Wave 3 row, `Rollback boundary` cell) + new evidence-isolation note under the wave table + `Adversarial safety analysis` (new `Coexistence evidence isolation` row) | Legacy readable authority is never matching review evidence for a candidate that has a new lineage |
 | D | `Unresolved maintainer and product decisions` (two new rows, same `Decision / Recommended default / Tradeoff` columns) | Adds decision 8 (external evidence retention horizon) and decision 9 (SDD attempt-ledger ownership) |
-| E | `Adversarial safety analysis` (new `Cross-lineage receipt contamination` row) + `Issue and PR coverage map` (`Receipt-only delivery validation` row gains `#1379`) | One coverage row only — the map is a coverage index, not a duplicate index |
+| E | `Adversarial safety analysis` (new `Cross-lineage receipt contamination` row) + `Issue and PR coverage map` (`Read-only review-context validation` row gains `#1379`) | One coverage row only — the map is a coverage index, not a duplicate index |

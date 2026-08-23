@@ -106,7 +106,7 @@ func TestRenderProfileCreate_Step1_ShowsJDRowsAssignmentAndClearHelp(t *testing.
 		"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
 	}
 
-	output := screens.RenderProfileCreate(1, draft, "", 0, "", true, assignments, picker, 0)
+	output := screens.RenderProfileCreate(1, draft, "", 0, "", true, assignments, picker, len(screens.ModelPickerRowsForProfile())-1)
 
 	for _, want := range []string{"--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "OpenAI / GPT-5", "backspace: clear"} {
 		if !strings.Contains(output, want) {

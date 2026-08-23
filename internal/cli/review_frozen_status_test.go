@@ -101,24 +101,17 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 		}
 	})
 
-	t.Run("occupied intended-untracked slots finalize through the selected OpenCode lineage", func(t *testing.T) {
-		repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
-		for order, lens := range record.State.SelectedLenses {
-			result := admittedReviewerResultForTest(t, repo, record, lens, order)
-			if order == 0 {
-				result.Findings = []facadeFinding{{
-					ID: "R1-001", Location: "service-token.ts:1", Severity: "CRITICAL", Claim: "frozen candidate failure",
-					ProofRefs: []string{"service-token.ts:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
-					CausalDisposition: reviewtransaction.CausalIntroduced,
-				}}
-			}
+	t.Run("occupied intended-untracked slots close on the final current capture", func(t *testing.T) {
+		repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
+		for order, lens := range record.State.SelectedLenses[:len(record.State.SelectedLenses)-1] {
 			input := filepath.Join(t.TempDir(), lens+".json")
-			writeReviewCLIJSON(t, input, result)
+			writeReviewCLIJSON(t, input, admittedReviewerResultForTest(t, repo, record, lens, order))
 			if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", record.State.LineageID,
 				"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", strconv.Itoa(order), "--input", input}, &bytes.Buffer{}); err != nil {
 				t.Fatal(err)
 			}
 		}
+
 		var output bytes.Buffer
 		if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--cwd", repo, "--lineage", record.State.LineageID}, &output); err != nil {
 			t.Fatalf("selected OpenCode STATUS: %v\n%s", err, output.String())
@@ -126,33 +119,58 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 		var status ReviewTargetStatusResult
 		decodeStrictReviewJSON(t, output.Bytes(), &status)
 		if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
-			status.Authority.LineageID != record.State.LineageID || status.Action != reviewtransaction.TargetStatusActionFinalize ||
-			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
-			status.NextTransition.ReasonCode != "captured_results_ready" || status.NextTransition.Execute == nil ||
-			status.NextTransition.Execute.Operation != "review.finalize" || len(status.NextTransition.Execute.Artifacts) != len(record.State.SelectedLenses) {
+			status.Authority.LineageID != record.State.LineageID || status.NextTransition == nil ||
+			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "reviewer_results_required" ||
+			status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 ||
+			status.NextTransition.Collect.Inputs[0].CaptureOperation != reviewCaptureResultCaptureOperation {
 			t.Fatalf("occupied frozen STATUS = %#v\n%s", status, output.String())
 		}
-		var finalized bytes.Buffer
-		if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,
-			"--lineage", record.State.LineageID, "--captured-results"}, &finalized); err != nil {
-			t.Fatalf("finalize selected OpenCode lineage: %v\n%s", err, finalized.String())
+
+		order := len(record.State.SelectedLenses) - 1
+		lens := record.State.SelectedLenses[order]
+		input := filepath.Join(t.TempDir(), lens+".json")
+		writeReviewCLIJSON(t, input, admittedReviewerResultForTest(t, repo, record, lens, order))
+		var terminal bytes.Buffer
+		if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", record.State.LineageID,
+			"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", strconv.Itoa(order), "--input", input}, &terminal); err != nil {
+			t.Fatalf("capture final frozen lens: %v\n%s", err, terminal.String())
 		}
-		var result ReviewIntegrationFinalizeResult
-		decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, finalized.Bytes()).Result, &result)
-		if result.State != reviewtransaction.StateCorrectionRequired {
-			t.Fatalf("selected OpenCode finalize state = %q, want correction_required", result.State)
+		var result reviewLastEventClosureResult
+		decodeStrictReviewJSON(t, terminal.Bytes(), &result)
+		if result.Operation != "review/capture-result" || result.LineageID != record.State.LineageID || result.State != reviewtransaction.StateApproved {
+			t.Fatalf("final frozen capture = %#v", result)
 		}
+		assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 	})
 
-	t.Run("stale legacy selector is not reused", func(t *testing.T) {
+	t.Run("explicit compact lineage ignores stale v1 and v3 siblings", func(t *testing.T) {
 		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
-		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'legacy'\n", 0o644)
-		addPristineLegacyAuthority(t, repo, "stale-legacy-lineage")
+		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'frozen'\n", 0o644)
+		started := atomicStartV2(t, repo, "frozen-status-atomic")
+		store := atomicCompactStartStore(t, repo, started.LineageID)
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeAtomicStartCorruptSibling(t, repo, "v1", "stale-v1-sibling")
+		writeAtomicStartCorruptSibling(t, repo, "v3", "stale-v3-sibling")
+		before := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
 		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
-		status := explicitFrozenReviewingStatus(t, repo, "stale-legacy-lineage")
-		if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Binding.LineageID == "stale-legacy-lineage" {
-			t.Fatalf("stale legacy start status = %#v", status)
+
+		status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+		if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
+			status.Authority.LineageID != record.State.LineageID || status.Authority.Revision != record.Revision ||
+			status.Authority.State != reviewtransaction.StateReviewing || status.NextTransition == nil ||
+			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "reviewer_results_required" {
+			t.Fatalf("explicit compact STATUS with stale siblings = %#v", status)
+		}
+		if after := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(before, after) {
+			t.Fatalf("explicit compact STATUS mutated or selected a sibling authority: before=%#v after=%#v", before, after)
+		}
+		loaded, err := store.Load()
+		if err != nil || !reflect.DeepEqual(loaded, record) {
+			t.Fatalf("explicit compact STATUS changed named compact authority: %#v, %v", loaded, err)
 		}
 	})
 }
@@ -179,6 +197,44 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 		runReviewCLIGit(t, repo, "commit", "-qm", "frozen base diff")
 		target.BaseRef = base
 	}
+	store, record := createFrozenReviewingStatusRecord(t, repo,
+		"frozen-status-"+strings.ReplaceAll(string(kind), "_", "-"), target)
+	return repo, store, record
+}
+
+func frozenStagedReviewingStatusFixture(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
+	t.Helper()
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+
+	// Keep a legal, unrelated open lineage in the authority inventory. The
+	// explicit frozen selector below must resume only its own pending review.
+	writeReviewStartCandidate(t, repo, "unrelated-token.ts", "export const unrelated = 'open'\n", 0o644)
+	_, unrelated := createFrozenReviewingStatusRecord(t, repo, "frozen-staged-unrelated", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if unrelated.State.State != reviewtransaction.StateReviewing || len(unrelated.State.SelectedLenses) == 0 {
+		t.Fatalf("unrelated open frozen authority = %#v", unrelated)
+	}
+	runReviewCLIGit(t, repo, "commit", "-qm", "commit unrelated authority subject")
+
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'frozen'\n", 0o644)
+	store, record := createFrozenReviewingStatusRecord(t, repo, "frozen-staged-reviewing", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: base, Projection: reviewtransaction.ProjectionStaged,
+		IntendedUntracked: []string{}, LedgerIDs: []string{},
+	})
+	if record.State.State != reviewtransaction.StateReviewing || len(record.State.SelectedLenses) == 0 ||
+		record.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
+		record.State.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged ||
+		!reflect.DeepEqual(record.State.InitialSnapshot.Paths, []string{"service-token.ts"}) || record.State.Recovery != nil {
+		t.Fatalf("open frozen staged authority = %#v", record)
+	}
+	return repo, store, record
+}
+
+func createFrozenReviewingStatusRecord(t *testing.T, repo, lineage string, target reviewtransaction.Target) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
+	t.Helper()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	snapshot, err := builder.BuildStoredSnapshot(t.Context(), target)
 	if err != nil {
@@ -198,14 +254,10 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 		t.Fatalf("fixture must select reviewer lenses: risk=%q lines=%d", risk, lines)
 	}
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "frozen-status-" + strings.ReplaceAll(string(kind), "_", "-"), Mode: reviewtransaction.ModeOrdinaryBounded,
-		Generation: 1, Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("1", 64), RiskLevel: risk,
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("1", 64), RiskLevel: risk,
 		SelectedLenses: lenses, OriginalChangedLines: &lines,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	started, err := reviewtransaction.StartCompactAuthority(t.Context(), repo, reviewtransaction.CompactStartRequest{State: state})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,39 +265,24 @@ func frozenReviewingStatusFixture(t *testing.T, kind reviewtransaction.TargetKin
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repo, store, started.Record
-}
-
-func frozenStagedReviewingStatusFixture(t *testing.T) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
-	t.Helper()
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
-	writeReviewStartCandidate(t, repo, "docs/candidate.md", "# Candidate\n", 0o644)
-	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed base candidate")
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "frozen-staged-root", "--base-ref", base, "--committed-only"}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", "frozen-staged-root"}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'frozen'\n", 0o644)
-	probe := selectorTransitionStatus(t, repo, "--lineage", "frozen-staged-root", "--base-ref", base, "--projection", "staged", "--workspace-overlay")
-	const successor, actor, reason = "frozen-staged-reviewing", "maintainer", "include staged token"
-	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=frozen-staged-root\npredecessor_revision=" + probe.Authority.Revision +
-		"\ntarget_identity=" + probe.TargetIdentity + "\nsuccessor_lineage=" + successor + "\nactor=" + actor + "\nreason=" + reason
-	status := selectorTransitionStatus(t, repo, "--lineage", "frozen-staged-root", "--base-ref", base, "--projection", "staged", "--workspace-overlay",
-		"--recovery-successor-lineage", successor, "--recovery-reason", reason, "--recovery-actor", actor, "--recovery-authorization", authorization)
-	executeSelectorTransition(t, repo, status)
-	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, successor)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(t.Context(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := store.Load()
+	started, err := store.CreateOrReplayAtomicStart(t.Context(), reviewtransaction.CompactAtomicStartRequest{
+		State: state,
+		Binding: reviewtransaction.CompactAtomicStartBinding{
+			LineageID: state.LineageID, WorktreeIdentity: lease.Identity().RepositoryRef,
+			TargetIdentity: snapshot.Identity, Selector: target, PolicyHash: state.PolicyHash,
+			Tier: state.RiskLevel, SelectedLenses: append([]string(nil), state.SelectedLenses...),
+			OriginalChangedLines: state.OriginalChangedLines, CorrectionBudget: state.CorrectionBudget,
+			CorrectionBudgetPolicy: state.CorrectionBudgetPolicy,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repo, store, record
+	return store, started.Record
 }
 
 func explicitFrozenReviewingStatus(t *testing.T, repo, lineage string) ReviewTargetStatusResult {
