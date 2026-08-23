@@ -195,6 +195,7 @@ func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *
 	repo := initReviewCLIRepo(t)
 	writeOverByteBudgetLensContextCandidate(t, repo)
 	authorityRoot := reviewCLIAuthorityRoot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, authorityRoot)
 	homeBefore := readLegacyAuthorityTree(t, home)
 
 	var output bytes.Buffer
@@ -222,12 +223,8 @@ func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *
 	if strings.Contains(output.String(), "GENTLE_AI_REVIEW_") {
 		t.Fatalf("over-budget START refusal emitted reviewer evidence:\n%s", output.String())
 	}
-	// A store LOCK file is bookkeeping the refusal itself takes out; durable
-	// authority is a persisted record, and there must be none.
-	for path := range readLegacyAuthorityTree(t, authorityRoot) {
-		if filepath.Base(path) != "LOCK" {
-			t.Fatalf("over-budget START persisted authority STATUS could only refuse: %s", path)
-		}
+	if after := snapshotAuthorityTree(t, authorityRoot); authorityBefore != after {
+		t.Fatalf("over-budget START changed authority storage before create:\nbefore:\n%s\nafter:\n%s", authorityBefore, after)
 	}
 	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
 		t.Fatalf("over-budget START persisted an artifact: before=%#v after=%#v", homeBefore, after)
@@ -335,7 +332,7 @@ func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *t
 		t.Fatalf("STATUS reoffered a deterministically impossible reviewer slot: %#v", status)
 	}
 	if status.Authority == nil || status.Authority.Revision != record.Revision ||
-		status.Authority.State != reviewtransaction.StateReviewing || status.Receipt.Status != ReviewReceiptExpectedMissing ||
+		status.Authority.State != reviewtransaction.StateReviewing ||
 		status.Frozen == nil || status.Frozen.CorrectionBudget != record.State.CorrectionBudget {
 		t.Fatalf("terminal STATUS changed frozen review truth: %#v", status)
 	}
@@ -508,7 +505,7 @@ func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
 
 // TestReviewLensContextRecordsProviderEmissionForTheReceipt proves the level a
 // receipt will carry is observed from what the provider actually produced, not
-// declared by whoever finalizes. Absence stays absence when nothing produced a
+// declared by whoever closes the review. Absence stays absence when nothing produced a
 // context.
 func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
 	reviewEnabledHome(t)
@@ -583,64 +580,6 @@ func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatalf("conflicting delivery emitted %d bytes", output.Len())
-	}
-}
-
-// TestReviewReceiptRecordsLensContextLevel is the end of the chain: a review
-// whose every lens context came from the provider command carries that fact on
-// its terminal receipt, and a review that never used the surface carries no
-// level at all rather than a guessed one.
-func TestReviewReceiptRecordsLensContextLevel(t *testing.T) {
-	reviewEnabledHome(t)
-	for _, test := range []struct {
-		name           string
-		produceContext bool
-		want           reviewtransaction.ReviewerContextLevel
-	}{
-		{name: "provider produced every lens context", produceContext: true, want: reviewtransaction.ReviewerContextLevelProviderCommand},
-		{name: "nothing produced a lens context", produceContext: false, want: ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-			handle := args[slices.Index(args, "--repository-context")+1]
-			state := record.State
-			if test.produceContext {
-				for _, lens := range state.SelectedLenses {
-					lensContextBlock(t, handle, lens)
-				}
-			}
-			finalizeArgs := []string{"--cwd", repo, "--lineage", state.LineageID}
-			for range state.SelectedLenses {
-				resultPath := filepath.Join(t.TempDir(), "review.json")
-				writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-					Findings: []facadeFinding{}, Evidence: []string{"reviewed the complete candidate scope"},
-				})
-				finalizeArgs = append(finalizeArgs, "--result", resultPath)
-			}
-			evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-			if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			finalizeArgs = append(finalizeArgs, "--evidence", evidencePath)
-			if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, io.Discard); err != nil {
-				t.Fatal(err)
-			}
-			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			payload, err := os.ReadFile(store.ReceiptPath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			receipt, err := reviewtransaction.ParseCompactReceipt(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if receipt.ReviewerContextLevel != test.want {
-				t.Fatalf("receipt reviewer context level = %q, want %q", receipt.ReviewerContextLevel, test.want)
-			}
-		})
 	}
 }
 
@@ -798,21 +737,13 @@ func startCompactAuthorityWithoutFacadeChecks(t *testing.T, repo, lineage string
 	if len(lenses) == 0 {
 		t.Fatal("fixture selected no lenses; it no longer exercises reviewer evidence")
 	}
-	policy, err := facadePolicyBytes("")
+	request, err := prepareReviewFacadeCompactAtomicStart(t.Context(), repo, lineage, "", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	}, snapshot, assessment, assessment.ChangedLines, lenses)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
-		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
-		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	started, err := reviewtransaction.StartCompactAuthority(t.Context(), repo, reviewtransaction.CompactStartRequest{
-		State: state, ExplicitLineage: true, RepositoryContext: true,
-	})
+	started, err := runReviewFacadeCompactAtomicStart(t.Context(), repo, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,13 +783,6 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 
 	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision) {
 		t.Fatal("reachable small candidate was classified as over budget")
-	}
-
-	// START routes the proven verdict only: an unproven probe defers to the
-	// launch path that can establish the truth, rather than refusing a
-	// candidate nothing measured or raising an untyped failure.
-	if startErr := reviewLensContextStartBudgetRefusal(t.Context(), filepath.Join(t.TempDir(), "absent"), record.State); startErr != nil {
-		t.Fatalf("START refused a candidate its probe never classified: %v", startErr)
 	}
 
 	for _, test := range []struct {

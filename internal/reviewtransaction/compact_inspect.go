@@ -8,9 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 const (
@@ -255,103 +252,6 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		exits = append(exits, exit)
 	}
 	return exits, nil
-}
-
-// CompactAuthorityDamageKinds names, one clause per damaged lineage, the KIND
-// of damage one inspection found: an unreadable entry, a dangling predecessor,
-// a forged authorization binding, a reconcilable anomaly class. A denial that
-// collapses all of them into one generic sentence leaves the operator unable
-// to distinguish a truncated file from a missing entry from a forged binding
-// while the product holds the exact diagnosis; this is that diagnosis, in the
-// same words the inspection publishes machine-readably.
-func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []string {
-	kinds := []string{}
-	for _, diagnostic := range report.EntryDiagnostics {
-		switch diagnostic.Problem {
-		case compactInspectionEntryMalformed:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not load (%s): either its bytes do not parse — what an interrupted write leaves behind — or its persisted state is semantically invalid", diagnostic.LineageID, diagnostic.Problem))
-		case compactInspectionEntryOutdated:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds authority frozen by an earlier release under a retired snapshot-identity formula (%s); it is outdated — gate-invalid, preserved for forensics — not damaged, and it never blocks another lineage's operation", diagnostic.LineageID, diagnostic.Problem))
-		case compactInspectionEntryMissing:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds no compact state (%s)", diagnostic.LineageID, diagnostic.Problem))
-		case compactInspectionEntryUnreadable:
-			kinds = append(kinds, fmt.Sprintf("store entry %q cannot be read (%s)", diagnostic.LineageID, diagnostic.Problem))
-		default:
-			kinds = append(kinds, fmt.Sprintf("authority root entry %q does not belong there (%s)", diagnostic.LineageID, diagnostic.Problem))
-		}
-	}
-	for _, edge := range report.Edges {
-		if edge.Valid {
-			continue
-		}
-		switch {
-		case len(edge.AnomalyClasses) > 0:
-			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q classifies as %s, an anomaly class no advertised operation admits since reconciliation retired", edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ",")))
-		case edge.NonReconcilableReason != "":
-			kinds = append(kinds, edge.NonReconcilableReason)
-		case anyCompactProblemContains(edge.Problems, "missing predecessor"):
-			kinds = append(kinds, fmt.Sprintf("recovery successor %q names predecessor %q, which is missing from the store", edge.SuccessorLineageID, edge.PredecessorLineageID))
-		default:
-			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q does not re-derive: %s", edge.SuccessorLineageID, strings.Join(edge.Problems, "; ")))
-		}
-	}
-	return kinds
-}
-
-func anyCompactProblemContains(problems []string, fragment string) bool {
-	for _, problem := range problems {
-		if strings.Contains(problem, fragment) {
-			return true
-		}
-	}
-	return false
-}
-
-// compactStartInvalidGraphRefusal turns the bare invalid-graph refusal REVIEW
-// START used to emit into one that names the sanctioned exit the read-only
-// inspection proves, following the same rule SanctionedCompactRecoveryExits
-// itself follows: a specific operation is named only when the operation's own
-// prediction accepts it, so the command printed never turns around and
-// refuses. When no edge has a sanctioned exit, only the diagnosis is named —
-// naming a dead end is worse than naming nothing.
-func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records map[string]CompactRecord, cause error) error {
-	report, inspectErr := inspectCompactRecoveryRecordSet(ctx, records, CompactRecoveryInspectionReport{
-		Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{},
-	})
-	if inspectErr != nil {
-		return cause
-	}
-	exits, exitsErr := SanctionedCompactRecoveryExits(ctx, repo, report)
-	if exitsErr != nil {
-		return cause
-	}
-	var continuation strings.Builder
-	for _, exit := range exits {
-		switch exit.Operation {
-		case CompactRecoveryEdgeExitAbandon:
-			eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, exit.SuccessorLineageID)
-			if eligibilityErr != nil || !eligibility.Eligible {
-				continue
-			}
-			fmt.Fprintf(&continuation, " Successor %q is pristine, so quarantining it whole clears its graph defect: %s",
-				exit.SuccessorLineageID, compactAbandonCommandText(repo, exit.SuccessorLineageID, eligibility))
-		case CompactRecoveryEdgeExitRepair:
-			// Re-derive with the same empty actor/reason `review repair
-			// --preflight` always uses (SanctionedCompactRecoveryExits'
-			// dispositionSeed check above), and re-confirm admission before
-			// naming the command — the same rule the abandon/reconcile cases
-			// above already follow, so this never advertises a plan whose own
-			// re-derivation would then refuse.
-			plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", "")
-			if planErr != nil || admitClosureDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
-				continue
-			}
-			fmt.Fprintf(&continuation, " Successor %q closes the content-mismatched-recovery-authorization class, so `review repair` quarantines it whole without discarding its captured review data: %s",
-				exit.SuccessorLineageID, compactRepairCommandText(repo, plan))
-		}
-	}
-	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %s`",
-		cause, continuation.String(), pathquote.Quote(repo))
 }
 
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to
