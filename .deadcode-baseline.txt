@@ -112,6 +112,10 @@ internal/agents/pi/model_routing_inspection_semantics.go	validateModelRoutingMod
 internal/agents/pi/model_routing_inspection_semantics.go	validateModelRoutingProvenance
 internal/agents/pi/model_routing_inspection_semantics.go	validateModelRoutingResolvedTarget
 internal/agents/pi/model_routing_inspection_semantics.go	validateModelRoutingTargets
+internal/agents/pi/model_routing_operation_envelope.go	ModelRoutingResponseError.Error
+internal/agents/pi/model_routing_operation_envelope.go	ModelRoutingResponseError.Unwrap
+internal/agents/pi/model_routing_operation_envelope.go	decodeModelRoutingOperationEnvelope
+internal/agents/pi/model_routing_operation_envelope.go	modelRoutingResponseError
 internal/agents/pi/package_root.go	ResolvePackageRoot
 internal/agents/pi/package_source.go	NotConfiguredError.Error
 internal/agents/pi/package_source.go	NotConfiguredError.Unwrap
