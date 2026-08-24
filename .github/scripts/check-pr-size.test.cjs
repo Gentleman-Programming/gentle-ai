@@ -113,9 +113,9 @@ test('workflow is trusted, read-only, and never evaluates merge queue or candida
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /pull_request_target:/);
   assert.match(workflow, /types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]/);
-  assert.match(workflow, /contents: read/);
-  assert.match(workflow, /pull-requests: read/);
-  assert.match(workflow, /issues: read/);
+  assert.match(workflow, /^\s*contents:\s+read\s*$/m);
+  assert.match(workflow, /^\s*pull-requests:\s+read\s*$/m);
+  assert.match(workflow, /^\s*issues:\s+read\s*$/m);
   assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /sparse-checkout: \|/);
