@@ -118,6 +118,43 @@ func TestFormatPromptSignature_OmitsSkillsBlockWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestFormatPromptSignature_RendersDBImpactWhenPresent covers H-05's prompt
+// side (design decision D6): when a DB impact was evaluated for the primary
+// artifact, it must appear in the rendered prompt as "db_impact: <value>" so
+// agents -- especially frontend-implementer -- are told about it explicitly.
+func TestFormatPromptSignature_RendersDBImpactWhenPresent(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-4",
+		Agent:       "frontend-implementer",
+		DBImpact:    "high-risk",
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "db_impact: high-risk") {
+		t.Errorf("Expected output to contain 'db_impact: high-risk', got: %s", out)
+	}
+}
+
+// TestFormatPromptSignature_OmitsDBImpactWhenEmpty covers the negative case:
+// when no DB impact was evaluated, no db_impact line should be rendered.
+func TestFormatPromptSignature_OmitsDBImpactWhenEmpty(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-5",
+		Agent:       "backend-implementer",
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if strings.Contains(out, "db_impact") {
+		t.Errorf("Expected no db_impact line when DBImpact is empty, got: %s", out)
+	}
+}
+
 func TestFormatPromptSignature_NilPackage(t *testing.T) {
 	_, err := FormatPromptSignature("instruction", nil)
 	if err == nil {

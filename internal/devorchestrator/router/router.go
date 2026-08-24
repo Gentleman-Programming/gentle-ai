@@ -44,6 +44,9 @@ scope:
 permissions:
   code: {{ .Pkg.Permissions.Code }}
   git: {{ .Pkg.Permissions.Git }}
+{{- if .Pkg.DBImpact }}
+db_impact: {{ .Pkg.DBImpact }}
+{{- end }}
 </context_package>
 
 {{- if .Pkg.RepoProfile }}

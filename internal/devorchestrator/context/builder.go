@@ -16,6 +16,13 @@ type Package struct {
 	ArchitectureProfile string      `json:"architecture_profile" yaml:"architecture_profile"`
 	Permissions         Permissions `json:"permissions" yaml:"permissions"`
 	ExpectedOutput      Output      `json:"expected_output" yaml:"expected_output"`
+	// DBImpact carries the db.Impact classification ("none", "simple",
+	// "high-risk") of the primary artifact, when one was evaluated. It is
+	// devorchestrator-owned (not part of sddstatus.StatusV1Projection) and is
+	// rendered into the agent prompt so agents -- especially
+	// frontend-implementer -- are told about DB/schema impact explicitly
+	// rather than only inferring it from an injected skill.
+	DBImpact string `json:"db_impact,omitempty" yaml:"db_impact,omitempty"`
 }
 
 type Scope struct {
@@ -50,6 +57,7 @@ type BuildRequest struct {
 	ArchitectureProfile string
 	ExpectedType        string
 	ExpectedID          string
+	DBImpact            string
 }
 
 // Build creates a new Context Package based on the provided request.
@@ -68,6 +76,7 @@ func Build(req BuildRequest) Package {
 		Skills:              req.Skills,
 		RepoProfile:         req.RepoProfile,
 		ArchitectureProfile: req.ArchitectureProfile,
+		DBImpact:            req.DBImpact,
 		Permissions: Permissions{
 			Code: "read", // default to read, orchestrator overrides if execution
 			Git:  "read",
