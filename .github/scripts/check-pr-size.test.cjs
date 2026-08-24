@@ -83,8 +83,12 @@ test('policy transitions require explicit activation facts and reject malformed 
   const active = { version: 1, enforcement: 'enforcing', limit: REVIEW_BUDGET_LIMIT, activation_snapshot: [7, 8], grandfathered_prs: [7, 8] };
   assert.throws(() => validatePolicyTransition(dormantPolicy(), active), /Activation pull requests must be explicitly provided/);
   assert.throws(() => validatePolicyTransition(dormantPolicy(), active, {}), /Activation pull requests must be explicitly provided/);
-  assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ state: 'open', number: 'invalid', labels: ['size:exception'] }] }), /Invalid open PR record number/);
+  assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ state: 'open', number: 'invalid', labels: ['size:exception'] }] }), /Invalid activation PR record number/);
   assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ state: 'open', number: 7, labels: 'not-an-array' }] }), /Invalid open PR record labels/);
+  for (const state of [undefined, 'invalid']) {
+    assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ state, number: 7, labels: [] }] }), /Invalid activation PR record state/);
+  }
+  assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ state: 'closed', number: 7 }, { state: 'open', number: 7, labels: ['size:exception'] }] }), /duplicate PR number/);
 });
 
 test('policy transitions allow only closed or merged grandfather removals after activation', () => {
@@ -111,7 +115,7 @@ test('workflow is trusted, read-only, and never evaluates merge queue or candida
   assert.match(workflow, /types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]/);
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /pull-requests: read/);
-  assert.doesNotMatch(workflow, /issues: read/);
+  assert.match(workflow, /issues: read/);
   assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /sparse-checkout: \|/);

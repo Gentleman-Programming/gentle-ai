@@ -124,12 +124,16 @@ function sameIds(left, right) {
 function qualifiedAtActivation(pullRequests) {
   if (!Array.isArray(pullRequests)) throw new Error('activationPullRequests must be an array');
   const qualified = new Set();
+  const seen = new Set();
   for (const pr of pullRequests) {
     if (!pr || typeof pr !== 'object') throw new Error('Activation pull request record must be an object');
+    if (!Number.isSafeInteger(pr.number) || pr.number <= 0) {
+      throw new Error(`Invalid activation PR record number: ${JSON.stringify(pr.number)}`);
+    }
+    if (seen.has(pr.number)) throw new Error(`Activation pull requests contain duplicate PR number ${pr.number}`);
+    seen.add(pr.number);
+    if (!['open', 'closed'].includes(pr.state)) throw new Error(`Invalid activation PR record state for PR #${pr.number}`);
     if (pr.state === 'open') {
-      if (!Number.isSafeInteger(pr.number) || pr.number <= 0) {
-        throw new Error(`Invalid open PR record number in activation pull requests: ${JSON.stringify(pr.number)}`);
-      }
       if (!Array.isArray(pr.labels)) {
         throw new Error(`Invalid open PR record labels in activation pull requests for PR #${pr.number}`);
       }
