@@ -27,8 +27,8 @@ Load when a planned PR may exceed **400 changed lines**, SDD forecasts chain ris
 | GitHub plus #3356 exact host/build proof | Use only the proven native command help surface. |
 | GitHub without that proof | Fail-closed; provide the official setup and evidence guidance in the reference. |
 | Positively identified non-GitHub host | Select the portable strategy explicitly. |
-| Unknown or ambiguous host | Stop; request host clarification. |
-| Over-budget `single-pr` on GitHub | Stop; do not use `size:exception`. |
+| Unknown or ambiguous host | Fail-closed; run `git remote get-url --all origin` to resolve or prove ambiguity, then select the route. |
+| Over-budget `single-pr` on GitHub | Stop; run `git diff --numstat "$(git merge-base HEAD origin/main)" HEAD`, then select `auto-chain` or reduce scope; never use `size:exception`. |
 | Over-budget `ask-on-risk` or `auto-chain` | Select or form a compliant chain; this is not remote authority. |
 
 ## Execution Steps
