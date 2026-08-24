@@ -299,6 +299,149 @@ func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeDevOrchestratorOptInSetsDefaultAgent(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{DevOrchestrator: true}); err != nil {
+		t.Fatalf("Inject(DevOrchestrator=true) error = %v", err)
+	}
+
+	settingsPath := claudeAdapter().SettingsPath(home)
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", settingsPath, err)
+	}
+
+	if agent, _ := root["agent"].(string); agent != "dev-orchestrator" {
+		t.Fatalf("settings.json agent = %v, want %q", root["agent"], "dev-orchestrator")
+	}
+}
+
+func TestInjectClaudeDevOrchestratorOptInMergesWithExistingSettings(t *testing.T) {
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	settingsPath := claudeAdapter().SettingsPath(home)
+	existing := `{"permissions": {"allow": ["Bash(git *)"]}, "foo": "bar"}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+	}
+
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{DevOrchestrator: true}); err != nil {
+		t.Fatalf("Inject(DevOrchestrator=true) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", settingsPath, err)
+	}
+
+	if agent, _ := root["agent"].(string); agent != "dev-orchestrator" {
+		t.Fatalf("settings.json agent = %v, want %q", root["agent"], "dev-orchestrator")
+	}
+	if foo, _ := root["foo"].(string); foo != "bar" {
+		t.Fatalf("settings.json foo = %v, want %q — pre-existing content was clobbered", root["foo"], "bar")
+	}
+	permissions, ok := root["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("settings.json permissions has unexpected type: %T — pre-existing content was clobbered", root["permissions"])
+	}
+	allow, ok := permissions["allow"].([]any)
+	if !ok || len(allow) != 1 || allow[0] != "Bash(git *)" {
+		t.Fatalf("settings.json permissions.allow = %v, want [%q] — pre-existing content was clobbered", permissions["allow"], "Bash(git *)")
+	}
+}
+
+func TestInjectClaudeDevOrchestratorOptOutLeavesAgentKeyAbsent(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{DevOrchestrator: false}); err != nil {
+		t.Fatalf("Inject(DevOrchestrator=false) error = %v", err)
+	}
+
+	settingsPath := claudeAdapter().SettingsPath(home)
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// The code path under test never created the file — acceptable.
+			return
+		}
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", settingsPath, err)
+	}
+	if _, exists := root["agent"]; exists {
+		t.Fatalf("settings.json unexpectedly has agent = %v with DevOrchestrator=false", root["agent"])
+	}
+}
+
+func TestInjectNonClaudeAdapterDevOrchestratorDoesNotTouchClaudeSettings(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), "", InjectOptions{DevOrchestrator: true}); err != nil {
+		t.Fatalf("Inject(opencode, DevOrchestrator=true) error = %v", err)
+	}
+
+	claudeSettingsPath := claudeAdapter().SettingsPath(home)
+	if _, err := os.Stat(claudeSettingsPath); err == nil {
+		t.Fatalf("%q was created by a non-Claude-Code adapter install", claudeSettingsPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("Stat(%q) error = %v", claudeSettingsPath, err)
+	}
+}
+
+func TestInjectClaudeDevOrchestratorOptInOverwritesPriorAgentChoice(t *testing.T) {
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	settingsPath := claudeAdapter().SettingsPath(home)
+	existing := `{"agent": "something-else"}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+	}
+
+	if _, err := Inject(home, claudeAdapter(), "", InjectOptions{DevOrchestrator: true}); err != nil {
+		t.Fatalf("Inject(DevOrchestrator=true) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", settingsPath, err)
+	}
+
+	// DELIBERATE: opting in via --dev-orchestrator wins over whatever prior
+	// agent the user (or a previous install) set — the explicit opt-in flag
+	// is the newer, more specific signal and must take precedence.
+	if agent, _ := root["agent"].(string); agent != "dev-orchestrator" {
+		t.Fatalf("settings.json agent = %v, want %q (opt-in must overwrite the prior choice)", root["agent"], "dev-orchestrator")
+	}
+}
+
 func TestInjectClaudePreservesExistingSections(t *testing.T) {
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")

@@ -633,6 +633,20 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 		changed = changed || workflowResult.Changed
 		files = append(files, workflowResult.Files...)
+
+		// --dev-orchestrator opts in to dev-orchestrator as the default Claude
+		// Code agent, mirroring the OpenCode overlay above: a targeted
+		// top-level "agent" key merge into settings.json, not a full-file
+		// overwrite, so it coexists with whatever permissions.Inject or the
+		// user already wrote into the same file.
+		if opts.DevOrchestrator {
+			devAgentResult, devAgentErr := writeClaudeDevOrchestratorDefaultAgent(homeDir, adapter)
+			if devAgentErr != nil {
+				return InjectionResult{}, devAgentErr
+			}
+			changed = changed || devAgentResult.Changed
+			files = append(files, devAgentResult.Files...)
+		}
 	}
 
 	// 3b. Write native workflow files (Windsurf Hybrid-First, and any future
@@ -2524,6 +2538,44 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssign
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+// writeClaudeDevOrchestratorDefaultAgent merges {"agent": "dev-orchestrator"}
+// into Claude Code's settings.json, the top-level key documented at
+// https://code.claude.com/docs/en/settings-reference.md that makes every new
+// session start as that named subagent. It reuses the same
+// filemerge.MergeJSONObjects + filemerge.WriteFileAtomic idiom used a few
+// hundred lines above to merge the dev-orchestrator overlay fragment into
+// OpenCode's config, so a missing settings.json is treated as an empty base
+// and any pre-existing top-level keys (e.g. "permissions") survive untouched.
+//
+// This is a deliberate opt-in overwrite: if the file already has its own
+// "agent" value (e.g. a user's prior choice), --dev-orchestrator wins because
+// the user explicitly asked for it via the flag.
+func writeClaudeDevOrchestratorDefaultAgent(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if adapter.Agent() != model.AgentClaudeCode {
+		return InjectionResult{}, nil
+	}
+	settingsPath := adapter.SettingsPath(homeDir)
+	if strings.TrimSpace(settingsPath) == "" {
+		return InjectionResult{}, nil
+	}
+
+	baseJSON, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return InjectionResult{}, fmt.Errorf("read Claude settings %q: %w", settingsPath, err)
+	}
+
+	merged, err := filemerge.MergeJSONObjects(baseJSON, []byte(`{"agent": "dev-orchestrator"}`))
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("merge dev-orchestrator default agent into %q: %w", settingsPath, err)
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
 func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
