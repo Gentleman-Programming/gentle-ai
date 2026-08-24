@@ -259,11 +259,9 @@ func transitionJourneys() []Journey {
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "begin, fail, begin again", Requires: sddAttemptBeginCapability, Composite: sddBeginFailBegin},
 				{Name: "fixture: the bounded correction moves the candidate", Fixture: sddBoundedCorrection},
-				{Name: "review start on the corrected candidate", Requires: startCapability,
+				{Name: "review start on the corrected zero-lens candidate closes without creating an SDD binding", Requires: startCapability,
 					Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize burns without creating an SDD binding", Requires: finalizeCapability,
-					Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "prove the completed review left no authority or binding",
+				{Name: "prove the terminal START left no authority or binding",
 					Composite: transitionProveReviewBurnedAndUnbound},
 				{Name: "now move the unbound objective",
 					Requires:  sddAttemptRescopeCapability,
@@ -286,6 +284,7 @@ func transitionJourneys() []Journey {
 			// the other.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "fixture: stage high-risk review candidate alongside the open attempt", Fixture: stageAuthCode},
 				{Name: "begin an attempt and leave it open", Requires: sddAttemptBeginCapability,
 					Composite: transitionBeginOnly},
 				{Name: "start a review alongside it", Requires: startCapability,

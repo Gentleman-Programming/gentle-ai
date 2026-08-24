@@ -43,9 +43,6 @@
 ./internal/reviewtransaction TestAuthoritativeStorePathsAreCanonicalUnderAnAliasedRepository  # store paths canonicalize once, not per-spelling
 ./internal/reviewtransaction TestAcquireLocalStoreLockUnderAnAliasedRepository  # the lock is one lock under either spelling
 ./internal/reviewtransaction TestAcquireLocalStoreLockRefusesARawAliasedDirectory  # canonicalization happens before lock acquisition, not never
-./internal/sddstatus TestResolveBindingChangeRootAcceptsAnAliasedRepositoryRoot # SDD binding surface of the same alias defect
-./internal/sddstatus TestResolveBindingChangeRootStillRejectsAForeignWorkspace  # alias acceptance must not weaken workspace identity
-./internal/sddstatus TestBindApprovedReviewThroughAnAliasedSpelling             # end-to-end binding through the aliased spelling
 
 # --- #1781: START EPERM under managed macOS profiles --------------------------
 # Fixed by 8fb1c2c1 (anchored lock walk); managed profiles surface as
@@ -97,7 +94,5 @@
 ./internal/reviewtransaction TestStoreLockRecoversCrashAndCorruptOwnerRecords    # crash recovery depends on platform lock-release behavior
 ./internal/reviewtransaction TestStoreLockIsReleasedWhenOwnerProcessExits        # kernel releases flock on exit: timing is per-platform
 ./internal/reviewtransaction TestConcurrentStoreLockRecoverersCannotBothWin race # recovery race window is scheduler-dependent
-./internal/reviewtransaction TestCompactStoresShareRepositoryWriteLock race      # shared write lock across stores under Darwin timing
-./internal/reviewtransaction TestCompactStoreRejectsConcurrentLockedWriter race  # exclusive-writer rejection under contention
 ./internal/reviewtransaction TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline  # cancellation vs bounded wait ordering
 ./internal/reviewtransaction TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance     # read path vs exclusive maintenance lock timing

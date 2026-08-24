@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 // Escalation continuation journeys. Both cases here are refusals that are
 // CORRECT: an escalated lineage really is terminal, and recovering it into a
 // successor whose target is byte-identical really would mint fresh authority

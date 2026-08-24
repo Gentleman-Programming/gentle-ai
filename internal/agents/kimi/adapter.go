@@ -231,6 +231,7 @@ Usage:
 Native SDD entrypoints:
   /skill:sdd-init
   /skill:sdd-explore
+  /skill:sdd-research
   /skill:sdd-propose
   /skill:sdd-spec
   /skill:sdd-design

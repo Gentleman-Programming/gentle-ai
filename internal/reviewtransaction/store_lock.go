@@ -233,21 +233,6 @@ func acquireLocalStoreLock(path string) (*storeLock, error) {
 var readOnlyStoreLockTimeout = 2 * time.Second
 var readOnlyStoreLockPollInterval = 25 * time.Millisecond
 
-// acquireStoreLockForReadOnlyEvaluation waits out transient advisory
-// contention for a caller that only reads authority under the lock.
-//
-// Retrying here cannot double-apply anything, because there is nothing to
-// apply: the guarded body is a re-derivation, not a mutation. That is exactly
-// why the mutation paths do not get this treatment — waiting cannot make a
-// second writer legitimate, it can only delay its refusal.
-//
-// Exhaustion returns *AuthorityLockTimeoutError rather than the contention
-// error, so the caller reports a bounded wait that genuinely elapsed instead
-// of an instantaneous refusal.
-func acquireStoreLockForReadOnlyEvaluation(ctx context.Context, path string) (*storeLock, error) {
-	return acquireStoreLockWithBoundedWait(ctx, path)
-}
-
 // acquireStoreLockForConvergentCompletion admits the second caller class that
 // may wait out transient contention instead of refusing: idempotent
 // post-terminal completion. Once authority is terminal, the receipt bytes are

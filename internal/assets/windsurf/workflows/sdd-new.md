@@ -1,218 +1,69 @@
 ---
-description: Inicializa una nueva feature o tarea mediana/grande usando SDD en modo Hybrid-First para Cascade en Windsurf
+description: Start a medium or large change with the SDD planning lifecycle in Windsurf
 ---
 
 # /sdd-new
 
-Este workflow define el comportamiento obligatorio de **Cascade** al iniciar una nueva feature, cambio de alcance medio/grande o trabajo con incertidumbre suficiente como para requerir planificación formal.
+Use this workflow for a new feature, a multi-file change, architectural risk, or any request that needs a formal implementation contract. Small maintenance tasks do not need this workflow.
 
-## Propósito
+## Operating rules
 
-Usar las capacidades nativas de Windsurf de forma **Hybrid-First**:
+- Enter Plan Mode immediately. Do not write production code or switch to Code Mode during planning.
+- The orchestrator owns lifecycle state and product discovery. Phase executors consume explicit handoffs and do not invent decisions.
+- Generated technical artifacts default to English unless the user explicitly requests another artifact language.
+- Stop whenever required state is missing, selected research is incomplete, product decisions are unresolved, or hybrid stores disagree.
 
-- **Plan Mode** para planificar
-- **Memories / MCP (Engram)** para recuperar contexto previo
-- **Artifacts `.sdd/`** solo como contrato formal de planificación
-- **Code Mode** únicamente después de aprobación explícita del usuario
+## Required sequence
 
-## Cuándo usar este workflow
+### 1. Initialize OpenSpec and Engram lifecycle
 
-Activa este workflow cuando ocurra cualquiera de estas condiciones:
+Run the installed `sdd-init` flow before creating planning artifacts. Resolve the change name, artifact store, project root, and allowed edit roots.
 
-- El usuario inicia una **nueva feature**
-- La tarea afecta **múltiples archivos o módulos**
-- El cambio tiene **riesgo arquitectónico** o incertidumbre
-- El usuario pide explícitamente trabajar con **SDD**
-- La implementación requiere un contrato formal antes de escribir código
+- OpenSpec artifacts live under `openspec/changes/<change>/`.
+- Engram artifacts use the `sdd/<change>/` topic family.
+- In hybrid mode, persist the same lifecycle state to both stores and require matching revisions and bytes.
 
-Si la tarea es pequeña, puntual o claramente de mantenimiento menor, este workflow NO es el camino correcto.
+Recover prior decisions with Engram when available, then read repository instructions and relevant architecture context. Never invent conventions when context is missing.
 
----
+### 2. Run local exploration
 
-## Reglas operativas obligatorias
+Run `sdd-explore` for repository-local investigation before external research or proposal work. Record the exploration outcome and references in pre-proposal state.
 
-### 1. Cambiar inmediatamente a Plan Mode
+Exploration may inspect current code, architecture, constraints, and risks. It does not make unconfirmed product decisions and does not create the proposal or specification.
 
-Al comenzar este workflow, **DEBES entrar en Plan Mode de inmediato**.
+### 3. Run optional admitted research
 
-Acciones obligatorias:
+Research is optional until explicitly selected. If the user or orchestrator selects it, persist the request before source access and run `sdd-research` only with exact admitted evidence grants.
 
-1. Analizar el pedido del usuario
-2. Formular un plan de alto nivel
-3. Identificar alcance, riesgos, dependencias y archivos probables
+Selected research must finish with a source-backed `done` artifact and valid references. Denied, partial, blocked, missing, or divergent research remains persisted and blocks proposal readiness. If research is not selected, skip only this step.
 
-Acciones prohibidas en esta etapa:
+### 4. Confirm product decisions
 
-- NO escribir código de producción
-- NO entrar en Code Mode
-- NO modificar lógica de la aplicación
-- NO ejecutar implementación parcial "para adelantar trabajo"
-- NO asumir aprobación implícita
+After exploration and any selected research, resolve product choices separately from evidence claims.
 
-**Este workflow es de planificación formal, no de ejecución.**
+- In interactive mode, ask only for unresolved choices and persist the answers.
+- In automatic mode, use confirmed facts or emit one lossless grouped decision prompt, persist the pending state, and stop.
+- Continue only when decisions are confirmed and all required references are valid.
 
----
+### 5. Create proposal and specification
 
-### 2. Recuperar contexto antes de proponer nada
+When pre-proposal state is ready, invoke `sdd-propose` with the confirmed handoff. The proposer must not interview the user. Persist the proposal through the initialized store, then invoke `sdd-spec` to define requirements and scenarios.
 
-Antes de redactar cualquier artefacto SDD, **DEBES recuperar contexto arquitectónico y restricciones del proyecto**.
+The strict order is:
 
-Orden de preferencia:
+1. Initialize lifecycle state.
+2. Complete local exploration.
+3. Complete optional selected research.
+4. Confirm product decisions.
+5. Run `sdd-propose`.
+6. Run `sdd-spec`.
 
-1. Usar **Engram** mediante las herramientas MCP canónicas: `mem_search` para buscar decisiones previas y `mem_context` para recuperar el contexto reciente del proyecto
-2. Si Engram no está disponible o no devuelve contexto suficiente, leer `AGENTS.md`
-3. Si existe contexto adicional del proyecto relacionado con SDD o arquitectura, incorporarlo también
+## Approval gate
 
-Debes buscar, como mínimo:
+Present a concise planning summary with the objective, scope, risks, unresolved blockers, and persisted artifact locations. Ask for explicit approval before implementation.
 
-- Decisiones arquitectónicas previas
-- Convenciones del repositorio
-- Restricciones de implementación
-- Reglas de calidad o revisión
-- Patrones ya establecidos para cambios similares
+After approval, continue through design and tasks before `sdd-apply`. Never treat silence as approval, create commits, or begin partial implementation from this workflow.
 
-Si no encuentras contexto suficiente, debes decirlo explícitamente en el plan. **No inventes convenciones.**
+## Completion criteria
 
----
-
-### 3. Crear el contrato formal inicial en `.sdd/`
-
-Debes crear el directorio `.sdd/` si no existe.
-
-Luego debes generar exactamente estos dos archivos iniciales:
-
-- `.sdd/proposal.md`
-- `.sdd/spec.md`
-
-En esta fase, esos dos archivos son **obligatorios**.
-
-#### Contenido mínimo de `.sdd/proposal.md`
-
-Debe capturar, como mínimo:
-
-- Título del cambio
-- Problema a resolver
-- Objetivo
-- Alcance incluido
-- Alcance excluido
-- Enfoque propuesto
-- Riesgos principales
-- Supuestos abiertos
-- Preguntas o decisiones pendientes
-
-#### Contenido mínimo de `.sdd/spec.md`
-
-Debe capturar, como mínimo:
-
-- Requisitos funcionales
-- Requisitos no funcionales si aplican
-- Escenarios de uso
-- Criterios de aceptación
-- Restricciones técnicas relevantes
-- Casos límite conocidos o supuestos importantes
-
-Los artefactos deben ser:
-
-- Claros
-- Revisables
-- Ejecutables como contrato de implementación
-- Consistentes con el contexto recuperado del proyecto
-
----
-
-### 4. Presentar resumen de planificación al usuario
-
-Después de crear `.sdd/proposal.md` y `.sdd/spec.md`, debes presentar un resumen breve y claro en chat.
-
-Ese resumen debe incluir:
-
-- Objetivo de la feature
-- Alcance propuesto
-- Riesgos o dudas principales
-- Confirmación de que los archivos fueron creados:
-  - `.sdd/proposal.md`
-  - `.sdd/spec.md`
-
-No muestres una pared de texto innecesaria. Resume lo esencial para revisión.
-
----
-
-### 5. Approval Gate absoluto
-
-Una vez generados los documentos, debes **detenerte ABSOLUTAMENTE**.
-
-Debes preguntar **exactamente**:
-
-**¿Apruebas este plan de implementación?**
-
-Luego:
-
-- Debes **esperar confirmación explícita**
-- NO puedes continuar a Code Mode sin aprobación
-- NO puedes empezar implementación "mientras tanto"
-- NO puedes interpretar silencio como aprobación
-- NO puedes reemplazar esta pausa con un resumen informal
-
-Respuestas válidas para continuar:
-
-- "sí"
-- "aprobado"
-- "de acuerdo"
-- "go ahead"
-- cualquier confirmación explícita equivalente
-
-Si el usuario pide cambios:
-
-- Debes seguir en Plan Mode
-- Debes ajustar `.sdd/proposal.md` y/o `.sdd/spec.md`
-- Debes volver a presentar el plan
-- Debes volver a preguntar: **¿Apruebas este plan de implementación?**
-
----
-
-## Secuencia estricta de ejecución
-
-Sigue esta secuencia sin saltos:
-
-1. Detectar que el trabajo amerita `/sdd-new`
-2. Entrar en **Plan Mode**
-3. Recuperar contexto con **Engram** o, en su defecto, leer `AGENTS.md`
-4. Sintetizar restricciones, alcance y riesgos
-5. Crear `.sdd/` si no existe
-6. Generar `.sdd/proposal.md`
-7. Generar `.sdd/spec.md`
-8. Presentar un resumen breve al usuario
-9. Preguntar exactamente: **¿Apruebas este plan de implementación?**
-10. **Detenerte y esperar respuesta**
-
----
-
-## Prohibiciones explícitas
-
-Mientras este workflow no haya sido aprobado por el usuario:
-
-- NO escribir código de producción
-- NO editar archivos de implementación
-- NO ejecutar tareas de aplicación
-- NO cambiar a Code Mode
-- NO crear commits
-- NO correr una implementación parcial
-- NO continuar automáticamente al siguiente paso de SDD
-
----
-
-## Criterio de salida de este workflow
-
-Este workflow se considera correctamente ejecutado solo si:
-
-- Cascade usó **Plan Mode**
-- Recuperó contexto con **Engram** o `AGENTS.md`
-- Generó `.sdd/proposal.md`
-- Generó `.sdd/spec.md`
-- Presentó un resumen al usuario
-- Preguntó exactamente: **¿Apruebas este plan de implementación?**
-- Se detuvo a esperar aprobación explícita
-
-Si cualquiera de esos puntos no ocurre, el workflow está mal ejecutado.
-
-
+This workflow is complete only when lifecycle state is persisted, local exploration is recorded, selected research is done or explicitly unselected, product decisions are confirmed, proposal and specification artifacts exist in the initialized store, and the user has explicitly approved the plan.

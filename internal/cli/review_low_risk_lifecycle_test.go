@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,59 +31,39 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, startOutput.Bytes(), &started)
 	if started.RiskLevel != reviewtransaction.RiskLow || started.ChangedLines != 129 || started.CorrectionBudget != 65 ||
+		started.State != reviewtransaction.StateApproved || started.Action != "closed" ||
 		started.LensesRequired || !reflect.DeepEqual(started.SelectedLenses, []string{}) {
 		t.Fatalf("low-risk START = %#v", started)
 	}
 	if !bytes.Contains(startOutput.Bytes(), []byte(`"selected_lenses": []`)) {
 		t.Fatalf("zero-lens negotiated START did not encode an array: %s", startOutput.String())
 	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("zero-lens START retained compact authority state: %v", err)
+	}
+
 	var rawStartOutput bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", started.LineageID}, &rawStartOutput); err != nil {
 		t.Fatal(err)
 	}
 	var rawStarted ReviewFacadeStartResult
 	decodeStrictReviewJSON(t, rawStartOutput.Bytes(), &rawStarted)
-	if !reflect.DeepEqual(rawStarted.SelectedLenses, []string{}) || !bytes.Contains(rawStartOutput.Bytes(), []byte(`"selected_lenses": []`)) {
-		t.Fatalf("zero-lens raw START did not encode an array: %s", rawStartOutput.String())
-	}
-
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), record.State.InitialSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nativeEvidence, err := reviewtransaction.NativeLowRiskVerificationEvidence(record.State, assessment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(nativeEvidence, []byte(reviewtransaction.NativeLowRiskVerificationDomain+"\x00")) {
-		t.Fatalf("native evidence lacks domain separation: %q", nativeEvidence)
-	}
-
-	var finalizeOutput bytes.Buffer
-	if err := RunReview([]string{
-		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-	}, &finalizeOutput); err != nil {
-		t.Fatalf("empty low-risk FINALIZE: %v; cause: %v\n%s", err, errors.Unwrap(err), finalizeOutput.String())
-	}
-	finalized := assertApprovedBurnedCompactNegotiatedFinalize(t, finalizeOutput.Bytes())
-	if finalized.LineageID != started.LineageID || finalized.StoreRevision == record.Revision {
-		t.Fatalf("empty low-risk FINALIZE = %#v, want burned terminal result for %q", finalized, started.LineageID)
+	if rawStarted.State != reviewtransaction.StateApproved || rawStarted.Action != "closed" ||
+		!reflect.DeepEqual(rawStarted.SelectedLenses, []string{}) || !bytes.Contains(rawStartOutput.Bytes(), []byte(`"selected_lenses": []`)) {
+		t.Fatalf("zero-lens raw START did not close and encode zero lenses: %s", rawStartOutput.String())
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
-// TestActiveMDXRequiresReviewerEvidence pins the content-classified boundary for
+// TestActiveMDXRequiresReviewerCapture pins the content-classified boundary for
 // MDX: runtime syntax withdraws the passive nomination its extension carries, so
-// the candidate becomes one consolidated review that cannot finalize on
-// structural readback alone.
+// the candidate becomes one consolidated review that closes on its reviewer
+// capture rather than structural readback alone.
 func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -98,49 +77,14 @@ func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 	if started.RiskLevel != reviewtransaction.RiskMedium || len(started.SelectedLenses) != 1 {
 		t.Fatalf("active MDX START = %#v", started)
 	}
-	output.Reset()
-	if err := RunReview([]string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID}, &output); err == nil {
-		t.Fatal("empty active MDX FINALIZE succeeded")
+	legacyStarted := ReviewFacadeStartResult{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
+		SelectedLenses: started.SelectedLenses,
 	}
-	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	record, _ := store.Load()
-	if record.State.State != reviewtransaction.StateReviewing {
-		t.Fatalf("empty active MDX FINALIZE persisted %q", record.State.State)
+	captureCleanCLIReviewerResult(t, repo, legacyStarted, 0, &output)
+	if !bytes.Contains(output.Bytes(), []byte(reviewLastEventClosureSchema)) {
+		t.Fatalf("active MDX terminal capture = %s", output.String())
 	}
-}
-
-func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	path := filepath.Join(repo, "docs", "guide.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("ordinary documentation\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runReviewCLIGit(t, repo, "add", "docs/guide.md")
-	started := startReviewOperationFixture(t, repo, "review-low-external-evidence")
-	evidence := []byte("external focused tests pass\n")
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidencePath, evidence, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath,
-	}, &output); err != nil {
-		t.Fatal(err)
-	}
-	finalized := assertApprovedBurnedCompactFacadeFinalize(t, output.Bytes())
-	if finalized.LineageID != started.LineageID {
-		t.Fatalf("external-evidence FINALIZE lineage = %q, want %q", finalized.LineageID, started.LineageID)
-	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
@@ -166,12 +110,6 @@ func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
 	if started.RiskLevel != reviewtransaction.RiskLow || started.Projection != reviewtransaction.ProjectionStaged ||
 		!reflect.DeepEqual(started.SelectedLenses, []string{}) {
 		t.Fatalf("staged low-risk START = %#v", started)
-	}
-	output.Reset()
-	if err := RunReview([]string{
-		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-	}, &output); err != nil {
-		t.Fatalf("staged empty FINALIZE: %v\n%s", err, output.String())
 	}
 	output.Reset()
 	if err := RunReview([]string{
@@ -209,20 +147,14 @@ func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
 	}, &output); err != nil {
 		t.Fatal(err)
 	}
-	output.Reset()
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", "low-risk-overlay",
-	}, &output); err != nil {
-		t.Fatalf("overlay empty FINALIZE: %v\n%s", err, output.String())
-	}
-	var finalized ReviewFacadeFinalizeResult
-	decodeStrictReviewJSON(t, output.Bytes(), &finalized)
-	if finalized.State != reviewtransaction.StateApproved {
-		t.Fatalf("overlay empty FINALIZE = %#v", finalized)
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	if started.State != reviewtransaction.StateApproved || started.Action != "closed" {
+		t.Fatalf("overlay zero-lens START = %#v", started)
 	}
 }
 
-func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
+func TestMediumReviewClosesOnCapturedEvidence(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -233,15 +165,15 @@ func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
 	if err := os.WriteFile(result, []byte(`{"lens":"reliability","findings":[],"evidence":["reviewed the exact candidate tree"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var output bytes.Buffer
-	if err := finalizeReviewCLIArgs(t, repo, []string{
-		"--cwd", repo, "--lineage", started.LineageID, "--result", result,
-	}, &output); err != nil {
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	var finalized ReviewFacadeFinalizeResult
-	decodeStrictReviewJSON(t, output.Bytes(), &finalized)
-	if finalized.State != reviewtransaction.StateValidating || finalized.ReceiptPath != "" {
-		t.Fatalf("medium empty-evidence FINALIZE = %#v", finalized)
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{result}); err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("captured medium evidence retained compact authority state: %v", err)
 	}
 }

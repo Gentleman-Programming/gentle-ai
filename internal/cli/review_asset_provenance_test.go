@@ -19,14 +19,6 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 			staleManagedReviewerAssets(t, home)
 			return false, errors.Join(RunReview([]string{"status", "--cwd", repo}, &bytes.Buffer{}), RunReview([]string{"capabilities"}, &bytes.Buffer{}), RunReview([]string{"start", "--help"}, &bytes.Buffer{}), RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &bytes.Buffer{}))
 		},
-		"capture evidence repository context": func(t *testing.T, home, repo string) (bool, error) {
-			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
-			started := runNegotiatedReviewStart(t, repo, "provenance-capture")
-			input := filepath.Join(t.TempDir(), "evidence.txt")
-			requireManagedAssetProvenanceNoError(t, os.WriteFile(input, []byte("passed\n"), 0o600))
-			staleManagedReviewerAssets(t, home)
-			return true, RunReviewCaptureEvidence([]string{"--repository-context", started.RepositoryContext.Handle, "--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity, "--expected-revision", started.RepositoryContext.Revision, "--outcome", "passed", "--input", input}, &bytes.Buffer{})
-		},
 		"abandon": func(t *testing.T, home, repo string) (bool, error) {
 			staleManagedReviewerAssets(t, home)
 			return true, RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--expected-revision", "revision", "--reason", "reason", "--actor", "actor", "--maintainer-authorization", "authorization"}, &bytes.Buffer{})

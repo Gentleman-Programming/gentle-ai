@@ -172,13 +172,13 @@ func (result ReviewIntegrationStartResult) Validate() error {
 	switch {
 	case legacyTransport:
 		switch result.Action {
-		case "created", "resumed", "reuse-receipt", "blocked-scope-action":
+		case "created", "resumed", "closed", "reuse-receipt", "blocked-scope-action":
 		default:
 			return fmt.Errorf("unsupported negotiated v1 START action %q", result.Action) // refusal:by-design world-action: a provider-built v1 START action outside the published enum is a contract implementation defect; only a code fix can make it representable
 		}
 	case nativeGitTransport:
 		switch result.Action {
-		case "created", "replayed":
+		case "created", "replayed", "closed":
 		default:
 			return fmt.Errorf("unsupported negotiated v2 START action %q", result.Action) // refusal:by-design world-action: a provider-built v2 START action outside the published enum is a contract implementation defect; only a code fix can make it representable
 		}

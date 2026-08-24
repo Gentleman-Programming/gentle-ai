@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -123,13 +124,7 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 	runReviewCLIGit(t, repo, "add", "--", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-m", "candidate")
 
-	// This predecessor represents a compact approval from before v3 started
-	// burning approved authority. Seed it through the reviewtransaction fixture
-	// seam instead of current FINALIZE so the recovery behavior sees the frozen
-	// base-diff authority it is meant to protect.
-	predecessor := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, "recover-1744-frozen-base", reviewtransaction.Target{
-		Kind: reviewtransaction.TargetBaseDiff, BaseRef: firstBase, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	}).Record
+	predecessor := escalatedBaseDiffRecoveryFixture(t, repo, "recover-1744-frozen-base", firstBase)
 	if predecessor.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff {
 		t.Fatalf("predecessor fixture is not base-diff: %#v", predecessor.State)
 	}
@@ -143,11 +138,13 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 	runReviewCLIGit(t, repo, "commit", "-m", "unrelated base")
 	differentBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 
+	successorIdentity := reviewRecoverBaseDiffSuccessorIdentity(t, repo, differentBase)
+	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, successorIdentity, "maintainer", "recover with a different base")
 	err := RunReviewRecover([]string{
 		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
 		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "recover-1744-different-base-successor",
-		"--disposition", "scope_changed", "--reason", "recover with a different base", "--actor", "maintainer",
-		"--base-ref", differentBase, "--committed-only",
+		"--disposition", "escalated", "--reason", "recover with a different base", "--actor", "maintainer",
+		"--base-ref", differentBase, "--committed-only", "--maintainer-authorization", authorization,
 	}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "recovery base-ref does not match predecessor base") {
 		t.Fatalf("base-diff predecessor with a changed base-ref = %v, want frozen base-tree rejection", err)
@@ -200,25 +197,71 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 		t.Fatal(err)
 	}
 	// The escalated compact predecessor is fixture setup for RECOVER admission.
-	// Construct it through the test-only legacy seam; production RECOVER remains
-	// the behavior exercised by this helper's callers.
-	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+	// The real events are: a severe final lens capture opens correction, a
+	// STATUS-bound plan opens the bounded fix, and a failed targeted validator
+	// closes it as escalated.
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage})
+	if err != nil {
 		t.Fatal(err)
 	}
-	resultPath := filepath.Join(t.TempDir(), "review.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
-			ProofRefs:     []string{"differential test fails only on candidate"},
-			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
-		}}, Evidence: []string{"focused differential test failed"},
-	})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage, "--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	for order := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == 0 {
+			findings = []facadeFinding{{
+				Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
+				ProofRefs:     []string{"differential test fails only on candidate"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
+	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, lineage, 1)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
+	}
+	open, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, open.State, open.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{
+			"the exact corrected candidate still fails the original criterion",
+		}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{
+			"the bounded correction introduced no unrelated regression",
+		}},
+		FollowUps: []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	previous := reviewProviderRoleHostAdapter
+	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+			return failedPayload, nil
+		})
+	}
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
+		"--expected-revision", open.Revision, "--request-hash", request.RequestHash,
+		"--agent", "pi", "--execute=true",
+	}, io.Discard); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v", err)
 	}
 	predecessor, err := store.Load()
 	if err != nil {
@@ -228,6 +271,83 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 		t.Fatalf("predecessor fixture did not reach an escalated current-changes authority: %#v", predecessor.State)
 	}
 	return repo, baseRef, predecessor
+}
+
+func escalatedBaseDiffRecoveryFixture(t *testing.T, repo, lineage, baseRef string) reviewtransaction.CompactRecord {
+	t.Helper()
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", lineage, "--base-ref", baseRef, "--committed-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	for order := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == 0 {
+			findings = []facadeFinding{{
+				Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate regression",
+				ProofRefs:     []string{"differential test fails only on candidate"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
+	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, lineage, 1)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("corrected candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, open.State, open.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{
+			"the exact corrected candidate still fails the original criterion",
+		}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{
+			"the bounded correction introduced no unrelated regression",
+		}},
+		FollowUps: []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	previous := reviewProviderRoleHostAdapter
+	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+			return failedPayload, nil
+		})
+	}
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
+		"--expected-revision", open.Revision, "--request-hash", request.RequestHash,
+		"--agent", "pi", "--execute=true",
+	}, io.Discard); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v", err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateEscalated || record.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff {
+		t.Fatalf("base-diff predecessor did not reach escalated state: %#v", record.State)
+	}
+	return record
 }
 
 // reviewRecoverBaseDiffSuccessorIdentity mirrors the exact target the CLI

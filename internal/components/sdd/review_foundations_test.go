@@ -69,8 +69,8 @@ func TestSDDVerifyRunsWithoutReviewArtifacts(t *testing.T) {
 		"Review state is informational and never a verification prerequisite.",
 		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
 		"Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.",
-		"exact canonical verification-evidence bytes, not only their hash",
-		"hashes cannot reconstruct artifact content",
+		"Return ordinary verification evidence with the result.",
+		"Terminal reviewer closure is capture-owned and informational",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("sdd-verify missing independent verification clause %q", want)
@@ -80,6 +80,8 @@ func TestSDDVerifyRunsWithoutReviewArtifacts(t *testing.T) {
 		"authoritative preterminal transaction",
 		"missing_review_authority",
 		"authority_only_failure",
+		"exact canonical verification-evidence bytes, not only their hash",
+		"complete-final-verification",
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("sdd-verify retains a review prerequisite %q", forbidden)

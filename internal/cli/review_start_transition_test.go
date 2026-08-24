@@ -31,15 +31,9 @@ func TestNegotiatedStatusStartLineageSelection(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 			if test.occupy {
-				startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
-					"--cwd", repo, "--lineage", "status-start-prior-schema-source",
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				var started ReviewFacadeStartResult
-				decodeStrictReviewJSON(t, startedBytes, &started)
-				relocateCompactRecordWithIdentities(t, repo, started.LineageID, test.lineage, retiredSnapshotIdentityForCLITest)
+				// A legacy-v1 record occupies the requested compatibility name but
+				// never resumes or shadows the current compact START target.
+				addPristineLegacyAuthority(t, repo, test.lineage)
 			}
 			selectors := []string{}
 			if test.lineage != "" {

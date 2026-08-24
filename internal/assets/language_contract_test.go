@@ -163,8 +163,8 @@ func allSDDPhaseSkillAssetPaths(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("Glob embedded SDD phase skills: %v", err)
 	}
-	if len(paths) != 10 {
-		t.Fatalf("SDD phase skill asset count = %d, want 10", len(paths))
+	if len(paths) != 11 {
+		t.Fatalf("SDD phase skill asset count = %d, want 11", len(paths))
 	}
 	sort.Strings(paths)
 	return paths
@@ -179,10 +179,10 @@ func TestShippedReviewAssetsDoNotInstructFixTouchedLineDiscovery(t *testing.T) {
 	}
 }
 
-func TestSDDOrchestratorAssetsEnforceInteractiveProposalGates(t *testing.T) {
+func TestSDDOrchestratorAssetsUseCanonicalResearchGate(t *testing.T) {
 	assetPaths := allSDDOrchestratorAssetPaths(t)
-	if len(assetPaths) < 11 {
-		t.Fatalf("SDD orchestrator asset count = %d, want at least 11", len(assetPaths))
+	if len(assetPaths) != 12 {
+		t.Fatalf("SDD orchestrator family count = %d, want 12", len(assetPaths))
 	}
 
 	for _, path := range assetPaths {
@@ -191,69 +191,45 @@ func TestSDDOrchestratorAssetsEnforceInteractiveProposalGates(t *testing.T) {
 			if path == "claude/sdd-orchestrator.md" {
 				content = MustRead("claude/sdd-orchestrator-workflow.md")
 			}
-			for _, required := range []string{
-				"Interactive approval is phase-scoped",
-				"approve only the immediate next phase",
-				"Before the `sdd-propose` phase in interactive mode",
-				"proposal question round",
-				"business problem",
-				"business rules",
-				"implications and impact",
-				"edge cases",
-				"Do not ask about test commands, PR shape, changed-line budget",
-			} {
-				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing interactive proposal gate wording %q", path, required)
-				}
+			if strings.Count(content, "{{GENTLE_AI_RESEARCH_LIFECYCLE}}") != 1 {
+				t.Fatalf("%s must reference the canonical research lifecycle exactly once", path)
+			}
+			if strings.Contains(content, "proposal question round") {
+				t.Fatalf("%s retains proposer-era interview guidance", path)
 			}
 		})
 	}
 }
 
-func TestSDDProposeAssetsRequireProposalQuestionRound(t *testing.T) {
-	assetPaths := allSDDProposeAssetPaths(t)
-	if len(assetPaths) < 4 {
-		t.Fatalf("SDD propose asset count = %d, want at least 4", len(assetPaths))
+func TestSDDProposeAssetsRequireConfirmedHandoffWithoutInterview(t *testing.T) {
+	paths := allSDDProposeAssetPaths(t)
+	if len(paths) < 4 {
+		t.Fatalf("SDD propose asset count = %d, want at least 4", len(paths))
 	}
-
-	for _, path := range assetPaths {
+	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
-			for _, required := range []string{
-				"Offer the user a proposal question round",
-				"second question round",
-				"business problem",
-				"target users and situations",
-				"business rules",
-				"implications and impact",
-				"edge cases",
-				"decision gaps",
-				"Do not ask about test commands, PR shape, changed-line budget, or other harness decisions unless the user explicitly asks to discuss delivery",
-			} {
+			for _, required := range []string{"confirmed pre-proposal handoff", "MUST NOT interview"} {
 				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing proposal question-round wording %q", path, required)
+					t.Fatalf("%s missing confirmed-handoff wording %q", path, required)
 				}
+			}
+			if strings.Contains(content, "proposal question round") {
+				t.Fatalf("%s retains proposal interview guidance", path)
 			}
 		})
 	}
 }
 
-func TestSharedSDDProposeSkillRequiresProposalQuestionRound(t *testing.T) {
+func TestSharedSDDProposeSkillRequiresConfirmedHandoffWithoutInterview(t *testing.T) {
 	content := MustRead("skills/sdd-propose/SKILL.md")
-	for _, required := range []string{
-		"Offer the user a proposal question round",
-		"second question round",
-		"business problem",
-		"target users and situations",
-		"business rules",
-		"implications and impact",
-		"edge cases",
-		"decision gaps",
-		"Do not ask about test commands, PR shape, changed-line budget, or other harness decisions unless the user explicitly asks to discuss delivery",
-	} {
+	for _, required := range []string{"confirmed pre-proposal handoff", "MUST NOT interview"} {
 		if !strings.Contains(content, required) {
-			t.Fatalf("skills/sdd-propose/SKILL.md missing proposal question-round wording %q", required)
+			t.Fatalf("skills/sdd-propose/SKILL.md missing confirmed-handoff wording %q", required)
 		}
+	}
+	if strings.Contains(content, "proposal question round") {
+		t.Fatal("skills/sdd-propose/SKILL.md retains proposal interview guidance")
 	}
 }
 

@@ -37,7 +37,7 @@ func reviewStartTransitionForCommand(t *testing.T, lineage string, kind reviewtr
 			Paths: []string{"internal/cli/review_next_transition.go"},
 		},
 	}
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: lineage})
+	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{StartLineage: lineage})
 	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.start" {
 		t.Fatalf("next transition = %#v, want an execute review.start transition", got)
 	}
@@ -72,7 +72,7 @@ func TestReviewNextTransitionV2StartCommandCarriesConsentRelay(t *testing.T) {
 			Paths: []string{"internal/cli/review_next_transition.go"},
 		},
 	}
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-v2-consent-command"})
+	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-v2-consent-command"})
 	want := "gentle-ai review start" +
 		" --contract=gentle-ai.review-integration/v2" +
 		" --target=sha256:" + strings.Repeat("b", 64) +
@@ -367,9 +367,8 @@ func TestReviewNextTransitionCollectAndStopCarryNoCommand(t *testing.T) {
 
 // TestReviewNextTransitionExecuteCommandValidatesAgainstPublishedSchemas
 // proves the emitted payload is admissible under the exact schemas it claims:
-// status-v2.schema.json for the STATUS result, and status.schema.json (which
-// operation.schema.json $refs for the negotiated FINALIZE result's
-// next_transition).
+// status-v2.schema.json for the STATUS result, and status.schema.json for the
+// compatibility next_transition payload.
 func TestReviewNextTransitionExecuteCommandValidatesAgainstPublishedSchemas(t *testing.T) {
 	got := reviewStartTransitionForCommand(t, "review-schema-command", reviewtransaction.TargetCurrentChanges)
 	if got.Execute.Command == "" {
@@ -483,14 +482,16 @@ func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
 	}
 	var started ReviewFacadeStartResult
 	decodeStrictReviewJSON(t, startedBytes, &started)
-	result := filepath.Join(t.TempDir(), "blocking.json")
-	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
-		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
-		CausalDisposition: reviewtransaction.CausalIntroduced,
-	}}, Evidence: []string{"reviewed exact current changes"}})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
+	for order := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == 0 {
+			findings = []facadeFinding{{
+				Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
+				ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
 	}
 
 	// Change the candidate so the live target really differs from the frozen

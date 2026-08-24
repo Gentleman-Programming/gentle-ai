@@ -89,6 +89,9 @@ func TestModelPickerRows_SubAgentsStartAtIndexTwo(t *testing.T) {
 			t.Errorf("ModelPickerRows()[%d] = %q, want %q", i+2, got, phase)
 		}
 	}
+	if rows[3] != "sdd-explore" || rows[4] != "sdd-research" || rows[5] != "sdd-propose" {
+		t.Fatalf("model picker phase order = %v", rows[2:6])
+	}
 }
 
 // ─── handleModelNav: orchestrator row (idx 0) ──────────────────────────────

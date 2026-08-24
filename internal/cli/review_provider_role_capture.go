@@ -31,9 +31,8 @@ type reviewProviderRoleCaptureArtifact struct {
 // lens path keeps its host-mediated refusal in reviewProviderAdapterFor.
 var reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return reviewerprovider.NewPiAdapter() }
 
-// reviewProviderRoleCaptureTimeout bounds one role capture operation, sized
-// like reviewFacadeFinalizeProviderOperationTimeout so a full Go-owned
-// adversarial pi run fits while a stalled provider cannot hang --execute
+// reviewProviderRoleCaptureTimeout bounds one role capture operation so a full
+// Go-owned adversarial pi run fits while a stalled provider cannot hang --execute
 // forever: on expiry the adapter surfaces its typed transport refusal,
 // nothing is captured, and STATUS reoffers the same collection input. A var
 // only as the test seam.
@@ -60,8 +59,8 @@ type reviewProviderRoleCaptureBinding struct {
 
 // parseReviewProviderRoleCapture owns the complete refusal matrix shared by
 // `review capture-refuter` and `review capture-validation`. Compiled runtimes
-// never take these commands: their refuter and validator requests are
-// materialized and invoked in-process by `review finalize --agent`.
+// materialize and execute their refuter and validator requests through the same
+// Go-owned capture closure.
 func parseReviewProviderRoleCapture(command string, args []string, stdout io.Writer, withRequestHash bool) (*reviewProviderRoleCaptureBinding, error) {
 	flags := newReviewFlagSet("review "+command, stdout, "Materialize or capture one Go-issued non-lens provider role result bound to compact review authority.")
 	cwd := flags.String("cwd", ".", "repository path")
@@ -73,7 +72,7 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if withRequestHash {
 		requestHash = flags.String("request-hash", "", "provider-issued frozen targeted validation request hash")
 	}
-	runtimeAgent := flags.String("agent", "", "host-relay runtime identity, required for both --materialize and --execute; compiled runtimes materialize this role internally through `gentle-ai review finalize --agent`")
+	runtimeAgent := flags.String("agent", "", "host-relay runtime identity, required for both --materialize and --execute")
 	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider role task without capturing anything; mutually exclusive with --execute")
 	execute := flags.Bool("execute", false, "run the Go-owned locked-down pi process on the Go-materialized role request and capture its raw result")
 	if err := parseReviewFlags(flags, args); err != nil {
@@ -118,11 +117,11 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if _, err := reviewRuntimeWithImmutableTransport(string(binding.runtime)); err != nil {
 		return nil, reviewPreflightError(err)
 	}
-	if reviewProviderCaptureRuntime(binding.runtime) {
-		return nil, reviewPreflightError(fmt.Errorf("review %s is unavailable for %q: a compiled runtime materializes internally through `gentle-ai review finalize --agent`", command, binding.runtime))
+	if reviewProviderCaptureRuntime(binding.runtime) && binding.materialize {
+		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize is unavailable for %q: its compiled Go adapter executes the provider contract directly; rerun `gentle-ai review %s` with the same binding and --execute", command, binding.runtime, command))
 	}
-	if !reviewProviderHostRelayMaterializeRuntime(binding.runtime) {
-		return nil, reviewPreflightError(fmt.Errorf("review %s provider runtime %q is host-mediated; use its live transport collection", command, binding.runtime)) // refusal:by-design world-action: only the Pi host relay collects a printed provider task and returns its raw result
+	if !reviewProviderCaptureRuntime(binding.runtime) && !reviewProviderHostRelayMaterializeRuntime(binding.runtime) {
+		return nil, reviewPreflightError(fmt.Errorf("review %s provider runtime %q has no Go-owned role capture contract", command, binding.runtime)) // refusal:by-design world-action: only compiled adapters and the Pi host relay collect non-lens provider roles
 	}
 	ctx := context.Background()
 	var err error
@@ -194,12 +193,29 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 		}
 		return nil
 	}
-	raw, err := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+	var raw []byte
+	if reviewProviderCaptureRuntime(binding.runtime) {
+		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleRefuter, binding.runtime)
+		if adapterErr != nil {
+			return reviewPreflightError(adapterErr)
+		}
+		raw, err = adapter.Review(ctx, request.Invocation)
+	} else {
+		raw, err = reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+	}
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", err))
 	}
 	if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, record.Revision, raw); err != nil {
 		return reviewPreflightError(err)
+	}
+	closure, err := closeReviewOnLastCapturedLens(ctx, binding.root, store, record)
+	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, record) {
+		return reviewPreflightError(err)
+	}
+	if closure != nil {
+		closure.Operation = reviewCaptureRefuterCaptureOperation
+		return encodeReviewJSON(stdout, closure)
 	}
 	return encodeReviewJSON(stdout, reviewProviderRoleCaptureArtifact{
 		Schema: reviewProviderRoleCaptureSchema, LineageID: state.LineageID,
@@ -243,16 +259,22 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 		}
 		return nil
 	}
-	raw, err := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+	var raw []byte
+	if reviewProviderCaptureRuntime(binding.runtime) {
+		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleTargetedValidator, binding.runtime)
+		if adapterErr != nil {
+			return reviewPreflightError(adapterErr)
+		}
+		raw, err = adapter.Review(ctx, request.Invocation)
+	} else {
+		raw, err = reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+	}
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", err))
 	}
-	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(ctx, binding.root, store, state, record.Revision, raw); err != nil {
+	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, binding.root, store, state, record.Revision, raw)
+	if err != nil {
 		return reviewPreflightError(err)
 	}
-	return encodeReviewJSON(stdout, reviewProviderRoleCaptureArtifact{
-		Schema: reviewProviderRoleCaptureSchema, LineageID: state.LineageID,
-		TargetIdentity: request.ValidationRequest.CorrectionTargetIdentity,
-		Role:           string(reviewerprovider.RoleTargetedValidator), Captured: true,
-	})
+	return encodeReviewJSON(stdout, closure)
 }

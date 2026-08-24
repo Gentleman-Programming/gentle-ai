@@ -16,7 +16,7 @@ func issue3321Journeys() []Journey {
 		ID:     "j113-correction-removes-candidate-only-path",
 		Review: reviewOptedIn,
 		Title:  "A bounded correction may remove a candidate-only file and continue through STATUS",
-		Source: "issue #3321: correction paths are frozen-to-current deltas, not current projection paths",
+		Source: "issue #3321 under #3587: correction paths are frozen-to-current deltas, and the terminal validator capture burns the corrected lineage",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: candidate-only defect and unchanged reviewed companion", Fixture: stageIssue3321Candidate},
@@ -24,17 +24,13 @@ func issue3321Journeys() []Journey {
 				Args: productArgs("review", "start", "--lineage", issue3321Lineage)},
 			{Name: "capture the blocking candidate-only finding and finish selected lenses", Requires: captureResultCapability,
 				Composite: func(r *journeyRun) error { return captureCorrectableFindingFor(r, "--lineage", issue3321Lineage) }},
-			{Name: "enter correction-required", Requires: finalizeResultsCapability,
-				Args: productArgs("review", "finalize", "--lineage", issue3321Lineage, "--captured-results=true")},
-			{Name: "forecast the three-line deletion", Requires: finalizeCorrectionCapability,
-				Args: productArgs("review", "finalize", "--lineage", issue3321Lineage, "--correction-lines", "3")},
+			{Name: "capture the three-line deletion plan from STATUS", Requires: captureCorrectionPlanCapability,
+				Composite: func(r *journeyRun) error { return captureCorrectionPlanFor(r, issue3321Lineage, 3) }},
 			{Name: "fixture: remove the candidate-only file exactly back to base", Fixture: removeIssue3321CandidateOnlyPath},
-			{Name: "STATUS v2 captures repository evidence for the base-equivalent correction", Requires: captureOutcomeEvidenceCapability,
-				Composite: func(r *journeyRun) error {
-					return capturePassedCorrectionEvidenceForContract(r, issue3321Lineage, reviewContractV2)
-				}},
-			{Name: "targeted validation approves and burns the corrected lineage", Requires: finalizeValidationCapability,
-				Composite: completeIssue3321Correction},
+			{Name: "targeted validator approves and burns the corrected lineage", Requires: capturedProviderValidatorStatusCapability,
+				Composite: func(r *journeyRun) error { return captureProviderValidatorSlotFor(r, issue3321Lineage) }},
+			{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability,
+				Composite: func(r *journeyRun) error { return requireAtomicLineageBurned(r, issue3321Lineage) }},
 		},
 	}}
 }

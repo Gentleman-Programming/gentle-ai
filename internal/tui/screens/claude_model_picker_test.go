@@ -7,6 +7,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
+func TestClaudeModelPickerPlacesResearchAfterExplore(t *testing.T) {
+	if len(claudePhases) < 3 || claudePhases[0] != "sdd-explore" || claudePhases[1] != "sdd-research" || claudePhases[2] != "sdd-propose" {
+		t.Fatalf("claude phase order = %v", claudePhases)
+	}
+}
+
 func TestNewClaudeModelPickerStateFromAssignments(t *testing.T) {
 	cases := []struct {
 		name        string

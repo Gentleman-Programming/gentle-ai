@@ -56,8 +56,8 @@ Return control to the parent orchestrator. Apply itself never routes to review â
 | --- | --- | --- |
 | 01 | canonical initial STATUS above | exactly one current-worktree START preflight; no authority discovery |
 | 02 | exact returned START | one compact lineage/worktree/target binding; retain lineage, revision, and target |
-| 03 | exact-lineage STATUS, collect, and FINALIZE | only returned transaction actions; no ambient resume, reuse, or delivery gate |
-| 04 | successful FINALIZE | native readback, exact authority/artifact burn, then `approved` |
+| 03 | exact-lineage STATUS and collect | only returned transaction actions; no ambient resume, reuse, or delivery gate |
+| 04 | final admitted capture | native readback, exact authority/artifact burn, then `approved` |
 | 05 | terminal lifecycle stop | ordinary repository policy owns any later delivery decision |
 
 Approval burns its exact review authority before returning. Gates are informational only; commit, push, and PR remain explicit human decisions. Never auto-launch Judgment Day.

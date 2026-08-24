@@ -1893,8 +1893,8 @@ func sddJourneys() []Journey {
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
 				{Name: "enabled failed verification records missing remediation authority", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("enabled remediation", func(status sddStatusV1) error {
-						if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "bounded review transaction is missing") {
-							return fmt.Errorf("enabled remediation omitted its missing authority context: %v", status.BlockedReasons)
+						if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "verify evidence requires independent SDD remediation") {
+							return fmt.Errorf("enabled remediation omitted its independent remediation context: %v", status.BlockedReasons)
 						}
 						return nil
 					})},
@@ -1934,17 +1934,16 @@ func sddJourneys() []Journey {
 						return nil
 					})},
 				{Name: "mode enable after unmanaged correction", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
-				{Name: "re-enabled review context is informational; archive proceeds", Requires: sddStatusCapability,
+				{Name: "re-enabled ordinary delivery remains archive-ready", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("re-enabled unmanaged correction", func(status sddStatusV1) error {
 						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
 							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q; want all_done/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" ||
-							!strings.Contains(status.ReviewGate.Reason, "disabled/unmanaged correction") {
-							return fmt.Errorf("re-enabled archive omitted informational review evidence: %+v", status.ReviewGate)
+						if status.ReviewGate != nil {
+							return fmt.Errorf("re-enabled archive retained retired review gate: %+v", status.ReviewGate)
 						}
 						if status.ReviewOffer == nil || !status.ReviewOffer.Available || !strings.Contains(status.ReviewOffer.Invocation, "review start") {
-							return fmt.Errorf("re-enabled archive omitted executable review offer: %+v", status.ReviewOffer)
+							return fmt.Errorf("re-enabled archive omitted its optional fresh-review offer: %+v", status.ReviewOffer)
 						}
 						return nil
 					})},

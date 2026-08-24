@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,66 +111,9 @@ func TestCrossRepositoryLifecycleRootConformance(t *testing.T) {
 			for order := range legacyTargetStart.SelectedLenses {
 				captureCLIReviewerResult(t, targetRoot, legacyTargetStart, order)
 			}
-			if err := RunReviewFacadeFinalize([]string{
-				"--cwd", targetRoot, "--lineage", lineage, "--captured-results=true",
-			}, &bytes.Buffer{}); err != nil {
-				t.Fatalf("advance B to validation: %v", err)
-			}
-			targetValidating := crossRepositoryLifecycleStatus(t, targetRoot, lineage, testCase.runtime)
-			assertCrossRepositoryContinuation(t, targetValidating, targetStarted, lineage, "B validating")
-
-			evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-			if err := os.WriteFile(evidencePath, []byte("focused cross-repository verification passed\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Chdir(sessionRoot)
-			if err := RunReviewCaptureEvidence([]string{
-				"--repository-context", targetValidating.RepositoryContext.Handle,
-				"--lineage", lineage,
-				"--target", targetValidating.RepositoryContext.TargetIdentity,
-				"--expected-revision", targetValidating.RepositoryContext.Revision,
-				"--outcome", string(reviewtransaction.VerificationOutcomePassed),
-				"--input", evidencePath,
-			}, &bytes.Buffer{}); err != nil {
-				t.Fatalf("capture B evidence while process cwd is A: %v", err)
-			}
-			targetRecord, err := targetStore.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
-			captured, err := reviewtransaction.ReadCapturedVerificationEvidence(
-				targetStore.Dir, lineage, targetRecord.Revision, targetRecord.State.CurrentSnapshot,
-			)
-			if err != nil || captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed {
-				t.Fatalf("B captured evidence = %#v, err=%v", captured, err)
-			}
-			sessionAuthorityAfterCapture, err := os.ReadFile(sessionStore.StatePath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			sessionCandidateAfterCapture, err := os.ReadFile(sessionCandidatePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(sessionAuthorityAfterCapture, sessionAuthorityBefore) || !bytes.Equal(sessionCandidateAfterCapture, sessionCandidateBefore) {
-				t.Fatal("B opaque evidence capture changed A authority or candidate bytes")
-			}
-
-			t.Chdir(targetRoot)
-			var finalizedOutput bytes.Buffer
-			if err := RunReviewFacadeFinalize([]string{
-				"--cwd", targetRoot, "--lineage", lineage, "--captured-evidence=true",
-			}, &finalizedOutput); err != nil {
-				t.Fatalf("finalize B captured evidence: %v", err)
-			}
-			var finalized ReviewFacadeFinalizeResult
-			if err := json.Unmarshal(finalizedOutput.Bytes(), &finalized); err != nil {
-				t.Fatal(err)
-			}
-			if finalized.State != reviewtransaction.StateApproved {
-				t.Fatalf("B finalize = %#v, want approved", finalized)
-			}
 			assertApprovedCompactAuthorityBurned(t, targetStore, lineage)
+
+			t.Chdir(sessionRoot)
 			sessionAuthorityAfterBurn, err := os.ReadFile(sessionStore.StatePath())
 			if err != nil {
 				t.Fatal(err)
@@ -181,7 +123,7 @@ func TestCrossRepositoryLifecycleRootConformance(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(sessionAuthorityAfterBurn, sessionAuthorityBefore) || !bytes.Equal(sessionCandidateAfterBurn, sessionCandidateBefore) {
-				t.Fatal("B approval burn changed A authority or candidate bytes")
+				t.Fatal("B terminal capture changed A authority or candidate bytes")
 			}
 			if record, err := sessionStore.Load(); err != nil || record.State.State != reviewtransaction.StateReviewing {
 				t.Fatalf("A authority after B burn = %#v, err=%v", record.State, err)

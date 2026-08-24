@@ -16,7 +16,7 @@ type ReviewAbandonResult struct {
 
 // reviewAbandonInputsRefusal names, for every value the gate demands, the one
 // command that publishes it and the exact field to read it from, then prints
-// the authorization template as its own final nine lines so the reader can
+// the authorization template as its own final eight lines so the reader can
 // fill it in without opening the source. The lookup command is the authority
 // inventory rather than the negotiated target status on purpose: abandonment
 // is defined over persisted bytes, so it must keep working for a lineage that
@@ -45,7 +45,7 @@ snapshot_identity = entries[].snapshot_identity
 discarded_work = entries[].discarded_work; use captured_lens_results comma-joined with "," in listed order
 --reason = %q or %q
 You choose --actor; the binding uses it with surrounding whitespace trimmed.
---maintainer-authorization is exactly these final nine lines, joined by LF, with no trailing newline:
+--maintainer-authorization is exactly these final eight lines, joined by LF, with no trailing newline:
 %s`, cwd, reviewtransaction.CompactAbandonReasonOperatorDisposition, reviewtransaction.CompactAbandonReasonRetiredSchema,
 		strings.NewReplacer("captured_lens_results=", "captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined with \",\" in listed order>", "findings_present=false", "findings_present=<entries[].discarded_work.findings_present>", "evidence_records_present=false", "evidence_records_present=<entries[].discarded_work.evidence_records_present>").Replace(
 			reviewtransaction.RenderCompactAbandonAuthorization("<--lineage>", "<--expected-revision>", "<entries[].snapshot_identity>", "<--actor>", "<--reason>", reviewtransaction.CompactDiscardedWorkSummary{})))
@@ -58,7 +58,7 @@ func RunReviewAbandon(args []string, stdout io.Writer) error {
 	expected := flags.String("expected-revision", "", "exact current authority revision")
 	reason := flags.String("reason", "", "abandonment reason: operator_disposition or retired_schema")
 	actor := flags.String("actor", "", "abandonment actor")
-	authorization := flags.String("maintainer-authorization", "", "exact nine-line LF-only v2 binding; run review abandon with no flags to print the template and where every value is read")
+	authorization := flags.String("maintainer-authorization", "", "exact eight-line LF-only v2 binding; run review abandon with no flags to print the template and where every value is read")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}

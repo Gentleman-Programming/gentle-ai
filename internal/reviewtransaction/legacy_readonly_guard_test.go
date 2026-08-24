@@ -38,11 +38,10 @@ import (
 // THIS package (store.go, compact_store.go) — review_facade.go:1632-1635
 // (design.md) is only their call site, not their declaration.
 var legacyRetainedReadSymbols = map[string][]string{
-	"../sddstatus/legacy_binding_read.go": {"parseLegacyBinding"},
-	"../sddstatus/review_binding.go":      {"parseBinding", "bindingBytes", "bindingDigest", "bindingPath"},
-	"candidate_decline.go":                {"parseCandidateDeclineAuthorization"},
-	"store.go":                            {"AuthoritativeStore", "LoadChain"},
-	"compact_store.go":                    {"NewLegacyReadOnlyError"},
+	"../sddstatus/review_binding.go": {"parseBinding", "bindingBytes", "bindingDigest", "bindingPath"},
+	"candidate_decline.go":           {"parseCandidateDeclineAuthorization"},
+	"store.go":                       {"AuthoritativeStore", "LoadChain"},
+	"compact_store.go":               {"NewLegacyReadOnlyError"},
 }
 
 // legacyRetiredMutationVerbs is the exact case-clause literal set this wave

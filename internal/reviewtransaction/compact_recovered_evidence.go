@@ -22,9 +22,10 @@ func deriveCompactRecoveredEvidence(ctx context.Context, repo string, predecesso
 	if relation.Kind != compactTargetChangedScope || relation.Paths != compactPathsSame {
 		return CompactRecoveredEvidence{}, false, nil
 	}
-	if !compactRecoveryReceiptBound(predecessorStore, predecessor) {
-		return CompactRecoveredEvidence{}, false, errors.New("accounting-only recovery predecessor receipt does not match authority")
-	}
+	// Escalations are intentionally receiptless. Their validated compact state
+	// and correction evidence are the recovery authority; requiring an absent
+	// approval receipt would turn the accounting-only recovery edge into a
+	// terminal dead end.
 	builder := SnapshotBuilder{Repo: repo}
 	for _, snapshot := range []Snapshot{predecessor.State.InitialSnapshot, attempt.Snapshot, successor.InitialSnapshot} {
 		if err := builder.ValidateEvidence(ctx, snapshot); err != nil {

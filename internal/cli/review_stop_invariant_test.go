@@ -40,11 +40,6 @@ const reviewStopReasonDocsTerminalPrefix = "Terminal"
 // removed from this table entirely, not marked with either disposition — see
 // the organic-dx Phase 3 investigation note on escalated_recovery_requires_changed_target.
 var reviewStopInvariantClassification = map[string]reviewStopDisposition{
-	"captured_verification_evidence_invalid": {
-		Terminal:      true,
-		Justification: "immutable captured verification metadata or bytes failed integrity validation; a maintainer must inspect the authority artifacts before they can be trusted",
-		ToolFault:     reviewStopToolFault(false),
-	},
 	"captured_artifacts_unverifiable": {
 		Terminal:      true,
 		Justification: "inspection failure of an already-captured artifact, not a routable state; requires a maintainer to inspect the review authority store directly",
@@ -65,7 +60,7 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 	},
 	"corrected_candidate_unavailable": {
 		Terminal:      false,
-		Justification: "caller-continuable: change the candidate content so it differs from the frozen original, then re-run `review status --next-transition` (or `review finalize`) — a concrete, flag-driven command, not a maintainer-only action; the docs row does not open with \"Terminal\", so pinning this terminal would contradict it (discoverability sweep finding beyond the three the audit named explicitly)",
+		Justification: "caller-continuable: change the candidate content so it differs from the frozen original, then re-run `review status --next-transition` — a concrete, flag-driven command, not a maintainer-only action; the docs row does not open with \"Terminal\", so pinning this terminal would contradict it",
 	},
 	"empty_base_diff_bootstrap_required": {
 		Terminal:      true,
@@ -77,22 +72,12 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
 		ToolFault:     reviewStopToolFault(false),
 	},
-	"correction_repository_verification_failed": {
-		Terminal:      false,
-		Justification: "caller-continuable: the failed candidate evidence remains immutable while the same open correction may be adjusted; changing the candidate yields a new identity and a new evidence slot without consuming the correction attempt",
-	},
 	"corrupted_or_unverifiable_authority": {
 		Terminal:      true,
 		Justification: "review repair --preflight already classified this authority unsupported/ambiguous/conflicting/truncated; requires a maintainer to inspect the review authority store directly",
 		// User-decision: a corrupted/unsupported store is a data-integrity
 		// finding requiring a maintainer's eyes, not proof of a code defect.
 		ToolFault: reviewStopToolFault(false),
-	},
-	"final_verification_retry_unavailable": {
-		Terminal:      true,
-		Justification: "internal invariant violation — routed to final-verification-retry collection without a retry-eligible disposition; no caller-side retry exists",
-		// Tool-fault: literal internal invariant violation.
-		ToolFault: reviewStopToolFault(true),
 	},
 	"manual_intervention_required": {
 		Terminal:      true,
@@ -109,15 +94,11 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 	},
 	"native_stop_required": {
 		Terminal:      true,
-		Justification: "only reachable for StateEscalated when neither the target changed, the escalation is accounting-only-eligible, nor a final-verification-retry is eligible (target_status.go:176-199) — a genuinely stuck escalated lineage; requires maintainer review",
+		Justification: "only reachable for StateEscalated when neither the target changed nor the escalation is accounting-only-eligible — a genuinely stuck escalated lineage; requires maintainer review",
 		// User-decision: this is the state machine correctly reporting a
 		// legitimate business outcome (an escalated lineage genuinely stuck
 		// pending a human's review), not an unreachable/unmodeled state.
 		ToolFault: reviewStopToolFault(false),
-	},
-	"original_finalize_request_required": {
-		Terminal:      false,
-		Justification: "caller-continuable: re-run `review finalize --lineage <id>` with the exact original content-bound payload — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
 	"recovery_scope_unchanged": {
 		Terminal:      false,
@@ -128,13 +109,6 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Justification: "terminal only for a fresh target with no existing lineage to recover; the row still names --lineage <id> or dropping --workspace-overlay as the way out of that terminal condition, matching the docs convention that a terminal row states its unblocking precondition",
 		// User-decision: a caller-input-shape mismatch (this exact flag
 		// combination is recovery-only), not an unreachable/unmodeled state.
-		ToolFault: reviewStopToolFault(false),
-	},
-	"unchanged_or_unverified_authority": {
-		Terminal:      true,
-		Justification: "the single correction attempt for this lineage is already consumed without a verified candidate change (classifyCompactCorrectionTarget's Blocked claim); an ordinary lineage admits exactly one correction attempt, so no further in-lineage action exists — further work requires a new lineage",
-		// User-decision: a legitimate, by-design business-rule terminal (one
-		// correction attempt is the designed limit), not a code defect.
 		ToolFault: reviewStopToolFault(false),
 	},
 	"rdd_disabled": {

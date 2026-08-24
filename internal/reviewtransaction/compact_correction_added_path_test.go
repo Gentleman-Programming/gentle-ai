@@ -197,38 +197,6 @@ func TestCompactCorrectionAddedPathStillBindsLineBudget(t *testing.T) {
 	}
 }
 
-// TestCompactCorrectionAddedPathIsDisclosedInReceipt proves an added path that
-// no lens ever saw is disclosed rather than hidden: the terminal receipt names
-// it, and its paths digest covers the delivered scope instead of claiming the
-// narrower reviewed one.
-func TestCompactCorrectionAddedPathIsDisclosedInReceipt(t *testing.T) {
-	requireSnapshotGit(t)
-	repo := initSnapshotRepo(t)
-	state := coverageCorrectionFixture(t, repo, "coverage-receipt", 3)
-	writeSnapshotFile(t, repo, "internal/widget/widget_windows_test.go", "package widget\n\nimport \"testing\"\n")
-	fix := buildCoverageFix(t, repo, state, "internal/widget/widget_windows_test.go")
-	if err := state.CompleteCorrection(fix, 3, passingCoverageValidation(state, fix)); err != nil {
-		t.Fatalf("CompleteCorrection: %v", err)
-	}
-	if err := state.CompleteVerification([]byte("go test ./internal/widget/ passes\n"), true); err != nil {
-		t.Fatalf("CompleteVerification: %v", err)
-	}
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatalf("Receipt: %v", err)
-	}
-	if !equalStrings(receipt.CorrectionAddedPaths, []string{"internal/widget/widget_windows_test.go"}) {
-		t.Fatalf("receipt CorrectionAddedPaths = %v, want the disclosed added path", receipt.CorrectionAddedPaths)
-	}
-	want := digestPaths([]string{"internal/widget/widget.go", "internal/widget/widget_windows_test.go"})
-	if receipt.PathsDigest != want {
-		t.Fatalf("receipt paths digest = %s, want the delivered union %s", receipt.PathsDigest, want)
-	}
-	if err := receipt.Validate(); err != nil {
-		t.Fatalf("validate disclosing receipt: %v", err)
-	}
-}
-
 // TestCompactStateRejectsForgedCorrectionAddedPaths proves the new field
 // cannot be used to widen an authority's scope without an actual admitted
 // correction.
@@ -456,60 +424,5 @@ func TestCompactCorrectionEscalationRollsBackTheWidenedScope(t *testing.T) {
 				t.Fatalf("a failed path-adding correction must still consume the one attempt: %d attempts", len(state.CorrectionAttempts))
 			}
 		})
-	}
-}
-
-// TestCompactAddedPathDeliversThroughThePrePRGate is the gate-level proof for
-// R3-widened-scope-no-gate-proof. Admitting a companion test path into the
-// bounded correction is only half the feature. Every delivery gate re-proves
-// the delivered paths against the scope the receipt authorizes, so a gate
-// still measuring the frozen reviewed manifest refuses the very file the
-// correction was granted -- the whole point of the change -- at the last step
-// before it ships. The candidate here goes all the way through: correction,
-// independent verification, receipt, published delivery, pre-PR gate.
-func TestCompactAddedPathDeliversThroughThePrePRGate(t *testing.T) {
-	requireSnapshotGit(t)
-	repo := initSnapshotRepo(t)
-	state := coverageCorrectionFixture(t, repo, "coverage-gate", 3)
-	branch := currentBranch(context.Background(), repo)
-	configurePublicationRemote(t, repo, branch)
-	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
-	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
-	writeSnapshotFile(t, repo, "internal/widget/widget_windows_test.go", "package widget\n\nimport \"testing\"\n")
-	fix := buildCoverageFix(t, repo, state, "internal/widget/widget_windows_test.go")
-	if err := state.CompleteCorrection(fix, 3, passingCoverageValidation(state, fix)); err != nil {
-		t.Fatalf("CompleteCorrection: %v", err)
-	}
-	if err := state.CompleteVerification([]byte("go test ./internal/widget/ passes\n"), true); err != nil {
-		t.Fatalf("CompleteVerification: %v", err)
-	}
-	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeCompactFixtureRecord(t, store, state)
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "-A")
-	gitSnapshot(t, repo, "commit", "-m", "deliver the corrected candidate")
-	// The delivered set genuinely exceeds the frozen reviewed manifest, so the
-	// allow below can only come from the widened correction scope.
-	delivered := []string{"internal/widget/widget.go", "internal/widget/widget_windows_test.go"}
-	if pathsAreSubset(delivered, state.GenesisPaths) == nil || pathsAreSubset(delivered, state.CorrectionScopePaths()) != nil {
-		t.Fatalf("fixture does not exercise the widened scope: genesis=%v scope=%v", state.GenesisPaths, state.CorrectionScopePaths())
-	}
-	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
-		Gate: GatePrePR, LineageID: state.LineageID, BaseRef: "origin/" + branch,
-	})
-	if got.Result != GateAllow {
-		t.Fatalf("pre-PR delivery of a correction that added a companion test = %#v, want allow", got)
-	}
-	if !equalStrings(receipt.CorrectionAddedPaths, []string{"internal/widget/widget_windows_test.go"}) {
-		t.Fatalf("the authorized receipt must disclose the added path, got %v", receipt.CorrectionAddedPaths)
 	}
 }

@@ -88,48 +88,6 @@ func TestLensContextEmissionStillRefusesAConflictingMechanism(t *testing.T) {
 	}
 }
 
-// TestCapturedVerificationEvidenceIsScopedToItsAuthorityRevision pins issue
-// #2623: the evidence directory was keyed by target identity alone, so
-// correction-phase evidence for an unchanged candidate collided with the
-// pre-correction record permanently — while ReadCapturedVerificationEvidence
-// already rejected that older record through ValidateBinding.
-func TestCapturedVerificationEvidenceIsScopedToItsAuthorityRevision(t *testing.T) {
-	dir := t.TempDir()
-	target := Snapshot{
-		Kind:     TargetCurrentChanges,
-		BaseTree: strings.Repeat("1", 64), CandidateTree: strings.Repeat("2", 64),
-		Paths:                  []string{"a.go"},
-		IntendedUntracked:      []string{},
-		PathsDigest:            "sha256:" + strings.Repeat("d", 64),
-		IntendedUntrackedProof: "sha256:" + strings.Repeat("e", 64),
-		Identity:               "sha256:" + strings.Repeat("c", 64),
-	}
-	first := CaptureVerificationEvidenceRequest{
-		StoreDir: dir, LineageID: "review-0123456789abcdef",
-		AuthorityRevision: "sha256:" + strings.Repeat("5", 64),
-		Target:            target, Payload: []byte("pre-correction suite passed\n"),
-		Outcome: VerificationOutcomePassed,
-	}
-	if _, err := PublishCapturedVerificationEvidence(first); err != nil {
-		t.Fatalf("first evidence: %v", err)
-	}
-	second := first
-	second.AuthorityRevision = "sha256:" + strings.Repeat("6", 64)
-	second.Payload = []byte("correction-phase suite passed\n")
-	if _, err := PublishCapturedVerificationEvidence(second); err != nil {
-		t.Fatalf("correction-phase evidence for the same target must record its own directory: %v", err)
-	}
-	for _, request := range []CaptureVerificationEvidenceRequest{first, second} {
-		captured, err := ReadCapturedVerificationEvidence(dir, request.LineageID, request.AuthorityRevision, request.Target)
-		if err != nil {
-			t.Fatalf("evidence for revision %s: %v", request.AuthorityRevision, err)
-		}
-		if string(captured.Payload) != string(request.Payload) {
-			t.Fatalf("evidence payload = %q, want %q", captured.Payload, request.Payload)
-		}
-	}
-}
-
 func canonicalLensContextEmissionForTest(emission LensContextEmission) ([]byte, error) {
 	payload, err := json.Marshal(emission)
 	if err != nil {

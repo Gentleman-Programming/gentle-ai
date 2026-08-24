@@ -259,7 +259,7 @@ func MigrateLegacyCodexCarrilDefaults(assignments map[string]string) map[string]
 
 func codexPresetEfforts(preset string) map[string]CodexEffort {
 	defaults := CodexPresetCarrilDefaults(preset)
-	out := make(map[string]CodexEffort, 13)
+	out := make(map[string]CodexEffort, 14)
 	for _, tier := range codexTierGroups {
 		effort := defaults[tier.Profile].Effort
 		for _, phase := range tier.Phases {
@@ -326,7 +326,7 @@ var codexTierGroups = []CodexTierGroup{
 		Profile:       "sdd-strong",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Effort,
-		Phases:        []string{"sdd-explore", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
+		Phases:        []string{"sdd-explore", "sdd-research", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
 	},
 	{
 		Profile:       "sdd-mid",
@@ -451,7 +451,7 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 // codexPhaseOrder is the canonical phase ordering for the per-phase table,
 // matching codexTierGroups phase groupings.
 var codexPhaseOrder = []string{
-	"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+	"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
 	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
 }

@@ -423,7 +423,8 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		"--repository-context", binding["repository-context"], "--expected-revision", binding["expected-revision"],
 		"--lineage", binding["lineage"], "--target", binding["target"], "--lens", binding["lens"], "--order", strconv.Itoa(order),
 	}
-	if stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...); err != nil {
+	stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+	if err != nil {
 		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	if responseRequests != 1 {
@@ -443,9 +444,14 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("Codex egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", denied, len(connections), connections)
-	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-		t.Fatalf("registered Codex provider capture did not enter validation: %#v", result)
+	var terminal organicFinalizeResult
+	if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
+		t.Fatalf("decode terminal Codex provider capture: %v\n%s", err, stdout)
 	}
+	if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
+		t.Fatalf("registered Codex provider capture did not close the clean review: %#v", terminal)
+	}
+	harness.assertReviewBurned(lineage, terminal)
 }
 
 // codexTracedConnectAddresses parses one trace per child process. strace -ff
@@ -708,24 +714,53 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 			return
 		}
 
-		lock.Lock()
-		defer lock.Unlock()
+		reviewBinding, bound, bindingErr := organicOpenCodeReviewBindingFromProvider(payload)
 		if strings.Contains(string(payload), poison) {
+			lock.Lock()
 			handlerFailure = "OpenCode passed the poisoned host Task prompt to the reviewer"
+			lock.Unlock()
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if bytes.Contains(payload, []byte(reviewerSystemMarker)) {
-			if !bytes.Contains(payload, []byte("GENTLE_AI_REVIEW_CONTEXT_END")) {
-				handlerFailure = "OpenCode reviewer request omitted the Go-materialized canonical prompt"
+			lock.Lock()
+			handlerFailure = "OpenCode passed the configured reviewer system prompt to the provider"
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bindingErr != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode reviewer binding is invalid: %v", bindingErr)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bound {
+			if err := reviewBinding.matches(binding); err != nil {
+				lock.Lock()
+				handlerFailure = fmt.Sprintf("OpenCode reviewer binding does not match the Go collect input: %v", err)
+				lock.Unlock()
 				writer.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			if !strings.Contains(reviewBinding.message, "GENTLE_AI_REVIEW_CONTEXT_END") {
+				lock.Lock()
+				handlerFailure = "OpenCode reviewer request omitted the Go-materialized canonical prompt"
+				lock.Unlock()
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			lock.Lock()
 			canonicalPromptSeen = true
 			providerRequests++
+			lock.Unlock()
 			writeOpenCodeChatText(writer, string(reviewerRaw))
 			return
 		}
+
+		lock.Lock()
+		defer lock.Unlock()
 		if !titleAnswered {
 			titleAnswered = true
 			writeOpenCodeChatText(writer, "review transport")
@@ -736,6 +771,11 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 			writeOpenCodeChatTask(writer, map[string]string{
 				"description": "run the Go-bound reviewer", "subagent_type": "review-reliability", "prompt": hostPrompt,
 			})
+			return
+		}
+		if !canonicalPromptSeen {
+			handlerFailure = "OpenCode reviewer request omitted its Go-materialized binding"
+			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		writeOpenCodeChatText(writer, "review task complete")
@@ -844,8 +884,300 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
-	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-		t.Fatalf("OpenCode capture did not enter validation: %#v", result)
+	status := organicProviderStatus(t, harness, lineage, "opencode")
+	if status.NextTransition == nil || status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("OpenCode terminal capture did not continue with an executable fresh target: %#v", status.NextTransition)
+	}
+}
+
+// TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently exercises the real
+// OpenCode scheduler through the current Go-owned transport. The one driver
+// response emits every fresh high-risk collect input as a foreground task, and
+// the reviewer requests wait at a barrier. A sequential scheduler cannot reach
+// the barrier, and completion order is intentionally decoupled from Go admission
+// and election.
+func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
+	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_OPENCODE_RUNTIME_E2E")) != "1" {
+		t.Skip("set GENTLE_AI_OPENCODE_RUNTIME_E2E=1 to verify grouped foreground OpenCode 4R scheduling")
+	}
+	binary, err := exec.LookPath("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != pinnedOpenCodeVersion {
+		t.Fatalf("OpenCode version = %q, want %q (error %v)", strings.TrimSpace(string(version)), pinnedOpenCodeVersion, err)
+	}
+
+	harness := newOrganicHarness(t)
+	harness.writeFiles(map[string]string{"internal/auth/session.go": "package auth\n\nfunc Session() bool { return true }\n"})
+	const lineage = "opencode-four-r-foreground-group"
+	initial := organicProviderStatus(t, harness, lineage, "opencode")
+	if initial.NextTransition == nil || initial.NextTransition.Execute == nil {
+		t.Fatalf("OpenCode 4R START transition = %#v", initial.NextTransition)
+	}
+	start := initial.NextTransition.Execute
+	stdout, stderr, err := harness.gentleAllowFailure(
+		"review", "start", "--cwd", harness.repo.worktree,
+		"--contract", "gentle-ai.review-integration/v2", "--target", start.argument("target"), "--projection", start.argument("projection"),
+		"--lineage", lineage, "--agent", "opencode", "--consent", "granted",
+	)
+	if err != nil {
+		t.Fatalf("OpenCode 4R START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var started organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+		t.Fatalf("decode OpenCode 4R START: %v\n%s", err, stdout)
+	}
+	wantLenses := []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}
+	if started.RiskLevel != organicRiskHigh || len(started.SelectedLenses) != len(wantLenses) {
+		t.Fatalf("OpenCode 4R selection = risk %q lenses %v, want high %v", started.RiskLevel, started.SelectedLenses, wantLenses)
+	}
+	for index, lens := range wantLenses {
+		if started.SelectedLenses[index] != lens {
+			t.Fatalf("OpenCode 4R selected lens[%d] = %q, want %q", index, started.SelectedLenses[index], lens)
+		}
+	}
+	bindings := organicProviderBindings(t, organicProviderStatus(t, harness, lineage, "opencode"))
+	if len(bindings) != len(wantLenses) {
+		t.Fatalf("OpenCode 4R collect bindings = %d, want %d", len(bindings), len(wantLenses))
+	}
+
+	taskArguments := make([]map[string]string, 0, len(bindings))
+	results := make(map[string]string, len(bindings))
+	expectedBindings := make(map[string]map[string]string, len(bindings))
+	for index, binding := range bindings {
+		if binding["lens"] != wantLenses[index] || binding["order"] != strconv.Itoa(index) {
+			t.Fatalf("OpenCode 4R binding[%d] = %#v, want %s at order %d", index, binding, wantLenses[index], index)
+		}
+		order, err := strconv.Atoi(binding["order"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := json.Marshal(map[string]any{
+			"lineage": binding["lineage"], "target": binding["target"], "lens": binding["lens"], "order": order,
+			"revision": binding["expected-revision"], "repository_context": binding["repository-context"], "subject_hash": binding["subject-hash"],
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := json.Marshal(map[string]any{
+			"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": []string{"internal/auth/session.go"}},
+			"lens": binding["lens"], "findings": []any{}, "evidence": []string{"loopback inspected the frozen candidate"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		taskArguments = append(taskArguments, map[string]string{
+			"description": "run the Go-bound reviewer", "subagent_type": binding["lens"],
+			"prompt": "GENTLE_AI_REVIEW_BINDING " + string(payload),
+		})
+		results[binding["lens"]] = string(result)
+		expectedBindings[binding["lens"]] = binding
+	}
+
+	var lock sync.Mutex
+	arrivals := make(map[string]int, len(wantLenses))
+	releases := make(map[string]chan struct{}, len(wantLenses))
+	for _, lens := range wantLenses {
+		releases[lens] = make(chan struct{})
+	}
+	allArrived := make(chan struct{})
+	arrived, inFlight, maxInFlight, settled := 0, 0, 0, 0
+	var titleAnswered, tasksIssued bool
+	var handlerFailure string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/chat/completions" {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode request = %s %s, want GET / or POST /v1/chat/completions", request.Method, request.URL.Path)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("read OpenCode 4R request: %v", err)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reviewBinding, bound, bindingErr := organicOpenCodeReviewBindingFromProvider(payload)
+		if bytes.Contains(payload, []byte("GENTLE_AI_OPENCODE_FOUR_R_REVIEWER")) {
+			lock.Lock()
+			handlerFailure = "OpenCode passed the configured 4R reviewer system prompt to the provider"
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bindingErr != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode 4R reviewer binding is invalid: %v", bindingErr)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bound {
+			expected, ok := expectedBindings[reviewBinding.lens]
+			if !ok {
+				lock.Lock()
+				handlerFailure = fmt.Sprintf("OpenCode 4R reviewer binding has an unknown lens %q", reviewBinding.lens)
+				lock.Unlock()
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if err := reviewBinding.matches(expected); err != nil {
+				lock.Lock()
+				handlerFailure = fmt.Sprintf("OpenCode 4R reviewer binding does not match the Go collect input: %v", err)
+				lock.Unlock()
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			lens := reviewBinding.lens
+			lock.Lock()
+			arrivals[lens]++
+			arrived++
+			inFlight++
+			if inFlight > maxInFlight {
+				maxInFlight = inFlight
+			}
+			if arrived == len(wantLenses) {
+				close(allArrived)
+			}
+			wait := releases[lens]
+			lock.Unlock()
+			select {
+			case <-wait:
+			case <-request.Context().Done():
+				writer.WriteHeader(http.StatusGatewayTimeout)
+				return
+			}
+			lock.Lock()
+			inFlight--
+			settled++
+			lock.Unlock()
+			writeOpenCodeChatText(writer, results[lens])
+			return
+		}
+
+		lock.Lock()
+		defer lock.Unlock()
+		if !titleAnswered {
+			titleAnswered = true
+			writeOpenCodeChatText(writer, "review transport")
+			return
+		}
+		if !tasksIssued {
+			for _, arguments := range taskArguments {
+				if _, hasBackground := arguments["background"]; hasBackground {
+					handlerFailure = "OpenCode 4R task unexpectedly sets background"
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			}
+			tasksIssued = true
+			writeOpenCodeChatTasks(writer, taskArguments)
+			return
+		}
+		if settled != len(wantLenses) || inFlight != 0 {
+			handlerFailure = "OpenCode sent an unbound request before the foreground reviewer group settled; a reviewer binding is missing"
+			writer.WriteHeader(http.StatusConflict)
+			return
+		}
+		writeOpenCodeChatText(writer, "review task group complete")
+	}))
+	defer server.Close()
+
+	configDirectory := t.TempDir()
+	pluginDirectory := filepath.Join(configDirectory, "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginSource, err := assets.Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDirectory, "opencode-review-transport.ts"), []byte(pluginSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reviewers := make(map[string]any, len(wantLenses))
+	for _, lens := range wantLenses {
+		reviewers[lens] = map[string]any{
+			"mode": "subagent", "hidden": true, "description": "test reviewer", "prompt": "GENTLE_AI_OPENCODE_FOUR_R_REVIEWER " + lens,
+			"tools": map[string]bool{"read": false, "write": false, "edit": false, "bash": false, "task": false},
+		}
+	}
+	config, err := json.Marshal(map[string]any{
+		"autoupdate": false, "share": "disabled", "snapshot": false, "model": "loopback/loopback", "small_model": "loopback/loopback",
+		"provider": map[string]any{"loopback": map[string]any{
+			"npm": "@ai-sdk/openai-compatible", "name": "Gentle AI 4R loopback",
+			"options": map[string]any{"baseURL": server.URL + "/v1", "apiKey": "loopback-key"},
+			"models":  map[string]any{"loopback": map[string]any{"name": "Loopback", "limit": map[string]int{"context": 32000, "output": 2048}}},
+		}},
+		"agent": reviewers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the grouped Go-bound reviewer tasks")
+	command.Dir = harness.repo.worktree
+	command.Env = append(harness.environment(),
+		"OPENCODE_CONFIG_DIR="+configDirectory,
+		"OPENCODE_CONFIG_CONTENT="+string(config),
+		"PATH="+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	type runResult struct {
+		output []byte
+		err    error
+	}
+	run := make(chan runResult, 1)
+	go func() {
+		output, err := command.CombinedOutput()
+		run <- runResult{output: output, err: err}
+	}()
+
+	select {
+	case <-allArrived:
+	case result := <-run:
+		t.Fatalf("OpenCode ended before every foreground reviewer reached the barrier: %v\n%s", result.err, result.output)
+	case <-time.After(30 * time.Second):
+		t.Fatal("OpenCode did not schedule all four foreground reviewer requests")
+	}
+	lock.Lock()
+	if maxInFlight != len(wantLenses) {
+		lock.Unlock()
+		t.Fatalf("maximum simultaneous OpenCode 4R reviewer requests = %d, want %d; arrivals=%v", maxInFlight, len(wantLenses), arrivals)
+	}
+	for _, lens := range wantLenses {
+		if arrivals[lens] != 1 {
+			lock.Unlock()
+			t.Fatalf("OpenCode 4R arrivals for %s = %d, want exactly one; arrivals=%v", lens, arrivals[lens], arrivals)
+		}
+	}
+	for _, lens := range wantLenses {
+		close(releases[lens])
+	}
+	lock.Unlock()
+
+	result := <-run
+	lock.Lock()
+	failed, issued, completed := handlerFailure, tasksIssued, settled
+	lock.Unlock()
+	if failed != "" || result.err != nil {
+		t.Fatalf("grouped OpenCode 4R runtime failure=%q err=%v\n%s", failed, result.err, result.output)
+	}
+	if !issued || completed != len(wantLenses) {
+		t.Fatalf("grouped OpenCode 4R task state issued=%t completed=%d, want true/%d\n%s", issued, completed, len(wantLenses), result.output)
+	}
+	authority := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)
+	if _, err := os.Stat(authority); !os.IsNotExist(err) {
+		t.Fatalf("grouped OpenCode 4R terminal capture retained authority at %q: %v", authority, err)
 	}
 }
 
@@ -863,6 +1195,24 @@ func writeOpenCodeChatTask(writer http.ResponseWriter, arguments map[string]stri
 	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
 }
 
+func writeOpenCodeChatTasks(writer http.ResponseWriter, arguments []map[string]string) {
+	toolCalls := make([]map[string]any, 0, len(arguments))
+	argumentDeltas := make([]map[string]any, 0, len(arguments))
+	for index, argument := range arguments {
+		encoded, _ := json.Marshal(argument)
+		toolCalls = append(toolCalls, map[string]any{
+			"index": index, "id": fmt.Sprintf("call_review_%d", index), "type": "function", "function": map[string]string{"name": "task", "arguments": ""},
+		})
+		argumentDeltas = append(argumentDeltas, map[string]any{
+			"index": index, "function": map[string]string{"arguments": string(encoded)},
+		})
+	}
+	writeOpenCodeChatChunk(writer, map[string]any{"role": "assistant", "tool_calls": toolCalls}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{"tool_calls": argumentDeltas}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{}, "tool_calls")
+	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+}
+
 func writeOpenCodeChatText(writer http.ResponseWriter, text string) {
 	writeOpenCodeChatChunk(writer, map[string]any{"role": "assistant", "content": text}, nil)
 	writeOpenCodeChatChunk(writer, map[string]any{}, "stop")
@@ -876,6 +1226,151 @@ func writeOpenCodeChatChunk(writer http.ResponseWriter, delta map[string]any, fi
 		"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finishReason}},
 	})
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
+}
+
+const organicReviewBindingPrefix = "GENTLE_AI_REVIEW_BINDING "
+
+type organicOpenCodeReviewBinding struct {
+	lineage           string
+	target            string
+	lens              string
+	order             int
+	revision          string
+	repositoryContext string
+	subjectHash       string
+	message           string
+}
+
+// organicOpenCodeReviewBindingFromProvider reads only OpenAI message content
+// strings. It deliberately does not inspect arbitrary serialized request bytes:
+// ambient system text can mention every lens without identifying the child that
+// OpenCode actually started.
+func organicOpenCodeReviewBindingFromProvider(payload []byte) (organicOpenCodeReviewBinding, bool, error) {
+	var request struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(payload, &request); err != nil {
+		return organicOpenCodeReviewBinding{}, false, fmt.Errorf("decode OpenCode provider request: %w", err)
+	}
+	bindings := make([]organicOpenCodeReviewBinding, 0, 1)
+	for _, providerMessage := range request.Messages {
+		var message string
+		if err := json.Unmarshal(providerMessage.Content, &message); err != nil {
+			continue
+		}
+		for _, line := range strings.Split(message, "\n") {
+			if !strings.HasPrefix(line, organicReviewBindingPrefix) {
+				continue
+			}
+			var decoded struct {
+				Lineage           string `json:"lineage"`
+				Target            string `json:"target"`
+				Lens              string `json:"lens"`
+				Order             int    `json:"order"`
+				Revision          string `json:"revision"`
+				RepositoryContext string `json:"repository_context"`
+				SubjectHash       string `json:"subject_hash"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, organicReviewBindingPrefix)), &decoded); err != nil {
+				return organicOpenCodeReviewBinding{}, false, fmt.Errorf("decode Go-materialized review binding: %w", err)
+			}
+			binding := organicOpenCodeReviewBinding{
+				lineage: decoded.Lineage, target: decoded.Target, lens: decoded.Lens, order: decoded.Order,
+				revision: decoded.Revision, repositoryContext: decoded.RepositoryContext, subjectHash: decoded.SubjectHash, message: message,
+			}
+			if binding.lens == "" || binding.order < 0 || binding.subjectHash == "" {
+				return organicOpenCodeReviewBinding{}, false, errors.New("Go-materialized review binding omits a valid lens, order, or subject hash")
+			}
+			bindings = append(bindings, binding)
+		}
+	}
+	switch len(bindings) {
+	case 0:
+		return organicOpenCodeReviewBinding{}, false, nil
+	case 1:
+		return bindings[0], true, nil
+	default:
+		return organicOpenCodeReviewBinding{}, false, fmt.Errorf("provider request contains %d Go-materialized review bindings", len(bindings))
+	}
+}
+
+func (binding organicOpenCodeReviewBinding) matches(expected map[string]string) error {
+	for _, field := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "lineage", got: binding.lineage, want: expected["lineage"]},
+		{name: "target", got: binding.target, want: expected["target"]},
+		{name: "lens", got: binding.lens, want: expected["lens"]},
+		{name: "order", got: strconv.Itoa(binding.order), want: expected["order"]},
+		{name: "revision", got: binding.revision, want: expected["expected-revision"]},
+		{name: "repository_context", got: binding.repositoryContext, want: expected["repository-context"]},
+		{name: "subject_hash", got: binding.subjectHash, want: expected["subject-hash"]},
+	} {
+		if field.got != field.want {
+			return fmt.Errorf("%s = %q, want %q", field.name, field.got, field.want)
+		}
+	}
+	return nil
+}
+
+func TestOrganicOpenCodeReviewBindingFromProvider(t *testing.T) {
+	const ambient = "review-risk review-resilience review-readability review-reliability"
+	binding := map[string]any{
+		"lineage": "lineage", "target": "target", "lens": "review-reliability", "order": 3,
+		"revision": "revision", "repository_context": "context", "subject_hash": "subject",
+	}
+	encoded, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := func(messages ...string) []byte {
+		t.Helper()
+		request, err := json.Marshal(map[string]any{"messages": func() []map[string]string {
+			values := make([]map[string]string, 0, len(messages))
+			for _, message := range messages {
+				values = append(values, map[string]string{"content": message})
+			}
+			return values
+		}()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+	for _, test := range []struct {
+		name      string
+		messages  []string
+		wantFound bool
+		wantError string
+	}{
+		{name: "ambient lenses are not a binding", messages: []string{ambient}},
+		{name: "one Go materialized binding", messages: []string{ambient, organicReviewBindingPrefix + string(encoded)}, wantFound: true},
+		{name: "ambiguous bindings", messages: []string{organicReviewBindingPrefix + string(encoded), organicReviewBindingPrefix + string(encoded)}, wantError: "contains 2"},
+		{name: "malformed binding", messages: []string{organicReviewBindingPrefix + "not-json"}, wantError: "decode Go-materialized review binding"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, found, err := organicOpenCodeReviewBindingFromProvider(payload(test.messages...))
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("binding error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found != test.wantFound {
+				t.Fatalf("binding found = %t, want %t", found, test.wantFound)
+			}
+			if found && (got.lens != "review-reliability" || got.order != 3 || got.subjectHash != "subject") {
+				t.Fatalf("binding = %#v, want the exact Go materialized lens, order, and subject", got)
+			}
+		})
+	}
 }
 
 func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
@@ -908,9 +1403,14 @@ func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
 			if err != nil {
 				t.Fatalf("provider capture: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 			}
-			if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-				t.Fatalf("provider capture did not enter validation: %#v", result)
+			var terminal organicFinalizeResult
+			if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
+				t.Fatalf("decode terminal provider capture: %v\n%s", err, stdout)
 			}
+			if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
+				t.Fatalf("provider capture did not close the clean review: %#v", terminal)
+			}
+			harness.assertReviewBurned(lineage, terminal)
 		})
 	}
 }
@@ -968,13 +1468,16 @@ type organicProviderStatusResult struct {
 }
 
 type organicProviderTransition struct {
-	Kind    string                  `json:"kind"`
-	Execute *organicProviderExecute `json:"execute"`
-	Collect *organicProviderCollect `json:"collect"`
+	Kind       string                  `json:"kind"`
+	ReasonCode string                  `json:"reason_code"`
+	Execute    *organicProviderExecute `json:"execute"`
+	Collect    *organicProviderCollect `json:"collect"`
 }
 
 type organicProviderExecute struct {
+	Operation string                    `json:"operation"`
 	Arguments []organicProviderArgument `json:"arguments"`
+	Artifacts []organicProviderArtifact `json:"artifacts"`
 }
 
 type organicProviderCollect struct {
@@ -983,6 +1486,12 @@ type organicProviderCollect struct {
 
 type organicProviderCollectInput struct {
 	Arguments []organicProviderArgument `json:"arguments"`
+}
+
+type organicProviderArtifact struct {
+	Lens              string `json:"lens"`
+	SelectedOrder     int    `json:"selected_order"`
+	AdmissionDecision string `json:"admission_decision"`
 }
 
 type organicProviderArgument struct {
@@ -1011,19 +1520,32 @@ func organicProviderStatus(t *testing.T, harness *organicHarness, lineage, agent
 
 func organicProviderBinding(t *testing.T, status organicProviderStatusResult) map[string]string {
 	t.Helper()
-	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+	bindings := organicProviderBindings(t, status)
+	if len(bindings) != 1 {
+		t.Fatalf("provider collect bindings = %d, want one: %#v", len(bindings), status.NextTransition)
+	}
+	return bindings[0]
+}
+
+func organicProviderBindings(t *testing.T, status organicProviderStatusResult) []map[string]string {
+	t.Helper()
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) == 0 {
 		t.Fatalf("provider collect transition = %#v", status.NextTransition)
 	}
-	binding := map[string]string{}
-	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
-		binding[argument.Name] = argument.Value
-	}
-	for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
-		if binding[name] == "" {
-			t.Fatalf("provider collect binding missing %q: %#v", name, status.NextTransition)
+	bindings := make([]map[string]string, len(status.NextTransition.Collect.Inputs))
+	for index, input := range status.NextTransition.Collect.Inputs {
+		binding := make(map[string]string, len(input.Arguments))
+		for _, argument := range input.Arguments {
+			binding[argument.Name] = argument.Value
 		}
+		for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
+			if binding[name] == "" {
+				t.Fatalf("provider collect binding[%d] missing %q: %#v", index, name, status.NextTransition)
+			}
+		}
+		bindings[index] = binding
 	}
-	return binding
+	return bindings
 }
 
 func TestOrganicProviderCaptureFakeWindowsDispatch(t *testing.T) {
@@ -1495,7 +2017,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		t.Fatalf("correction journey needs one consolidated review with a budget: %#v", started)
 	}
 
-	harness.captureReviewerResultOrFail(lineage, started, 0, organicReviewerResult{
+	stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []organicFinding{{
 			Location:          path + ":5",
@@ -1507,64 +2029,52 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		}},
 		Evidence: []string{"the focused differential test failed on the candidate"},
 	})
-	required := harness.finalize(lineage, "--captured-results=true")
-	if required.State != organicStateCorrectionRequired {
+	if err != nil {
+		t.Fatalf("capture candidate-caused result: %v\n%s", err, stderr)
+	}
+	var required organicFinalizeResult
+	if err := json.Unmarshal([]byte(stdout), &required); err != nil {
+		t.Fatalf("decode correction-required capture: %v\n%s", err, stdout)
+	}
+	if required.Operation != "review/capture-result" || required.State != organicStateCorrectionRequired {
 		t.Fatalf("candidate-caused blocker did not require a correction: %#v", required)
 	}
 
-	forecast := harness.finalize(lineage, "--correction-lines", "2")
-	if forecast.State != organicStateCorrectionRequired {
-		t.Fatalf("in-budget forecast escalated: %#v", forecast)
-	}
-
-	harness.writeFiles(map[string]string{path: organicLimitSource("fixed")})
 	waiting := harnessCorrectionStatus(t, harness, lineage)
 	if waiting.NextTransition == nil || waiting.NextTransition.Kind != "collect" ||
-		waiting.NextTransition.ReasonCode != "correction_repository_verification_required" ||
+		waiting.NextTransition.ReasonCode != "correction_plan_required" ||
 		waiting.NextTransition.Collect == nil || len(waiting.NextTransition.Collect.Inputs) != 1 {
-		t.Fatalf("corrected candidate did not request repository verification evidence: %#v", waiting)
+		t.Fatalf("correction-required review did not request a bound correction plan: %#v", waiting)
 	}
 	input := waiting.NextTransition.Collect.Inputs[0]
-	if input.CaptureOperation != "review.capture-evidence" {
-		t.Fatalf("correction evidence capture operation = %q", input.CaptureOperation)
+	if input.CaptureOperation != "review.capture-correction-plan" {
+		t.Fatalf("correction-plan capture operation = %q", input.CaptureOperation)
 	}
-	var correctionTarget string
+	planArguments := []string{"review", "capture-correction-plan"}
+	hasRepositoryContext := false
 	for _, argument := range input.Arguments {
-		if argument.Name == "target" {
-			correctionTarget = argument.Value
+		if argument.Name == "repository-context" && argument.Value != "" {
+			hasRepositoryContext = true
 		}
+		planArguments = append(planArguments, "--"+argument.Name, argument.Value)
 	}
-	if correctionTarget == "" {
-		t.Fatalf("correction evidence transition omitted its candidate target: %#v", input)
+	if !hasRepositoryContext {
+		planArguments = append(planArguments, "--cwd", harness.repo.worktree)
 	}
-	harness.gentle(
-		"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-		"--target", correctionTarget, "--expected-revision", waiting.Authority.Revision,
-		"--outcome", "passed", "--input", harness.writeEvidence(),
-	)
-	ready := harnessCorrectionStatus(t, harness, lineage)
-	if ready.ValidationRequest == nil || ready.ValidationRequest.CorrectionTargetIdentity != correctionTarget ||
-		ready.NextTransition == nil || ready.NextTransition.Kind != "collect" || ready.NextTransition.ReasonCode != "targeted_validation_required" {
-		t.Fatalf("passed correction evidence did not expose the bound targeted-validation request: %#v", ready)
+	planArguments = append(planArguments, "--correction-lines", "2")
+	var forecast organicFinalizeResult
+	payload := harness.gentle(planArguments...)
+	if err := json.Unmarshal(payload, &forecast); err != nil {
+		t.Fatalf("decode correction plan capture: %v\n%s", err, payload)
 	}
-	validation := harness.writeJSON("validation.json", organicValidationResult{
-		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
-		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
-		OriginalCriteria:              organicValidationCheck{Passed: true, Evidence: []string{"the original acceptance test passed"}},
-		CorrectionRegression:          organicValidationCheck{Passed: true, Evidence: []string{"the targeted regression test passed"}},
-		FollowUps:                     []any{},
-	})
-	approved := harness.finalize(lineage, "--validation", validation, "--captured-evidence")
-	harness.assertReviewBurned(lineage, approved)
+	if forecast.Operation != "review.capture-correction-plan" || forecast.State != organicStateCorrectionRequired {
+		t.Fatalf("in-budget correction plan did not retain the correction authority: %#v", forecast)
+	}
 
-	// A consumed correction cannot be replayed through a terminal receipt: the
-	// approved transaction is gone, so a second finalize attempt cannot mutate it.
-	_, _, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--captured-results=true")
-	if err == nil {
-		t.Fatal("a second correction reused burned terminal authority")
-	}
-	if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected second correction recreated terminal authority: %v", statErr)
+	// The one forecast is immutable. Repeating it must fail before a second
+	// correction route exists, rather than reviving a retired FINALIZE path.
+	if _, _, err := harness.gentleAllowFailure(planArguments...); err == nil {
+		t.Fatal("a second correction plan was accepted after the one bounded forecast")
 	}
 
 	// Materially new work starts a fresh transaction; it never reopens the
@@ -2035,28 +2545,32 @@ func (harness *organicHarness) startReview(lineage string, extra ...string) (org
 	return started, stderr
 }
 
-// approveReview runs the proportional plan the tier selected: zero reviewers for
-// passive content, and one result per selected lens plus final evidence
-// otherwise. The suite never selects lenses itself. Approval is terminal: it
-// burns the transaction instead of retaining a delivery receipt or authority.
+// approveReview runs the proportional plan the tier selected. The final
+// admitted reviewer event is terminal: it burns compact authority without a
+// receipt publication or FINALIZE replay.
 func (harness *organicHarness) approveReview(lineage string, started organicStartResult) organicFinalizeResult {
 	harness.t.Helper()
 	if len(started.SelectedLenses) == 0 {
-		finalized := harness.finalize(lineage)
+		finalized := organicFinalizeResult{LineageID: lineage, State: started.State, Action: started.Action}
 		harness.assertReviewBurned(lineage, finalized)
 		return finalized
 	}
+	var finalized organicFinalizeResult
 	for index, lens := range started.SelectedLenses {
-		harness.captureReviewerResult(lineage, started, index, organicReviewerResult{
+		stdout, stderr, err := harness.captureReviewerResult(lineage, started, index, organicReviewerResult{
 			Lens:     lens,
 			Findings: []organicFinding{},
 			Evidence: []string{"inspected every frozen candidate path for " + lens},
 		})
+		if err != nil {
+			harness.t.Fatalf("capture reviewer result for %s: %v\n%s", lens, err, stderr)
+		}
+		if index == len(started.SelectedLenses)-1 {
+			if err := json.Unmarshal([]byte(stdout), &finalized); err != nil {
+				harness.t.Fatalf("decode terminal reviewer capture: %v\n%s", err, stdout)
+			}
+		}
 	}
-	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
-		harness.t.Fatalf("reviewer results did not reach validation: %#v", result)
-	}
-	finalized := harness.finalize(lineage, "--evidence", harness.writeEvidence())
 	harness.assertReviewBurned(lineage, finalized)
 	return finalized
 }
@@ -2141,21 +2655,6 @@ type organicCapturePreflight struct {
 type organicInspection struct {
 	Status string   `json:"status"`
 	Paths  []string `json:"paths"`
-}
-
-func (harness *organicHarness) finalize(lineage string, extra ...string) organicFinalizeResult {
-	harness.t.Helper()
-	arguments := []string{"review", "finalize", "--cwd", harness.repo.worktree}
-	if lineage != "" {
-		arguments = append(arguments, "--lineage", lineage)
-	}
-	arguments = append(arguments, extra...)
-	var result organicFinalizeResult
-	payload := harness.gentle(arguments...)
-	if err := json.Unmarshal(payload, &result); err != nil {
-		harness.t.Fatalf("decode review finalize: %v\n%s", err, payload)
-	}
-	return result
 }
 
 func (harness *organicHarness) gate(gate string, extra ...string) organicGateResult {
@@ -2759,7 +3258,7 @@ func harnessCorrectionStatus(t *testing.T, harness *organicHarness, lineage stri
 	t.Helper()
 	payload := harness.gentle(
 		"review", "status", "--cwd", harness.repo.worktree, "--lineage", lineage,
-		"--contract", "gentle-ai.review-integration/v1", "--next-transition",
+		"--contract", "gentle-ai.review-integration/v2", "--next-transition",
 	)
 	var status organicCorrectionStatus
 	if err := json.Unmarshal(payload, &status); err != nil {

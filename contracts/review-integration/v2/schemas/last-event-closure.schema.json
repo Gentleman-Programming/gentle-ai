@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/last-event-closure.schema.json",
+  "title": "Gentle AI review terminal last-event capture response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation", "lineage_id", "state", "store_revision"],
+  "allOf": [
+    {
+      "if": {"properties": {"operation": {"const": "review.capture-correction-plan"}}, "required": ["operation"]},
+      "then": {
+        "required": ["target_identity", "request_hash", "correction_lines"],
+        "not": {"required": ["action"]}
+      },
+      "else": {"required": ["action"]}
+    }
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-last-event-closure/v1"},
+    "operation": {"enum": ["review/capture-result", "review.capture-correction-plan", "review.capture-refuter", "review/capture-validation"]},
+    "lineage_id": {"type": "string", "minLength": 1},
+    "target_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "request_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "correction_lines": {"type": "integer", "minimum": 1},
+    "state": {"enum": ["approved", "correction_required", "escalated"]},
+    "action": {"type": "string", "minLength": 1},
+    "store_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "advisory_findings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "findings"],
+      "properties": {
+        "statement": {"type": "string", "minLength": 1},
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "severity", "disposition"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "lens": {"type": "string", "minLength": 1},
+              "location": {"type": "string", "minLength": 1},
+              "severity": {"type": "string", "minLength": 1},
+              "disposition": {"enum": ["informational", "follow_up", "refuted"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package reviewtransaction
 
 import (

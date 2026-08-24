@@ -59,25 +59,12 @@ func TestReviewValidateRequiresGateNamesValidGates(t *testing.T) {
 	}
 }
 
-// TestReviewFinalizeNoDiscoverableLineageNamesStartCommand pins that the
-// dead-end reached by running finalize before any review start names the
-// exact continuation command instead of only stating the concept, and that
-// the wording stays honest for both a lineage that was never started and one
-// started under a different --cwd (it never claims nothing was attempted).
-func TestReviewFinalizeNoDiscoverableLineageNamesStartCommand(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	err := RunReviewFacadeFinalize([]string{"--cwd", repo}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "gentle-ai review start") || !strings.Contains(err.Error(), "--cwd") {
-		t.Fatalf("finalize with no discoverable lineage error = %v, want it to name gentle-ai review start and --cwd", err)
-	}
-}
-
 // TestReviewValidateDoesNotConsultAnActiveLineage pins that delivery remains
 // non-deciding even while an active review lifecycle exists.
 func TestReviewValidateDoesNotConsultAnActiveLineage(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := "receipt-not-available-needs-finalize"
+	lineage := "receipt-not-available-before-closure"
 	writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)

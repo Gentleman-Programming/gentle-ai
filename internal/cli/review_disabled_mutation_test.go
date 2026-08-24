@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,18 +11,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// The kill switch is meant to freeze review authority read-only, not to leave
-// it writable. `RDDOperationMutate` was declared and documented for exactly
-// that -- "advances existing authority. Disabled mode rejects it" -- and then
-// never reached the CLI surface, so the only guarded operation was START. A
-// lineage started before the switch went off could still be finalized to an
-// approved terminal receipt while receipt-driven development was switched off,
-// which also defeats the second half of the rule: re-enabling would rediscover
-// approved authority and skip the re-validation that makes the switch safe.
-//
-// Every test here drives the real router (`RunReview`), because the defect was
-// precisely that a correct internal guard was never wired to the surface: a
-// unit test on AuthorizeRDDOperation passed the entire time.
+// The kill switch freezes review authority against every currently routed
+// authority mutation. Reads and delivery validation remain available while
+// disabled; mutations must refuse only after their own request validation has
+// succeeded.
 
 // disabledReviewRepo freezes an in-flight low-risk lineage and then turns
 // receipt-driven development off for this clone, which is the exact shape the
@@ -51,106 +42,15 @@ func disabledReviewRepo(t *testing.T, lineage string) (repo string, started Revi
 	return repo, started
 }
 
-func reviewReceiptPath(repo, lineage string) string {
-	return filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2", lineage, "review-receipt.json")
-}
-
-// TestDisabledReviewRefusesFinalizeThroughTheRouter is the reproduction of the
-// defect itself: with the switch off, FINALIZE used to exit 0, transition the
-// lineage to `approved`, and publish a terminal receipt.
-func TestDisabledReviewRefusesFinalizeThroughTheRouter(t *testing.T) {
-	repo, started := disabledReviewRepo(t, "review-disabled-finalize")
-
-	var output bytes.Buffer
-	err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &output)
-	if err == nil {
-		t.Fatalf("finalize advanced review authority while the kill switch was off:\n%s", output.String())
-	}
-	if !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
-		t.Fatalf("finalize refused for the wrong reason: %v\n%s", err, output.String())
-	}
-	if _, statErr := os.Stat(reviewReceiptPath(repo, started.LineageID)); !os.IsNotExist(statErr) {
-		t.Fatalf("a terminal receipt was published while reviews were off (stat = %v)", statErr)
-	}
-}
-
-// TestDisabledReviewFreezesAuthorityInsteadOfDestroyingIt holds the other half
-// of "freeze": the refusal must leave the in-flight lineage exactly where it
-// was, still readable, and still finishable once the operator turns reviews
-// back on. Refusing must never discard work or auto-flip the switch.
-func TestDisabledReviewFreezesAuthorityInsteadOfDestroyingIt(t *testing.T) {
-	repo, started := disabledReviewRepo(t, "review-disabled-frozen")
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var refused bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &refused); !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
-		t.Fatalf("finalize while disabled = %v\n%s", err, refused.String())
-	}
-
-	// The frozen authority is still fully visible while disabled.
-	var status bytes.Buffer
-	if err := RunReview([]string{"status", "--cwd", repo}, &status); err != nil {
-		t.Fatalf("status could not read frozen authority while disabled: %v\n%s", err, status.String())
-	}
-	if !strings.Contains(status.String(), started.LineageID) || !strings.Contains(status.String(), "reviewing") {
-		t.Fatalf("frozen lineage is no longer readable as reviewing:\n%s", status.String())
-	}
-
-	// The switch itself is untouched: refusing never re-enables anything.
-	var mode bytes.Buffer
-	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &mode); err != nil {
-		t.Fatalf("review mode status: %v\n%s", err, mode.String())
-	}
-	if effective := decodeReviewModeResult(t, mode.Bytes()).Status.Effective; effective != reviewtransaction.RDDModeOff {
-		t.Fatalf("a refused mutation changed the kill switch to %q", effective)
-	}
-
-	// Turning reviews back on lets the same frozen lineage finish.
-	enableReviewForClone(t, repo)
-	var resumed bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &resumed); err != nil {
-		t.Fatalf("re-enabling did not release the frozen lineage: %v\n%s", err, resumed.String())
-	}
-	finalized := assertApprovedBurnedCompactFacadeFinalize(t, resumed.Bytes())
-	if finalized.LineageID != started.LineageID {
-		t.Fatalf("re-enabled finalize lineage = %q, want %q", finalized.LineageID, started.LineageID)
-	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
-}
-
-// TestDisabledReviewRefusesEveryAuthorityProgressingVerb sweeps the whole verb
-// surface, and it is the anti-drift guard for this fix: the original defect was
-// one guard wired to one verb out of twenty, so a per-verb assertion is what
-// keeps the next verb from quietly reopening the hole.
-//
-// Every request here is well-formed, which is the point. The kill switch is
-// deliberately evaluated after a verb has validated its own request -- refusing
-// a malformed request with "run review mode enable" would name a command that
-// does not resolve the block -- so a sweep built from malformed requests would
-// prove nothing about the switch.
+// TestDisabledReviewRefusesEveryAuthorityProgressingVerb sweeps the current
+// routed authority-mutation surface. Every request is well-formed, which is
+// the point: the kill switch is evaluated after a verb validates its request,
+// so malformed requests cannot prove the disabled-mode refusal.
 func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	const authorization = "gentle-ai.maintainer-authorization/v1"
 	input := filepath.Join(t.TempDir(), "input.json")
 	if err := os.WriteFile(input, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// retry-final-verification parses its incident before it resolves the
-	// repository, so the sweep supplies one that parses. It never has to match
-	// real authority: the kill switch answers first.
-	incidentPayload, err := reviewtransaction.CanonicalFinalVerificationIncident(reviewtransaction.FinalVerificationIncident{
-		Schema: reviewtransaction.FinalVerificationIncidentSchema, Class: reviewtransaction.FinalVerificationIncidentProceduralToolingFailure,
-		LineageID: "review-disabled-sweep", TerminalRevision: digest, ValidatingRevision: digest,
-		TargetIdentity: digest, FailedEvidenceHash: digest, FinalizeRequestDigest: digest,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	incident := filepath.Join(t.TempDir(), "incident.json")
-	if err := os.WriteFile(incident, incidentPayload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,21 +59,21 @@ func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 		args []string
 	}{
 		{verb: "start"},
-		{verb: "finalize"},
 		{verb: "capture-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
-		{verb: "capture-evidence", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--outcome", "passed", "--input", input}},
+		{verb: "capture-correction-plan", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--correction-lines", "1"}},
+		{verb: "capture-refuter", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--agent", "pi", "--execute"}},
+		{verb: "capture-validation", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--agent", "pi", "--execute"}},
 		{verb: "preserve-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
 		{verb: "repair", args: []string{"--contract", ReviewIntegrationContractV1}},
 		{verb: "invalidate", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest}},
 		{verb: "recover", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--disposition", "scope_changed"}},
-		{verb: "retry-final-verification", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--incident", incident, "--actor", "maintainer", "--reason", "reason", "--maintainer-authorization", authorization}},
 		{verb: "reclaim", args: []string{"--lineage", "review-disabled-sweep", "--reason", "reason", "--actor", "maintainer"}},
 		{verb: "dispose-result", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--lens", "review-risk", "--order", "0", "--artifact-digest", digest, "--class", "empty_result", "--diagnostic", "diagnostic", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "reopen-results", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "bind-sdd", args: []string{"--change", "some-change", "--lineage", "review-disabled-sweep", "--expected-binding-revision", digest}},
 	} {
 		t.Run(testCase.verb, func(t *testing.T) {
 			repo, _ := disabledReviewRepo(t, "review-disabled-sweep")
+			t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 			var output bytes.Buffer
 			err := RunReview(append([]string{testCase.verb, "--cwd", repo}, testCase.args...), &output)
 			if !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
@@ -185,10 +85,8 @@ func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 
 // TestDisabledReviewLetsMalformedRequestsAnswerFirst is the ordering the sweep
 // above depends on. Two things are wrong at once here -- the request is invalid
-// and reviews are off -- and the usage error has to win, because this branch's
-// rule is that a message may name a command only if running that command
-// resolves the block. Answering an unknown flag with "run review mode enable"
-// would name a command that leaves the caller exactly as stuck.
+// and reviews are off -- and the usage error has to win, because a message may
+// name a command only if running that command resolves the block.
 func TestDisabledReviewLetsMalformedRequestsAnswerFirst(t *testing.T) {
 	repo, _ := disabledReviewRepo(t, "review-disabled-malformed")
 
@@ -216,11 +114,8 @@ func TestDisabledReviewLetsMalformedRequestsAnswerFirst(t *testing.T) {
 	}
 }
 
-// TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable is the other
-// direction, and it is the load-bearing one: freezing authority read-only is
-// worthless if the operator can no longer see it, and the entire point of the
-// switch is that ordinary delivery proceeds unblocked and unmanaged. A change
-// that made any lifecycle gate refuse while disabled would break the feature.
+// TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable proves that
+// freezing authority does not prevent inspection or ordinary delivery.
 func TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable(t *testing.T) {
 	repo, started := disabledReviewRepo(t, "review-disabled-readable")
 
@@ -245,7 +140,7 @@ func TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable(t *testing.T)
 		{"status", "--cwd", repo},
 		{"capabilities"},
 		{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID},
-		{"finalize", "--help"},
+		{"capture-result", "--help"},
 		{"abandon", "--help"},
 	} {
 		var output bytes.Buffer
@@ -255,74 +150,23 @@ func TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable(t *testing.T)
 	}
 }
 
-// TestDisabledReviewReplaysTerminalAuthorityWhileDisabled establishes the
-// terminal boundary of a frozen lineage. Before approval, disabled mode keeps
-// the authority frozen and resumes it after re-enable. Approval then burns that
-// authority, so disabling again exposes ordinary delivery rather than a
-// terminal receipt that FINALIZE could replay.
-func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "docs", "terminal.md"), []byte("approved before the switch went off\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runReviewCLIGit(t, repo, "add", "docs/terminal.md")
-	const lineage = "review-disabled-terminal-replay"
-	started := startFacadeReviewResult(t, repo, lineage)
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	disableReviewForClone(t, repo)
-	var frozen bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &frozen); !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
-		t.Fatalf("finalize did not freeze before approval: %v\n%s", err, frozen.String())
-	}
-
-	enableReviewForClone(t, repo)
-	var approved bytes.Buffer
-	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &approved); err != nil {
-		t.Fatalf("finalize after re-enable: %v\n%s", err, approved.String())
-	}
-	assertApprovedBurnedCompactFacadeFinalize(t, approved.Bytes())
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
-
-	disableReviewForClone(t, repo)
-	var gateOutput bytes.Buffer
-	if err := RunReview([]string{"validate", "--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &gateOutput); err != nil {
-		t.Fatalf("burned authority blocked ordinary disabled delivery: %v\n%s", err, gateOutput.String())
-	}
-	var gate ReviewValidateResult
-	decodeStrictReviewJSON(t, gateOutput.Bytes(), &gate)
-	if gate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged || gate.Allowed || gate.Result == reviewtransaction.GateAllow {
-		t.Fatalf("burned authority disabled delivery = %#v, want ordinary unmanaged policy", gate)
-	}
-
-	var replayed bytes.Buffer
-	err = RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &replayed)
-	if err == nil {
-		t.Fatalf("burned authority was replayed while disabled:\n%s", replayed.String())
-	}
-	if errors.Is(err, reviewtransaction.ErrRDDDisabled) {
-		t.Fatalf("burned authority was reported as frozen rather than absent: %v\n%s", err, replayed.String())
-	}
-}
-
-// TestDisabledReviewMutationRefusalNamesARunnableContinuation holds the
-// branch rule that a block must name a command whose execution resolves it,
-// and that the mutation refusal says what re-enabling will actually let the
-// operator do -- they hold an in-flight lineage, not a fresh start.
+// TestDisabledReviewMutationRefusalNamesARunnableContinuation holds the branch
+// rule that a block must name a command whose execution resolves it.
 func TestDisabledReviewMutationRefusalNamesARunnableContinuation(t *testing.T) {
 	repo, started := disabledReviewRepo(t, "review-disabled-continuation")
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 	var output bytes.Buffer
-	err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &output)
+	err := RunReview([]string{
+		"capture-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", digest, "--lens", "review-risk", "--order", "0", "--input", input,
+	}, &output)
 	if err == nil {
-		t.Fatalf("finalize was not refused:\n%s", output.String())
+		t.Fatalf("capture-result was not refused:\n%s", output.String())
 	}
 	message := err.Error()
 	if !strings.Contains(message, "gentle-ai review mode enable --scope=clone") {
@@ -333,32 +177,37 @@ func TestDisabledReviewMutationRefusalNamesARunnableContinuation(t *testing.T) {
 	}
 }
 
-// TestDisabledReviewNegotiatedMutationEmitsTheTypedFailure keeps the machine
-// surface honest: a caller driving the negotiated contract must receive the
-// published failure envelope, not a bare error, and it must carry the runnable
-// continuation rather than only a bare `stop`.
-func TestDisabledReviewNegotiatedMutationEmitsTheTypedFailure(t *testing.T) {
+// TestDisabledReviewCaptureResultEmitsTheTypedFailure keeps the machine surface
+// honest: a surviving mutation must emit the published failure envelope rather
+// than a bare error, with the runnable enable continuation in its cause.
+func TestDisabledReviewCaptureResultEmitsTheTypedFailure(t *testing.T) {
 	repo, started := disabledReviewRepo(t, "review-disabled-negotiated")
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 	var output bytes.Buffer
 	err := RunReview([]string{
-		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
+		"capture-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", digest, "--lens", "review-risk", "--order", "0", "--input", input,
 	}, &output)
 	if err == nil {
-		t.Fatalf("negotiated finalize advanced authority while disabled:\n%s", output.String())
+		t.Fatalf("capture-result advanced authority while disabled:\n%s", output.String())
 	}
 	var failure ReviewIntegrationFailure
 	decodeStrictReviewJSON(t, output.Bytes(), &failure)
 	if failure.Code != "rdd_disabled" {
-		t.Fatalf("negotiated failure code = %q, want rdd_disabled\n%s", failure.Code, output.String())
+		t.Fatalf("capture-result failure code = %q, want rdd_disabled\n%s", failure.Code, output.String())
 	}
 	if failure.MutationOutcome != ReviewMutationNotStarted {
-		t.Fatalf("negotiated failure claimed mutation outcome %q", failure.MutationOutcome)
+		t.Fatalf("capture-result failure claimed mutation outcome %q", failure.MutationOutcome)
 	}
 	if !strings.Contains(failure.Cause, "gentle-ai review mode enable --scope=clone") {
-		t.Fatalf("negotiated failure carries no runnable continuation: %#v", failure)
+		t.Fatalf("capture-result failure carries no runnable continuation: %#v", failure)
 	}
 	if err := failure.Validate(); err != nil {
-		t.Fatalf("negotiated failure envelope is invalid: %v", err)
+		t.Fatalf("capture-result failure envelope is invalid: %v", err)
 	}
 }

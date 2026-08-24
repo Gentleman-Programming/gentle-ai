@@ -173,7 +173,7 @@ type ReviewGateDeniedError struct {
 }
 
 func RunReviewStep(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review-step", stdout, "Read-only legacy v1 compatibility command. Mutation is rejected; use gentle-ai review finalize for compact authority.")
+	flags := newReviewFlagSet("review-step", stdout, "Read-only legacy v1 compatibility command. Mutation is rejected; use the negotiated review start and capture routes for compact authority.")
 	cwd := flags.String("cwd", "", "repository root")
 	lineage := flags.String("lineage", "", "review lineage identifier")
 	operation := flags.String("operation", "", "legacy lifecycle operation rejected as read-only")
@@ -202,7 +202,7 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 	if !strings.HasPrefix(attemptedOperation, "review/") {
 		attemptedOperation = "review/" + attemptedOperation
 	}
-	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use gentle-ai review finalize", reviewtransaction.NewLegacyReadOnlyError(attemptedOperation, *lineage))
+	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use the negotiated review start and capture routes", reviewtransaction.NewLegacyReadOnlyError(attemptedOperation, *lineage))
 }
 
 // Error renders the human-surface denial. It always names a continuation:
@@ -739,8 +739,8 @@ func reviewGateAction(result reviewtransaction.GateResult) string {
 		return "explicit-maintainer-action"
 	case reviewtransaction.GateEscalated:
 		// STATUS already re-derives escalated-authority recovery eligibility
-		// (accounting-only, changed-target, or final-verification-retry); a
-		// bare stop here told the caller nothing it did not already know.
+		// (accounting-only or changed-target); a bare stop here told the caller
+		// nothing it did not already know.
 		return "review.status"
 	default:
 		return "explicit-maintainer-action"

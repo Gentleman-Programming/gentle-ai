@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -218,11 +217,6 @@ func ReopenCompactReviewerResults(ctx context.Context, repo string, request Comp
 	next.EvidenceHash = ""
 	next.ResultReopens = append(append([]CompactResultReopen(nil), record.State.ResultReopens...), audit)
 	revision, err := store.replaceContextGuarded(ctx, record.Revision, CompactResultReopenOperation, next, func() error {
-		if _, statErr := os.Stat(store.ReceiptPath()); statErr == nil {
-			return errors.New("review reopen-results refuses an authority that already has a receipt")
-		} else if !os.IsNotExist(statErr) {
-			return statErr
-		}
 		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(ctx, repository, store.Dir, record.State, frozen, plan.AuthorizedLenses)
 		if inspectErr != nil {
 			return inspectErr
@@ -291,11 +285,6 @@ func buildCompactResultReopenPlan(ctx context.Context, repository string, store 
 	state := record.State
 	if state.InitialSnapshot.Identity != request.TargetIdentity || !compactResultReopenStateEligible(state) {
 		return CompactResultReopenPlan{}, errors.New("review reopen-results requires an uncorrected validating or correction-required authority on the exact frozen target; run `gentle-ai review status --cwd <repo>` to see where this review actually is")
-	}
-	if _, err := os.Stat(store.ReceiptPath()); err == nil {
-		return CompactResultReopenPlan{}, errors.New("review reopen-results refuses an authority that already has a receipt")
-	} else if !os.IsNotExist(err) {
-		return CompactResultReopenPlan{}, err
 	}
 	authorizedLenses, err := canonicalReopenQuarantineLenses(state, request.QuarantineLenses)
 	if err != nil {

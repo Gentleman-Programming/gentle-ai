@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,8 +17,8 @@ import (
 const hostCommandTimeout = 12 * time.Minute
 
 // hostStepBudget bounds the negotiated transition follower. A full medium
-// lifecycle is start -> capture -> finalize -> evidence -> finalize; the
-// budget leaves room for refuter/validator legs without permitting a loop.
+// lifecycle is start -> capture -> final capture closure; the budget leaves
+// room for refuter/validator legs without permitting a loop.
 const hostStepBudget = 10
 
 // mergeEnvironment overlays overrides onto the inherited environment,
@@ -215,12 +214,20 @@ func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[str
 	b.noteHostCost(lane, "1 compiled reviewer subprocess run (capture-result --agent)")
 	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,
 		append([]string{"review", "capture-result"}, argumentTokens(input)...)...)
-	if code != 0 || getString(capture, "schema") != "gentle-ai.review-result-artifact/v2" || getString(capture, "admission_decision") != "completed" {
+	if code != 0 || !admittedCapture(capture) {
 		b.fail(lane, "reviewer capture admitted", fmt.Sprintf("exit=%d schema=%q admission=%q %s",
 			code, getString(capture, "schema"), getString(capture, "admission_decision"), firstLine(stderr)))
 		return false
 	}
-	b.pass(lane, "reviewer capture admitted", "real reviewer process produced a native result artifact")
+	b.pass(lane, "reviewer capture admitted", "real reviewer process produced an admitted native capture")
+	switch operationState(capture) {
+	case "approved":
+		b.burnApproved(lane, "lifecycle burned", repo, "", env, capture)
+		return false
+	case "correction_required":
+		b.pass(lane, "lifecycle burned", "real reviewer reported candidate-causal findings (correction_required); transport and admission proven")
+		return false
+	}
 	return true
 }
 
@@ -229,12 +236,6 @@ func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[str
 // reported as such, mirroring the claude --with-model lane.
 func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 	const check = "lifecycle burned"
-	evidencePath := filepath.Join(b.workRoot, lane+"-evidence.txt")
-	evidence := fmt.Sprintf("crosslane battery %s: node --check passed on the frozen candidate\n", timestamp())
-	if err := os.WriteFile(evidencePath, []byte(evidence), 0o644); err != nil {
-		b.fail(lane, check, err.Error())
-		return
-	}
 	for step := 0; step < hostStepBudget; step++ {
 		statusDoc, statusStderr, _ := b.statusEnv(repo, agent, env)
 		kind := getString(statusDoc, "next_transition", "kind")
@@ -265,23 +266,22 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 				if !b.hostCaptureLens(lane, repo, env, input) {
 					return
 				}
-			case "review.capture-evidence":
-				tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
-				captureArgs := append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)
-				record, captureStderr, code := b.runJSONEnv("verification-evidence", repo, env, captureArgs...)
-				if code != 0 || getString(record, "outcome") != "passed" {
-					b.fail(lane, check, fmt.Sprintf("evidence capture exit=%d %s", code, firstLine(captureStderr)))
-					return
-				}
 			case "review.capture-refuter", "review.capture-validation":
 				// The provider-rendered argv carries --execute: Go itself spawns
 				// the real locked-down pi role process on the materialized request.
 				b.noteHostCost(lane, "1 Go-owned pi role process run ("+operation+")")
 				roleDoc, roleStderr, code := b.runJSONEnv("provider-role", repo, env,
 					append([]string{"review", strings.TrimPrefix(operation, "review.")}, argumentTokens(input)...)...)
-				captured, _ := roleDoc["captured"].(bool)
-				if code != 0 || !captured {
-					b.fail(lane, check, fmt.Sprintf("%s exit=%d captured=%v %s", operation, code, captured, firstLine(roleStderr)))
+				if code != 0 || !admittedCapture(roleDoc) {
+					b.fail(lane, check, fmt.Sprintf("%s exit=%d state=%q %s", operation, code, operationState(roleDoc), firstLine(roleStderr)))
+					return
+				}
+				switch operationState(roleDoc) {
+				case "approved":
+					b.burnApproved(lane, check, repo, agent, env, roleDoc)
+					return
+				case "correction_required":
+					b.pass(lane, check, "provider role reported candidate-causal findings (correction_required)")
 					return
 				}
 			default:

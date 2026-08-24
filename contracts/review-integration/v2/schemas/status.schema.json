@@ -27,8 +27,7 @@
     "reconciliation": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/reconciliation"},
     "eligibility": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/action_eligibility"},
     "next_transition": {"$ref": "#/$defs/next_transition"},
-    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
-    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
+    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
   },
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -99,8 +98,6 @@
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/1"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/2"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/3"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/5"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/6"}
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"}
   ]
 }

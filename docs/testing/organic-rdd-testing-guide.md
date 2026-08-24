@@ -1,7 +1,7 @@
 # 🧪 How to test — Organic RDD (prerelease 2.2.0-rc.1)
 
 > [!IMPORTANT]
-> **Historical delivery semantics only.** Any `allow`, receipt, or gate example below records the superseded prerelease procedure; it does not authorize, block, or govern a current commit, push, PR, release, or archive. Current delivery follows ordinary repository policy, and review outcomes are informational.
+> **Current closure and delivery semantics.** A zero-lens START, or the final admitted lens, refuter, or validation capture, closes and burns a review. Delivery always follows ordinary repository policy; review closure is informational.
 
 > [!WARNING]
 > **Historical and superseded guide.** This document preserves the candidate-specific validation procedure for `v2.2.0-rc.1` and PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). It is not current installation or validation guidance for stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0), prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), or unreleased `main`. Use the [Quickstart version policy](../quickstart.md#version-policy) for current installation channels and validation entry points.
@@ -88,7 +88,14 @@ It does NOT hang, it does NOT review. A refusal that exits non-zero and names no
 ### Flow 3: Documentation-only change (zero ceremony)
 
 1. [ ] Edit `README.md` (plain text) and stage **only that file**: `git add README.md`.
-2. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: `risk_level: low`, `selected_lenses: []` — zero reviewers, no question.
+2. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: `risk_level: low`, `selected_lenses: []` — zero reviewers, no question; START closes and burns the review.
+
+### Current review lifecycle (use for every flow below)
+
+1. Start the review. A zero-lens START closes and burns it immediately. For selected lenses, use only the exact STATUS-issued capture route for each admitted result.
+2. If STATUS requests a correction, use its bound `capture-correction-plan`. After the bounded correction, use the terminal STATUS-issued `capture-validation`; its admitted capture closes and burns the review.
+3. If capture output is malformed, incomplete, unavailable, or ambiguous, query STATUS for the same lineage. STATUS reconciles the outcome; relaunch only when it reoffers the identical bound slot.
+4. Commit, push, PR, release, and archive actions follow ordinary unmanaged repository policy. Do not run a separate delivery step after review closure.
 
 ### Flow 4: The review is chosen by evidence, not by size
 
@@ -105,9 +112,9 @@ It does NOT hang, it does NOT review. A refusal that exits non-zero and names no
 
 **If you are driving this from a script or an agent**: the answer is read as one whole line, so it must end with a newline. Sending the bare character `2` over a pseudo-terminal is echoed but never completes the read, and the command waits until your harness kills it. Send `2\n`. There is no timeout on this prompt, so a missing newline looks exactly like a hang.
 
-### Flow 6: Delivery with reviews turned off
+### Flow 6: Delivery stays ordinary unmanaged
 
-**Watch out for the fixture**: this flow needs a configured upstream. With no remote, `pre-push` cannot derive what to compare against and fails closed with a typed error — that is correct, but it does not test what this flow wants to test. Set the remote up first:
+**Watch out for the fixture**: this flow needs a configured upstream so the push is real. Set one up first:
 
 ```
 git init --bare $HOME/demo-remote.git
@@ -115,9 +122,9 @@ cd $HOME/demo && git remote add origin $HOME/demo-remote.git
 git push -u origin HEAD
 ```
 
-1. [ ] Turn reviews off, make a change and commit → **Expected**: the commit works normally.
-2. [ ] `gentle-ai review validate --gate pre-push --cwd $HOME/demo` → **Expected**: `"delivery": "disabled/unmanaged"`, `"allowed": false`, **exit 0**. It reports, it does not block.
-3. [ ] Check that it does NOT say `allow` → **Expected**: never a false PASS.
+1. [ ] Turn reviews off, make a change, and commit → **Expected**: the commit works normally.
+2. [ ] Push the commit → **Expected**: ordinary repository policy decides delivery; no review lifecycle command is part of the push.
+3. [ ] Turn reviews back on, make and commit another docs change, then push → **Expected**: delivery remains ordinary unmanaged policy.
 
 ### Flow 7: Turning it off mid-work and coming back
 
@@ -134,31 +141,16 @@ git push -u origin HEAD
 
 These flows are new. Each one reproduces a bug someone in the community found in earlier rounds. They need a binary **later than Refresh 4**. Check which build you have with `gentle-ai doctor`: it names the binary you actually invoked and its version, and warns when that differs from the one on your `PATH`. If yours predates the current refresh, download it again from the release page or build from the PR branch.
 
-### Flow 9: Pre-push after you already pushed (the bug that cost us the most)
+### Flow 9: Published commits stay ordinary delivery
 
-Reported by @Wladimirfn, @Denver2828, @MarsSall and @Freedom2828. It looked like a Windows bug and it was not: it happened when the reviewed commit was **already published**.
+Reported by @Wladimirfn, @Denver2828, @MarsSall and @Freedom2828. The old candidate procedure tried to make a previously published commit re-enter review delivery. Current delivery never does that.
 
 You need the remote from Flow 6.
 
-1. [ ] Docs change, `review start` + `review finalize` → **Expected**: approved receipt.
-2. [ ] `review validate --gate pre-commit`, commit, and `review validate --gate pre-push` → **Expected**: `allow`, **exit 0**. (This is the regression: before the push it still has to work the same.)
-3. [ ] **Push**: `git push origin HEAD`.
-4. [ ] Turn reviews off and make ANOTHER docs commit.
-5. [ ] `review validate --gate pre-push` → **Expected**: `"delivery": "disabled/unmanaged"`, **exit 0**. **NEVER** `authority_corrupted`.
-6. [ ] Turn reviews on and repeat the gate → **Expected**: `result: "scope-changed"` naming a **runnable** recovery, not just a reason:
-
-```
-review lifecycle gate denied: scope-changed: recover via gentle-ai review recover
-  --base-ref <commit> --committed-only (requires: predecessor_lineage_id, ...)
-```
-
-No corruption either.
-
-7. [ ] **Now run exactly what it named**, filling in the required inputs, then `review finalize` on the successor, then repeat the gate → **Expected**: `allow`, exit 0.
-
-Step 7 is the one that matters most in this whole guide. Until this refresh the message named a recovery that, followed literally, landed you right back at the same denial. The tests proved the message was **emitted** and never that following it **worked**. If you follow it and stay blocked, that is the most valuable report you can send us.
-
-8. [ ] One case still ends without a one-step recovery **on purpose**: when the committed content is byte-identical to what was approved and only the commit topology changed. No command resolves it, so the message names none — it states the exact reason instead (`reviewed delivery is not exactly one commit from its reviewed base`). The same is true once the reviewed commit is fully published: the message names the reason (`reviewed delivery base commit is missing or ambiguous in publication range`), not a maintainer. That is intended, not a defect.
+1. [ ] Make a docs change and run `review start` → **Expected**: its zero-lens START closes and burns the review.
+2. [ ] Commit and push the change.
+3. [ ] Turn reviews off, make and commit another docs change, then push it.
+4. [ ] Turn reviews on and make a third docs change → **Expected**: a new START concerns only this new candidate; previously closed reviews and published commits do not govern ordinary delivery.
 
 ### Flow 10: First commit in a repo with no history
 
@@ -169,47 +161,27 @@ Reported by @lu149e, with the root cause confirmed by @Denver2828.
 3. [ ] `git rev-parse --verify HEAD` → **Expected**: it fails, because there is no first commit yet. That is correct.
 4. [ ] `gentle-ai review start --cwd "$PWD"` → **Expected**: the review **starts**. It used to blow up with `Needed a single revision`.
 
-### Flow 11: Transitions run exactly as they are printed
+### Flow 11: STATUS transitions run exactly as returned
 
-This one is for people using agents. The product prints the next command; if it is not literally executable, an agent that follows instructions to the letter gets stuck.
+This one is for people using agents. A controller must not infer a lifecycle action from status prose; it uses the returned transition exactly.
 
-1. [ ] With a review in progress, ask for the next transition. The command needs the explicit contract:
-
-```
-gentle-ai review status --next-transition --contract gentle-ai.review-integration/v1
-```
-
-**First read `next_transition.kind`. Steps 2 to 4 only apply when it is `execute`.**
-
-If it is `collect`, the tool is waiting for reviewer results that do not exist yet, so there is no command it could print: a model has to run the lens first. That is correct behaviour, not a defect. Skip to step 5. If it is `stop`, there is no transition at all and the same applies.
-
-The quickest way to land on `execute` is to ask before any review has started, or right after `review capture-result`.
-
-2. [ ] Look at the `token` of each argument in the response → **Expected**: each one is a complete flag ready to run (`--target=sha256:...`), not a name and a value sitting apart.
-3. [ ] Read the `next_transition.execute.command` field → **Expected**: one complete line, starting with `gentle-ai review <verb>`, carrying every argument from step 2 in the same order and in `--flag=value` form. You never assemble it yourself: `operation` is a logical name (`review.start`), `command` is the runnable line.
-4. [ ] **Copy and paste that `command` exactly as it came out**, without fixing anything → **Expected**: it runs. It used to print `--captured-results true` (with a space) and the parser rejected it, and before that there was no `command` at all — only `operation`, which an agent had to translate into a verb by guessing.
-5. [ ] If you landed on `collect`, look at its `inputs[].arguments` → **Expected**: each one carries a `token` too, because those arguments are literally the flags of `review capture-result`. Do **not** mark the flow FAIL for the missing `command` on a collect: there is genuinely nothing runnable to print until a model has produced the reviewer result that `--input` points at.
-6. [ ] Paste those collect tokens straight into `gentle-ai review capture-result` → **Expected**: it runs. **Do not add `--cwd`**: the tokens already carry `--repository-context`, and passing both is refused. If you hit that refusal, report whether it told you which one to drop.
-
-### Flow 12: Finalize without evidence says what to do
-
-**This flow needs a review in `validating`, and getting there is part of the test.** Do not look it up here and do not read the source: start a review that selects lenses (the Flow 4 auth change works) and find your way to `validating` using only what the tool tells you.
-
-That is deliberate. Three testers in a row marked this N/A because they could not work out how to produce the reviewer-result payload `capture-result --input` demands. That was not their failure, it was the finding: the product has a command that emits the schema with a working example and nothing pointed at it. It should now point at it from both the flag help and the refusal.
-
-1. [ ] Work your way to `validating` from the tool's own output → **Expected**: every refusal along the way names what to do next. Write down each one that does not, and what you had to guess. **If you cannot get there without reading source or asking someone, stop and report that** — it is worth more than a PASS on the step below.
-
-**The actual test:**
-
-2. [ ] With that review in `validating` and no captured evidence, run `gentle-ai review finalize --lineage <id> --cwd .` → **Expected**: an error that **names both commands** to get out:
+1. [ ] With a review in progress, ask for the next transition:
 
 ```
-finalize for lineage "<id>" had no verification evidence to consume and made no
-transition; capture it first with `gentle-ai review capture-evidence`, then run
-`gentle-ai review finalize --lineage <id> --captured-evidence`
+gentle-ai review status --next-transition --contract gentle-ai.review-integration/v2
 ```
 
-It used to say `continue the current review state` and nothing ever happened.
+2. [ ] First read `next_transition.kind`. If it is `execute`, run the returned operation with its ordered argument tokens exactly as returned → **Expected**: the transition runs without reordered, synthesized, or added arguments.
+3. [ ] If it is `collect`, inspect `inputs[].arguments` → **Expected**: each carries a complete token for the bound capture. A model must first produce that bound reviewer result; do not invent an execute action.
+4. [ ] Submit a completed result only through the returned collect input. Do **not** add `--cwd`: inputs that carry `--repository-context` refuse both contexts together.
+5. [ ] After any malformed, incomplete, unavailable, or ambiguous capture result, query STATUS again. Relaunch only if it reoffers the same bound slot; otherwise follow the returned state.
+
+### Flow 12: Final capture closes the review
+
+1. [ ] Start a review that selects lenses and follow only the STATUS-issued `capture-result` route for each selected lens.
+2. [ ] Submit the final admitted capture → **Expected**: the final reviewer, refuter, or targeted-validator capture closes the review and burns its authority. No additional close or retry command follows it; delivery remains ordinary unmanaged policy.
+
+If a capture is malformed, incomplete, or unavailable, query the same exact-lineage STATUS and relaunch only when it reoffers the same bound slot.
 
 ### Flow 13: Flag combinations we do not support
 
@@ -221,58 +193,37 @@ It used to say `continue the current review state` and nothing ever happened.
 
 These flows test the new work: that the tool recovers on its own, that blocks say how to continue, and that old history does not constrain current work. They need a binary **later than Refresh 4**.
 
-### Flow 14: Old receipts do not block new work
+### Flow 14: Closed reviews do not block new work
 
 The bug @decode2 and @fisidj found. You need the remote from Flow 6.
 
-1. [ ] Make **three** docs changes, each one with `review start` + `review finalize` + commit. Push the first two.
-2. [ ] Turn reviews off and make a fourth commit **without reviewing it**.
-3. [ ] `review validate --gate pre-push` → **Expected**: `delivery: "disabled/unmanaged"`, exit 0. **Never** "multiple terminal review receipts require explicit target selection".
-4. [ ] Turn reviews on and run `review status --contract gentle-ai.review-integration/v1` → **Expected**: it says nothing governs the candidate and that you should start a new one. The old lineages show up listed as a recovery option, **not** as a list you are forced to pick from.
+1. [ ] Make **three** docs changes. For each one, run `review start`, confirm that the zero-lens START closes, then commit. Push the first two.
+2. [ ] Turn reviews off and make a fourth commit **without reviewing it**, then push it.
+3. [ ] Turn reviews on and run `review status --contract gentle-ai.review-integration/v2` → **Expected**: STATUS does not make any prior closed review govern the fourth commit or its delivery.
 
-### Flow 15: Recovery that drives itself
+### Flow 15: Corrections use the STATUS-bound plan
 
-1. [ ] Get to a state where `review recover` is the continuation (for example: an approved review, then change the candidate's scope).
-2. [ ] Run `review recover` **without** `--actor`, **without** `--reason` and **without** `--maintainer-authorization` → **Expected**: it works. The tool derives all three on its own.
-3. [ ] Now run the same thing passing a deliberately **wrong** `--maintainer-authorization` → **Expected**: it refuses. The tool authorizes itself when you said nothing, but it **never corrects what you said wrong**.
+1. [ ] Reach a correction state and query STATUS for the review lineage.
+2. [ ] Use only the bound `capture-correction-plan` STATUS returns → **Expected**: it identifies the admitted correction scope.
+3. [ ] After the bounded correction, query STATUS again and use the terminal `capture-validation` it returns → **Expected**: the admitted validation capture closes and burns the review.
+4. [ ] If either capture result is ambiguous, query STATUS again before doing anything else; it reconciles closure or reoffers the same bound slot.
 
-### Flow 16: Blocks say which command comes next
+### Flow 16: STATUS says which capture comes next
 
-1. [ ] With a review in progress waiting for results, run `review finalize --lineage <id>` → **Expected**: the error names `gentle-ai review capture-result`.
-2. [ ] Run a gate in a repo **with no review at all**, asking for the negotiated envelope:
+1. [ ] With a selected-lens review waiting for results, run `review status --next-transition --contract gentle-ai.review-integration/v2`.
+2. [ ] Read the returned collect input → **Expected**: it identifies the exact bound capture to submit; do not assemble or substitute a different route.
+3. [ ] Submit the result only through that route, then query STATUS → **Expected**: STATUS identifies the next capture or the closed state.
 
-```
-gentle-ai review validate --gate pre-commit --contract gentle-ai.review-integration/v1
-```
-
-→ **Expected**: `code: receipt_missing` and `next_action: review.start`. It used to say only "stop" and the agent had to guess.
-
-### Flow 17: Visible numbers when it escalates
+### Flow 17: Visible numbers when a correction escalates
 
 1. [ ] Push a correction past its line budget → **Expected**: the message says **spent, remaining and total** with distinct labels. It used to escalate with a number that was not printed anywhere.
 
-### Flow 18: Defect report ready to paste
+### Flow 18: Ambiguous capture output is reconciled by STATUS
 
-**What a report is for.** A defect report is written for a *stored-state deadlock*: an operation that tried to write, could not, and has no command that resolves it. That is a narrow class on purpose. Most blocks are not in it — a policy denial, a scope change, an exhausted correction budget and an escalated lineage are all the tool working correctly, and none of them generates a report. Reads never generate one either: `review status` is read-only and stays read-only, so a state it merely *reports* as unrecognised writes nothing to your repository.
-
-Earlier rounds asked you to report this flow "if you hit a terminal block caused by us", with no way to produce one. Following the guide never reaches the class above, so the step was always marked failed. Here is a procedure that actually reaches it.
-
-1. [ ] Docs change, `review start` + `review finalize` → **Expected**: approved receipt. Note the `receipt_path` it prints.
-2. [ ] Break the stored receipt on purpose so it no longer matches the authority that produced it — edit that file and change `"generation"` to a different number:
-
-```
-$EDITOR "$(git rev-parse --git-common-dir)"/gentle-ai/review-transactions/v2/<lineage>/review-receipt.json
-```
-
-3. [ ] Run `review finalize --lineage <lineage>` again → **Expected**: it fails with **exit 1**, and the last sentence names the report file and the link:
-
-```
-... A defect report was saved at <...>/gentle-ai/defect-reports/receipt-publication-conflict-<hash>.md
--- file it at https://github.com/Gentleman-Programming/gentle-ai/issues/new/choose.
-```
-
-4. [ ] Open that file → **Expected**: it carries version, commit, OS, the operation and the error. It does **NOT** carry the contents of your files, or absolute paths with your username, or environment variables. It is meant to be pasted into a public issue.
-5. [ ] A block that is **your decision** (abandon vs recover), and any ordinary denial or escalation → **Expected**: NO report is generated, and none is promised. There is no bug to report.
+1. [ ] Start a selected-lens review and retain the exact STATUS-issued capture input.
+2. [ ] Produce a malformed, incomplete, unavailable, or otherwise ambiguous capture outcome.
+3. [ ] Query STATUS for that same lineage → **Expected**: it reconciles any admitted outcome. It reoffers a capture only when the identical bound slot is still open.
+4. [ ] Follow the reoffered route only when the lineage, target, revision, subject, lens, and order all match the original input. Otherwise stop and report the mismatch with the STATUS output.
 
 ### Flow 19: First-run hygiene
 
@@ -301,13 +252,12 @@ macOS puts `$TMPDIR` under `/var/folders/...`, and `/var` is a symlink to `/priv
 echo "one more line" >> guide.md
 git add guide.md
 gentle-ai review start --cwd .
-gentle-ai review finalize --cwd .
-gentle-ai review validate --gate pre-commit --cwd .
+# For this docs-only low-risk case, START closes and burns the review.
 ```
 
-→ **Expected**: it completes with `allow`. No "no discoverable review lineage", no path-shaped error.
+→ **Expected**: the zero-lens START closes and burns the review. No "no discoverable review lineage" or path-shaped error.
 
-**The `git add` is not optional and it is not tidiness.** START with the default workspace projection freezes your uncommitted change; the pre-commit gate asks about the staged index. Skip the staging and you get `receipt_unrelated` — a correct answer to a different question, which reads exactly like the path bug this flow is looking for. Reported by @edwinsaavedran after it produced precisely that false signal.
+**The `git add` is not optional and it is not tidiness.** START with the default workspace projection freezes your uncommitted change. Staging keeps the snapshot stable while this flow verifies that `/var` and `/private/var` resolve to the same review state. Reported by @edwinsaavedran after the old path handling produced a false signal.
 3. [ ] Now `cd` into the **other** spelling of the same directory (add or remove the `/private` prefix) and run `review status --cwd "$PWD"` → **Expected**: the same lineage, same state. If it reports no authority, that is the defect: paste both paths.
 
 ### Flow 21: Reviewer results on ExFAT (#1804)
@@ -323,8 +273,8 @@ hdiutil attach /tmp/rddtest.dmg
 
 If `hdiutil` rejects the filesystem name, `hdiutil create -help` lists the ones your macOS version accepts. A real ExFAT USB stick works just as well, and any external volume you already have formatted that way is fine.
 
-2. [ ] Create a throwaway repo **on that volume** (`/Volumes/RDDTEST`), make a change, and run `review start` → `review capture-result` → `review finalize`.
-3. [ ] → **Expected**: the reviewer result publishes and finalize reaches its normal terminal state. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
+2. [ ] Create a throwaway repo **on that volume** (`/Volumes/RDDTEST`), make a change, start the review, and follow each STATUS-issued capture route.
+3. [ ] → **Expected**: the reviewer result publishes, and the final admitted capture closes and burns the review. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
 4. [ ] Detach with `hdiutil detach /Volumes/RDDTEST` when done.
 
 ### Flow 22: First-use store contention (#1850) — **fixed on the branch, still broken in the published asset**
@@ -354,7 +304,7 @@ TMPDIR=/private/tmp GIT_CONFIG_NOSYSTEM=1 \
 
 Only reproducible on a Mac under an MDM or corporate configuration profile, which cannot be staged on a personal machine.
 
-1. [ ] If your Mac is company-managed, run the ordinary `review start` → `finalize` → `validate` cycle → **Expected**: it completes, or fails with a typed permission error naming what to do.
+1. [ ] If your Mac is company-managed, start a review and follow its STATUS-issued capture route → **Expected**: it closes on the final admitted capture, or fails with a typed permission error naming what to do.
 2. [ ] A raw `EPERM` or `operation not permitted` with no continuation is the defect. Say which profile restrictions apply if you can.
 
 ---
@@ -369,14 +319,14 @@ The review target comes from the workspace snapshot, so anything that writes a f
 
 Run everything below with output going **outside** the repo.
 
-1. [ ] Ask for the next transition and keep the `command` it prints:
+1. [ ] Ask for the next transition and retain its execute operation and ordered argument tokens:
 
 ```
-gentle-ai review status --next-transition --contract gentle-ai.review-integration/v1 --cwd . > /tmp/rdd-out/nt.json
+gentle-ai review status --next-transition --contract gentle-ai.review-integration/v2 --cwd . > /tmp/rdd-out/nt.json
 ```
 
 2. [ ] Now change the workspace, exactly as a linter would: `echo "lint output" > lint-report.txt` **inside the repo**.
-3. [ ] Run the command you kept, unchanged → **Expected**: it refuses with
+3. [ ] Run the returned execute transition unchanged → **Expected**: it refuses with
 
 ```
 code:        stale_target_identity
@@ -387,7 +337,7 @@ cause:       review start target does not match the freshly built snapshot
 The `cause` naming the real reason is the point. A bare `invalid_request` with an empty `required_inputs` is the defect.
 
 4. [ ] **Follow the continuation it named**: ask for the transition again → **Expected**: a **different** target identity.
-5. [ ] Run that new command → **Expected**: exit 0, review starts. If following the named continuation does not unblock you, that is the report.
+5. [ ] Run that new returned execute transition → **Expected**: exit 0, review starts. If following the named continuation does not unblock you, that is the report.
 
 ### Flow 25: Windows updates itself (**never tested on real Windows**)
 
@@ -441,15 +391,15 @@ into whichever of the two it happens to reach first.
 1. [ ] Put a throwaway repo on a real network mount — an NFS export or an SMB
    share, not a loopback image. Note the mount options (`mount | grep <path>`)
    in your report; `nolock` and `local_lock=` change the answer.
-2. [ ] Run the ordinary cycle there:
+2. [ ] Run the ordinary review lifecycle there:
 
 ```
 gentle-ai review start --cwd .
-gentle-ai review finalize --cwd .
-gentle-ai review validate --gate pre-commit --cwd .
+# Follow each STATUS-issued review capture-result invocation.
+# The final admitted capture closes and burns the review.
 ```
 
-→ **Expected**: it completes with `allow`, exactly as on a local disk.
+→ **Expected**: the final admitted capture closes and burns the review, exactly as on a local disk.
 
 3. [ ] Now run two reviews at once against the same repo from two machines (or
    two shells on two mounts of the same export), started within a second of each
@@ -486,13 +436,11 @@ sudo mount -o remount,ro <mountpoint>     # or: sudo mount -o ro,bind /src /ro-c
    `git status` shows no new untracked files and the common dir holds no partial
    `gentle-ai/` tree.
 
-### Flow 29: The disk fills during a receipt write — **needs a small filesystem you can fill**
+### Flow 29: The disk fills during capture publication — **needs a small filesystem you can fill**
 
-`ENOSPC` in the middle of publishing a receipt is the one failure that can
-leave authority and receipt disagreeing. The store publishes immutably
-(no-replace) precisely so a losing writer cannot corrupt a published
-generation, and this is the flow that tests whether that holds when the failure
-is the disk rather than a competing writer.
+`ENOSPC` while publishing a capture must not create an ambiguous closed review.
+This flow checks that the next STATUS query remains the authority for the
+capture outcome.
 
 1. [ ] Build a tiny filesystem and put the repo on it:
 
@@ -502,19 +450,14 @@ mkdir -p /tmp/tiny && sudo mount -o loop /tmp/tiny.img /tmp/tiny
 sudo chown "$USER" /tmp/tiny
 ```
 
-2. [ ] Set up a repo there, stage a docs change, run `review start` →
-   **Expected**: it works.
+2. [ ] Set up a repo there, stage a selected-lens change, start the review, and
+   retain the STATUS-issued capture input.
 3. [ ] Fill the remaining space (`fallocate -l <n> /tmp/tiny/ballast` until
-   `df` reports 100%), then run `review finalize` → **Expected**: a typed
-   failure naming the disk. Not a partial receipt, and not an approval.
-4. [ ] Delete the ballast and run `review finalize` again → **Expected**: it
-   either completes cleanly or refuses with a runnable continuation. **A state
-   that no command can leave is the defect**, and that is exactly the
-   stored-state deadlock flow 18 describes — check whether a defect report was
-   written, and paste it.
-5. [ ] `review validate --gate pre-commit` after step 3 and before step 4 →
-   **Expected**: never `allow`. A half-written receipt must never gate as
-   approved.
+   `df` reports 100%), then submit that capture → **Expected**: a typed failure
+   naming the disk; the review is not reported as closed.
+4. [ ] Delete the ballast and query STATUS for the same lineage → **Expected**:
+   it reconciles the result or reoffers the identical bound capture. Submit it
+   only when reoffered; its final admitted capture closes and burns the review.
 
 ### Flow 30: A case-insensitive, Unicode-normalizing volume — **needs APFS, HFS+, exFAT or NTFS**
 
@@ -536,25 +479,26 @@ hdiutil attach /tmp/rddcase.dmg
 truncate -s 200M /tmp/rddcase.img && mkfs.exfat /tmp/rddcase.img
 ```
 
-2. [ ] Repo on that volume. Stage `docs/guide.md`, run `review start` +
-   `review finalize` → **Expected**: an approved receipt.
+2. [ ] Repo on that volume. Stage `docs/guide.md`, run `review start`, and
+   follow the STATUS-issued capture route → **Expected**: the review closes on
+   its final admitted capture.
 3. [ ] Now `cd` in with a **differently cased** path
    (`cd /volumes/rddcase/...` instead of `/Volumes/RDDCASE/...`) and run
-   `review validate --gate pre-commit --cwd "$PWD"` → **Expected**: the same
-   lineage, `allow`. If it reports no authority, paste **both** spellings — that
-   is the identity policy failing to defer to the volume.
+   `review status --cwd "$PWD"` → **Expected**: the same lineage and closed
+   state. If it reports no authority, paste **both** spellings — that is the
+   identity policy failing to defer to the volume.
 4. [ ] Create a file whose name has a composed accent (NFC), for example
-   `printf 'x\n' > "docs/café.md"` typed with a single é, stage it and run the
-   full cycle → **Expected**: it completes. On HFS+ the volume stores it
-   decomposed (NFD), so the name git reports back differs byte-for-byte from
-   the one you typed. A `path not found` or a scope mismatch on a file that is
-   plainly there is the defect. Report the output of
-   `git ls-files | xxd | head` alongside it, because the bytes are the finding.
-5. [ ] With the receipt approved, rename `docs/guide.md` to `docs/Guide.md` and
-   re-run the gate → **Expected**: on a case-insensitive volume this is not a
-   scope change, because it is the same file. Whatever the answer, say which it
-   gave: this is the case where "correct" depends entirely on the volume and we
-   want the real one, not the assumed one.
+   `printf 'x\n' > "docs/café.md"` typed with a single é, stage it, and start a
+   new review → **Expected**: it follows the STATUS-issued capture lifecycle.
+   On HFS+ the volume stores the name decomposed (NFD), so the name git reports
+   back differs byte-for-byte from the one you typed. A `path not found` or a
+   scope mismatch on a file that is plainly there is the defect. Report the
+   output of `git ls-files | xxd | head` alongside it, because the bytes are the
+   finding.
+5. [ ] Rename `docs/guide.md` to `docs/Guide.md`, start a new review, and follow
+   STATUS → **Expected**: report whether the volume treats it as the same path.
+   This is the case where "correct" depends entirely on the volume and we want
+   the real answer, not the assumed one.
 
 ### Flow 31: Antivirus holding a file mid-write — **needs Windows with real-time scanning on**
 
@@ -571,16 +515,16 @@ reported as a permanent corruption.
 ```powershell
 1..20 | ForEach-Object {
   gentle-ai review start --cwd .
-  gentle-ai review finalize --cwd .
-  gentle-ai review validate --gate pre-commit --cwd .
+  # Follow each STATUS-issued review capture-result invocation.
+  # The final admitted capture closes and burns the review.
 }
 ```
 
-→ **Expected**: 20 of 20 reach `allow`. Report how many did.
+→ **Expected**: 20 of 20 close on their final admitted capture. Report how many did.
 
 2. [ ] Any failure → **Expected**: a typed, retryable message. If you see
-   `authority_corrupted`, `receipt_missing` or a defect report for what is
-   really a scanner holding a handle for 40 ms, that is the defect: a transient
+   `authority_corrupted` or a defect report for what is really a scanner
+   holding a handle for 40 ms, that is the defect: a transient
    was classified as permanent. Paste the whole message.
 3. [ ] Repeat with the directory **excluded** from scanning → **Expected**: if
    the failures disappear, that confirms the cause. Say so in the report; it is
@@ -593,11 +537,11 @@ reported as a permanent corruption.
 
 The Git common directory sits under `.git/`, the review store adds
 `gentle-ai/review-transactions/v2/<lineage>/`, and the lineage identifier is
-long. Start from a deep checkout and the full path to a receipt passes 260
+long. Start from a deep checkout and the full transaction path passes 260
 characters, which is the classic Win32 `MAX_PATH` wall.
 
 1. [ ] On Windows, clone or create the repo under a deliberately deep path so
-   that the receipt path exceeds 260 characters. Check it:
+   that the transaction path exceeds 260 characters. Check it:
 
 ```powershell
 $p = "$(git rev-parse --git-common-dir)\gentle-ai\review-transactions\v2"
@@ -622,52 +566,33 @@ failing without saying why is not.
 ### Flow 33: The system clock moves backwards — **needs a VM snapshot or a settable clock**
 
 **Read this one carefully, because it is testing a claim rather than a
-behaviour.** The design states explicitly that approval is bound to candidate
-**content**, never to a wall-clock moment, and that a recorded timestamp is
-never used as an approval cutoff. That is written down in the source and it is
-true where it was written down. This flow asks whether it holds *everywhere* —
-including the places nobody thought about when they wrote the comment.
+behaviour.** Review closure is bound to the captured candidate state, not to a
+wall-clock cutoff. This flow asks whether a clock change affects an already
+closed review's STATUS result.
 
 A clock goes backwards for ordinary reasons: an NTP correction after a bad RTC
-read, a restored VM snapshot, a laptop resuming with a dead battery, a container
-starting with a host clock behind the one that wrote the state.
+read, a restored VM snapshot, a laptop resuming with a dead battery, or a
+container starting with a host clock behind the one that wrote the state.
 
-1. [ ] First, establish the baseline the claim rests on. Approve a review, then
-   look at the receipt:
-
-```
-gentle-ai review start --cwd . && gentle-ai review finalize --cwd .
-cat "$(git rev-parse --git-common-dir)"/gentle-ai/review-transactions/v2/<lineage>/review-receipt.json
-```
-
-→ **Expected**: the receipt carries **no timestamp of any kind** — only
-content bindings (`base_tree`, `initial_review_tree`, `final_candidate_tree`,
-`paths_digest`, `fix_delta_hash`, `policy_hash`, `evidence_hash`,
-`terminal_state`). If you find a time field in there, stop and report it: the
-claim is already false and the rest of this flow is academic.
-
-2. [ ] Now move the clock backwards by an hour, **after** the approval:
+1. [ ] Establish a baseline: start a review, follow every STATUS-issued capture
+   until it closes, then record `gentle-ai review status --cwd .`.
+2. [ ] Move the clock backwards by an hour **after** closure:
 
 ```
 sudo date -s "-1 hour"        # or restore a VM snapshot taken an hour ago
 ```
 
-3. [ ] `gentle-ai review validate --gate pre-commit --cwd .` → **Expected**:
-   `allow`, unchanged. The approval is bound to bytes that did not move.
-4. [ ] `gentle-ai review status --cwd .` → **Expected**: the same lineage and
-   state. No "receipt from the future", no `authority_corrupted`.
-5. [ ] The kill switch keeps a timestamp that the design says is provenance
-   only. Test that directly: `gentle-ai review mode disable`, then
-   `gentle-ai review mode enable`, then move the clock back past
-   `rdd_mode_recorded_at` in `$HOME/.gentle-ai/state.json`, then
-   `gentle-ai review mode status --json` → **Expected**: `effective: on`, and
-   the source that decided it. A candidate refused because it is "older than
-   the mode record" would be exactly the time-based approximation the design
-   says it deliberately does not implement.
-6. [ ] Finally, move the clock **forwards** by a day and repeat steps 3 to 5 →
+3. [ ] Run `gentle-ai review status --cwd .` → **Expected**: the same lineage
+   and closed state. No time-based refusal or `authority_corrupted`.
+4. [ ] The kill switch keeps a timestamp for provenance. Test that directly:
+   `gentle-ai review mode disable`, then `gentle-ai review mode enable`, then
+   move the clock back past `rdd_mode_recorded_at` in
+   `$HOME/.gentle-ai/state.json`, then run `gentle-ai review mode status --json`
+   → **Expected**: `effective: on`, with the source that decided it.
+5. [ ] Move the clock **forwards** by a day and repeat steps 3 and 4 →
    **Expected**: identical answers. A rule that only holds in one direction is
    still a rule about the clock.
-7. [ ] **Report the result even when everything passes**, with how you moved the
+6. [ ] **Report the result even when everything passes**, with how you moved the
    clock and by how much. A confirmed absence is the whole point of this flow.
 
 ---
@@ -744,7 +669,7 @@ This section is retained to explain the original candidate procedure. Do not ope
 
 ## What is NOT a bug
 
-- **The gate exits 0 when reviews are off.** It reports `disabled/unmanaged` but does not veto — repository policy rules.
+- **Delivery remains ordinary when reviews are off.** Repository policy rules; review mode does not veto a commit or push.
 - **`requirements.txt`/`CMakeLists.txt` get one review (tier 1), not zero.** An unreviewed dependency bump would be a security downgrade.
 - **With no terminal, the question does not appear and it reviews straight away** (it warns on stderr). Turning a safety net off silently is not an option.
 - **"Not now" asks again on the next piece of work.** Per work unit, on purpose.

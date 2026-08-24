@@ -113,13 +113,17 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 		return
 	}
 	manifest := b.record("result-artifact", []byte(replay.Output))
-	if getString(manifest, "schema") != "gentle-ai.review-result-artifact/v2" || getString(manifest, "admission_decision") != "completed" {
+	if !admittedCapture(manifest) {
 		b.fail(openCodeLane, openCodeEchoStep, "host echo did not round-trip a completed result artifact")
 		return
 	}
 	b.pass(openCodeLane, openCodeEchoStep,
 		"drifted host echo was rebuilt into Go-canonical bytes and captured; only the exact bytes stay a pass-through")
-	b.finishApproved(openCodeLane, "host-echo lifecycle burned", repo, "opencode", nil)
+	if operationState(manifest) != "approved" {
+		b.fail(openCodeLane, "host-echo lifecycle burned", fmt.Sprintf("terminal state = %q, want approved", operationState(manifest)))
+		return
+	}
+	b.burnApproved(openCodeLane, "host-echo lifecycle burned", repo, "opencode", nil, manifest)
 }
 
 // hostEchoedMaterialization reproduces the drift a re-typed materialization
