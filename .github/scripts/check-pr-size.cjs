@@ -167,7 +167,9 @@ function validatePolicyTransition(previous, next, options = {}) {
     if (next.enforcement !== 'enforcing' || !sameIds(next.activation_snapshot, next.grandfathered_prs)) {
       throw new Error('Activation snapshot must exactly establish the enforcing grandfather list');
     }
-    for (const id of next.activation_snapshot) if (!eligible.has(id)) throw new Error(`PR #${id} is not qualified at activation`);
+    if (eligible.size !== next.activation_snapshot.length || next.activation_snapshot.some((id) => !eligible.has(id))) {
+      throw new Error('Activation snapshot must exactly match all qualified open PRs');
+    }
     return { valid: true };
   }
   if (!sameIds(previous.activation_snapshot, next.activation_snapshot)) throw new Error('Activation snapshot is immutable');

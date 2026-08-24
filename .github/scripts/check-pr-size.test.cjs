@@ -95,7 +95,10 @@ test('policy transitions allow only closed or merged grandfather removals after 
       { number: 8, state: 'open', labels: ['size:exception'] },
     ],
   }), { valid: true });
-  assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ number: 7, state: 'closed', labels: ['size:exception'] }] }), /not qualified at activation/);
+  assert.throws(() => validatePolicyTransition(dormantPolicy(), { ...active, activation_snapshot: [7], grandfathered_prs: [7] }, {
+    activationPullRequests: [{ number: 7, state: 'open', labels: ['size:exception'] }, { number: 8, state: 'open', labels: ['size:exception'] }],
+  }), /exactly match all qualified open PRs/);
+  assert.throws(() => validatePolicyTransition(dormantPolicy(), active, { activationPullRequests: [{ number: 7, state: 'closed', labels: ['size:exception'] }] }), /exactly match all qualified open PRs/);
   assert.equal(evaluatePrSize(pullRequest({ number: 7, additions: 401, deletions: 0 }), active).enforced, false);
   assert.deepEqual(validatePolicyTransition(active, { ...active, grandfathered_prs: [7] }, { closedOrMergedPullRequests: [{ number: 8, state: 'closed' }] }), { valid: true });
   assert.throws(() => validatePolicyTransition(active, { ...active, grandfathered_prs: [7] }, { closedOrMergedPullRequests: [] }), /not proven closed or merged/);
