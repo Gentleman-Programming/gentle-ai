@@ -991,19 +991,27 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	for _, required := range []string{
 		"### SDD Session Preflight (HARD GATE)",
 		"Before executing ANY SDD command or natural-language SDD request",
+		"#### Delivery Route Fact (NON-AUTHORITATIVE)",
+		"Repository identity",
+		"Remote identity",
+		"Provider/capability/route",
+		"Pinned revision",
+		"Command-help evidence/digest",
+		"Postcondition evidence/digest",
+		"Observed/freshness marker",
 		"Execution mode",
 		"Artifact store",
 		"Chained PR strategy",
 		"Review budget",
 		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
-		"Use the `question` tool for SDD Session Preflight",
-		"only when it is available in the current interactive runtime and all four groups are exactly representable",
+		"Use the `question` tool only when it is available in the current interactive runtime",
+		"all four groups are exactly representable",
 		"follow the Lossless Blocking Prompts fallback above and STOP",
-		"When the native route is representable, ask all four preflight groups in one single `question` tool call",
+		"For a resolved non-blocked route, ask all four preflight groups in one single `question` tool call",
 		"OpenCode can render the groups as tabs",
 		"Do NOT run this as a sequential wizard",
 		"Do NOT issue four separate `question` tool calls",
-		"The single `question` tool call must contain these four localized groups in this order",
+		"### GitHub-native route",
 		"Match the user's current language and active persona",
 		"Treat the preflight UI as direct orchestrator conversation",
 		"not as a generated technical artifact",
@@ -1011,8 +1019,8 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		"this UI follows the user's conversation language/persona",
 		"Do NOT mix languages inside one grouped question",
 		"Do NOT show option codes",
-		"Do NOT show canonical values",
-		"map the selected human labels to canonical values internally",
+		"Do NOT show option codes or canonical values in the UI.",
+		"Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr`.",
 		"¿Quiere ajustar algo o continuamos?",
 		"Artifacts: OpenSpec, Engram, Both",
 		"Review: 400 lines, 800 lines, Other",
@@ -1026,6 +1034,135 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
+		}
+	}
+}
+
+func TestOpenCodeSDDOrchestratorProviderAwareDeliveryPolicy(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+
+	preflightStart := strings.Index(content, "### SDD Session Preflight (HARD GATE)")
+	preflightEnd := strings.Index(content, "### SDD Entry Routing (MANDATORY)")
+	if preflightStart < 0 || preflightEnd <= preflightStart {
+		t.Fatal("opencode/sdd-orchestrator.md missing provider-aware preflight boundaries")
+	}
+	preflight := content[preflightStart:preflightEnd]
+	for _, required := range []string{
+		"NON-AUTHORITATIVE",
+		"Repository identity", "Remote identity", "Provider/capability/route",
+		"Pinned revision", "Command-help evidence/digest",
+		"Postcondition evidence/digest", "Observed/freshness marker",
+		"gentle-ai-chained-pr", "single provider resolver",
+		"OpenCode must not perform host detection",
+		"does not authorize remote mutation",
+	} {
+		if !strings.Contains(preflight, required) {
+			t.Fatalf("preflight missing provider-aware route contract %q", required)
+		}
+	}
+
+	routeSection := func(heading string) string {
+		start := strings.Index(preflight, heading)
+		if start < 0 {
+			t.Fatalf("preflight missing route heading %q", heading)
+		}
+		section := preflight[start:]
+		if end := strings.Index(section[len(heading):], "\n### "); end >= 0 {
+			return section[:len(heading)+end]
+		}
+		return section
+	}
+
+	github := routeSection("### GitHub-native route")
+	for _, required := range []string{
+		"Pace: Interactive, Automatic.",
+		"Artifacts: OpenSpec, Engram, Both.",
+		"PRs: Ask me, Single PR, Auto.",
+		"Review: 400 lines, 800 lines, Other.",
+		"#### Rendered GitHub-native route schema",
+		"ask-on-risk | auto-chain | single-pr",
+		"Do not offer or accept `exception-ok`, `size:exception`, manual chaining, or any chain strategy (`stacked-to-main` or `feature-branch-chain`).",
+		"An over-budget `single-pr` stops.",
+	} {
+		if !strings.Contains(github, required) {
+			t.Fatalf("GitHub-native route missing required policy %q", required)
+		}
+	}
+	schemaStart := strings.Index(github, "#### Rendered GitHub-native route schema")
+	if schemaStart < 0 {
+		t.Fatal("GitHub-native rendered schema is missing")
+	}
+	schemaEnd := strings.Index(github[schemaStart:], "\n\nMap answers to canonical values")
+	if schemaEnd <= 0 {
+		t.Fatal("GitHub-native rendered schema has no end boundary")
+	}
+	githubSchema := github[schemaStart : schemaStart+schemaEnd]
+	for _, required := range []string{
+		"| `delivery_strategy` | `ask-on-risk` \\| `auto-chain` \\| `single-pr` |",
+		"| `chain_strategy` | not applicable |",
+		"| `manual_chaining` | `false` |",
+		"| `size_exception` | not applicable |",
+	} {
+		if !strings.Contains(githubSchema, required) {
+			t.Fatalf("GitHub-native rendered schema missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"exception-ok", "size:exception", "manual chaining",
+		"stacked-to-main", "feature-branch-chain",
+	} {
+		if strings.Contains(githubSchema, forbidden) {
+			t.Fatalf("GitHub-native rendered schema must not make %q selectable", forbidden)
+		}
+	}
+
+	portable := routeSection("### Portable route")
+	for _, required := range []string{
+		"positively identified non-GitHub provider",
+		"ask-on-risk | auto-chain | single-pr | exception-ok",
+		"manual chaining is permitted",
+		"`stacked-to-main`", "`feature-branch-chain`",
+		"Exact repository identity", "Exact candidate/snapshot identity",
+		"Exact changed-line count", "Approving actor identity",
+		"Approval record/reference", "Freshness/time",
+		"never grants remote mutation authority",
+	} {
+		if !strings.Contains(portable, required) {
+			t.Fatalf("portable route missing required policy %q", required)
+		}
+	}
+	for _, label := range []string{"Pace", "Artifacts", "PR group", "Review"} {
+		if strings.Index(portable, label) < 0 {
+			t.Fatalf("portable route missing preflight group %q", label)
+		}
+	}
+	if !(strings.Index(portable, "Pace") < strings.Index(portable, "Artifacts") &&
+		strings.Index(portable, "Artifacts") < strings.Index(portable, "PR group") &&
+		strings.Index(portable, "PR group") < strings.Index(portable, "Review")) {
+		t.Fatal("portable route must preserve the Pace, Artifacts, PRs, Review preflight order")
+	}
+
+	blocked := routeSection("### Blocked route")
+	for _, required := range []string{
+		"GitHub unavailable or unproven, or an unknown or ambiguous provider",
+		"Do not ask a strategy or chain question.",
+		"Do not emit a delivery selection, chain choice, or exception field.",
+	} {
+		if !strings.Contains(blocked, required) {
+			t.Fatalf("blocked route missing fail-closed policy %q", required)
+		}
+	}
+
+	guard := markdownSection(content, "### Review Workload Guard (MANDATORY)")
+	for _, required := range []string{
+		"Load `gentle-ai-chained-pr` as the single resolver",
+		"OpenCode must not perform host detection",
+		"block before editing with no fallback",
+		"do not install, guess a provider, use manual GitHub choreography",
+		"do not authorize remote create/submit/sync/update/merge operations",
+	} {
+		if !strings.Contains(guard, required) {
+			t.Fatalf("review workload guard missing delivery authority boundary %q", required)
 		}
 	}
 }
@@ -1061,11 +1198,11 @@ func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
 
 func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValues(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
-	start := strings.Index(content, "User-facing preflight question format:")
+	start := strings.Index(content, "### GitHub-native route")
 	if start < 0 {
 		t.Fatal("opencode/sdd-orchestrator.md missing preflight question format block")
 	}
-	end := strings.Index(content[start:], "Map answers to canonical values")
+	end := strings.Index(content[start:], "#### Rendered GitHub-native route schema")
 	if end < 0 {
 		t.Fatal("opencode/sdd-orchestrator.md missing end of preflight question format block")
 	}
@@ -1319,7 +1456,6 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 		{path: "windsurf/sdd-orchestrator.md", propagationScope: "inline phase context"},
 		{path: "antigravity/sdd-orchestrator.md", propagationScope: "dynamic subagent context"},
 		{path: "cursor/sdd-orchestrator.md", propagationScope: "prompt"},
-		{path: "opencode/sdd-orchestrator.md", propagationScope: "prompt"},
 		{path: "hermes/sdd-orchestrator.md", propagationScope: "prompt"},
 	}
 

@@ -164,55 +164,64 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, **f
 
 ### SDD Session Preflight (HARD GATE)
 
-Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit `SDD Session Preflight` decision block.
+Before executing ANY SDD command or natural-language SDD request, load `gentle-ai-chained-pr` as the single provider resolver; OpenCode must not perform host detection. Resolve and retain the following fact before presenting delivery choices.
+
+#### Delivery Route Fact (NON-AUTHORITATIVE)
+
+| Required field | Required evidence |
+| --- | --- |
+| Repository identity | Exact repository identity |
+| Remote identity | Exact remote/host identity |
+| Provider/capability/route | Observed provider, capability, and selected route |
+| Pinned revision | Exact candidate or runtime revision |
+| Command-help evidence/digest | Verifiable command-help output or digest |
+| Postcondition evidence/digest | Verifiable observed postcondition or digest |
+| Observed/freshness marker | Observation time or equivalent freshness marker |
+
+Each field must be present, non-blank, well-formed, verifiable, fresh, and mutually matched. Missing, blank, malformed, unverifiable, stale, or mismatched route evidence blocks apply with no fallback. The fact is continuity evidence only; it does not authorize remote mutation.
 
 This applies to `/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
 
-Required preflight choices:
+Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable for the resolved non-blocked route. Use the `question` tool only when it is available in the current interactive runtime and the complete route-conditioned envelope is exactly representable. While that native route is usable, do NOT render a duplicate plain-chat menu. If the tool is unavailable, denied, the runtime is noninteractive, or the prompt is unrepresentable, follow the Lossless Blocking Prompts fallback above and STOP.
 
-1. **Execution mode**: `interactive` or `auto`.
-2. **Artifact store**: `openspec`, `engram`, or `both` when Engram is callable. If Engram is unavailable, offer only file/inline-safe choices.
-3. **Chained PR strategy**: the canonical `delivery_strategy` — `ask-on-risk`, `auto-chain`, `single-pr`, or `exception-ok`. The preflight menu offers the first three; `exception-ok` is reachable only when the user explicitly accepts `size:exception`.
-4. **Review budget**: maximum changed lines before stopping for reviewer-burden approval.
+For a resolved non-blocked route, ask all four preflight groups in one single `question` tool call: Pace, Artifacts, the route-conditioned PR strategy, and Review. OpenCode can render the groups as tabs. Do NOT run this as a sequential wizard. Do NOT issue four separate `question` tool calls. The route-conditioned groups preserve the existing Execution mode, Artifact store, Chained PR strategy, and Review budget semantics. Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question. Do NOT show option codes or canonical values in the UI.
 
-User-facing preflight question format:
+### GitHub-native route
 
-Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable. While that native route is usable, do NOT render a duplicate plain-chat menu. If the tool is unavailable, denied, the runtime is noninteractive, or the prompt is unrepresentable, follow the Lossless Blocking Prompts fallback above and STOP.
-
-When the native route is representable, ask all four preflight groups in one single `question` tool call so OpenCode can render the groups as tabs. Do NOT run this as a sequential wizard. Do NOT issue four separate `question` tool calls.
-
-The single `question` tool call must contain these four localized groups in this order:
+Offer exactly these four localized groups in order:
 
 1. Pace: Interactive, Automatic.
 2. Artifacts: OpenSpec, Engram, Both.
 3. PRs: Ask me, Single PR, Auto.
 4. Review: 400 lines, 800 lines, Other.
 
-Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
+#### Rendered GitHub-native route schema
 
-Do NOT show option codes in the interactive UI. Do NOT show canonical values or other internal values in the interactive UI labels or descriptions.
+| Field | Allowed value(s) |
+| --- | --- |
+| `delivery_strategy` | `ask-on-risk` \| `auto-chain` \| `single-pr` |
+| `chain_strategy` | not applicable |
+| `manual_chaining` | `false` |
+| `size_exception` | not applicable |
 
-After the single grouped `question` tool call returns, map the selected human labels to canonical values internally. Do not reveal the canonical values in the UI.
+Map answers to canonical values: Interactive -> `interactive`; Automatic -> `auto`; OpenSpec -> `openspec`; Engram -> `engram`; Both -> `both`; Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`; 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number. The route-conditioned **Chained PR strategy** is selectable only as `delivery_strategy`. Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr`. Do not offer or accept `exception-ok`, `size:exception`, manual chaining, or any chain strategy (`stacked-to-main` or `feature-branch-chain`). An over-budget `single-pr` stops.
 
-If Other is selected for review budget, ask one follow-up question for the numeric budget.
+### Portable route
 
-Only after all four preflight choices are collected, summarize them as the `SDD Session Preflight` decision block and continue with the SDD init guard/requested phase.
+For a positively identified non-GitHub provider, offer Pace, Artifacts, a PR group with Ask me, Single PR, Auto, and a maintainer-approved exception, and Review. Map the first three PR choices as above; map the exception only to `exception-ok` when its bound approval evidence is present. Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr | exception-ok`. `chain_strategy` may be `stacked-to-main` or `feature-branch-chain`; manual chaining is permitted. For portable routes only, when a selected strategy requires a chain choice: Present the two strategy options through one `question` tool call when the lossless native route is usable; otherwise emit the complete choice through the plain chat or terminal fallback and STOP. A portable `size:exception` requires evidence bound to Exact repository identity, Exact candidate/snapshot identity, Exact changed-line count, Rationale, Approving actor identity, authorized maintainer evidence or authority-basis attestation, Approval record/reference, and Freshness/time. Missing, unverifiable, or stale exception evidence blocks and never grants remote mutation authority.
 
-Map answers to canonical values:
+### Blocked route
 
-- Pace: Interactive -> `interactive`; Automatic -> `auto`.
-- Artifacts: OpenSpec -> `openspec`; Engram -> `engram`; Both -> `both`.
-- PRs: Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`.
-- Review: 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number.
+For GitHub unavailable or unproven, or an unknown or ambiguous provider, STOP with the route evidence needed to unblock. Do not install, guess, or use a manual fallback. Do not ask a strategy or chain question. Do not emit a delivery selection, chain choice, or exception field.
 
-The PR canonical values are exactly the `delivery_strategy` domain `sdd-tasks` and `sdd-apply` accept; never emit a value outside it. The preflight offers no separate chained option because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it `Auto` already resolves to `auto-chain` without asking again.
+If Other is selected for review budget, ask one follow-up question for the numeric budget. Only after all applicable non-blocked choices are collected, summarize them with the Delivery Route Fact as the `SDD Session Preflight` decision block and continue with the SDD init guard/requested phase. Route facts, planning, exception evidence, and RDD reviews/receipts do not authorize remote create/submit/sync/update/merge operations.
 
 Hard gate rules:
 
 - `openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight.
-- If the session has no preflight block, ask the single grouped `question` tool preflight above. Do not run init, delegate phases, edit files, or apply tasks until all four choices are collected.
-- Cache the choices for this session and include them in later phase prompts.
-- If the user explicitly provided all four choices in the current conversation, summarize them as the session preflight block and continue.
+- If route evidence is blocked, do not run init, delegate phases, edit files, or apply tasks.
+- Cache the choices for this session: non-blocked route-applicable choices and their Delivery Route Fact for later phase prompts.
+- If the user explicitly provided route-applicable choices in the current conversation, validate the route fact first, then summarize the preflight block and continue.
 
 ### SDD Entry Routing (MANDATORY)
 
@@ -315,25 +324,23 @@ Cache the artifact store choice for the session. Pass it as `artifact_store.mode
 
 ### Delivery Strategy
 
-This is collected by `SDD Session Preflight` as the chained PR strategy. If missing, enforce the hard gate before any phase work. Ask which delivery/review strategy they want:
+The Delivery Route Fact selects this schema before any strategy prompt. Cache only a route-applicable `delivery_strategy`. Pass it as `delivery_strategy` with the fact to `sdd-tasks` and `sdd-apply`. `sdd-apply` must load `gentle-ai-chained-pr`, revalidate the runtime, and block before editing with no fallback when the fact is missing, blank, malformed, unverifiable, stale, or mismatched.
 
-- **`ask-on-risk`** (default): Ask later if `sdd-tasks` forecasts high risk or >400 changed lines.
-- **`auto-chain`**: If forecast is high, continue with chained/stacked PR slices without asking again.
-- **`single-pr`**: Prefer one PR; if forecast exceeds 400 lines, require `size:exception` before apply.
-- **`exception-ok`**: Allow a large PR because the maintainer explicitly accepts `size:exception`. The preflight menu cannot select this; it is reached only when the user explicitly accepts `size:exception`, either up front or when `ask-on-risk` stops to ask.
+### GitHub-native route
 
-These four are the whole domain. Cache the delivery strategy for the session. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+The only selectable values are `ask-on-risk`, `auto-chain`, and `single-pr`. Do not offer or accept `exception-ok`, `size:exception`, manual chaining, or any chain strategy (`stacked-to-main` or `feature-branch-chain`). `chain_strategy` is not applicable. An over-budget `single-pr` stops.
+
+### Portable route
+
+For a positively identified non-GitHub provider, the selectable values are `ask-on-risk`, `auto-chain`, `single-pr`, and `exception-ok`. Ask a chain question only when the route and selected strategy require it; `stacked-to-main`, `feature-branch-chain`, and manual chaining are portable-only. Require the bound maintainer exception evidence before accepting `exception-ok`.
+
+### Blocked route
+
+For GitHub unavailable or unproven, or an unknown or ambiguous provider, STOP with actionable route-evidence requirements. Do not ask a strategy or chain question, and do not emit a delivery selection, chain choice, or exception field.
 
 ### Chain Strategy
 
-When `delivery_strategy` results in chained PRs (either by user choice via `ask-on-risk` or automatically via `auto-chain`), ask the user which chain strategy to use. Present the two strategy options through one `question` tool call when the lossless native route is usable; otherwise emit the complete choice through the plain chat or terminal fallback and STOP.
-
-- **`stacked-to-main`**: Each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
-- **`feature-branch-chain`**: The feature/tracker branch accumulates final integration; PR #1 targets the tracker branch, later child PRs target the immediate previous PR branch so review diffs stay focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
-
-Cache the chain strategy for the session. Pass it as `chain_strategy` to `sdd-tasks` and `sdd-apply` prompts alongside `delivery_strategy`. Do not ask again unless the user changes scope.
-
-When delivery planning yields chained PRs, treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match: resolve it by registry name through this template's existing skill-resolution mechanism (the same one it already uses to pass skills to phases) and ensure the `sdd-tasks` and `sdd-apply` phases load and follow it BEFORE planning or creating any PR. Do not hardcode the skill path; defer resolution to that mechanism.
+Load `gentle-ai-chained-pr` as the sole route resolver; OpenCode must not perform host detection. It determines whether a chain prompt is route-applicable. Route facts, planning/phase approval, exception evidence, `auto-chain`, and RDD reviews/receipts never authorize remote create/submit/sync/update/merge operations.
 
 ### Dependency Graph
 
@@ -350,20 +357,13 @@ Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommende
 
 ### Review Workload Guard (MANDATORY)
 
-After `sdd-tasks` completes and before launching `sdd-apply`, inspect the task result summary for `Review Workload Forecast`.
+After `sdd-tasks` completes and before launching `sdd-apply`, read the `Review Workload Forecast` and Delivery Route Fact. Load `gentle-ai-chained-pr` as the single resolver; OpenCode must not perform host detection. Revalidate the current provider/runtime, and independently verify Repository identity, Remote identity, Provider/capability/route, Pinned revision, Command-help evidence/digest, Postcondition evidence/digest, and Observed/freshness marker. Missing, blank, malformed, unverifiable, stale, or mismatched facts block before editing with no fallback; do not install, guess a provider, use manual GitHub choreography, or reuse stale continuity prose.
 
-If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply the cached `delivery_strategy`. Whenever a directive below tells the orchestrator to ask the user a decision (split vs. exception, or which chain strategy), use one `question` tool call only when the complete decision is natively representable; otherwise emit the complete choice through the plain chat or terminal fallback and STOP.
+For a verified GitHub-native route, permit only `ask-on-risk`, `auto-chain`, or `single-pr`; `chain_strategy`, manual chaining, and exception fields are not applicable. An over-budget `single-pr` stops. For a verified portable route, preserve all four strategies; only portable `exception-ok` may use `size:exception` with bound maintainer evidence, and only portable routes may ask a chain question or use manual/feature-branch chaining. For a blocked route, do not ask a strategy or chain question and do not emit a delivery selection, chain choice, or exception field.
 
-- **`ask-on-risk`**: STOP and ask whether to split into chained/stacked PRs or proceed with `size:exception`, using the lossless blocking-prompt route. If the user chooses chained PRs and `chain_strategy` is not yet cached, ask which chain strategy to use (stacked-to-main or feature-branch-chain) through the same route.
-- **`auto-chain`**: Do not ask about splitting. If `chain_strategy` is not yet cached, ask which chain strategy to use through the lossless blocking-prompt route. Then pass to `sdd-apply`: implement only the next autonomous slice using work-unit commits, with clear start, finish, verification, and rollback boundary.
-- **`single-pr`**: STOP and require/record maintainer-approved `size:exception` before `sdd-apply`.
-- **`exception-ok`**: Continue, but pass to `sdd-apply` that this run uses maintainer-approved `size:exception`.
+If the route-applicable forecast says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply only the verified route-conditioned strategy. `ask-on-risk` asks only the route-applicable decision; `auto-chain` applies only the next autonomous slice; `single-pr` stops when its selected route requires it; and portable `exception-ok` requires the recorded bound approval evidence. Any other `delivery_strategy` value is invalid for the selected route: STOP, report it, and do not choose a fallback. Do this even in Automatic mode. Automatic mode does not override reviewer burnout protection.
 
-Any other `delivery_strategy` value is invalid. Do NOT pick the nearest branch and do NOT proceed: STOP, report the unrecognised value, and re-collect the delivery strategy through the lossless blocking-prompt route before launching `sdd-apply`.
-
-Do this even in Automatic mode. Automatic mode does not override reviewer burnout protection.
-
-When launching `sdd-apply`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
+When launching `sdd-apply`, include the verified Delivery Route Fact, resolved route-conditioned `delivery_strategy`, any route-applicable `chain_strategy`, and the applicable PR boundary or portable exception evidence. Route facts, planning, exception evidence, and RDD reviews/receipts do not authorize remote create/submit/sync/update/merge operations.
 
 <!-- gentle-ai:sdd-model-assignments -->
 
