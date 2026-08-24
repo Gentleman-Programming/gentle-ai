@@ -47,7 +47,7 @@ After a sync, rebase, or base change, re-enter through review status before deli
 
 Generate `pr-body.md` locally from the target repository's required PR body, then append this section. Do not modify the target repository's PR template.
 
-```markdown
+````markdown
 ## Chain Context
 
 | Field | Value |
@@ -71,7 +71,7 @@ Generate `pr-body.md` locally from the target repository's required PR body, the
 - Includes: <focused work unit>
 - Excludes: <deferred work>
 - Rollback: <independent rollback boundary>
-```
+````
 
 ## Verification
 

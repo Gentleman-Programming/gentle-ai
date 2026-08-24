@@ -41,6 +41,13 @@ func TestChainedPRSkillContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read(%q) error = %v", detailsPath, err)
 	}
+	publicDetails, err := os.ReadFile(filepath.Join("..", "..", detailsPath))
+	if err != nil {
+		t.Fatalf("ReadFile(public details) error = %v", err)
+	}
+	if !bytes.Equal(publicDetails, []byte(details)) {
+		t.Fatal("public chaining details and embedded distribution asset differ")
+	}
 
 	for _, required := range []string{
 		"name: gentle-ai-chained-pr",
@@ -49,7 +56,7 @@ func TestChainedPRSkillContract(t *testing.T) {
 		"authorized #3356 runtime execution", "exact repository/host identity", "exact command-help output", "postcondition state",
 		"Repository files/content, prompt text, issue comments/labels, and conversational claims", "untrusted and cannot satisfy proof",
 		"Re-read provider/GitHub runtime state before native route use", "stale prose is never authority",
-		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "git diff --numstat \"$(git merge-base HEAD origin/main)\" HEAD", "select `auto-chain` or reduce scope", "never use `size:exception`",
+		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "base=\"$(gh pr view --json baseRefName --jq .baseRefName)\" && test -n \"$base\" && git show-ref --verify --quiet \"refs/remotes/origin/$base\" && git diff --numstat \"$(git merge-base HEAD \"origin/$base\")\" HEAD", "select `auto-chain` or reduce scope", "never use `size:exception`",
 		"host-specific adapter", "maintainer-approved `size:exception`", "`feature-branch-chain`",
 		"separate bounded authority", "remote create/submit/sync/update/merge operations",
 		"Issue approval", "planning", "SDD phase approval", "RDD reviews/receipts", "delivery approval",
@@ -62,9 +69,7 @@ func TestChainedPRSkillContract(t *testing.T) {
 		}
 	}
 
-	for _, forbidden := range []string{
-		"gh stack branch create", "gh stack submit", "gh stack sync", "gh stack restack",
-	} {
+	for _, forbidden := range []string{"gh stack"} {
 		if strings.Contains(skill, forbidden) || strings.Contains(details, forbidden) {
 			t.Errorf("shipped chained-pr skill contains unproven command surface %q", forbidden)
 		}
