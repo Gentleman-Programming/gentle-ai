@@ -2,12 +2,9 @@ package sddstatus
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // TestVerifyReportPathUnderAnchorsDecidesSpellingsFromAnyPlatform is the
@@ -296,87 +293,6 @@ func TestCanonicalVerifyReportPathsAcceptsTwoSpellingsOfOneWorkspace(t *testing.
 			}
 			if got != canonical {
 				t.Fatalf("repository-relative report path = %q, want %q", got, canonical)
-			}
-		})
-	}
-}
-
-// TestBoundArchiveGateAttestsPostReviewReportThroughAnAliasedWorkspace is the
-// executed regression for the three Windows suite failures. It drives the
-// whole archive-gate path the CI job drives, and only the spelling of --cwd
-// differs between the passing and failing runs: before the fix the aliased run
-// projected ReviewGate nil, Archive blocked, NextRecommended resolve-review and
-// "current repository target no longer matches the reviewed scope", which is
-// byte for byte what the Windows runner reported under C:\Users\RUNNER~1.
-func TestBoundArchiveGateAttestsPostReviewReportThroughAnAliasedWorkspace(t *testing.T) {
-	const change = "aliased-post-review-verify-report"
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Join(base, "real")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Creating a directory symlink needs SeCreateSymbolicLinkPrivilege or
-	// Developer Mode on Windows, so the aliased spelling is not creatable for
-	// every test process. Where it is not, only the subtest that needs it skips
-	// by name; the canonical spelling still runs, and the aliased reproduction
-	// still runs wherever symlinks are available.
-	alias := filepath.Join(base, "alias")
-	aliasErr := os.Symlink(root, alias)
-
-	changeRoot := seedReadyChange(t, root, change, "- [x] 1.1 Done\n")
-	verifyPath := filepath.Join(changeRoot, "verify-report.md")
-	write(t, verifyPath, boundedVerifyEnvelope(shaID("a"), "pass"))
-	writeApprovedCompactAuthorityForChangeWithCandidate(t, root, changeRoot, "approved-aliased-post-review", "- [x] 1.1 Approved\n", nil)
-	if _, err := BindApprovedReview(context.Background(), root, change, "approved-aliased-post-review", ""); err != nil {
-		t.Fatal(err)
-	}
-	write(t, verifyPath, boundedVerifyEnvelope(shaID("b"), "pass"))
-	runSDDStatusGit(t, root, "add", "openspec")
-
-	store := mustRuntimeStore(t, root, change)
-	runtime, err := store.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
-	started, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: runtime.Revision, RequestID: "begin-aliased-final-verify", WorkUnit: "verify",
-		EvidenceGoal: "run final independent verification", MaxAttempts: 1, MaxChangedLines: 20,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Finish(context.Background(), FinishAttemptRequest{
-		ExpectedRevision: started.Revision, RequestID: "settle-aliased-final-verify", Outcome: AttemptPassed,
-		EvidenceRevision: shaID("b"), Diagnosis: "final verification passed", HarnessDisposition: HarnessReused,
-		CleanupEvidence: "no cleanup required", ProcessEvidence: "focused verification passed",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, spelling := range []struct {
-		name     string
-		cwd      string
-		aliasErr error
-	}{
-		{name: "canonical workspace", cwd: root},
-		{name: "aliased workspace", cwd: alias, aliasErr: aliasErr},
-	} {
-		t.Run(spelling.name, func(t *testing.T) {
-			if spelling.aliasErr != nil {
-				t.Skipf("creating a directory symlink is unavailable, so this spelling cannot be built (Windows requires SeCreateSymbolicLinkPrivilege or Developer Mode): %v", spelling.aliasErr)
-			}
-			settled, err := Resolve(ResolveOptions{CWD: spelling.cwd, ChangeName: change})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if settled.ReviewGate == nil || settled.ReviewGate.Result != reviewtransaction.GateAllow ||
-				settled.ReviewGate.Reason != "bound receipt differs only by the native-settlement-attested canonical passing verify report" ||
-				settled.Dependencies.Archive != DependencyReady || settled.NextRecommended != "archive" {
-				t.Fatalf("attested status through %s = gate %#v, archive %q, next %q, blocked %v; want report-delta allow and archive-ready",
-					spelling.cwd, settled.ReviewGate, settled.Dependencies.Archive, settled.NextRecommended, settled.BlockedReasons)
 			}
 		})
 	}

@@ -22,35 +22,6 @@ func runtimeDischargedFailureRefusal(evidence string, dischargedByOrdinal int) e
 		evidence, dischargedByOrdinal)
 }
 
-// runtimeChargedCandidateRefusal replaces "approved SDD remediation successor
-// does not bind the natively charged candidate" (#2088).
-//
-// Its reporter tried six configurations, every one of them prescribed by the
-// runtime's own dispatcher, and asked in the issue for "which
-// tree/identity/manifest relationship is checked". The check is one tree
-// equality, and printing both sides answers the question outright: either the
-// workspace is not the approved bytes, or the approved bytes are not this
-// candidate, and the operator can see at a glance which.
-func runtimeChargedCandidateRefusal(approvedTree, chargedTree, lineage string) error {
-	return fmt.Errorf(
-		"approved review %s covers candidate tree %s, but this attempt charged tree %s, so the successor does not bind the work being settled; these two trees must be identical. Either restore the workspace to the approved bytes and settle again, or get the charged tree approved and name that lineage — `gentle-ai review status --cwd <repo> --contract %s --next-transition` names the next review action for the candidate you actually have. `git diff %s %s` shows exactly what differs",
-		lineage, approvedTree, chargedTree, runtimeReviewIntegrationContract, approvedTree, chargedTree)
-}
-
-// runtimeBoundPredecessorRefusal replaces "bound compact predecessor is stale
-// or not approved" (#2894), which reported two different problems, with two
-// different exits, in one sentence that distinguished neither.
-func runtimeBoundPredecessorRefusal(lineage, boundRevision, currentRevision string, stale bool) error {
-	if stale {
-		return fmt.Errorf(
-			"this change is bound to review %s at revision %s, but that lineage has since advanced to %s, so the binding no longer describes its authority; re-bind to the current revision with `gentle-ai review bind-sdd --cwd <repo> --change <change> --lineage %s` and settle again",
-			lineage, boundRevision, currentRevision, lineage)
-	}
-	return fmt.Errorf(
-		"this change is bound to review %s at revision %s, and that revision is not in an approved state, so it cannot authorize a settlement; run `gentle-ai review status --cwd <repo> --contract %s --next-transition` to see what that lineage still owes before it can approve",
-		lineage, boundRevision, runtimeReviewIntegrationContract)
-}
-
 // runtimeDischargedFailure answers the question #2881's refusal could not:
 // was the failure this correction names real, and already repaired?
 //

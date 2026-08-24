@@ -11,15 +11,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// These tests are the RED-first proof for the finalize-ambiguity diagnosis:
-// the negotiated collect-satisfying capture operations (`capture-result`,
-// `capture-evidence`, `capture-refuter`, `capture-validation`) refused with
-// bare stderr and EMPTY stdout, so a machine caller that parses stdout (the
-// gentle-pi runtime, the OpenCode transport host) could only classify the
-// refusal as empty-output with mutation outcome unknown -- a false ambiguity
-// for an operation that provably never started. Every refusal here must emit
-// one `gentle-ai.review-integration.failure/v2` envelope on stdout, exactly as
-// the success path already prints its JSON envelope on stdout.
+// These tests prove each surviving collect-satisfying capture operation
+// (`capture-result`, `capture-refuter`, `capture-validation`) emits one
+// `gentle-ai.review-integration.failure/v2` envelope on stdout when it
+// refuses. Machine callers can therefore classify the refusal as not started
+// instead of mistaking empty stdout for an unknown mutation outcome.
 
 // decodeCaptureRefusalEnvelope decodes the single stdout document a refused
 // capture operation must emit and asserts the caller-facing typed error
@@ -45,154 +41,6 @@ func decodeCaptureRefusalEnvelope(t *testing.T, err error, output []byte) Review
 		t.Fatalf("capture refusal envelope identity = %q/%q, want failure/v2", failure.Schema, failure.Contract)
 	}
 	return failure
-}
-
-// validatingEvidenceReview drives one low-risk review to the validating
-// (evidence-pending) state: started, single lens captured, finalize accepted
-// the captured results. This is the exact live state of the ce2 probe.
-func validatingEvidenceReview(t *testing.T) (string, string, reviewtransaction.CompactRecord) {
-	t.Helper()
-	repo, started, store, _, _ := capturedArtifact(t)
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	validating, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if validating.State.State != reviewtransaction.StateValidating {
-		t.Fatalf("evidence-pending state = %q, want validating", validating.State.State)
-	}
-	return repo, started.LineageID, validating
-}
-
-func writeCaptureEvidenceInput(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "verification.txt")
-	if err := os.WriteFile(path, []byte("verification: go test ./... passed\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-// TestCaptureEvidenceBindingRefusalEmitsTypedFailureEnvelope is the exact ce2
-// shape: capture-evidence at the evidence-pending state whose --target names
-// the live workspace snapshot instead of the frozen validating target. The
-// refusal happens strictly before PublishCapturedVerificationEvidence, so the
-// honest machine classification is a not_started preflight refusal whose
-// continuation is a fresh STATUS (STATUS re-renders fresh slot tokens).
-func TestCaptureEvidenceBindingRefusalEmitsTypedFailureEnvelope(t *testing.T) {
-	reviewEnabledHome(t)
-	const staleTarget = "sha256:6718ffa9d77c4965113517101482479c71763d40de8c366d2ebac11a367e6e1d"
-	tests := []struct {
-		name     string
-		mutate   func(args []string, validating reviewtransaction.CompactRecord) []string
-		wantText string
-	}{
-		{
-			name: "stale target identity",
-			mutate: func(args []string, validating reviewtransaction.CompactRecord) []string {
-				return append(args, "--target", staleTarget, "--expected-revision", validating.Revision)
-			},
-			wantText: "verification evidence binding does not match the current validating or correction authority",
-		},
-		{
-			name: "stale authority revision",
-			mutate: func(args []string, validating reviewtransaction.CompactRecord) []string {
-				return append(args, "--target", validating.State.CurrentSnapshot.Identity, "--expected-revision", staleTarget)
-			},
-			wantText: "verification evidence binding does not match the current authority revision",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo, lineage, validating := validatingEvidenceReview(t)
-			args := tt.mutate([]string{
-				"capture-evidence", "--cwd", repo, "--lineage", lineage,
-				"--outcome", string(reviewtransaction.VerificationOutcomePassed),
-				"--input", writeCaptureEvidenceInput(t),
-			}, validating)
-			var output bytes.Buffer
-			err := RunReview(args, &output)
-			failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
-			if failure.Operation != "review.capture-evidence" || failure.Phase != "preflight" ||
-				failure.Code != "verification_evidence_binding_mismatch" {
-				t.Fatalf("binding refusal envelope = %#v", failure)
-			}
-			if failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
-				failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
-				failure.NextAction != "review.status" || failure.LineageID != lineage {
-				t.Fatalf("binding refusal classification = %#v", failure)
-			}
-			if !strings.Contains(failure.Cause, tt.wantText) {
-				t.Fatalf("binding refusal cause %q does not carry the native reason %q", failure.Cause, tt.wantText)
-			}
-			schema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
-			validatePublishedReviewSchema(t, schema, output.Bytes())
-		})
-	}
-}
-
-// TestCaptureEvidenceSuccessEnvelopeIsByteIdenticalThroughRunReview pins the
-// success path: routing capture-evidence refusals through envelope emission
-// must not touch the bytes a successful capture prints on stdout.
-func TestCaptureEvidenceSuccessEnvelopeIsByteIdenticalThroughRunReview(t *testing.T) {
-	reviewEnabledHome(t)
-	repo, lineage, validating := validatingEvidenceReview(t)
-	var output bytes.Buffer
-	if err := RunReview([]string{
-		"capture-evidence", "--cwd", repo, "--lineage", lineage,
-		"--target", validating.State.CurrentSnapshot.Identity,
-		"--expected-revision", validating.Revision,
-		"--outcome", string(reviewtransaction.VerificationOutcomePassed),
-		"--input", writeCaptureEvidenceInput(t),
-	}, &output); err != nil {
-		t.Fatalf("successful capture-evidence through RunReview: %v\n%s", err, output.String())
-	}
-	var record reviewtransaction.VerificationEvidenceRecord
-	decodeStrictReviewJSON(t, output.Bytes(), &record)
-	if record.Schema != "gentle-ai.review-verification-evidence/v2" || record.LineageID != lineage {
-		t.Fatalf("captured evidence record = %#v", record)
-	}
-	var reencoded bytes.Buffer
-	if err := encodeReviewJSON(&reencoded, record); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(output.Bytes(), reencoded.Bytes()) {
-		t.Fatalf("success envelope bytes changed:\ngot:  %s\nwant: %s", output.Bytes(), reencoded.Bytes())
-	}
-}
-
-// TestCaptureEvidenceConflictRefusalEmitsTypedFailureEnvelope reaches the
-// last uncovered capture-evidence refusal: a replay whose bytes differ from
-// the immutably captured record. Nothing is written, so the honest machine
-// classification is a not_started refusal whose continuation is a fresh STATUS.
-func TestCaptureEvidenceConflictRefusalEmitsTypedFailureEnvelope(t *testing.T) {
-	reviewEnabledHome(t)
-	repo, lineage, validating := validatingEvidenceReview(t)
-	args := []string{
-		"capture-evidence", "--cwd", repo, "--lineage", lineage,
-		"--target", validating.State.CurrentSnapshot.Identity,
-		"--expected-revision", validating.Revision,
-		"--outcome", string(reviewtransaction.VerificationOutcomePassed),
-	}
-	if err := RunReview(append(args, "--input", writeCaptureEvidenceInput(t)), &bytes.Buffer{}); err != nil {
-		t.Fatalf("first capture-evidence must commit: %v", err)
-	}
-	conflicting := filepath.Join(t.TempDir(), "conflicting.txt")
-	if err := os.WriteFile(conflicting, []byte("verification: a different transcript\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	err := RunReview(append(args, "--input", conflicting), &output)
-	failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
-	if failure.Operation != "review.capture-evidence" || failure.Phase != "preflight" ||
-		failure.Code != "captured_final_evidence_conflict" || failure.MutationOutcome != ReviewMutationNotStarted ||
-		failure.NextAction != "review.status" || failure.LineageID != lineage {
-		t.Fatalf("conflict refusal envelope = %#v", failure)
-	}
-	schema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
-	validatePublishedReviewSchema(t, schema, output.Bytes())
 }
 
 // TestCaptureResultRefusalsEmitTypedFailureEnvelopes covers the reviewer-lens
@@ -237,18 +85,29 @@ func TestCaptureResultRefusalsEmitTypedFailureEnvelopes(t *testing.T) {
 		validatePublishedReviewSchema(t, schema, output.Bytes())
 	})
 	t.Run("occupied slot", func(t *testing.T) {
-		repo, started, _, record, _ := capturedArtifact(t)
+		repo, started, _, record := newArtifactReview(t, true)
+		if len(record.State.SelectedLenses) < 2 {
+			t.Fatalf("selected lenses = %v, want multiple lenses for a nonterminal occupied slot", record.State.SelectedLenses)
+		}
+		first := filepath.Join(t.TempDir(), "first.json")
+		if err := os.WriteFile(first, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		binding := []string{
+			"capture-result", "--cwd", repo, "--lineage", started.LineageID,
+			"--target", record.State.InitialSnapshot.Identity,
+			"--lens", record.State.SelectedLenses[0], "--order", "0",
+		}
+		if err := RunReview(append(binding, "--input", first), &bytes.Buffer{}); err != nil {
+			t.Fatalf("capture first selected lens: %v", err)
+		}
 		conflicting := filepath.Join(t.TempDir(), "conflicting.json")
 		payload := admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0, "a different inspection narrative")
 		if err := os.WriteFile(conflicting, payload, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		var output bytes.Buffer
-		err := RunReview([]string{
-			"capture-result", "--cwd", repo, "--lineage", started.LineageID,
-			"--target", record.State.InitialSnapshot.Identity,
-			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", conflicting,
-		}, &output)
+		err := RunReview(append(binding, "--input", conflicting), &output)
 		failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
 		if failure.Operation != "review.capture-result" || failure.Code != reviewerResultSlotOccupiedCode ||
 			failure.NextAction != "review.status" || failure.MutationOutcome != ReviewMutationNotStarted {
@@ -298,8 +157,8 @@ func TestCaptureRefusalKeepsOperatorErrorAndKillSwitchIdentity(t *testing.T) {
 	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	var output bytes.Buffer
 	err := RunReview([]string{
-		"capture-evidence", "--cwd", repo, "--lineage", "review-capture-envelope-disabled",
-		"--target", digest, "--expected-revision", digest, "--outcome", "passed", "--input", input,
+		"capture-result", "--cwd", repo, "--lineage", "review-capture-envelope-disabled",
+		"--target", digest, "--lens", "review-risk", "--order", "0", "--input", input,
 	}, &output)
 	if !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
 		t.Fatalf("kill-switch identity lost through envelope emission: %v", err)
@@ -316,7 +175,7 @@ func TestCaptureRefusalKeepsOperatorErrorAndKillSwitchIdentity(t *testing.T) {
 // contract) and without gaining a negotiated --contract route.
 func TestCollectCaptureOperationsStayOffTheNegotiatedSurface(t *testing.T) {
 	for _, operation := range []string{
-		"review.capture-result", "review.capture-evidence", "review.capture-refuter", "review.capture-validation",
+		"review.capture-result", "review.capture-refuter", "review.capture-validation",
 	} {
 		metadata, known := reviewIntegrationOperationByName(operation)
 		if !known {
@@ -354,7 +213,7 @@ func (w reviewEmitFailureWriter) Write([]byte) (int, error) { return 0, w.err }
 // both errors, refusal primary, so errors.Is/As dispatch keeps working.
 func TestCaptureRefusalEmitFailurePreservesNativeRefusal(t *testing.T) {
 	emitErr := errors.New("stdout gone: broken pipe")
-	err := RunReview([]string{"capture-evidence", "--cwd", initReviewCLIRepo(t)}, reviewEmitFailureWriter{err: emitErr})
+	err := RunReview([]string{"capture-result", "--cwd", initReviewCLIRepo(t)}, reviewEmitFailureWriter{err: emitErr})
 	var typed *ReviewIntegrationFailureError
 	if !errors.As(err, &typed) || typed.Failure.Code != "invalid_request" {
 		t.Fatalf("native refusal lost when envelope emission failed: %v", err)

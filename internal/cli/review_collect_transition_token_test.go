@@ -67,7 +67,7 @@ func TestExternalCaptureCollectArgumentsStayUntokenized(t *testing.T) {
 		TargetIdentity: "sha256:" + strings.Repeat("a", 64),
 		Candidates:     []string{"review-one", "review-two"},
 	}
-	transition := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
+	transition := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{})
 	if transition.Kind != reviewNextTransitionCollect || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
 		t.Fatalf("ambiguous transition = %#v", transition)
 	}
@@ -130,30 +130,6 @@ func TestCollectCaptureOperationKindsAreClassifiedFromSource(t *testing.T) {
 	}
 }
 
-// TestTokenizedCollectTransitionValidatesAgainstPublishedSchemas proves the
-// tokenized collect payload is admissible under the exact schemas it claims,
-// in both published status versions.
-func TestTokenizedCollectTransitionValidatesAgainstPublishedSchemas(t *testing.T) {
-	binding := ReviewTransitionBinding{
-		LineageID:      "review-collect-schema",
-		Revision:       "sha256:" + strings.Repeat("a", 64),
-		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
-	}
-	transition := reviewCollectTransition("verification_evidence_required", ReviewTransitionInput{
-		Name: "evidence", Schema: reviewtransaction.VerificationEvidenceRecordSchema,
-		CaptureOperation: "review.capture-evidence", Arguments: reviewBindingArguments(binding),
-	})
-	if transition.Collect.Inputs[0].Arguments[0].Token == "" {
-		t.Fatal("native collect transition carries no token to validate")
-	}
-	payload, err := json.Marshal(transition)
-	if err != nil {
-		t.Fatal(err)
-	}
-	validateAgainstPublishedNextTransitionSchemaV2(t, payload)
-	validateAgainstPublishedNextTransitionSchema(t, payload)
-}
-
 // captureOperationsFromTransitionSource reads the transition source and
 // returns every capture_operation it can emit. Reading the source is
 // deliberate: the point is to discover the kinds that exist rather than to
@@ -165,8 +141,13 @@ func captureOperationsFromTransitionSource(t *testing.T) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	constants := map[string]string{"reviewCaptureResultCaptureOperation": reviewCaptureResultCaptureOperation}
-	pattern := regexp.MustCompile(`CaptureOperation:\s*(?:"([^"]*)"|([A-Za-z_][A-Za-z0-9_.]*))`)
+	constants := map[string]string{
+		"reviewCaptureCorrectionPlanOperation":    reviewCaptureCorrectionPlanOperation,
+		"reviewCaptureResultCaptureOperation":     reviewCaptureResultCaptureOperation,
+		"reviewCaptureRefuterCaptureOperation":    reviewCaptureRefuterCaptureOperation,
+		"reviewCaptureValidationCaptureOperation": reviewCaptureValidationCaptureOperation,
+	}
+	pattern := regexp.MustCompile(`CaptureOperation(?:\s*:\s*|\s*=\s*)(?:"([^"]*)"|([A-Za-z_][A-Za-z0-9_.]*))`)
 	seen := map[string]struct{}{}
 	operations := make([]string, 0)
 	for _, match := range pattern.FindAllStringSubmatch(string(source), -1) {

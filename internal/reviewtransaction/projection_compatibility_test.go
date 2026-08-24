@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"context"
 	"testing"
 )
 
@@ -196,29 +195,5 @@ func TestDiscoveryExactCandidateIgnoresIntendedUntrackedSideBand(t *testing.T) {
 	}
 	if !legacyLiveTargetMatchesValidatedSnapshot(transaction, live) {
 		t.Fatal("legacyLiveTargetMatchesValidatedSnapshot() rejected exact candidate side-band variation")
-	}
-}
-
-func TestApprovedStagedCurrentChangesReceiptGovernsWorkspaceBaseDiffAfterCommit(t *testing.T) {
-	repo, state, _, _ := approvedCurrentChangesScopeRecoveryFixtureForProjection(t, "projection-compatible-status", ProjectionStaged)
-	gitSnapshot(t, repo, "commit", "-m", "deliver staged candidate")
-
-	target := Target{
-		Kind: TargetBaseDiff, BaseRef: state.InitialSnapshot.BaseTree,
-		IntendedUntracked: []string{},
-	}
-	requested := newCompactStartStateForTarget(t, repo, "projection-compatible-start", target)
-	requested.PolicyHash = state.PolicyHash
-	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-	if err != nil || started.Action != CompactStartReuseReceipt || started.Record.State.LineageID != state.LineageID {
-		t.Fatalf("START after commit = %#v, %v", started, err)
-	}
-
-	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
-		Target: target, LineageID: state.LineageID,
-	})
-	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateApproved ||
-		status.Action != TargetStatusActionValidate || status.ReceiptIdentity == "" || status.LineageID != state.LineageID {
-		t.Fatalf("STATUS after commit = %#v, %v", status, err)
 	}
 }

@@ -18,7 +18,7 @@ Load when changing how any runtime (Claude Code, OpenCode, Codex, future) invoke
 - Runtime output is advisory: it cannot create authority, mutate review state, mint a receipt, or open a gate. Only Go admission does.
 - Byte budget refuses before invocation; never truncate. Malformed, truncated, or incomplete input never becomes PASS, complete, or a clean receipt.
 - No OpenCode restart, child isolation, special session, or `OPENCODE_DISABLE_*` variables. An ordinary running session is sufficient.
-- The RDD semantic pipeline is untouchable: lens selection, severity meanings, candidate causality, refuter adjudication, bounded correction, verification, terminal receipt, delivery gates.
+- The RDD semantic pipeline is untouchable: lens selection, severity meanings, candidate causality, refuter adjudication, bounded correction, verification, terminal receipt, and read-only review-context evaluation. These are review-lifecycle concerns only; ordinary repository policy owns delivery.
 - Refuter and fix validator consume the same provider contract. A validator that could not inspect produced no verdict — surface a blocked decision; never record it as failed (that irreversibly consumes the single correction).
 - Capability advertisement requires shared-contract conformance plus organic runtime proof. Codex stays unadvertised until both positive and fail-closed proofs pass.
 - Transport failures never consume a correction budget, duplicate a capture, or strand a lineage.

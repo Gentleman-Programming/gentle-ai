@@ -150,14 +150,12 @@ func TestReviewCaptureResultInputPreflightValidatesWithoutPersistence(t *testing
 	if err := RunReviewCaptureResult(append(binding, "--input", input), &output); err != nil {
 		t.Fatalf("real capture after dry run failed: %v", err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
-	if artifact.Path == "" {
-		t.Fatalf("real capture did not persist an artifact: %#v", artifact)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("real capture terminal result = %#v", terminal)
 	}
-	if _, err := os.Stat(artifact.Path); err != nil {
-		t.Fatalf("real capture artifact: %v", err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func assertReviewResultDryRunMatchesPublishedSchema(t *testing.T, response []byte) {
@@ -231,9 +229,8 @@ func TestReviewCaptureResultNestedRepositoryFailsActionablyAndStaysRetriable(t *
 	if err := RunReviewCaptureResult(args(child, "--input", input), &output); err != nil {
 		t.Fatalf("retry from reviewing repository failed: %v", err)
 	}
-	manifest := strings.TrimSpace(output.String())
-	if err := RunReviewFacadeFinalize([]string{"--cwd", child, "--lineage", started.LineageID, "--result-artifact", manifest}, io.Discard); err != nil {
-		t.Fatalf("finalize after recovered capture failed: %v", err)
+	if !strings.Contains(output.String(), reviewLastEventClosureSchema) {
+		t.Fatalf("recovered capture did not close on its terminal event: %s", output.String())
 	}
 }
 
@@ -304,21 +301,21 @@ func TestReviewPreserveResultDurableIncidentArtifact(t *testing.T) {
 	if other.Path == artifact.Path || other.SHA256 == artifact.SHA256 {
 		t.Fatal("distinct raw result reused the first incident artifact")
 	}
-	// An incident artifact is never a captured lens result: finalize must
-	// reject its manifest.
-	if err := RunReviewFacadeFinalize([]string{"--cwd", child, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(first.String())}, io.Discard); err == nil {
-		t.Fatal("finalize accepted an incident artifact as a captured lens result")
+	// An incident artifact is never a captured lens result; preserving it did
+	// not create the reviewer-results directory.
+	if _, err := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, child), "v2", started.LineageID, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(err) {
+		t.Fatalf("incident preservation created a reviewer result slot: %v", err)
 	}
 }
 
-// TestReviewPreservedResultReplaysThroughCaptureAndFinalize pins the recovery
-// contract documented on RunReviewPreserveResult: a preserved incident payload
-// must replay through `review capture-result --input <preserved path>` and
-// finalize. The plugin must therefore preserve the EXTRACTED strict reviewer
+// TestReviewPreservedResultReplaysThroughCaptureClosesOnLastEvent pins the
+// recovery contract documented on RunReviewPreserveResult: a preserved incident
+// payload must replay through `review capture-result --input <preserved path>`.
+// The plugin must therefore preserve the EXTRACTED strict reviewer
 // JSON on capture failure — a preserved raw task envelope (what the plugin
 // held in output.output before extraction) is rejected by the strict replay
 // decoder and is not a recoverable artifact.
-func TestReviewPreservedResultReplaysThroughCaptureAndFinalize(t *testing.T) {
+func TestReviewPreservedResultReplaysThroughTerminalCapture(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
 	extracted := string(admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0))
@@ -352,14 +349,13 @@ func TestReviewPreservedResultReplaysThroughCaptureAndFinalize(t *testing.T) {
 		t.Fatal("envelope-wrapped preserved payload replayed through capture-result")
 	}
 	// The extracted strict JSON — what the plugin preserves on capture
-	// failure — replays and finalizes.
+	// failure — replays and closes on its terminal capture.
 	var output bytes.Buffer
 	if err := RunReviewCaptureResult(captureArgs(preserve(extracted)), &output); err != nil {
 		t.Fatalf("extracted preserved payload failed replay: %v", err)
 	}
-	manifest := strings.TrimSpace(output.String())
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", manifest}, io.Discard); err != nil {
-		t.Fatalf("finalize after preserved-result replay failed: %v", err)
+	if !strings.Contains(output.String(), reviewLastEventClosureSchema) {
+		t.Fatalf("preserved-result replay did not close on its terminal capture: %s", output.String())
 	}
 }
 
@@ -494,7 +490,7 @@ func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
 // store-lock + CAS in CaptureReviewerResult, with no new revision minted.
 func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, started, store, record := newArtifactReview(t, false)
+	repo, started, store, record := newArtifactReview(t, true)
 	rawInput := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(rawInput, []byte("raw reviewer output\nthat is not JSON"), 0o600); err != nil {
 		t.Fatal(err)
@@ -546,7 +542,7 @@ func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 // TestReviewPreserveResultInterruptedRecoveryRetries pins scenario 7
 // (interrupted recovery): a recovery capture that fails partway (rejected
 // payload) must not consume or corrupt the slot, so a subsequent retry of the
-// identical binding with the correct extracted payload succeeds and finalizes.
+// identical binding with the correct extracted payload closes on capture.
 func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, started, _, record := newArtifactReview(t, false)
@@ -578,7 +574,7 @@ func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
 		t.Fatal("interrupted recovery capture with an incomplete payload was accepted")
 	}
 	// A clean retry of the identical binding with the correct extracted
-	// payload must succeed and finalize.
+	// payload must succeed and close on capture.
 	extracted := filepath.Join(t.TempDir(), "extracted.json")
 	if err := os.WriteFile(extracted, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
 		t.Fatal(err)
@@ -587,9 +583,8 @@ func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
 	if err := RunReviewCaptureResult(captureArgs(extracted), &output); err != nil {
 		t.Fatalf("retry after interrupted recovery failed: %v", err)
 	}
-	manifest := strings.TrimSpace(output.String())
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", manifest}, io.Discard); err != nil {
-		t.Fatalf("finalize after interrupted-recovery retry failed: %v", err)
+	if !strings.Contains(output.String(), reviewLastEventClosureSchema) {
+		t.Fatalf("interrupted-recovery retry did not close on its terminal capture: %s", output.String())
 	}
 }
 
