@@ -83,9 +83,15 @@ func (o *Orchestrator) PrepareBatches(status sddstatus.StatusV1Projection, defau
 	return batch.GenerateExecutionBatches(status, defaultAgent)
 }
 
-// ExecuteBatches distributes the given execution batches to a ConcurrentEngine.
-func (o *Orchestrator) ExecuteBatches(ctx stdctx.Context, batches []batch.ExecutionBatch, prompts map[string]string, runner executor.AgentRunner, maxWorkers int) map[string]error {
+// ExecuteBatches distributes the given execution batches to a
+// ConcurrentEngine configured with H-09a's bounded retry and backoff
+// defaults, so a transient dispatch failure is retried before being
+// recorded as failed. It returns each repo's final error (absent means
+// success) and the real number of attempts made for that repo.
+func (o *Orchestrator) ExecuteBatches(ctx stdctx.Context, batches []batch.ExecutionBatch, prompts map[string]string, runner executor.AgentRunner, maxWorkers int) (map[string]error, map[string]int) {
 	engine := executor.New(runner, maxWorkers)
+	engine.MaxAttempts = executor.DefaultMaxAttempts
+	engine.BaseBackoff = executor.DefaultBaseBackoff
 	return engine.ExecuteBatches(ctx, batches, prompts)
 }
 

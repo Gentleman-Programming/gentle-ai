@@ -211,7 +211,7 @@ func runDevOrchestratorDispatch(args []string, stdout io.Writer) error {
 	// only emits prompts and journals outcome "planned", while ExecuteBatches
 	// is genuinely invoked so the whole facade is reachable.
 	runner := &plannedAgentRunner{stdout: stdout}
-	dispatchErrors := orch.ExecuteBatches(context.Background(), batches, prompts, runner, *maxWorkers)
+	dispatchErrors, dispatchAttempts := orch.ExecuteBatches(context.Background(), batches, prompts, runner, *maxWorkers)
 
 	store, loaded, err := devOrchestratorJournal(*cwd, *change)
 	if err != nil {
@@ -222,7 +222,7 @@ func runDevOrchestratorDispatch(args []string, stdout io.Writer) error {
 	record := devjournal.Record{
 		Schema: devjournal.SchemaV1, Change: *change, UpdatedAt: time.Now().UTC(),
 		StatusDigest: devOrchestratorStatusDigest(projection),
-		Dispatches:   devOrchestratorDispatchRecords(batches, *agentName, dispatchErrors),
+		Dispatches:   devOrchestratorDispatchRecords(batches, *agentName, dispatchErrors, dispatchAttempts),
 	}
 	if err := store.Save(record, loaded.Revision); err != nil {
 		return fmt.Errorf("save dev-orchestrator journal: %w", err)
@@ -262,7 +262,12 @@ func devOrchestratorJournal(cwd, change string) (devjournal.Store, devjournal.Lo
 	return store, loaded, nil
 }
 
-func devOrchestratorDispatchRecords(batches []batch.ExecutionBatch, agentName string, dispatchErrors map[string]error) []devjournal.Dispatch {
+// devOrchestratorDispatchRecords builds one devjournal.Dispatch per ready
+// batch. Attempt carries the real number of attempts ExecuteBatches made
+// for that repo (H-09a's bounded retry means this can be > 1), never a
+// hardcoded value; a repo missing from dispatchAttempts (should not happen
+// for a ready batch that actually ran) falls back to 1.
+func devOrchestratorDispatchRecords(batches []batch.ExecutionBatch, agentName string, dispatchErrors map[string]error, dispatchAttempts map[string]int) []devjournal.Dispatch {
 	now := time.Now().UTC()
 	dispatches := make([]devjournal.Dispatch, 0, len(batches))
 	for _, b := range batches {
@@ -273,8 +278,12 @@ func devOrchestratorDispatchRecords(batches []batch.ExecutionBatch, agentName st
 		if dispatchErr, failed := dispatchErrors[b.RepoName]; failed {
 			outcome, errMsg = devjournal.OutcomeFailed, dispatchErr.Error()
 		}
+		attempt := dispatchAttempts[b.RepoName]
+		if attempt <= 0 {
+			attempt = 1
+		}
 		dispatches = append(dispatches, devjournal.Dispatch{
-			RepoSlug: b.RepoName, Agent: agentName, Attempt: 1, Outcome: outcome,
+			RepoSlug: b.RepoName, Agent: agentName, Attempt: attempt, Outcome: outcome,
 			Error: errMsg, StartedAt: now, FinishedAt: now,
 		})
 	}
