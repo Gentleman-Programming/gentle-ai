@@ -371,7 +371,7 @@ All PRs go through automated checks:
 | Check | What It Verifies |
 |-------|-----------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
-| **Check Issue Reference** | PR body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or non-closing `Refs #N`; malformed, cross-repository, and mixed closing/non-closing references fail |
+| **Check Issue Reference** | PR body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or non-closing `Refs #N`; malformed, cross-repository, and mixed closing/non-closing references for the same issue fail |
 | **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |
 | **Unit Tests** | `go test ./...` passes |

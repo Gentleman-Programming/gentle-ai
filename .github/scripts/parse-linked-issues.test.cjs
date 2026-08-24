@@ -91,10 +91,28 @@ test('a valid reference next to a malformed one still fails closed, reporting bo
   assert.match(result.errors[0].reason, /malformed/i);
 });
 
+test('a valid reference does not mask malformed suffixes or cross-repository targets', () => {
+  const cases = [
+    ['Refs #42/extra', /malformed/i],
+    ['Refs github.com/owner/repo#42', /cross-repositor/i],
+    ['Refs https://github.com/owner/repo#42', /cross-repositor/i],
+  ];
+  for (const [invalidReference, reason] of cases) {
+    const result = parseLinkedIssues(`Closes #1770\n${invalidReference}`);
+    assert.deepEqual(result.references, [closing(1770)]);
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0].raw, invalidReference);
+    assert.match(result.errors[0].reason, reason);
+  }
+});
+
 test('punctuation after a valid reference is accepted, never treated as malformed', () => {
   for (const [body, kind] of [
     ['Closes #42.', 'closing'],
     ['Refs #42,', 'non-closing'],
+    ['Closes #42)', 'closing'],
+    ['Refs #42]', 'non-closing'],
+    ['Closes #42`', 'closing'],
     ['Closes #42', 'closing'],
   ]) {
     assert.deepEqual(parseLinkedIssues(body), ok({ number: 42, kind }));

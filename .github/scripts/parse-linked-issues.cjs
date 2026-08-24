@@ -7,9 +7,13 @@ const CLOSING_KEYWORDS = 'closes|fixes|resolves';
 const NON_CLOSING_KEYWORDS = 'refs';
 const KEYWORDS = `${CLOSING_KEYWORDS}|${NON_CLOSING_KEYWORDS}`;
 
-// Valid same-repo reference: keyword then #<number>; the trailing (?!\w)
-// rejects word-like suffixes (#12foo, #12_bar) as malformed, not #12.
-const REFERENCE_PATTERN = new RegExp(`\\b(${KEYWORDS})\\s+#(\\d+)(?!\\w)`, 'gi');
+// Valid references end at whitespace or common Markdown punctuation. Every
+// other suffix (for example, #12/extra) is malformed rather than #12.
+const VALID_REFERENCE_END = String.raw`$|[\s.,;:!?)}\]'"\`]`;
+const REFERENCE_PATTERN = new RegExp(
+  `\\b(${KEYWORDS})\\s+#(\\d+)(?=${VALID_REFERENCE_END})`,
+  'gi'
+);
 
 // owner/repo#N fails closed; non-overlapping token classes bound each match
 // to a linear scan, and the approval gate resolves only base-repo issues.
@@ -18,10 +22,10 @@ const CROSS_REPO_PATTERN = new RegExp(
   'gi'
 );
 
-// Catch keyword + invalid `#` tokens, including word-like numeric suffixes;
-// [a-zA-Z_] keeps a valid trailing digit from becoming a suffix.
+// Catch keyword + invalid `#` tokens and numeric suffixes that are not valid
+// reference delimiters.
 const MALFORMED_PATTERN = new RegExp(
-  `\\b(${KEYWORDS})\\s+#(?:(?!\\d)\\S*|\\d+[a-zA-Z_]\\S*)`,
+  `\\b(${KEYWORDS})\\s+#(?:(?!\\d)\\S*|\\d+(?=[^\\d])(?!${VALID_REFERENCE_END})\\S*)`,
   'gi'
 );
 

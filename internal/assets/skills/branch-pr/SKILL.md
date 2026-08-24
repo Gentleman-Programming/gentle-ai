@@ -18,7 +18,7 @@ Use this skill when:
 
 ## Critical Rules
 
-1. **Every PR MUST visibly link an approved base-repository issue** — `Closes/Fixes/Resolves #N` closes it on merge; `Refs #N` is non-closing; malformed, cross-repository, and mixed closing/non-closing references are rejected
+1. **Every PR MUST visibly link an approved base-repository issue** — `Closes/Fixes/Resolves #N` closes it on merge; `Refs #N` is non-closing; malformed, cross-repository, and mixed closing/non-closing references for the same issue are rejected
 2. **Every PR MUST have exactly one `type:*` label**
 3. **Automated checks must pass** before merge is possible
 4. **Blank PRs without issue linkage will be blocked** by GitHub Actions

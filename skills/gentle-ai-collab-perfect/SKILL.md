@@ -216,10 +216,11 @@ Before recommending any action that touches permissions, label state, or commit 
    gh issue view <N> --json number,title,state,labels,comments
    ```
 
-4. **After applying a body rewrite**, round-trip the body and confirm `closingIssuesReferences` is populated for the linked issue:
+4. **After applying a body rewrite**, round-trip the body and confirm `Check Issue Reference` passes. For `Closes`/`Fixes`/`Resolves`, also confirm `closingIssuesReferences` is populated; `Refs #N` is verified by the body and check result alone:
    ```bash
    gh pr view <N> --json body --jq '.body'             # round-trip
-   gh pr view <N> --json closingIssuesReferences        # confirm linkage parsed
+   gh pr checks <N> --json name,state                   # confirm Check Issue Reference passes
+   gh pr view <N> --json closingIssuesReferences        # closing references only
    ```
 
 5. **Trust the contributor's lived permissions over inferred defaults.** If they say "I can only do X", route everything else to the maintainer — don't waste their PR review budget on GraphQL 403s.

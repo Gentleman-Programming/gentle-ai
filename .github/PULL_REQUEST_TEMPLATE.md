@@ -10,7 +10,7 @@ Closes #
 
 <!-- Replace the # above with the issue number, e.g.: Closes #42 -->
 
-Use `Closes/Fixes/Resolves #N` to close an approved issue on merge, or `Refs #N` for a non-closing link. References must be visible and well-formed for an issue in this base repository; cross-repository or mixed closing/non-closing references are rejected.
+Use `Closes/Fixes/Resolves #N` to close an approved issue on merge, or `Refs #N` for a non-closing link. References must be visible and well-formed for an issue in this base repository; cross-repository references or both forms for the same issue are rejected.
 
 ---
 
