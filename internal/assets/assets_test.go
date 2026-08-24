@@ -1,6 +1,8 @@
 package assets
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -213,6 +215,42 @@ func normalizedWords(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
+func TestKilocodeLegacyOrchestratorAssetBaseline(t *testing.T) {
+	const path = "opencode/sdd-orchestrator-kilocode-legacy.md"
+	const wantSHA256 = "11229bf1309f3417418558503acdfd5e3837ef89b4fc50eeba2df8cf819814e7"
+
+	content, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read(%q) error = %v", path, err)
+	}
+
+	for _, required := range []string{
+		"### SDD Session Preflight (HARD GATE)",
+		"### Delivery Strategy",
+		"### Chain Strategy",
+		"### Review Workload Guard (MANDATORY)",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("%s missing historical Kilocode section %q", path, required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"### Provider-Aware Route Policy",
+		"gentle-ai.provider-transport/v1",
+		"opencode-review-transport",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must exclude OpenCode provider-aware route policy %q", path, forbidden)
+		}
+	}
+
+	gotSHA256 := sha256.Sum256([]byte(content))
+	if got := hex.EncodeToString(gotSHA256[:]); got != wantSHA256 {
+		t.Fatalf("%s SHA-256 = %s, want %s", path, got, wantSHA256)
+	}
+}
+
 // TestAllEmbeddedAssetsAreReadable verifies that every expected embedded file
 // can be loaded via Read() without error. This catches missing/misnamed files
 // at test time rather than at runtime.
@@ -250,6 +288,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"opencode/persona-gentleman.md",
 		"opencode/background-subagents.md",
 		"opencode/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator-kilocode-legacy.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
 		"opencode/commands/sdd-apply.md",
