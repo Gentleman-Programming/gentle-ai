@@ -1838,17 +1838,120 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 				}
 			}
 
-			// The 12 dev-orchestrator role agents are single-overlay only —
-			// multi mode is blocked by the hardcoded profilePhaseOrder, so they
-			// must never be required in the multi overlay.
-			if !isMulti {
-				for _, role := range opencode.DevRolePhases() {
-					agentDef, ok := agents[role].(map[string]any)
-					if !ok {
-						t.Fatalf("%q missing %s agent", assetPath, role)
-					}
-					prompt, _ := agentDef["prompt"].(string)
-					assertExecutorBoundaryPrompt(t, assetPath, role, prompt)
+			// The 12 dev-orchestrator role agents belong to neither default
+			// overlay: they ship only in the opt-in
+			// sdd-overlay-devorchestrator.json fragment, so an install that
+			// opts out never receives them. Their structure is asserted by
+			// TestOpenCodeDevOrchestratorOverlayRolesArePromptFileAgents and
+			// their executor boundary by TestDevRolePromptSourcesAreExplicitExecutors.
+			for _, role := range opencode.DevRolePhases() {
+				if _, exists := agents[role]; exists {
+					t.Errorf("%q must not define dev role %q: it belongs to the opt-in dev-orchestrator overlay", assetPath, role)
+				}
+			}
+		})
+	}
+}
+
+// devRoleExecutorBoundaryPhrases are the four boundary literals every
+// non-orchestrator dev-role prompt source must contain, proving it is a leaf
+// executor that never delegates, calls the task tool, or launches sub-agents.
+// They differ from openCodeExecutorBoundaryPhrases because the dev-role prompts
+// are no longer inline overlay strings: since the runtime-generation migration
+// they are produced from internal/assets/claude/agents/<role>.md, which words
+// the task-tool boundary as "Do NOT call the Task tool".
+var devRoleExecutorBoundaryPhrases = []string{
+	"not the orchestrator", "Do NOT delegate", "Do NOT call the Task tool", "Do NOT launch sub-agents",
+}
+
+// TestOpenCodeDevOrchestratorOverlayRolesArePromptFileAgents is the relocated
+// home of the dev-role overlay coverage. All 12 DevRolePhases() agents moved out
+// of sdd-overlay-single.json — where they leaked into every opt-out install —
+// and into the opt-in dev-orchestrator overlay. That overlay carries no inline
+// prompts: every role uses a __PROMPT_FILE_<role>__ placeholder that
+// inlineOpenCodeSDDPrompts rewrites to a {file:./prompts/sdd/<role>.md}
+// reference, so the boundary text itself is asserted against the prompt source
+// by TestDevRolePromptSourcesAreExplicitExecutors.
+func TestOpenCodeDevOrchestratorOverlayRolesArePromptFileAgents(t *testing.T) {
+	const assetPath = "opencode/sdd-overlay-devorchestrator.json"
+
+	var root map[string]any
+	if err := json.Unmarshal([]byte(MustRead(assetPath)), &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", assetPath, err)
+	}
+
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing agent map", assetPath)
+	}
+
+	roles := opencode.DevRolePhases()
+	if len(agents) != len(roles) {
+		t.Errorf("%q agent count = %d, want %d (exactly the DevRolePhases() family)", assetPath, len(agents), len(roles))
+	}
+
+	for _, role := range roles {
+		agentDef, ok := agents[role].(map[string]any)
+		if !ok {
+			t.Fatalf("%q missing %s agent", assetPath, role)
+		}
+
+		prompt, _ := agentDef["prompt"].(string)
+		wantPlaceholder := "__PROMPT_FILE_" + role + "__"
+		if prompt != wantPlaceholder {
+			t.Errorf("%q role %s prompt = %q, want placeholder %q", assetPath, role, prompt, wantPlaceholder)
+		}
+
+		mode, _ := agentDef["mode"].(string)
+		hidden, _ := agentDef["hidden"].(bool)
+		if role == "dev-orchestrator" {
+			// The opt-in makes dev-orchestrator a visible primary (SPEC-006).
+			if mode != "primary" {
+				t.Errorf("%q %s mode = %q, want %q", assetPath, role, mode, "primary")
+			}
+			if hidden {
+				t.Errorf("%q %s hidden = true, want false", assetPath, role)
+			}
+			continue
+		}
+		if mode != "subagent" {
+			t.Errorf("%q %s mode = %q, want %q", assetPath, role, mode, "subagent")
+		}
+		if !hidden {
+			t.Errorf("%q %s hidden = false, want true", assetPath, role)
+		}
+		// Executor roles are leaves: the task tool stays off so the prompt
+		// boundary is enforced by configuration, not only by wording.
+		tools, ok := agentDef["tools"].(map[string]any)
+		if !ok {
+			t.Errorf("%q %s missing tools", assetPath, role)
+			continue
+		}
+		if enabled, _ := tools["task"].(bool); enabled {
+			t.Errorf("%q %s tools.task = true, want false for a leaf executor", assetPath, role)
+		}
+	}
+}
+
+// TestDevRolePromptSourcesAreExplicitExecutors asserts the executor boundary for
+// the 11 non-orchestrator dev roles against internal/assets/claude/agents/<role>.md,
+// which WriteDevAgentPromptFiles turns into the runtime prompt files that the
+// dev-orchestrator overlay's __PROMPT_FILE_<role>__ placeholders resolve to.
+// dev-orchestrator is deliberately exempt: it is the orchestrator, so the
+// "not the orchestrator" boundary would be false for it.
+func TestDevRolePromptSourcesAreExplicitExecutors(t *testing.T) {
+	for _, role := range opencode.DevRolePhases() {
+		if role == "dev-orchestrator" {
+			continue
+		}
+		t.Run(role, func(t *testing.T) {
+			assetPath := "claude/agents/" + role + ".md"
+			// The markdown hard-wraps prose, so a boundary sentence can span
+			// two lines. Collapse whitespace before matching.
+			prompt := strings.Join(strings.Fields(MustRead(assetPath)), " ")
+			for _, want := range devRoleExecutorBoundaryPhrases {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("%q prompt source missing executor boundary %q", assetPath, want)
 				}
 			}
 		})
