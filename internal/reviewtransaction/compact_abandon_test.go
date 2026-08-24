@@ -16,14 +16,7 @@ import (
 // through the real store write path (repository evidence validated at start).
 func pristineReviewingFixture(t *testing.T, repo, lineage string) (CompactRecord, CompactStore) {
 	t.Helper()
-	state := newCompactTestState(t, repo, lineage)
-	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace("", "review/start", state); err != nil {
-		t.Fatal(err)
-	}
+	_, store := startReviewingCompactAuthority(t, repo, newCompactTestState(t, repo, lineage))
 	record, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -96,21 +89,32 @@ func TestPristineInvalidatedLineageRemainsAuditable(t *testing.T) {
 	}
 }
 
-// approvedCompactFixture persists one terminal approved compact lineage with
-// its authoritative receipt.
+// approvedCompactFixture closes a clean reviewing authority through the
+// current last-event lifecycle before persisting terminal compact state.
 func approvedCompactFixture(t *testing.T, repo, lineage string) (CompactRecord, CompactStore) {
 	t.Helper()
-	state := correctedCompactTestState(t, repo, lineage)
-	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	state, store := startReviewingCompactAuthority(t, repo, newCompactTestState(t, repo, lineage))
+	started, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := writeCompactFixtureRecord(t, store, state)
-	receipt, err := state.Receipt()
-	if err != nil {
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(started.Revision, "review/complete-review", state); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
 		t.Fatal(err)
 	}
 	return record, store
@@ -121,9 +125,7 @@ func abandonFixtureRequest(record CompactRecord, summaries ...CompactDiscardedWo
 		LineageID: record.State.LineageID, ExpectedRevision: record.Revision,
 		Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	}
-	summary := CompactDiscardedWorkSummary{
-		FindingsPresent: len(record.State.Findings) > 0, EvidenceRecordsPresent: record.State.EvidenceRecordDigest != "",
-	}
+	summary := CompactDiscardedWorkSummary{FindingsPresent: len(record.State.Findings) > 0}
 	if len(summaries) == 1 {
 		summary = summaries[0]
 	}
@@ -146,10 +148,6 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	approvedReceiptBefore, err := os.ReadFile(approvedStore.ReceiptPath())
-	if err != nil {
-		t.Fatal(err)
-	}
 	pristinePayload, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +166,7 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	proof := committed.Abandonment
 	if proof == nil || proof.Schema != CompactAbandonAuthorizationSchema || proof.LineageID != record.State.LineageID ||
 		proof.Revision != record.Revision || proof.SnapshotIdentity != record.State.InitialSnapshot.Identity ||
-		len(proof.DiscardedWork.CapturedLensResults) != 0 || proof.DiscardedWork.FindingsPresent || proof.DiscardedWork.EvidenceRecordsPresent {
+		len(proof.DiscardedWork.CapturedLensResults) != 0 || proof.DiscardedWork.FindingsPresent {
 		t.Fatalf("abandonment proof = %#v", proof)
 	}
 	if len(committed.Residue) != 1 || committed.Residue[0] != "review-state.json" {
@@ -201,9 +199,8 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 		t.Fatalf("persisted abandonment record = %#v", persisted)
 	}
 	approvedStateAfter, _ := os.ReadFile(approvedStore.StatePath())
-	approvedReceiptAfter, _ := os.ReadFile(approvedStore.ReceiptPath())
-	if !bytes.Equal(approvedStateBefore, approvedStateAfter) || !bytes.Equal(approvedReceiptBefore, approvedReceiptAfter) {
-		t.Fatal("abandonment changed unrelated approved state or receipt bytes")
+	if !bytes.Equal(approvedStateBefore, approvedStateAfter) {
+		t.Fatal("abandonment changed unrelated approved state bytes")
 	}
 
 	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
@@ -307,13 +304,6 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := writeCompactFixtureRecord(t, store, state)
-		receipt, err := state.Receipt()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
-			t.Fatal(err)
-		}
 		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
 			!strings.Contains(err.Error(), `holds terminal "escalated" authority`) {
 			t.Fatalf("terminal escalated refusal = %v", err)
@@ -327,7 +317,7 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := writeCompactFixtureRecord(t, store, state)
-		request := abandonFixtureRequest(record, CompactDiscardedWorkSummary{FindingsPresent: true, EvidenceRecordsPresent: record.State.EvidenceRecordDigest != ""})
+		request := abandonFixtureRequest(record, CompactDiscardedWorkSummary{FindingsPresent: true})
 		if _, err := AbandonPristineCompactStore(context.Background(), repo, request); err != nil {
 			t.Fatalf("captured review data abandonment = %v", err)
 		}

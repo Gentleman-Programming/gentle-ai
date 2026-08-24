@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -38,11 +37,6 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 	if err != nil {
 		return nil, err
 	}
-	staged, err := discoverCompactBurnStagedStoresForLineage(ctx, repo, lineageID)
-	if err != nil {
-		return nil, err
-	}
-	stores = append(stores, staged...)
 	storeByLineage := make(map[string]CompactStore, len(stores))
 	for _, store := range stores {
 		if _, duplicate := storeByLineage[store.lineageID]; duplicate {
@@ -136,7 +130,14 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 			}
 		}
 		if carrier, cause := compactAuthorityBlockingCause(records, violations, lineageID); cause != nil {
-			return nil, compactBlockedLineageError(lineageID, carrier, cause)
+			if carrier == lineageID {
+				return nil, fmt.Errorf(
+					"compact authority lineage %q cannot govern: %w. Every other lineage is unaffected; see this entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
+					lineageID, cause)
+			}
+			return nil, fmt.Errorf(
+				"compact authority lineage %q cannot govern because the entry %q it recovers from carries: %w. Every lineage that does not recover through %q is unaffected; see that entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
+				lineageID, carrier, cause, carrier)
 		}
 		if priorSchema[lineageID] {
 			// The named lineage ITSELF is prior-schema history, so it owns no
@@ -165,67 +166,21 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 
 func loadStableCompactTargetStatusCandidate(ctx context.Context, store CompactStore, initial CompactRecord) (targetStatusCandidate, error) {
 	record := initial
-	var lastSemanticError error
 	for attempt := 0; attempt < targetStatusCompactAuthorityReadAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return targetStatusCandidate{}, err
 		}
 		targetStatusCompactAuthorityReadHook(store.lineageID, "after-state", attempt)
-		if err := ctx.Err(); err != nil {
+		observed, err := store.LoadContext(ctx)
+		if err != nil {
 			return targetStatusCandidate{}, err
 		}
-
-		first, firstErr := inspectCompactTargetArtifacts(ctx, store, record.State, "first", attempt)
-		if err := ctx.Err(); err != nil {
-			return targetStatusCandidate{}, err
-		}
-		observed, loadErr := store.LoadContext(ctx)
-		if loadErr != nil {
-			return targetStatusCandidate{}, loadErr
-		}
-		if !compactTargetStatusRecordsEqual(record, observed) {
-			record = observed
-			lastSemanticError = nil
-			continue
-		}
-
-		if firstErr != nil && IsCompactAuthorityOperationalFailure(firstErr) {
-			return targetStatusCandidate{}, firstErr
-		}
-		second, secondErr := inspectCompactTargetArtifacts(ctx, store, observed.State, "second", attempt)
-		if err := ctx.Err(); err != nil {
-			return targetStatusCandidate{}, err
-		}
-		if secondErr != nil && IsCompactAuthorityOperationalFailure(secondErr) {
-			return targetStatusCandidate{}, secondErr
-		}
-		// The first receipt/journal pair precedes the second state observation,
-		// while the second pair follows it. Equal raw identities, canonical
-		// content, and existence therefore make that state observation the
-		// linearization point for the complete authority view.
-		if !compactTargetArtifactSetsEqual(first, second) {
-			record = observed
-			lastSemanticError = nil
-			continue
-		}
-
-		observationErr := errors.Join(firstErr, secondErr)
-		if observationErr != nil {
-			lastSemanticError = observationErr
+		if record.Revision != observed.Revision || !compactStateEqual(record.State, observed.State) {
 			record = observed
 			continue
 		}
-
 		copy := observed
-		return targetStatusCandidate{
-			version: AuthorityVersionCompact, lineage: observed.State.LineageID, compact: &copy,
-			receiptIdentity: second.receipt.artifact.identity, receiptPublished: second.receipt.published,
-			receiptCanonical:  bytes.Equal(second.receipt.artifact.content, second.receipt.artifact.canonical),
-			receiptReplayable: second.receipt.replayable, pendingFinalize: second.journal.pending,
-		}, nil
-	}
-	if lastSemanticError != nil {
-		return targetStatusCandidate{}, lastSemanticError
+		return targetStatusCandidate{version: AuthorityVersionCompact, lineage: observed.State.LineageID, compact: &copy}, nil
 	}
 	return targetStatusCandidate{}, fmt.Errorf(
 		"%w: compact target status authority %q did not stabilize after %d reads",
@@ -233,6 +188,7 @@ func loadStableCompactTargetStatusCandidate(ctx context.Context, store CompactSt
 	)
 }
 
+/*
 type compactTargetFinalizeJournalObservation struct {
 	artifact compactTargetArtifactObservation
 	pending  bool
@@ -301,6 +257,8 @@ func compactTargetStatusRecordsEqual(left, right CompactRecord) bool {
 		left.State.CurrentSnapshot.Identity == right.State.CurrentSnapshot.Identity &&
 		compactStateEqual(left.State, right.State)
 }
+
+*/
 
 type compactTerminalHistoryProjection uint8
 

@@ -20,8 +20,8 @@ import (
 // and re-querying reoffered the identical pairing forever.
 //
 // The property: drive a faithful staged correction cycle — two newly added
-// files, one deterministic CRITICAL finding, accepted forecast, bounded edit,
-// passed repository verification — then execute the targeted-validation input
+// files, one deterministic CRITICAL finding, accepted forecast, and bounded
+// edit — then execute the targeted-validation input
 // EXACTLY as the provider hands it over, name/value tokens and opaque handle
 // included. The handle must resolve and the immutable corrected tree must
 // answer. Green on Linux today, which is itself evidence: the field failure
@@ -48,6 +48,9 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(repo, "alpha.go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	runReviewCLIGit(t, repo, "add", "alpha.go", "beta.go")
 
 	startSnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
@@ -66,7 +69,7 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 	started := decodeNegotiatedReviewStart(t, startOut.Bytes())
 	t.Logf("started: risk=%s lenses=%v", started.RiskLevel, started.SelectedLenses)
 
-	finalizeArgs := []string{"--cwd", nestedB, "--lineage", started.LineageID}
+	resultPaths := make([]string, 0, len(started.SelectedLenses))
 	for index, lens := range started.SelectedLenses {
 		resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
 		findings := []facadeFinding{}
@@ -80,16 +83,12 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 		writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 			Lens: lens, Findings: findings, Evidence: []string{"inspected the exact frozen candidate"},
 		})
-		finalizeArgs = append(finalizeArgs, "--result", resultPath)
+		resultPaths = append(resultPaths, resultPath)
 	}
-	if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
-		t.Fatalf("finalize results: %v", err)
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
+		t.Fatalf("capture results: %v", err)
 	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", nestedB, "--lineage", started.LineageID, "--correction-lines", "2",
-	}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("forecast: %v", err)
-	}
+	captureCorrectionPlanFromCurrentStatus(t, nestedB, started.LineageID, 2)
 
 	// Reporter's order: read the correction plan from STATUS FIRST, then edit.
 	kind0, reason0, _, _ := reviewNegotiatedTransition(t, nestedB, "--lineage", started.LineageID, "--projection", "staged")
@@ -138,31 +137,6 @@ func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
 		kind, reason := string(transition.Kind), transition.ReasonCode
 		t.Logf("hop %d: kind=%s reason=%s", hop, kind, reason)
 
-		if kind == "collect" && reason == "correction_repository_verification_required" {
-			if len(transition.Collect.Inputs) != 1 {
-				t.Fatalf("correction repository verification input = %#v", transition.Collect)
-			}
-			input := transition.Collect.Inputs[0]
-			inputTokens := make([]string, 0, len(input.Arguments))
-			for _, argument := range input.Arguments {
-				token := argument.Token
-				if token == "" {
-					token = "--" + argument.Name + "=" + argument.Value
-				}
-				inputTokens = append(inputTokens, token)
-			}
-			passed := filepath.Join(t.TempDir(), "passed.txt")
-			if err := os.WriteFile(passed, []byte("full repository verification passed\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			captureArgs := append(inputTokens, "--outcome", "passed", "--input", passed)
-			if err := RunReviewCaptureEvidence(captureArgs, &bytes.Buffer{}); err != nil {
-				t.Fatalf("execute exact B capture descriptor from A: %v", err)
-			}
-			target := transitionArgumentValue(t, transition, "target")
-			t.Logf("        published passed evidence for %s", target[:24])
-			continue
-		}
 		if kind == "collect" && reason == "targeted_validation_required" {
 			if len(transition.Collect.Inputs) == 0 {
 				t.Fatalf("targeted_validation_required carries no inputs")

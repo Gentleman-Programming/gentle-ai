@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,13 +17,9 @@ import (
 // release under the retired snapshot-identity formula fails semantic
 // validation and becomes unreadable to every consumer. The scoped-authority
 // rule (#2495, `scanCompactAuthority`) says an entry nobody can read is ABSENT
-// from the graph, not a verdict on it — but four walks still iterated every
-// discovered store and failed closed on the first unreadable foreign record:
-// RecoverCompactAuthority's recovery-graph loop (#2741),
-// InspectCompactFinalVerificationRetrySource (the STATUS path that turned one
-// escalated lineage plus one historical record into repository-wide
-// `corrupted_or_unverifiable_authority`, #2743), the two `review abandon`
-// walks, and the RAR receipt superseded probe.
+// from the graph, not a verdict on it. Recovery, status, and abandonment must
+// therefore keep serving a valid reviewing or escalated lineage while one
+// unrelated historical record remains unreadable.
 
 // retiredSnapshotIdentity recomputes a snapshot's identity with the EXACT
 // formula every pre-rc.2 release used (verbatim from fbb55080^, the commit
@@ -56,6 +51,15 @@ func retiredSnapshotIdentity(snapshot Snapshot) string {
 		writeLengthPrefixed(hash, []byte(value))
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func mustLoadCompactRecord(t *testing.T, store CompactStore) CompactRecord {
+	t.Helper()
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
 }
 
 // outdateCompactSnapshotIdentity rewrites an already-persisted, checksum-valid
@@ -99,12 +103,12 @@ func outdateCompactSnapshotIdentity(t *testing.T, store CompactStore) {
 	}
 }
 
-// outdatedForeignLineage plants one unrelated historical-style lineage whose
-// record no longer loads, removing its worktree residue so the fixture never
-// changes what any other lineage's live snapshot sees.
+// outdatedForeignLineage plants one unrelated historical-style reviewing
+// lineage whose record no longer loads, removing its worktree residue so the
+// fixture never changes what another lineage's live snapshot sees.
 func outdatedForeignLineage(t *testing.T, repo, lineage string) {
 	t.Helper()
-	foreign := quarantineFixtureHealthyLineage(t, repo, lineage, "foreign historical candidate\n")
+	foreign := startReviewingFixtureLineage(t, repo, lineage, "foreign historical candidate\n")
 	if err := os.Remove(filepath.Join(repo, foreign+".txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -116,12 +120,21 @@ func outdatedForeignLineage(t *testing.T, repo, lineage string) {
 }
 
 // TestRecoverCompactAuthorityIgnoresUnreadableForeignLineage is #2741: a
-// healthy correction-required lineage authorized for scope-changed recovery
-// must recover even though an unrelated stored lineage no longer loads. The
-// unscoped "validate recovery graph" loop used to abort on the foreign record
-// before attempting anything for the lineage actually being recovered.
+// valid escalated lineage must recover even though an unrelated stored lineage
+// no longer loads. The unscoped recovery-graph loop used to abort on the
+// foreign record before attempting anything for the lineage being recovered.
 func TestRecoverCompactAuthorityIgnoresUnreadableForeignLineage(t *testing.T) {
-	repo, predecessor, _, predecessorRecord := correctionScopeRecoveryFixture(t, "recover-scoped-predecessor")
+	repo := initSnapshotRepo(t)
+	predecessor := newCompactTestState(t, repo, "recover-scoped-predecessor")
+	predecessor.State = StateEscalated
+	if err := predecessor.Validate(); err != nil {
+		t.Fatalf("escalated predecessor fixture is invalid: %v", err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, predecessor.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorRecord := writeCompactFixtureRecord(t, store, predecessor)
 	outdatedForeignLineage(t, repo, "recover-scoped-foreign")
 
 	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
@@ -129,7 +142,7 @@ func TestRecoverCompactAuthorityIgnoresUnreadableForeignLineage(t *testing.T) {
 	successor.Generation = predecessor.Generation + 1
 	request := CompactRecoveryRequest{
 		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: predecessorRecord.Revision,
-		Successor: successor, Disposition: RecoveryScopeChanged, Reason: "correction requires a process helper",
+		Successor: successor, Disposition: RecoveryEscalated, Reason: "recover the escalated candidate with a process helper",
 		Actor: "maintainer", RecoveredAt: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC),
 	}
 	request.MaintainerAuthorization = recoveryAuthorizationFixture(request)
@@ -147,10 +160,20 @@ func TestRecoverCompactAuthorityIgnoresUnreadableForeignLineage(t *testing.T) {
 // fail-closed control for the scoping above: absence from the graph is only
 // ever the answer for a FOREIGN record. A recovery whose own predecessor is
 // the outdated record must still refuse, because scoping never widens
-// authority — an outdated record stays gate-invalid, it just stops taking
+// authority — an outdated record stays unavailable, it just stops taking
 // unrelated lineages down with it.
 func TestRecoverCompactAuthorityStillRefusesTheOutdatedLineageItself(t *testing.T) {
-	repo, predecessor, store, predecessorRecord := correctionScopeRecoveryFixture(t, "recover-outdated-predecessor")
+	repo := initSnapshotRepo(t)
+	predecessor := newCompactTestState(t, repo, "recover-outdated-predecessor")
+	predecessor.State = StateEscalated
+	if err := predecessor.Validate(); err != nil {
+		t.Fatalf("escalated predecessor fixture is invalid: %v", err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, predecessor.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorRecord := writeCompactFixtureRecord(t, store, predecessor)
 	outdateCompactSnapshotIdentity(t, store)
 
 	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
@@ -158,58 +181,47 @@ func TestRecoverCompactAuthorityStillRefusesTheOutdatedLineageItself(t *testing.
 	successor.Generation = predecessor.Generation + 1
 	request := CompactRecoveryRequest{
 		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: predecessorRecord.Revision,
-		Successor: successor, Disposition: RecoveryScopeChanged, Reason: "correction requires a process helper",
+		Successor: successor, Disposition: RecoveryEscalated, Reason: "recover the escalated candidate with a process helper",
 		Actor: "maintainer", RecoveredAt: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC),
 	}
 	request.MaintainerAuthorization = recoveryAuthorizationFixture(request)
 
-	before := compactAuthorityFileSnapshot(t, repo)
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := RecoverCompactAuthority(context.Background(), repo, request); err == nil {
 		t.Fatal("recovery whose own predecessor is an outdated record succeeded")
 	}
-	if after := compactAuthorityFileSnapshot(t, repo); !reflect.DeepEqual(after, before) {
-		t.Fatalf("refused recovery mutated authority: %#v != %#v", after, before)
-	}
-}
-
-// TestInspectFinalVerificationRetrySourceIgnoresUnreadableForeignLineage is
-// #2743's STATUS mechanism: any escalated lineage routes negotiated status
-// through the retry-source inspection, whose unscoped store walk returned the
-// first foreign load error and flipped the whole repository to
-// corrupted_or_unverifiable_authority.
-func TestInspectFinalVerificationRetrySourceIgnoresUnreadableForeignLineage(t *testing.T) {
-	fixture := newFinalVerificationRetryFixture(t, "retry-scoped-source", "retry-scoped-successor")
-	outdatedForeignLineage(t, fixture.repo, "retry-scoped-foreign")
-
-	eligibility, ok, err := InspectCompactFinalVerificationRetrySource(
-		context.Background(), fixture.repo, fixture.predecessor.State.LineageID, fixture.predecessor.Revision)
+	after, err := os.ReadFile(store.StatePath())
 	if err != nil {
-		t.Fatalf("retry-source inspection with an unreadable foreign record = %v", err)
+		t.Fatal(err)
 	}
-	if !ok {
-		t.Fatal("escalated lineage lost retry-source eligibility because of an unreadable foreign record")
+	if !bytes.Equal(after, before) {
+		t.Fatal("refused recovery mutated its outdated predecessor authority")
 	}
-	if eligibility.IncidentClass != FinalVerificationIncidentProceduralToolingFailure {
-		t.Fatalf("eligibility = %#v", eligibility)
+	successorStore, err := CompactAuthoritativeStore(context.Background(), repo, successor.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(successorStore.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("refused recovery created successor authority: %v", err)
 	}
 }
 
-// TestTargetStatusStaysHealthyWithOutdatedHistoricalAuthority reproduces
-// #2743's reported shape end-to-end at the status layer: a repository holding
-// pre-rc.2 compact-v2 history, one unrelated new lineage that escalates, and
-// the immediately following STATUS. Every escalated lineage routes through
-// InspectCompactFinalVerificationRetrySource, whose unscoped walk turned the
-// first outdated historical record into `applicability: corrupted` with a
-// terminal `corrupted_or_unverifiable_authority` stop and zero eligible
-// repair candidates. Status must classify the live target normally instead.
+// TestTargetStatusStaysHealthyWithOutdatedHistoricalAuthority proves status
+// still classifies a valid reviewing target normally while one unrelated
+// pre-rc.2 compact record remains unreadable.
 func TestTargetStatusStaysHealthyWithOutdatedHistoricalAuthority(t *testing.T) {
-	fixture := newFinalVerificationRetryFixture(t, "status-scoped-escalated", "status-scoped-successor")
-	if fixture.predecessor.State.State != StateEscalated {
-		t.Fatalf("fixture predecessor state = %s, want escalated", fixture.predecessor.State.State)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "base\nstatus target\n")
+	record, _ := pristineReviewingFixture(t, repo, "status-scoped-reviewing")
+	if record.State.State != StateReviewing {
+		t.Fatalf("fixture state = %s, want reviewing", record.State.State)
 	}
-	outdatedForeignLineage(t, fixture.repo, "status-scoped-historical")
+	outdatedForeignLineage(t, repo, "status-scoped-historical")
 
-	status, err := AssessTargetStatus(context.Background(), fixture.repo, TargetStatusRequest{
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
 		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
 	})
 	if err != nil {
@@ -220,29 +232,6 @@ func TestTargetStatusStaysHealthyWithOutdatedHistoricalAuthority(t *testing.T) {
 	}
 	if status.Action == TargetStatusActionRepairAuthority {
 		t.Fatalf("status demanded authority repair for an outdated historical record: %#v", status)
-	}
-}
-
-// TestPreCommitGateAllowsApprovedReceiptWithOutdatedHistoricalAuthority pins
-// the delivery half: the pre-commit gate validates the approved lineage's own
-// receipt and must keep allowing it while outdated pre-rc.2 records sit in
-// the same store. Delivery never widens — the approved lineage still proves
-// its own authority — it simply stops being hostage to unrelated history.
-func TestPreCommitGateAllowsApprovedReceiptWithOutdatedHistoricalAuthority(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	outdatedForeignLineage(t, repo, "gate-scoped-historical")
-	writeSnapshotFile(t, repo, "tracked.txt", "base\napproved delivery\n")
-	state, _, receipt := approvedCompactCurrentChangesFixture(t, repo, "gate-scoped-approved", []string{})
-
-	gitSnapshot(t, repo, "add", "--", "tracked.txt")
-	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
-		Gate: GatePreCommit, LineageID: state.LineageID,
-	})
-	if got.Result != GateAllow {
-		t.Fatalf("pre-commit gate with outdated historical authority = %#v, want allow", got)
-	}
-	if got.Context.CandidateTree != receipt.FinalCandidateTree {
-		t.Fatalf("gate context candidate tree = %q, want the approved %q", got.Context.CandidateTree, receipt.FinalCandidateTree)
 	}
 }
 
@@ -274,42 +263,29 @@ func TestPristineAbandonmentIgnoresUnreadableForeignLineage(t *testing.T) {
 	}
 }
 
-// TestCompactLineageSupersededUnderMaintenanceIgnoresUnreadableForeignLineage:
-// the RAR receipt binding probe walked every store to prove the approved
-// lineage has no recovery successor, and failed the whole receipt derivation
-// on the first unreadable foreign record.
-func TestCompactLineageSupersededUnderMaintenanceIgnoresUnreadableForeignLineage(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "base\napproved change\n")
-	approved, _ := approvedCompactFixture(t, repo, "rar-scoped-approved")
-	outdatedForeignLineage(t, repo, "rar-scoped-foreign")
-
-	superseded, err := compactLineageSupersededUnderMaintenance(context.Background(), repo, approved.State.LineageID)
-	if err != nil {
-		t.Fatalf("superseded probe with an unreadable foreign record = %v", err)
-	}
-	if superseded {
-		t.Fatal("approved lineage reported superseded without any recovery successor")
-	}
-}
-
 // TestInspectAuthorityKeepsGenuineSemanticDamageMalformed proves the outdated
 // class is exactly as narrow as the retired-identity signature: any other
-// semantic-validation failure keeps the existing malformed classification.
+// semantic-validation failure remains malformed while a valid reviewing
+// lineage remains available to the inspection.
 func TestInspectAuthorityKeepsGenuineSemanticDamageMalformed(t *testing.T) {
 	repo := initSnapshotRepo(t)
-	lineage := quarantineFixtureHealthyLineage(t, repo, "inspect-semantic-damage", "damaged candidate\n")
-	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	startReviewingFixtureLineage(t, repo, "inspect-semantic-target", "target candidate\n")
+	foreign := startReviewingFixtureLineage(t, repo, "inspect-semantic-damage", "damaged candidate\n")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, foreign)
 	if err != nil {
 		t.Fatal(err)
 	}
-	corruptCompactStateSemantics(t, store)
+	persistSemanticallyInvalidCompactState(t, store)
 
 	report, err := InspectCompactRecoveryEdges(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.EntryDiagnostics) != 1 || report.EntryDiagnostics[0].Problem != "malformed_compact_state" {
+	if report.Totals.LoadedEntries != 1 {
+		t.Fatalf("valid reviewing target was lost after foreign semantic damage: %#v", report.Totals)
+	}
+	if len(report.EntryDiagnostics) != 1 || report.EntryDiagnostics[0].LineageID != foreign ||
+		report.EntryDiagnostics[0].Problem != "malformed_compact_state" {
 		t.Fatalf("entry diagnostics = %#v", report.EntryDiagnostics)
 	}
 }

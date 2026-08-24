@@ -16,8 +16,8 @@ func findingIDPrefixJourneys() []Journey {
 		{
 			ID:     "j78-lens-finding-id-prefix-discovery",
 			Review: reviewOptedIn,
-			Title:  "#3417: an exact active-lineage reviewer discovers lens finding-ID prefixes before native admission",
-			Source: "issue #1844 under #3417: exact active-lineage STATUS binds every discovered finding-ID prefix before native admission",
+			Title:  "#3587: an exact active-lineage reviewer discovers lens finding-ID prefixes before native admission",
+			Source: "issue #1844 under #3587: exact active-lineage STATUS binds every discovered finding-ID prefix before native admission",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
@@ -120,11 +120,25 @@ func captureDisclosedFindingIDPrefixes(r *journeyRun, lineage string) error {
 			return fmt.Errorf("capture mapped ID for %q exited %d: %s", lens, observation.ExitCode, firstLine(observation.Stderr))
 		}
 		var captured struct {
+			Schema            string `json:"schema"`
+			Operation         string `json:"operation"`
+			LineageID         string `json:"lineage_id"`
+			State             string `json:"state"`
 			AdmissionDecision string `json:"admission_decision"`
 		}
-		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil || captured.AdmissionDecision != "completed" {
-			return fmt.Errorf("capture mapped ID for %q = %q, %v; want completed native admission", lens, observation.Stdout, err)
+		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil {
+			return fmt.Errorf("decode mapped-ID capture for %q: %w", lens, err)
+		}
+		if captured.Schema == "gentle-ai.review-last-event-closure/v1" {
+			if round != 3 || captured.Operation != "review/capture-result" ||
+				captured.LineageID != lineage || captured.State != "approved" {
+				return fmt.Errorf("terminal mapped-ID capture for %q = %+v", lens, captured)
+			}
+			return requireAtomicLineageBurned(r, lineage)
+		}
+		if captured.AdmissionDecision != "completed" {
+			return fmt.Errorf("capture mapped ID for %q = %q; want an admitted result or terminal closure", lens, observation.Stdout)
 		}
 	}
-	return nil
+	return fmt.Errorf("mapped finding-ID captures never produced terminal last-event closure")
 }

@@ -8,11 +8,11 @@ The parent orchestrator coordinates one native transaction; reviewers, refuters,
 
 2. **Freeze once.** Invoke only the returned START operation and its ordered tokens unchanged. START freezes one compact atomic transaction with an explicit lineage, worktree, and target binding. It ignores every other lineage and worktree. Capture the returned lineage, revision, and target tokens. An exact replay of an active START may return `replayed`; a genuinely new START is independent.
 
-3. **Stay bound.** Every later STATUS, collection, and FINALIZE call for that transaction passes the exact captured lineage, revision, and target tokens. Route only from that transaction's returned `next_transition`; never infer a command from prose, ambient state, a gate, or a stale reply. Do not start another lineage, reuse a burned lineage, or perform ambient recovery. For `execute`, run the exact operation and ordered arguments. For `collect`, satisfy only the named inputs and their exact capture operations, then ask STATUS again with the same binding. For `stop`, run no lifecycle operation.
+3. **Stay bound.** Every later STATUS and collection call for that transaction passes the exact captured lineage, revision, and target tokens. Route only from that transaction's returned `next_transition`; never infer a command from prose, ambient state, a gate, or a stale reply. Do not start another lineage, reuse a burned lineage, or perform ambient recovery. For `execute`, run the exact operation and ordered arguments. For `collect`, satisfy only the named inputs and their exact capture operations, then ask STATUS again with the same binding. For `stop`, run no lifecycle operation.
 
 4. **Terminate atomically.** Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. It reads back successful approval, then burns that exact authority and its artifacts before returning `approved`. No terminal receipt, tombstone, witness, mirror, or delivery authority survives. Unrelated transactions survive unchanged.
 
-Clean FINALIZE success stops with no terminal STATUS. After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay. STATUS is read-only; FINALIZE alone owns mutation and burn. If that STATUS returns `original_finalize_request_required`, replay only the exact original FINALIZE request it identifies. Never blindly replay or invent a new binding.
+The final reviewer, refuter, or targeted-validator capture owns closure. A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot. Never invent a binding or retry from prose.
 
 When v2 returns `forecast`, relay it losslessly in the user's language: preserve every step's order and fields (`step`, `kind`, `reason_code`, `description`) and the horizon. Forecast is informational; route only from `next_transition`.
 
@@ -20,7 +20,7 @@ When v2 returns `forecast`, relay it losslessly in the user's language: preserve
 
 A session in repository A may review an explicitly selected nested target in unrelated repository B only after explicit user authorization. Native Go resolves the requested path to the canonical B worktree root; adapters never parse authorization or roots.
 
-- After B is selected, retain canonical B as the lifecycle working root from selectorless STATUS through consent, collection, correction, validation, FINALIZE, and burn. Do not fall back to A.
+- After B is selected, retain canonical B as the lifecycle working root from selectorless STATUS through consent, collection, correction, targeted validation, and burn. Do not fall back to A.
 - Run provider-issued command tokens exactly. Never append, remove, or rebuild provider-issued command tokens. When a command omits `--cwd`, run it with process cwd B.
 - Opaque `repository_context` can capture or materialize from any process cwd, but the host still retains B for lifecycle continuity. Go owns repository binding; adapters never parse authorization or roots.
 - The same lineage text in A and B is independent. Approval burns B only; A remains untouched.
@@ -52,8 +52,8 @@ Reviewers inspect only the provider-bound immutable trees. Never hand candidate 
 | --- | --- | --- |
 | 01 | canonical initial STATUS above | exactly one current-worktree START preflight; no authority discovery |
 | 02 | exact returned START | one compact lineage/worktree/target binding; retain lineage, revision, and target |
-| 03 | exact-lineage STATUS, collect, and FINALIZE | only returned transaction actions; no ambient resume, reuse, or delivery gate |
-| 04 | successful FINALIZE | native readback, exact authority/artifact burn, then `approved` |
+| 03 | exact-lineage STATUS and collect | only returned transaction actions; no ambient resume, reuse, or delivery gate |
+| 04 | final admitted capture | native readback, exact authority/artifact burn, then `approved` |
 | 05 | terminal lifecycle stop | ordinary repository policy owns any later delivery decision |
 
 <!-- authority-first-terminal-procedure:end -->
@@ -64,16 +64,14 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 
 | Reason codes | Continuation |
 | --- | --- |
-| `captured_verification_evidence_invalid`, `captured_artifacts_unverifiable` | Terminal — maintainer inspects B authority, or `D`. |
-| `captured_result_selection_unavailable`, `final_verification_retry_unavailable` | Terminal — maintainer inspects lineage, or `D`. |
+| `captured_artifacts_unverifiable` | Terminal — maintainer inspects B authority, or `D`. |
+| `captured_result_selection_unavailable` | Terminal — maintainer inspects lineage, or `D`. |
 | `missing_authority_binding` | Terminal — file a bounded defect with lineage, or `D`. |
 | `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal — maintainer inspects authority/lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal — authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal — reduce B scope and start a new transaction, or `D`. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover, or drop `--workspace-overlay` and start fresh; otherwise `D`. |
-| `unchanged_or_unverified_authority` | Terminal — unchanged `review start` resumes its lineage; change B and start new, or `D`. |
-| `corrected_candidate_unavailable`, `correction_repository_verification_failed` | Change B correction candidate, then `S`; do not reuse the pre-correction target and collect new evidence after verification failure. |
-| `original_finalize_request_required` | Re-run `gentle-ai review finalize --lineage <id>` with the exact original content-bound payload. |
+| `corrected_candidate_unavailable` | Change B correction candidate, then `S`; do not reuse the pre-correction target. |
 | `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `gentle-ai review recover`. |
 | `rdd_disabled` | Enable `gentle-ai review mode enable --scope clone --cwd <B>`, then `S`. |
 

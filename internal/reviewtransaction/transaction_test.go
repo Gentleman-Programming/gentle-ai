@@ -112,8 +112,12 @@ func TestFrozenLedgerFindingsHashDetectsTamperedFrozenFindings(t *testing.T) {
 	_ = tx.StartReview()
 	_ = freezeTestFindings(tx, []Finding{{ID: "R1-001", Severity: "CRITICAL"}})
 	tx.Findings[0].Severity = "WARNING"
-	if _, err := ParseTransaction(mustMarshalTransaction(t, *tx)); err == nil {
-		t.Fatal("ParseTransaction() accepted frozen findings that no longer match their ledger binding")
+	var parsed Transaction
+	if err := json.Unmarshal(mustMarshalTransaction(t, *tx), &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(tampered transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err == nil {
+		t.Fatal("Transaction.validate() accepted frozen findings that no longer match their ledger binding")
 	}
 }
 
@@ -333,18 +337,24 @@ func TestTransactionCausalityRoundTripAndLegacyReadCompatibility(t *testing.T) {
 	_ = freezeTestFindings(tx, []Finding{{ID: "R1-001", Severity: "CRITICAL"}})
 	_, _ = tx.ClassifyEvidence([]FindingEvidence{{FindingID: "R1-001", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk fails focused test"}})
 	payload := mustMarshalTransaction(t, *tx)
-	parsed, err := ParseTransaction(payload)
-	if err != nil {
-		t.Fatalf("ParseTransaction(new) error = %v", err)
+	var parsed Transaction
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(new transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err != nil {
+		t.Fatalf("Transaction.validate(new) error = %v", err)
 	}
 	if got := parsed.Classifications["R1-001"].Causality; got != CausalIntroduced || parsed.legacyCausality {
 		t.Fatalf("new causality round trip = %q legacy=%v", got, parsed.legacyCausality)
 	}
 
 	legacyPayload := []byte(strings.Replace(string(payload), `"causal_disposition":"introduced",`, "", 1))
-	legacy, err := ParseTransaction(legacyPayload)
-	if err != nil {
-		t.Fatalf("ParseTransaction(legacy) error = %v", err)
+	var legacy Transaction
+	if err := json.Unmarshal(legacyPayload, &legacy); err != nil {
+		t.Fatalf("json.Unmarshal(legacy transaction) error = %v", err)
+	}
+	if err := legacy.validate(); err != nil {
+		t.Fatalf("Transaction.validate(legacy) error = %v", err)
 	}
 	if !legacy.legacyCausality || legacy.Classifications["R1-001"].Causality != "" || legacy.State != StateFixRequired || !equalStrings(legacy.FixFindingIDs, []string{"R1-001"}) {
 		t.Fatalf("legacy classification was not preserved fail-closed: %#v", legacy)

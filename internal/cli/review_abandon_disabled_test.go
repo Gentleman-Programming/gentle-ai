@@ -209,16 +209,16 @@ func TestReviewStartBooleanFlagHelpDoesNotSuggestSeparateValue(t *testing.T) {
 // the exact shape issue #3124 and its occurrences describe.
 func breakForeignCompactSnapshotIdentity(t *testing.T, repo, lineage string) {
 	t.Helper()
-	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage, "review-state.json")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := store.StatePath()
 	payload, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := record.Load()
+	loaded, err := store.Load()
 	if err != nil {
 		t.Fatalf("fixture lineage %q does not load before it is broken: %v", lineage, err)
 	}
@@ -230,7 +230,7 @@ func breakForeignCompactSnapshotIdentity(t *testing.T, repo, lineage string) {
 	if err := os.WriteFile(statePath, []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, loadErr := record.Load(); loadErr == nil {
+	if _, loadErr := store.Load(); loadErr == nil {
 		t.Fatalf("fixture lineage %q still loads after its snapshot identity was retired", lineage)
 	} else if !strings.Contains(loadErr.Error(), "identity does not match its metadata") {
 		t.Fatalf("fixture lineage %q load error = %v, want a snapshot identity mismatch", lineage, loadErr)
@@ -244,7 +244,7 @@ func breakForeignCompactSnapshotIdentity(t *testing.T, repo, lineage string) {
 func TestReviewAbandonOfAPristineLineageIgnoresAnUnrelatedUnloadableLineage(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "docs/foreign.md", "foreign\n", 0o644)
+	writeReviewStartCandidate(t, repo, "foreign.go", "package foreign\n", 0o644)
 	foreignStarted := atomicStartV2(t, repo, "abandon-foreign-active")
 	runReviewCLIGit(t, repo, "commit", "-qm", "foreign active candidate")
 	breakForeignCompactSnapshotIdentity(t, repo, foreignStarted.LineageID)

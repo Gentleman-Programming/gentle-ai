@@ -113,7 +113,7 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 
 func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T) {
 	reviewEnabledHome(t)
-	t.Run("created and receipt replay", func(t *testing.T) {
+	t.Run("created and closed-review restart", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 		lineage := "review-start-context-reuse"
@@ -127,14 +127,7 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		recreated := runNegotiatedReviewStart(t, repo, lineage)
 		if recreated.Action != "created" || recreated.BaseTree != created.BaseTree || recreated.CandidateTree != created.CandidateTree ||
 			!reflect.DeepEqual(*recreated.ChangedPathManifest, *created.ChangedPathManifest) {
-			t.Fatalf("START after approved authority burn = %#v", recreated)
-		}
-		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(store.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("START after approved authority burn reused a receipt: %v", err)
+			t.Fatalf("START after clean capture closure = %#v", recreated)
 		}
 	})
 
@@ -390,39 +383,22 @@ func assertNegotiatedStartFrozenContext(t *testing.T, repo string, result Review
 	}
 }
 
-func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewIntegrationStartResult, approved bool) {
+func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewIntegrationStartResult, clean bool) {
 	t.Helper()
-	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"reviewed frozen candidate context"},
-	})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
-		t.Fatal(err)
+	legacy := ReviewFacadeStartResult{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
+		SelectedLenses: started.SelectedLenses,
 	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if approved {
-		evidence := filepath.Join(t.TempDir(), "evidence.txt")
-		if err := os.WriteFile(evidence, []byte("focused verification passed\n"), 0o644); err != nil {
-			t.Fatal(err)
+	for order := range legacy.SelectedLenses {
+		findings := []facadeFinding{}
+		if !clean && order == len(legacy.SelectedLenses)-1 {
+			findings = []facadeFinding{{
+				Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate requires correction",
+				ProofRefs:     []string{"tracked.txt:1 changed hunk"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
 		}
-		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidence}, io.Discard); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	next := record.State
-	if err := next.CompleteVerification([]byte("verification failed"), false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(record.Revision, "review/complete-verification", next); err != nil {
-		t.Fatal(err)
+		captureCLIReviewerResultWithFindings(t, repo, legacy, order, findings, &bytes.Buffer{})
 	}
 }
 

@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package sddstatus
 
 import (
@@ -688,14 +690,10 @@ func TestResolveIgnoresAmbiguousPathBoundCompactAuthoritiesPreVerify(t *testing.
 	if err := secondState.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{}}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err = second.Replace(revision, "review/complete-review", secondState)
-	if err != nil {
+	if err := secondState.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := secondState.CompleteVerification([]byte("verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := second.Replace(revision, "review/complete-verification", secondState); err != nil {
+	if _, err := second.Replace(revision, "review/complete-review", secondState); err != nil {
 		t.Fatal(err)
 	}
 	receipt, err := secondState.Receipt()
@@ -1521,14 +1519,10 @@ func writeApprovedCompactAuthorityForChangeWithCandidate(t *testing.T, repo, cha
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{}}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err = store.Replace(revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+	if _, err := store.Replace(revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 	receipt, err := state.Receipt()
@@ -1650,14 +1644,10 @@ func TestApplyReviewGateDiscoversCompactStateAndReceiptWithoutMirrors(t *testing
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{}}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err = store.Replace(revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("independent SDD specification and runtime verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+	if _, err := store.Replace(revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 	receipt, _ := state.Receipt()

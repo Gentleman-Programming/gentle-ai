@@ -85,11 +85,8 @@ func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 		t.Fatalf("disabled archive=%q next=%q blocked=%v, want an unmanaged route to archive",
 			status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
 	}
-	if status.ReviewGate != nil {
-		t.Fatalf("disabled reviewGate = %#v, want structural absence", status.ReviewGate)
-	}
-	if status.ReviewTransaction != nil {
-		t.Fatalf("disabled status fabricated a review transaction: %#v", status.ReviewTransaction)
+	if status.ReviewOffer != nil {
+		t.Fatalf("disabled reviewOffer = %#v, want structural absence", status.ReviewOffer)
 	}
 }
 
@@ -111,7 +108,7 @@ func corruptCloneLocalReviewMode(t *testing.T, repo string) {
 }
 
 // seedScopeChangedApprovedSDDChange leaves a historical scope change behind
-// after FINALIZE burns its baseline authority. The historical review is not a
+// after terminal closure burns its baseline authority. The historical review is not a
 // governing receipt and must not become an SDD archive blocker.
 func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
 	t.Helper()
@@ -119,14 +116,16 @@ func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
 	writeSDDStatusFile(t, root+"/docs/baseline.md", "# baseline\n\nplain prose, no executable content.\n")
 	runReviewCLIGit(t, root, "add", "-A")
 	started := startFacadeReviewResult(t, root, "scope-changed-baseline")
-	finalizeFacadeLineage(t, root, started.LineageID)
+	if started.State != "approved" || started.Action != "closed" {
+		t.Fatalf("baseline zero-lens START = %#v", started)
+	}
 	commitAllSDDStatus(t, root, "baseline reviewed delivery")
 	writeSDDStatusFile(t, root+"/docs/scope-changed.md", "# scope changed\n\nplain prose, delivered after approval.\n")
 	commitAllSDDStatus(t, root, "scope changed after approval")
 }
 
 // TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled retains its stable fixture
-// name while pinning #3417's replacement behavior: FINALIZE burned the old
+// name while pinning #3417's replacement behavior: terminal closure burned the old
 // approval, so a historical scope change has no deciding gate. Enabled status
 // offers a new review but archive proceeds under ordinary repository policy.
 func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
@@ -224,8 +223,8 @@ func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 		{"thin", "--json"},
 	} {
 		status := runSDDCommandJSON(t, RunSDDStatus, args...)
-		if status.ReviewGate != nil || status.ReviewOffer != nil {
-			t.Fatalf("unreadable mode fabricated review state: gate=%#v offer=%#v", status.ReviewGate, status.ReviewOffer)
+		if status.ReviewOffer != nil {
+			t.Fatalf("unreadable mode fabricated review offer: %#v", status.ReviewOffer)
 		}
 		if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
 			t.Fatalf("unreadable mode archive=%q next=%q, want ordinary ready/archive", status.Dependencies.Archive, status.NextRecommended)

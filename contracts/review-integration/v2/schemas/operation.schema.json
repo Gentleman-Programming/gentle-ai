@@ -9,43 +9,6 @@
     "schema": {"const": "gentle-ai.review-integration.operation/v2"},
     "contract": {"const": "gentle-ai.review-integration/v2"},
     "operation": {"$ref": "../../v1/schemas/operation.schema.json#/properties/operation"},
-    "result": {
-      "oneOf": [
-        {"$ref": "#/$defs/finalize"},
-        {"$ref": "gate-result.schema.json"},
-        {"$ref": "../../v1/schemas/operation.schema.json#/$defs/bind_sdd"},
-        {"$ref": "../../v1/schemas/operation.schema.json#/$defs/retry_final_verification"}
-      ]
-    }
-  },
-  "$defs": {
-    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "finalize": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["operation", "lineage_id", "state", "action", "store_revision"],
-      "properties": {
-        "operation": {"const": "review/finalize"},
-        "lineage_id": {"type": "string", "minLength": 1},
-        "state": {"type": "string", "minLength": 1},
-        "action": {"type": "string", "minLength": 1},
-        "store_revision": {"$ref": "#/$defs/sha256"},
-        "eligibility": {"$ref": "status.schema.json#/properties/eligibility"},
-        "next_transition": {"$ref": "status.schema.json#/$defs/next_transition"},
-        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
-        "escalation": {"type": "string", "minLength": 1},
-        "advisory_findings": {"$ref": "../../v1/schemas/operation.schema.json#/$defs/advisory_findings"}
-      },
-      "allOf": [
-        {
-          "if": {"required": ["validation_request"]},
-          "then": {"properties": {"state": {"const": "correction_required"}}}
-        },
-        {
-          "if": {"required": ["advisory_findings"]},
-          "then": {"properties": {"state": {"const": "approved"}}}
-        }
-      ]
-    }
+    "result": {"$ref": "gate-result.schema.json"}
   }
 }
