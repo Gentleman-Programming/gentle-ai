@@ -1213,9 +1213,9 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentClaudeTheme:
 		for _, adapter := range adapters {
-			res, err := theme.InjectClaudeTheme(s.homeDir, adapter)
+			res, err := theme.InjectVisualThemes(s.homeDir, adapter)
 			if err != nil {
-				return fmt.Errorf("sync Claude theme for %q: %w", adapter.Agent(), err)
+				return fmt.Errorf("sync visual themes for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed), res.Files...)
 		}

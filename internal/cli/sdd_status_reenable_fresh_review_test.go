@@ -39,9 +39,6 @@ func dispatchReviewStart(t *testing.T, repo, lineage string, extra ...string) Re
 
 func requireEnabledOrdinaryArchive(t *testing.T, status sddstatus.Status, subject string) {
 	t.Helper()
-	if status.ReviewGate != nil {
-		t.Fatalf("%s reviewGate = %#v, want structural absence without governing review authority", subject, status.ReviewGate)
-	}
 	if status.ReviewOffer == nil || !status.ReviewOffer.Available {
 		t.Fatalf("%s reviewOffer = %#v, want an available non-deciding review invitation", subject, status.ReviewOffer)
 	}
@@ -85,8 +82,8 @@ func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
 	if disabled.Dependencies.Archive != sddstatus.DependencyReady || disabled.NextRecommended != "archive" {
 		t.Fatalf("disabled archive=%q next=%q, want ordinary ready/archive", disabled.Dependencies.Archive, disabled.NextRecommended)
 	}
-	if disabled.ReviewGate != nil || disabled.ReviewOffer != nil {
-		t.Fatalf("disabled status fabricated review state: gate=%#v offer=%#v", disabled.ReviewGate, disabled.ReviewOffer)
+	if disabled.ReviewOffer != nil {
+		t.Fatalf("disabled status fabricated review offer: %#v", disabled.ReviewOffer)
 	}
 
 	// Re-enabling does not turn a burned baseline approval into a governing
@@ -153,9 +150,6 @@ func TestSDDStatusEnabledMissingReceiptIsDeclineNotAStop(t *testing.T) {
 	seedArchiveGatedSDDChange(t, root)
 
 	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate != nil {
-		t.Fatalf("enabled missing-receipt gate = %#v, want structural absence (decline)", status.ReviewGate)
-	}
 	if status.ReviewOffer == nil || !status.ReviewOffer.Available {
 		t.Fatalf("enabled missing-receipt reviewOffer = %#v, want an available invitation", status.ReviewOffer)
 	}

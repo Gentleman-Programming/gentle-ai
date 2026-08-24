@@ -460,7 +460,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// sdd-research adds a default-deny collection executor and the confirmed
 	// pre-proposal handoff to the shared OpenCode/Kilocode overlay. The rendered
 	// settings hash is recomputed from the combined source.
-	const want = "8ff029ce9dfe2de5489c83082cfdf79fac3d65b02490f2685c9a931e52c5ff5e"
+	// #3564 replaces the shared SDD status contract with v2, so the embedded
+	// pre-proposal contract now names the sole public status version.
+	const want = "421237bd384a32355c89991675d9251dd0696afe5209e0b57c0e5030661391b1"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

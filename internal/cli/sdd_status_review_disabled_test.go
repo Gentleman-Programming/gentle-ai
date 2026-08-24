@@ -85,11 +85,8 @@ func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 		t.Fatalf("disabled archive=%q next=%q blocked=%v, want an unmanaged route to archive",
 			status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
 	}
-	if status.ReviewGate != nil {
-		t.Fatalf("disabled reviewGate = %#v, want structural absence", status.ReviewGate)
-	}
-	if status.ReviewTransaction != nil {
-		t.Fatalf("disabled status fabricated a review transaction: %#v", status.ReviewTransaction)
+	if status.ReviewOffer != nil {
+		t.Fatalf("disabled reviewOffer = %#v, want structural absence", status.ReviewOffer)
 	}
 }
 
@@ -226,8 +223,8 @@ func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 		{"thin", "--json"},
 	} {
 		status := runSDDCommandJSON(t, RunSDDStatus, args...)
-		if status.ReviewGate != nil || status.ReviewOffer != nil {
-			t.Fatalf("unreadable mode fabricated review state: gate=%#v offer=%#v", status.ReviewGate, status.ReviewOffer)
+		if status.ReviewOffer != nil {
+			t.Fatalf("unreadable mode fabricated review offer: %#v", status.ReviewOffer)
 		}
 		if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
 			t.Fatalf("unreadable mode archive=%q next=%q, want ordinary ready/archive", status.Dependencies.Archive, status.NextRecommended)

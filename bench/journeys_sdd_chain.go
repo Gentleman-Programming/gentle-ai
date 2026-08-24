@@ -163,9 +163,9 @@ func sddChainJourneys() []Journey {
 				{Name: "fixture: fresh independent verification passes", Fixture: sddReplaceFailedVerifyReport},
 				{Name: "archive is ready without review authority", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
-					After: sddStatusAssertion("disabled archive after the reset-crossing correction", func(status sddStatusV1) error {
-						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || status.ReviewGate != nil || status.ReviewOffer != nil {
-							return fmt.Errorf("disabled archive = archive %q next %q gate=%+v offer=%+v", status.Dependencies.Archive, status.NextRecommended, status.ReviewGate, status.ReviewOffer)
+					After: sddStatusAssertion("disabled archive after the reset-crossing correction", func(status sddStatusV2) error {
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || status.ReviewOffer != nil {
+							return fmt.Errorf("disabled archive = archive %q next %q offer=%+v", status.Dependencies.Archive, status.NextRecommended, status.ReviewOffer)
 						}
 						return nil
 					})},

@@ -47,9 +47,9 @@ func resetReviewEntryHookCallCountForTest() {
 // first, so every real call is provable by the counter above regardless of
 // what OfferReviewAfterVerify itself does.
 //
-// Offers are informational. They do not read runtime receipt authority.
-func reviewOfferForVerify(ctx context.Context, repo, lineageID string) (reviewtransaction.Offer, error) {
+// Offers are informational and mode-only. They do not read runtime authority.
+func reviewOfferForVerify(ctx context.Context, repo string) (reviewtransaction.Offer, error) {
 	reviewEntryHook()
 	reviewEntryHookCallCount++
-	return reviewtransaction.OfferReviewAfterVerify(ctx, repo, reviewtransaction.OfferRequest{LineageID: lineageID})
+	return reviewtransaction.OfferReviewAfterVerify(ctx, repo)
 }

@@ -83,7 +83,7 @@ func TestHybridRestartRequiresByteEqualStateWithoutStorePreference(t *testing.T)
 		},
 		"engram-convention.md":   {"sdd/{change-name}/research", "gentle-ai.sdd-research/v1", "gentle-ai.sdd-preproposal/v1"},
 		"openspec-convention.md": {"research.md", "gentle-ai.sdd-research/v1", "gentle-ai.sdd-preproposal/v1"},
-		"sdd-status-contract.md": {"Native status v1 remains unchanged", "pre-proposal gate", "matching hybrid state"},
+		"sdd-status-contract.md": {"gentle-ai.sdd-status/v2", "pre-proposal gate", "matching hybrid state"},
 	}
 
 	for name, clauses := range contracts {
