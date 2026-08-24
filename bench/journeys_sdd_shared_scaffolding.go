@@ -21,10 +21,10 @@ func sddSharedScaffoldingJourneys() []Journey {
 	}}
 }
 
-func requireSDDUnmanagedOrdinaryArchive(label string) func(sddStatusV1) error {
-	return func(status sddStatusV1) error {
-		if status.ReviewGate != nil || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-			return fmt.Errorf("%s status = %+v, want no durable review gate and ordinary archive readiness", label, status)
+func requireSDDUnmanagedOrdinaryArchive(label string) func(sddStatusV2) error {
+	return func(status sddStatusV2) error {
+		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("%s status = %+v, want ordinary archive readiness", label, status)
 		}
 		return nil
 	}

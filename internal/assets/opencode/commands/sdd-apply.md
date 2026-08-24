@@ -37,7 +37,7 @@ If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
 
 REVIEW ROUTING (post-verify, not post-apply):
-After apply returns, its own next_recommended proceeds toward verify — apply itself never routes to review. The review offer is a post-verify decision (see sdd-verify.md). If the parent observes one, selectorless negotiated STATUS may preflight only the current worktree candidate. The parent executes only the exact returned START, then retains and reuses that transaction's lineage, revision, and target tokens for every subsequent STATUS, capture, and FINALIZE call. It never substitutes direct START, resumes ambient authority, or launches review from the apply executor.
+After apply returns, its own next_recommended proceeds toward verify — apply itself never routes to review. If the parent later observes a fresh `reviewOffer` block, it may present and run only its exact invocation. SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority; the apply executor never launches review.
 
 {{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
 

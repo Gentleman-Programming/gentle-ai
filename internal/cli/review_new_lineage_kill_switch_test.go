@@ -110,7 +110,7 @@ func TestNewLineageKillSwitchOffProducesZeroSideEffectsAcrossEntrySurfaces(t *te
 			}
 		}
 
-		offer, offerErr := reviewtransaction.OfferReviewAfterVerify(context.Background(), repo, reviewtransaction.OfferRequest{LineageID: "kill-switch-off-lineage"})
+		offer, offerErr := reviewtransaction.OfferReviewAfterVerify(context.Background(), repo)
 		if offerErr != nil {
 			t.Fatalf("%s: OfferReviewAfterVerify produced an error while the kill switch is off: %v", pass, offerErr)
 		}

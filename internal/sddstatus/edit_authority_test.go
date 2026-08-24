@@ -294,7 +294,7 @@ func TestBlockedEditAuthorityStatusCarriesConsentEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projected, err := ProjectStatusV1(status)
+	projected, err := ProjectStatusV2(status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestBlockedEditAuthorityStatusCarriesConsentEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	againProjected, err := ProjectStatusV1(again)
+	againProjected, err := ProjectStatusV2(again)
 	if err != nil {
 		t.Fatal(err)
 	}

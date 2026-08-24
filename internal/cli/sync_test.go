@@ -3128,11 +3128,11 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		}
 	}
 
-	// post-apply consumes the parent's exact START and retained transaction
-	// bindings. It must not negotiate canonical STATUS a second time.
+	// post-apply leaves review to the parent after independent verification. It
+	// must not negotiate canonical STATUS or retain review authority itself.
 	for _, required := range []string{
-		"parent executes only the exact returned START",
-		"retains and reuses that transaction's lineage, revision, and target tokens",
+		"fresh `reviewOffer` block",
+		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
 	} {
 		if !strings.Contains(postApply, required) {
 			t.Errorf("synced OpenCode post-apply controller is missing parent-owned routing clause %q", required)

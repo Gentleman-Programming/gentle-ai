@@ -1,12 +1,9 @@
 package sddstatus
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func readSpecCounts(paths []string) (SpecCounts, error) {
@@ -43,36 +40,10 @@ func readText(path string) string {
 	return string(content)
 }
 
-const incompatibleReviewTransactionReason = "bounded review transaction artifact is not a native JSON review transaction; regenerate it from native review authority"
-
-func readReviewTransaction(path, content string) (*reviewtransaction.Transaction, string) {
-	if path == "" && strings.TrimSpace(content) == "" {
-		return nil, "bounded review transaction is missing"
-	}
-	payload := []byte(content)
-	if path != "" {
-		read, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Sprintf("bounded review transaction cannot be read: %v", err)
-		}
-		payload = read
-	}
-	if !strings.HasPrefix(strings.TrimSpace(string(payload)), "{") {
-		if json.Valid(payload) {
-			return nil, "bounded review transaction is invalid: native review transaction must be a JSON object"
-		}
-		return nil, incompatibleReviewTransactionReason
-	}
-	transaction, err := reviewtransaction.ParseTransaction(payload)
-	if err != nil {
-		return nil, fmt.Sprintf("bounded review transaction is invalid: %v", err)
-	}
-	return &transaction, ""
-}
-
-// resolveBoundedRemediation keeps independent SDD verification failures on
-// the runtime attempt path. Receipt or review-gate state has no role in this
-// decision.
+// resolveBoundedRemediation preserves failed-evidence truth without importing
+// review authority. The deferred runtime codecs still validate any historical
+// evidence they own; status only reports whether ordinary SDD evidence requires
+// or completed remediation.
 func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, applyProgress string) RemediationState {
 	if !required {
 		return RemediationState{}
@@ -85,7 +56,7 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, app
 		FailedEvidenceRevision: verify.EvidenceRevision,
 		Reason:                 fmt.Sprintf("verify evidence requires independent SDD remediation for %s: %s", verify.EvidenceRevision, verify.Reason),
 	}
-	evaluation := parseRemediationResult(applyProgress, verify.EvidenceRevision, RemediationBinding{})
+	evaluation := parseRemediationResult(applyProgress, verify.EvidenceRevision)
 	state.Complete = evaluation.Complete
 	state.Required = !evaluation.Complete
 	if state.Complete {

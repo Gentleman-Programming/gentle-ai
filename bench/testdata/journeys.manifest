@@ -24,6 +24,7 @@ j40-sdd-attempt-reset-after-drift
 j41-kill-switch-versus-sdd-pre-verify
 j42-kill-switch-versus-sdd-archive
 j44-sdd-historical-requirement-stale-pass
+j47-disabled-mode-archives-discovered-scope-changed-authority
 j49-status-without-cwd-honors-kill-switch
 j51-negotiated-status-correction-continuation
 j59-current-status-and-start-ignore-sibling-worktree-transaction
