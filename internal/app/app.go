@@ -912,9 +912,11 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 	current, err := state.Read(homeDir)
 	if err != nil {
 		// State file may not exist yet (e.g. pre-state users). Other read
-		// failures, such as invalid JSON, must not overwrite existing state.
+		// failures, such as invalid JSON, must not overwrite existing
+		// state — and must not be swallowed either, otherwise the caller's
+		// new assignments would be silently lost. Surface the error.
 		if !errors.Is(err, os.ErrNotExist) {
-			return nil
+			return fmt.Errorf("read existing state: %w", err)
 		}
 		current = state.InstallState{}
 	}

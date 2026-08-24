@@ -1220,9 +1220,12 @@ func TestPersistAssignmentsSkipsCorruptState(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	persistAssignments(home, model.Selection{
+	err := persistAssignments(home, model.Selection{
 		CodexPhaseModelAssignments: map[string]string{},
 	})
+	if err == nil {
+		t.Fatal("persistAssignments() returned nil for corrupt state.json; want an error so assignments are not silently lost")
+	}
 
 	got, err := os.ReadFile(statePath)
 	if err != nil {
