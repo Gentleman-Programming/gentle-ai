@@ -22,6 +22,8 @@ import (
 // ErrEngramArtifactStoreUnsupported is returned by route/dispatch when the
 // resolved SDD artifact store is Engram: intent.Router only writes to the
 // filesystem, so status alone stays allowed (it is read-only).
+//
+// refusal:by-design operator-knowledge: switching a repo's SDD artifact store away from Engram is a project-wide configuration decision only the operator can make; no single dev-orchestrator invocation can flip it for them
 var ErrEngramArtifactStoreUnsupported = errors.New("dev-orchestrator: route/dispatch are unsupported when the SDD artifact store is engram")
 
 // RunDevOrchestrator is the CLI entry point for
@@ -29,6 +31,7 @@ var ErrEngramArtifactStoreUnsupported = errors.New("dev-orchestrator: route/disp
 // `--dev-orchestrator` install opt-in only selects overlay packaging.
 func RunDevOrchestrator(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
+		// refusal:by-design operator-knowledge: only the operator knows which operation they meant; the message already enumerates every valid one, and no runnable command can pick it for them
 		return errors.New("dev-orchestrator requires an operation: status, route, context, or dispatch")
 	}
 	operation, rest := args[0], args[1:]
@@ -42,6 +45,7 @@ func RunDevOrchestrator(args []string, stdout io.Writer) error {
 	case "dispatch":
 		return runDevOrchestratorDispatch(rest, stdout)
 	default:
+		// refusal:by-design operator-knowledge: only the operator knows which operation they meant; the message already enumerates every valid one, and no runnable command can pick it for them
 		return fmt.Errorf("unknown dev-orchestrator operation %q; want one of status, route, context, or dispatch", operation)
 	}
 }
@@ -82,9 +86,11 @@ func runDevOrchestratorStatus(args []string, stdout io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(*cwd) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which repository they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator status requires --cwd")
 	}
 	if strings.TrimSpace(*change) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which SDD change they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator status requires --change")
 	}
 
@@ -117,9 +123,11 @@ func runDevOrchestratorRoute(args []string, stdout io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(*cwd) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which repository they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator route requires --cwd")
 	}
 	if strings.TrimSpace(*intentText) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows the intent they want routed; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator route requires --intent")
 	}
 
@@ -148,12 +156,15 @@ func runDevOrchestratorContext(args []string, stdout io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(*cwd) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which repository they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator context requires --cwd")
 	}
 	if strings.TrimSpace(*agentName) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which agent contract they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator context requires --agent")
 	}
 	if strings.TrimSpace(*artifact) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which artifact they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator context requires --artifact")
 	}
 
@@ -181,12 +192,15 @@ func runDevOrchestratorDispatch(args []string, stdout io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(*cwd) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which repository they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator dispatch requires --cwd")
 	}
 	if strings.TrimSpace(*change) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which SDD change they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator dispatch requires --change")
 	}
 	if strings.TrimSpace(*agentName) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which default agent they meant; the message already names the required flag, and no runnable command can supply that value for them
 		return errors.New("dev-orchestrator dispatch requires --agent")
 	}
 	if err := intent.ValidateIdentifier(*change); err != nil {
