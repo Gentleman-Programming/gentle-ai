@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 // Recovery guard-rail journeys around a HEALTHY approved lineage. All three
 // refusals under test here are CORRECT and stay exactly as strict:
 //

@@ -2,184 +2,46 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
-func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *testing.T) {
-	reviewEnabledHome(t)
-	legacyRepo := initReviewCLIRepo(t)
-	negotiatedRepo := initReviewCLIRepo(t)
-	for _, repo := range []string{legacyRepo, negotiatedRepo} {
-		writeNegotiatedOperationChange(t, repo, "thin")
-	}
-	lineage := "review-operation-finalize"
-	legacyOutput, legacyStore := finalizeNegotiatedOperationFixture(t, legacyRepo, lineage, false)
-	negotiatedOutput, negotiatedStore := finalizeNegotiatedOperationFixture(t, negotiatedRepo, lineage, true)
-
-	legacyFields := strictReviewJSONFields(t, legacyOutput)
-	wantLegacyFields := []string{"action", "lineage_id", "operation", "state", "store_revision"}
-	if !reflect.DeepEqual(legacyFields, wantLegacyFields) {
-		t.Fatalf("legacy finalize fields = %v, want %v\n%s", legacyFields, wantLegacyFields, legacyOutput)
-	}
-	var legacy ReviewFacadeFinalizeResult
-	decodeStrictReviewJSON(t, legacyOutput, &legacy)
-	envelope := decodeReviewOperationEnvelope(t, negotiatedOutput)
-	if envelope.Operation != ReviewIntegrationOperationFinalize {
-		t.Fatalf("negotiated finalize operation = %q", envelope.Operation)
-	}
-	var negotiated ReviewIntegrationFinalizeResult
-	decodeStrictReviewJSON(t, envelope.Result, &negotiated)
-	if negotiated.Operation != legacy.Operation || negotiated.LineageID != legacy.LineageID || negotiated.State != legacy.State ||
-		negotiated.Action != legacy.Action {
-		t.Fatalf("negotiated finalize result = %#v, legacy %#v", negotiated, legacy)
-	}
-	if legacy.ReceiptPath != "" {
-		t.Fatalf("legacy finalize retained a receipt path %q", legacy.ReceiptPath)
-	}
-	assertNoPrivateReviewOperationFields(t, negotiatedOutput)
-
-	assertApprovedCompactAuthorityBurned(t, legacyStore, lineage)
-	assertApprovedCompactAuthorityBurned(t, negotiatedStore, lineage)
-}
-
-func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing.T) {
-	reviewEnabledHome(t)
-	legacyRepo := initReviewCLIRepo(t)
-	negotiatedRepo := initReviewCLIRepo(t)
-	lineage := "review-operation-binding"
-	for _, repo := range []string{legacyRepo, negotiatedRepo} {
-		writeNegotiatedOperationChange(t, repo, "thin")
-		seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, lineage, reviewtransaction.Target{
-			Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+func TestRetiredBindSDDRejectsBothPublishedContractsWithoutAnEnvelope(t *testing.T) {
+	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+		t.Run(contract, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{"bind-sdd", "--contract", contract, "--cwd", t.TempDir()}, &output)
+			if err == nil || !strings.Contains(err.Error(), "unknown review command") {
+				t.Fatalf("retired bind-sdd error = %v", err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("retired bind-sdd emitted an operation envelope: %q", output.String())
+			}
 		})
-	}
-
-	var legacyOutput bytes.Buffer
-	if err := RunReview([]string{
-		"bind-sdd", "--cwd", legacyRepo, "--change", "thin", "--lineage", lineage, "--expected-binding-revision=",
-	}, &legacyOutput); err != nil {
-		t.Fatal(err)
-	}
-	wantLegacyFields := []string{"authority_revision", "change", "gate_context", "lineage", "receipt_hash", "revision", "schema"}
-	if fields := strictReviewJSONFields(t, legacyOutput.Bytes()); !reflect.DeepEqual(fields, wantLegacyFields) {
-		t.Fatalf("legacy bind-sdd fields = %v, want %v", fields, wantLegacyFields)
-	}
-	var legacy sddstatus.ReviewBinding
-	decodeStrictReviewJSON(t, legacyOutput.Bytes(), &legacy)
-	var negotiatedOutput bytes.Buffer
-	if err := RunReview([]string{
-		"bind-sdd", "--contract", ReviewIntegrationContractV1, "--cwd", negotiatedRepo, "--change", "thin",
-		"--lineage", lineage, "--expected-binding-revision=",
-	}, &negotiatedOutput); err != nil {
-		t.Fatal(err)
-	}
-	envelope := decodeReviewOperationEnvelope(t, negotiatedOutput.Bytes())
-	if envelope.Operation != ReviewIntegrationOperationBindSDD {
-		t.Fatalf("negotiated bind-sdd operation = %q", envelope.Operation)
-	}
-	var negotiated sddstatus.ReviewBinding
-	decodeStrictReviewJSON(t, envelope.Result, &negotiated)
-	if !reflect.DeepEqual(legacy, negotiated) {
-		t.Fatalf("negotiated binding changed identities:\nlegacy=%#v\nnegotiated=%#v", legacy, negotiated)
-	}
-	legacyNative := readReviewOperationRuntimeBinding(t, legacyRepo, "thin")
-	negotiatedNative := readReviewOperationRuntimeBinding(t, negotiatedRepo, "thin")
-	if !reflect.DeepEqual(legacyNative, legacy) || !reflect.DeepEqual(negotiatedNative, negotiated) {
-		t.Fatal("contract negotiation changed native SDD binding authority")
-	}
-	assertNoPrivateReviewOperationFields(t, negotiatedOutput.Bytes())
-}
-
-func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelope(t *testing.T) {
-	reviewEnabledHome(t)
-	fixture := newLegacyCLIFixture(t, "historical-bind-sdd")
-	writeNegotiatedOperationChange(t, fixture.repo, "thin")
-	commonDir := strings.TrimSpace(runReviewCLIGit(t, fixture.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
-	authorityRoot := filepath.Join(commonDir, "gentle-ai")
-	before := readLegacyAuthorityTree(t, authorityRoot)
-
-	var output bytes.Buffer
-	err := RunReview([]string{
-		"bind-sdd", "--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo, "--change", "thin",
-		"--lineage", fixture.lineage, "--expected-binding-revision=",
-	}, &output)
-	if err == nil {
-		t.Fatalf("legacy bind-sdd succeeded: %s", output.String())
-	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	// organic-dx Phase 3b task 3b.4: the negotiated envelope now carries the
-	// same "choose a new lineage for compact authority" route the
-	// non-negotiated START collision already names, regardless of which
-	// operation hit the legacy-read-only lineage.
-	if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != reviewtransaction.LegacyReadOnlyErrorCode ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "review.start" ||
-		!strings.Contains(failure.Message, "choose a new lineage for compact authority") ||
-		strings.Contains(output.String(), fixture.repo) || strings.Contains(output.String(), fixture.store.Dir) {
-		t.Fatalf("legacy bind-sdd failure = %#v\n%s", failure, output.String())
-	}
-	var typed *reviewtransaction.LegacyReadOnlyError
-	if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !errors.As(err, &typed) ||
-		typed.Operation != "review/bind-sdd" || typed.LineageID != fixture.lineage {
-		t.Fatalf("legacy bind-sdd lost typed cause: %#v", err)
-	}
-	if after := readLegacyAuthorityTree(t, authorityRoot); !reflect.DeepEqual(before, after) {
-		t.Fatal("legacy bind-sdd changed authority bytes")
 	}
 }
 
 func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testing.T) {
 	reviewEnabledHome(t)
 	for _, contract := range []string{"", "gentle-ai.review-integration/v3"} {
-		t.Run("finalize_"+contract, func(t *testing.T) {
-			repo := initReviewCLIRepo(t)
-			writeNegotiatedOperationChange(t, repo, "thin")
-			lineage := "review-invalid-finalize"
-			started := startReviewOperationFixture(t, repo, lineage)
-			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			before := readReviewOperationFile(t, store.StatePath())
-			evidence := filepath.Join(t.TempDir(), "evidence.txt")
-			if err := os.WriteFile(evidence, []byte("tests pass\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			var output bytes.Buffer
-			err = RunReviewFacadeFinalize([]string{
-				"--contract=" + contract, "--cwd", repo, "--lineage", lineage, "--evidence", evidence,
-			}, &output)
-			if err == nil || output.Len() != 0 || !bytes.Equal(before, readReviewOperationFile(t, store.StatePath())) {
-				t.Fatalf("invalid finalize contract %q mutated/output: %q, %v", contract, output.String(), err)
-			}
-			if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
-				t.Fatalf("invalid finalize contract published receipt: %v", err)
-			}
-		})
-
-		t.Run("validate_and_bind_"+contract, func(t *testing.T) {
+		t.Run("validate_"+contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeNegotiatedOperationChange(t, repo, "thin")
 			lineage := "review-invalid-read-boundary"
-			_, store := finalizeNegotiatedOperationFixture(t, repo, lineage, false)
-			assertApprovedCompactAuthorityBurned(t, store, lineage)
+			fixture := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, lineage, reviewtransaction.Target{
+				Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+			})
+			store := fixture.Store
 			for _, call := range []struct {
 				name string
 				args []string
 			}{
 				{name: "validate", args: []string{"validate", "--contract=" + contract, "--cwd", repo, "--lineage", lineage, "--gate", string(reviewtransaction.GatePostApply)}},
-				{name: "bind-sdd", args: []string{"bind-sdd", "--contract=" + contract, "--cwd", repo, "--change", "thin", "--lineage", lineage, "--expected-binding-revision="}},
 			} {
 				var output bytes.Buffer
 				err := RunReview(call.args, &output)
@@ -195,9 +57,9 @@ func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testi
 					t.Fatalf("invalid %s contract %q failure = %#v", call.name, contract, failure)
 				}
 			}
-			assertApprovedCompactAuthorityBurned(t, store, lineage)
+			assertArtifactRevision(t, store, fixture.Record.Revision)
 			if _, err := os.Stat(reviewOperationBindingPath(store, "thin")); !os.IsNotExist(err) {
-				t.Fatalf("invalid bind contract published binding: %v", err)
+				t.Fatalf("invalid contract published runtime state: %v", err)
 			}
 		})
 	}
@@ -226,41 +88,6 @@ func TestNegotiatedReviewOperationSchemaAndFixturesAreStrict(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoPrivateReviewOperationFields(t, payload)
-}
-
-func finalizeNegotiatedOperationFixture(t *testing.T, repo, lineage string, negotiated bool) ([]byte, reviewtransaction.CompactStore) {
-	t.Helper()
-	started := startReviewOperationFixture(t, repo, lineage)
-	evidence := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidence, []byte("focused tests pass\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	args := []string{"--cwd", repo, "--lineage", started.LineageID}
-	resultPaths := make([]string, 0, len(started.SelectedLenses))
-	for index, lens := range started.SelectedLenses {
-		result := filepath.Join(t.TempDir(), fmt.Sprintf("reviewer-%d.json", index))
-		payload := fmt.Sprintf(`{"lens":%q,"findings":[],"evidence":["reviewed exact candidate tree"]}`, lens)
-		if err := os.WriteFile(result, []byte(payload), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		resultPaths = append(resultPaths, result)
-	}
-	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
-		t.Fatal(err)
-	}
-	args = append(args, "--captured-results=true", "--evidence", evidence)
-	if negotiated {
-		args = append([]string{"--contract", ReviewIntegrationContractV1}, args...)
-	}
-	var output bytes.Buffer
-	if err := RunReviewFacadeFinalize(args, &output); err != nil {
-		t.Fatal(err)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return output.Bytes(), store
 }
 
 func startReviewOperationFixture(t *testing.T, repo, lineage string) ReviewFacadeStartResult {
@@ -337,19 +164,6 @@ func readReviewOperationFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return payload
-}
-
-func readReviewOperationRuntimeBinding(t *testing.T, repo, change string) sddstatus.ReviewBinding {
-	t.Helper()
-	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, err := store.Status()
-	if err != nil || status.Binding == nil {
-		t.Fatalf("native SDD binding status = %#v, err=%v", status, err)
-	}
-	return *status.Binding
 }
 
 func reviewOperationBindingPath(store reviewtransaction.CompactStore, change string) string {

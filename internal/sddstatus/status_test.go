@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package sddstatus
 
 import (
@@ -335,6 +337,25 @@ func TestResolvePlanningRoutesOmitExpectedBlockersForBothStores(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestResolveMissingProposalStillRecommendsPropose(t *testing.T) {
+	root := t.TempDir()
+	seedPlanningRoute(t, root, "legacy-change", "propose")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "legacy-change"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "propose" {
+		t.Fatalf("NextRecommended = %q, want propose", status.NextRecommended)
+	}
+	if status.Artifacts["proposal"] != ArtifactMissing {
+		t.Fatalf("proposal state = %q, want missing", status.Artifacts["proposal"])
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want no planning-route blockers", status.BlockedReasons)
 	}
 }
 

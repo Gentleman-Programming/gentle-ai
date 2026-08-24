@@ -12,9 +12,8 @@
     "schema": {"const": "gentle-ai.review-integration.failure/v2"},
     "contract": {"const": "gentle-ai.review-integration/v2"},
     "operation": {"enum": [
-      "review.capabilities", "review.start", "review.status", "review.finalize", "review.repair",
-      "review.retry_final_verification", "review.validate", "review.bind_sdd",
-      "review.capture-result", "review.capture-evidence", "review.capture-refuter", "review.capture-validation"
+      "review.capabilities", "review.start", "review.status", "review.repair", "review.validate",
+      "review.capture-correction-plan", "review.capture-result", "review.capture-refuter", "review.capture-validation"
     ]},
     "phase": {"$ref": "../../v1/schemas/failure.schema.json#/properties/phase"},
     "code": {"$ref": "../../v1/schemas/failure.schema.json#/properties/code"},
@@ -35,7 +34,6 @@
   },
   "allOf": [
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
-    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"},
-        {"$ref": "../../v1/schemas/failure.schema.json#/allOf/2"}
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
   ]
 }

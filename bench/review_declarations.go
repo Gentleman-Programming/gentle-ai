@@ -5,7 +5,6 @@ package main
 // deliberately untouched so they can prove their own mode transition.
 var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j01-docs-happy-path":                                                       reviewOptedIn,
-	"j02-high-risk-four-lens":                                                   reviewOptedIn,
 	"j03-kill-switch":                                                           reviewUntouched,
 	"j04-size-does-not-escalate":                                                reviewOptedIn,
 	"j05-gate-without-any-review":                                               reviewOptedIn,
@@ -20,7 +19,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j103-sdd-interrupted-settlement-omits-evidence":                            reviewOptedIn,
 	"j104-repository-context-survives-fresh-process":                            reviewOptedIn,
 	"j105-compiled-provider-capture-retries-same-binding":                       reviewOptedIn,
-	"j106-captured-provider-validator-slot-finalizes-generically":               reviewOptedIn,
+	"j106-captured-provider-validator-terminal-capture":                         reviewOptedIn,
 	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding":        reviewOptedIn,
 	"j108-sdd-post-review-verify-report-is-natively-bound":                      reviewOptedIn,
 	"j109-sdd-legacy-post-review-report-requires-current-attestation":           reviewOptedIn,
@@ -29,6 +28,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged":           reviewOptedIn,
 	"j112-sdd-attempt-settle-survives-review-mode-transition":                   reviewUntouched,
 	"j113-correction-removes-candidate-only-path":                               reviewOptedIn,
+	"j114-last-reviewer-capture-closes-and-burns":                               reviewOptedIn,
 	"j12-rejected-capture-then-recapture":                                       reviewOptedIn,
 	"j13-next-transition-runs-verbatim":                                         reviewOptedIn,
 	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,

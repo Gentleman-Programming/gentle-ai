@@ -210,16 +210,43 @@ fi
 ```bash
 # Run this block as one shell transaction so the EXIT trap remains active.
 # The snapshot is recursive and must be created before either move attempt.
+source="openspec/changes/{change-name}"
+destination="openspec/changes/archive/YYYY-MM-DD-{change-name}"
 snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/sdd-archive.XXXXXX")"
 trap 'rm -rf -- "$snapshot_root"' EXIT
-cp -R "openspec/changes/{change-name}" "$snapshot_root/source"
+cp -R "$source" "$snapshot_root/source"
 
 # Mechanical move (MANDATORY): git mv when tracked, mv otherwise
 mkdir -p openspec/changes/archive
-if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+  printf 'archive destination collision: source %s and destination %s remain unchanged. Resolve the destination collision, then rerun this archive step.\n' "$source" "$destination" >&2
+  exit 1
+fi
+
+if git mv "$source" "$destination"; then
   :
 else
-  if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+  git_mv_status=$?
+  if [ -e "$source" ] || [ -L "$source" ]; then
+    :
+  else
+    printf 'git mv failed with status %s and source %s is absent; refusing plain mv fallback.\n' "$git_mv_status" "$source" >&2
+    exit "$git_mv_status"
+  fi
+  if diff -r "$snapshot_root/source" "$source"; then
+    fallback_source_diff_status=0
+  else
+    fallback_source_diff_status=$?
+  fi
+  if [ "$fallback_source_diff_status" -ne 0 ]; then
+    printf 'git mv failed with status %s and source %s changed; refusing plain mv fallback.\n' "$git_mv_status" "$source" >&2
+    exit "$git_mv_status"
+  fi
+  if [ -e "$destination" ] || [ -L "$destination" ]; then
+    printf 'archive destination collision: source %s and destination %s remain unchanged. Resolve the destination collision, then rerun this archive step.\n' "$source" "$destination" >&2
+    exit 1
+  fi
+  if mv "$source" "$destination"; then
     :
   else
     move_status=$?
@@ -228,13 +255,13 @@ else
 fi
 
 # The source must be gone before comparing the archived tree with its snapshot.
-if [ -e "openspec/changes/{change-name}" ] || [ -L "openspec/changes/{change-name}" ]; then
+if [ -e "$source" ] || [ -L "$source" ]; then
   printf 'archive move left the source directory in place\n' >&2
   exit 1
 fi
 
 # MANDATORY readback: only empty diff output passes.
-if diff -r "$snapshot_root/source" "openspec/changes/archive/YYYY-MM-DD-{change-name}"; then
+if diff -r "$snapshot_root/source" "$destination"; then
   diff_status=0
 else
   diff_status=$?
@@ -247,6 +274,29 @@ fi
 Use today's date in ISO format (e.g., `2026-02-16`).
 
 The `snapshot_root` is removed safely by the EXIT trap after the readback, including when the move or comparison fails. Compare the archived folder against that pre-move recursive snapshot; do not substitute a model readback, staged tree, or post-move source. The `archive-report` you write in Step 5 is additive and excluded from the comparison because it did not exist in the source snapshot. Any non-empty `diff -r` output or non-zero status is truncation, alteration, or an operational failure and FAILS the phase; a missing `diff -r` also FAILS the phase.
+
+The portable destination guard rejects a destination that already exists before either move attempt; it does not provide an atomic cross-process no-clobber guarantee. Do not add a suffix, overwrite, merge, delete, or otherwise choose a destination automatically.
+
+### Historical Malformed Nesting Recovery (Manual Only)
+
+This guidance is only for the historical malformed shape `archive/YYYY-MM-DD-{change-name}/{change-name}/`. Run this block manually only after inspecting the paths:
+
+```bash
+active_source="openspec/changes/{change-name}"
+outer_destination="openspec/changes/archive/YYYY-MM-DD-{change-name}"
+nested_source="$outer_destination/{change-name}"
+
+if [ -e "$active_source" ] || [ -L "$active_source" ] ||
+   [ ! -d "$outer_destination" ] || [ -L "$outer_destination" ] ||
+   [ ! -d "$nested_source" ] || [ -L "$nested_source" ]; then
+  printf 'historical archive recovery refused: active source must be absent, and outer destination and nested source must be real directories; all paths remain unchanged. Resolve the ambiguous shape manually.\n' >&2
+  exit 1
+fi
+
+mv "$nested_source" "$active_source"
+```
+
+Never automatically delete, overwrite, or merge the outer archive directory. If the active source exists or is a symlink, the outer destination or nested source is not a real directory, or the shape is otherwise ambiguous, stop and resolve the paths manually. After the active source is restored and the collision is resolved, rerun this archive step.
 
 ### Step 4: Verify Archive
 

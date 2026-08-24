@@ -1493,8 +1493,8 @@ func waveOneJourneys() []Journey {
 		{
 			ID:     "j51-negotiated-status-correction-continuation",
 			Review: reviewOptedIn,
-			Title:  "#3417: selectorless STATUS starts only a fresh candidate; correction continues through its exact active lineage",
-			Source: "issue #2044 under #3417: selectorless STATUS is fresh by design, while every active correction continuation carries its exact lineage",
+			Title:  "#3587: selectorless STATUS starts only a fresh candidate; correction continues through its exact active lineage",
+			Source: "issue #2044 under #3587: selectorless STATUS is fresh by design, while every active correction continuation carries its exact lineage",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
@@ -1506,14 +1506,16 @@ func waveOneJourneys() []Journey {
 				{Name: "capture one blocking finding and finish the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return captureExactSelectedReviewerSlots(r, correctedDeliveryLineage, true)
 				}},
-				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
-					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
-					After: requireReviewState("correction_required", correctedDeliveryLineage)},
-				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
-					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "capture the bounded correction plan from the exact STATUS binding", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, correctedDeliveryLineage, 2)
+				}},
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
-				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
-				{Name: "post-correction exact active-lineage status requests targeted validation and burns on completion", Requires: finalizeValidationCapability, Composite: completeBurnedCorrectedReview},
+				{Name: "post-correction exact active-lineage validator capture burns on completion", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+					return captureProviderValidatorSlotFor(r, correctedDeliveryLineage)
+				}},
+				{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageBurned(r, correctedDeliveryLineage)
+				}},
 			},
 		},
 		{

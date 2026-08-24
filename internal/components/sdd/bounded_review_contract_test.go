@@ -43,8 +43,8 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"burns that exact authority and its artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
-		"Clean FINALIZE success stops with no terminal STATUS.",
-		"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+		"The final reviewer, refuter, or targeted-validator capture owns closure.",
+		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 		"### Cross-repository lifecycle root",
 		"explicit user authorization",
@@ -57,6 +57,15 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Approval burns B only; A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
+		"### Research and Pre-Proposal Gate (MANDATORY)",
+		"immediately after `sdd-explore`",
+		"selected research is `done` or research is unselected",
+		"product decisions are `confirmed`",
+		"evidence references are valid",
+		"one lossless grouped prompt",
+		"persist the pending state before prompting",
+		"STOP without invoking `sdd-propose`",
+		"Native `gentle-ai.sdd-status/v1` remains unchanged",
 	}
 }
 
@@ -68,8 +77,8 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *test
 		"burns that exact authority and its artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
-		"Clean FINALIZE success stops with no terminal STATUS.",
-		"After any non-clean FINALIZE result, malformed or no output, transport loss, or post-mutation processing failure, issue exactly one retained target-bound read-only STATUS before replay.",
+		"The final reviewer, refuter, or targeted-validator capture owns closure.",
+		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 	} {
 		if !strings.Contains(content, want) {
@@ -100,10 +109,8 @@ func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T
 	inventory := content[startIndex:endIndex]
 
 	for _, code := range []string{
-		"captured_verification_evidence_invalid",
 		"captured_artifacts_unverifiable",
 		"captured_result_selection_unavailable",
-		"final_verification_retry_unavailable",
 		"missing_authority_binding",
 		"corrupted_or_unverifiable_authority",
 		"manual_intervention_required",
@@ -111,10 +118,7 @@ func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T
 		"empty_base_diff_bootstrap_required",
 		"lens_context_budget_exceeded",
 		"staged_workspace_overlay_recovery_unavailable",
-		"unchanged_or_unverified_authority",
 		"corrected_candidate_unavailable",
-		"correction_repository_verification_failed",
-		"original_finalize_request_required",
 		"recovery_scope_unchanged",
 		"rdd_disabled",
 	} {
@@ -124,10 +128,7 @@ func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T
 	}
 
 	for _, group := range []string{
-		"| `captured_verification_evidence_invalid`, `captured_artifacts_unverifiable` |",
-		"| `captured_result_selection_unavailable`, `final_verification_retry_unavailable` |",
 		"| `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` |",
-		"| `corrected_candidate_unavailable`, `correction_repository_verification_failed` |",
 	} {
 		if strings.Count(inventory, group) != 1 {
 			t.Errorf("stop inventory lost grouped continuation %q", group)
@@ -196,12 +197,12 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		"orchestrator": {
 			"Selectorless STATUS only preflights the current worktree candidate",
 			"Invoke only the returned START operation and its ordered tokens unchanged",
-			"Every later STATUS, collection, and FINALIZE call",
+			"Every later STATUS and collection call",
 			"For `execute`", "For `collect`", "For `stop`",
 		},
 		"post-apply": {
 			"exact returned START",
-			"exact-lineage STATUS, collect, and FINALIZE",
+			"exact-lineage STATUS and collect",
 			"native readback, exact authority/artifact burn, then `approved`",
 		},
 	}
@@ -287,6 +288,9 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClausesFor(agent.ID))
+			if strings.Count(content, researchLifecycleContract()) != 1 {
+				t.Fatal("rendered orchestrator must contain one canonical research lifecycle")
+			}
 			// The retired WorkRun commands are gone from the assets, so nothing
 			// here may require them. internal/assets/assets_test.go owns the
 			// inverse assertion that they never come back.
@@ -322,6 +326,61 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 	}
 	if got := sddOrchestratorAsset(model.AgentPi); got != "generic/sdd-orchestrator.md" {
 		t.Fatalf("Pi orchestrator asset = %q, want generic adapter", got)
+	}
+}
+
+func TestOpenCodeOrchestratorAddsOnlyOneConcurrentReviewerGroupContract(t *testing.T) {
+	const openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
+		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
+		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
+
+	for _, test := range []struct {
+		name  string
+		agent model.AgentID
+		count int
+	}{
+		{name: "opencode", agent: model.AgentOpenCode, count: 1},
+		{name: "claude", agent: model.AgentClaudeCode},
+		{name: "codex", agent: model.AgentCodex},
+		{name: "kilocode", agent: model.AgentKilocode},
+		{name: "generic", agent: model.AgentPi},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := strings.Count(renderSDDOrchestratorAsset(test.agent), openCodeConcurrentReviewerGroupContract); got != test.count {
+				t.Fatalf("rendered %s concurrent reviewer group contract count = %d, want %d", test.name, got, test.count)
+			}
+		})
+	}
+
+	entries, err := assets.FS.ReadDir("opencode/commands")
+	if err != nil {
+		t.Fatalf("read OpenCode command assets: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		t.Run("command/"+entry.Name(), func(t *testing.T) {
+			content := renderBoundedReviewAsset(model.AgentOpenCode, "opencode/commands/"+entry.Name())
+			if got := strings.Count(content, openCodeConcurrentReviewerGroupContract); got != 0 {
+				t.Fatalf("rendered OpenCode command concurrent reviewer group contract count = %d, want 0", got)
+			}
+		})
+	}
+
+	preserved := "Operator-owned prompt.\n\n#### Review Execution Contract\n\n" +
+		"Legacy managed review contract.\n\n" + openCodeConcurrentReviewerGroupContract +
+		"\n\n#### Cost and Context Balance\n\nOperator-owned balance guidance.\n"
+	once := renderPreservedOpenCodeOrchestratorPrompt(preserved, model.AgentOpenCode)
+	twice := renderPreservedOpenCodeOrchestratorPrompt(once, model.AgentOpenCode)
+	if got := strings.Count(once, openCodeConcurrentReviewerGroupContract); got != 1 {
+		t.Fatalf("preserved OpenCode prompt concurrent reviewer group contract count after first render = %d, want 1", got)
+	}
+	if got := strings.Count(twice, openCodeConcurrentReviewerGroupContract); got != 1 {
+		t.Fatalf("preserved OpenCode prompt concurrent reviewer group contract count after second render = %d, want 1", got)
+	}
+	if twice != once {
+		t.Fatal("preserved OpenCode prompt rendering is not idempotent")
 	}
 }
 
@@ -459,8 +518,8 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndAtomic(t *testing.T) {
 	want := []authorityFirstRow{
 		{order: 1, operation: "canonical initial STATUS above", result: "exactly one current-worktree START preflight; no authority discovery"},
 		{order: 2, operation: "exact returned START", result: "one compact lineage/worktree/target binding; retain lineage, revision, and target"},
-		{order: 3, operation: "exact-lineage STATUS, collect, and FINALIZE", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
-		{order: 4, operation: "successful FINALIZE", result: "native readback, exact authority/artifact burn, then `approved`"},
+		{order: 3, operation: "exact-lineage STATUS and collect", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
+		{order: 4, operation: "final admitted capture", result: "native readback, exact authority/artifact burn, then `approved`"},
 		{order: 5, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
 	}
 	if len(rows) != len(want) {
@@ -486,7 +545,7 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
 			}
-			for _, want := range []string{"Selectorless STATUS only preflights the current worktree candidate", "Route only from that transaction's returned `next_transition`", "Forecast is informational; route only from `next_transition`", "Clean FINALIZE success stops with no terminal STATUS."} {
+			for _, want := range []string{"Selectorless STATUS only preflights the current worktree candidate", "Route only from that transaction's returned `next_transition`", "Forecast is informational; route only from `next_transition`", "The final reviewer, refuter, or targeted-validator capture owns closure."} {
 				if !strings.Contains(content, want) {
 					t.Errorf("rendered orchestrator missing forecast contract %q", want)
 				}

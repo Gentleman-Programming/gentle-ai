@@ -3,9 +3,7 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -189,19 +187,22 @@ func TestResolveRDDModeNeverCreatesState(t *testing.T) {
 	}
 }
 
-func TestDisabledRDDRejectsStartsAndFreezesActiveAuthority(t *testing.T) {
+func TestDisabledRDDRejectsStartsAndLeavesCurrentOpenAuthorityIntact(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
-	gitSnapshot(t, repo, "add", "tracked.txt")
-	gitSnapshot(t, repo, "commit", "-m", "candidate")
-	_, _, receipt := approvedCompactRevisionFixture(t, repo, "rdd-mode-frozen")
+	state := newCompactTestState(t, repo, "rdd-mode-frozen")
+	_, store := startReviewingCompactAuthority(t, repo, state)
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	global := RDDGlobalMode{Value: "off", RecordedAt: time.Now().UTC()}
 	if _, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationStart); !errors.Is(err, ErrRDDDisabled) {
 		t.Fatalf("disabled start error = %v, want ErrRDDDisabled", err)
 	}
 	var disabled *RDDDisabledError
-	_, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationMutate)
+	_, err = AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationMutate)
 	if !errors.As(err, &disabled) || disabled.Operation != RDDOperationMutate {
 		t.Fatalf("disabled mutation error = %v, want typed RDDDisabledError", err)
 	}
@@ -211,8 +212,13 @@ func TestDisabledRDDRejectsStartsAndFreezesActiveAuthority(t *testing.T) {
 	if _, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationAbandon); err != nil {
 		t.Fatalf("disabled mode rejected sanctioned abandonment: %v", err)
 	}
-	if err := receipt.Validate(); err != nil {
-		t.Fatalf("disabled mode broke receipt validation: %v", err)
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision || after.State.State != StateReviewing ||
+		after.State.CurrentSnapshot.Identity != before.State.CurrentSnapshot.Identity {
+		t.Fatalf("disabled mode changed current open authority: before=%#v after=%#v", before, after)
 	}
 }
 
@@ -230,14 +236,12 @@ func TestReEnabledRDDAuthorizesAFreshReviewOfTheCurrentCandidate(t *testing.T) {
 	if disabled.Enabled() {
 		t.Fatalf("clone-local disable did not take effect: %#v", disabled)
 	}
-	// While disabled, starting a review is still a typed stop.
 	var stop *RDDDisabledError
 	err = AuthorizeRDDCandidate(disabled)
 	if !errors.As(err, &stop) || !errors.Is(err, ErrRDDDisabled) || stop.Operation != RDDOperationStart {
 		t.Fatalf("disabled candidate error = %v, want a typed RDDDisabledError start stop", err)
 	}
 
-	// The user keeps working with the kill switch off.
 	writeSnapshotFile(t, repo, "recovered.txt", "work authored while review was disabled\n")
 	gitSnapshot(t, repo, "add", "recovered.txt")
 	gitSnapshot(t, repo, "commit", "-m", "work authored while review was disabled")
@@ -253,114 +257,21 @@ func TestReEnabledRDDAuthorizesAFreshReviewOfTheCurrentCandidate(t *testing.T) {
 		t.Fatalf("re-enable stranded the current candidate: %v", err)
 	}
 
-	// The recovery path must actually reach a receipt, and that receipt must be
-	// bound to the bytes the review froze rather than to any earlier approval.
-	state, _, receipt := approvedCompactRevisionFixture(t, repo, "rdd-recovery")
-	if err := receipt.Validate(); err != nil {
-		t.Fatalf("recovery receipt is invalid: %v", err)
-	}
-	subject, err := VerificationSubjectFromSnapshot(state.CurrentSnapshot)
+	state := newCompactTestState(t, repo, "rdd-recovery")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
 	if err != nil {
-		t.Fatalf("VerificationSubjectFromSnapshot error = %v", err)
+		t.Fatal(err)
 	}
-	if receipt.FinalCandidateTree != subject.CandidateTree {
-		t.Fatalf("recovery receipt tree = %q, want the reviewed candidate tree %q",
-			receipt.FinalCandidateTree, subject.CandidateTree)
-	}
-}
-
-// The invariant that survives is content binding, not authorship time. A
-// receipt issued before the disabled window may never approve the bytes that
-// exist after re-enabling, and nothing approves without a review having run.
-// The binding itself is enforced by the native receipt authority path
-// (rar_native_receipt.go plus the compact store), so this test asserts the
-// delegation instead of restating the rule in the kill switch.
-func TestReEnabledRDDNeverInheritsAPreDisableApproval(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "reviewed before the kill switch\n")
-	gitSnapshot(t, repo, "add", "tracked.txt")
-	gitSnapshot(t, repo, "commit", "-m", "reviewed before the kill switch")
-	staleState, _, staleReceipt := approvedCompactRevisionFixture(t, repo, "rdd-stale-approval")
-	stalePayload, err := canonicalRARReceiptPayload(staleReceipt)
+	revision, err := store.Replace("", "review/start", state)
 	if err != nil {
-		t.Fatalf("canonicalRARReceiptPayload error = %v", err)
+		t.Fatal(err)
 	}
-	staleDigest := sha256.Sum256(stalePayload)
-	staleRef := fmt.Sprintf("sha256:%x", staleDigest)
-
-	global := RDDGlobalMode{Value: "on", RecordedAt: time.Now().UTC().Add(-time.Hour)}
-	disabled, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", global)
-	if err != nil {
-		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
-	}
-	writeSnapshotFile(t, repo, "tracked.txt", "changed while review was disabled\n")
-	gitSnapshot(t, repo, "add", "tracked.txt")
-	gitSnapshot(t, repo, "commit", "-m", "changed while review was disabled")
-	enabled, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeUnset, disabled.Revision, global)
-	if err != nil {
-		t.Fatalf("SetCloneLocalRDDMode(clear) error = %v", err)
-	}
-	if err := AuthorizeRDDCandidate(enabled); err != nil {
-		t.Fatalf("re-enable stranded the changed candidate: %v", err)
-	}
-
-	repository, err := OpenRARAuthorityRepository(context.Background(), repo)
-	if err != nil {
-		t.Fatalf("OpenRARAuthorityRepository error = %v", err)
-	}
-
-	// Nothing approves without an actual review: a started-but-unreviewed
-	// lineage over the current bytes derives no receipt and locks no authority.
-	started := newCompactRevisionState(t, repo, "rdd-unreviewed")
-	startedStore, err := CompactAuthoritativeStore(context.Background(), repo, "rdd-unreviewed")
-	if err != nil {
-		t.Fatalf("CompactAuthoritativeStore error = %v", err)
-	}
-	if _, err := startedStore.Replace("", "review/start", started); err != nil {
-		t.Fatalf("start fresh review error = %v", err)
-	}
-	if _, err := started.Receipt(); err == nil {
-		t.Fatal("a started-but-unreviewed candidate derived a receipt")
-	}
-	if _, _, release, err := repository.lockNativeReceipt(context.Background(), "rdd-unreviewed", staleRef); err == nil {
-		release()
-		t.Fatal("an unreviewed candidate locked native receipt authority")
-	}
-
-	// A genuine fresh review of the current bytes reaches its own receipt, and
-	// the pre-disable receipt is refused for it because it binds other bytes.
-	freshState, _, freshReceipt := approvedCompactRevisionFixture(t, repo, "rdd-recovery")
-	freshSubject, err := VerificationSubjectFromSnapshot(freshState.CurrentSnapshot)
-	if err != nil {
-		t.Fatalf("VerificationSubjectFromSnapshot error = %v", err)
-	}
-	staleSubject, err := VerificationSubjectFromSnapshot(staleState.CurrentSnapshot)
-	if err != nil {
-		t.Fatalf("VerificationSubjectFromSnapshot(stale) error = %v", err)
-	}
-	if staleSubject.CandidateTree == freshSubject.CandidateTree {
-		t.Fatal("the disabled window did not change the candidate bytes")
-	}
-	if staleReceipt.FinalCandidateTree == freshSubject.CandidateTree {
-		t.Fatal("the pre-disable receipt is bound to the post-re-enable bytes")
-	}
-	if _, _, release, err := repository.lockNativeReceipt(context.Background(), "rdd-recovery", staleRef); err == nil {
-		release()
-		t.Fatal("a pre-disable receipt approved the post-re-enable candidate")
-	}
-	freshPayload, err := canonicalRARReceiptPayload(freshReceipt)
-	if err != nil {
-		t.Fatalf("canonicalRARReceiptPayload(fresh) error = %v", err)
-	}
-	freshDigest := sha256.Sum256(freshPayload)
-	native, boundSubject, release, err := repository.lockNativeReceipt(
-		context.Background(), "rdd-recovery", fmt.Sprintf("sha256:%x", freshDigest))
-	if err != nil {
-		t.Fatalf("fresh receipt did not govern the reviewed candidate: %v", err)
-	}
-	defer release()
-	if boundSubject.CandidateTree != freshSubject.CandidateTree || native.Compact == nil {
-		t.Fatalf("fresh native authority = %#v bound to %#v", native, boundSubject)
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+	})
+	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateReviewing ||
+		status.Revision != revision || status.Projection.CurrentCandidateTree != state.CurrentSnapshot.CandidateTree {
+		t.Fatalf("re-enabled current open candidate status = %#v, %v", status, err)
 	}
 }
 

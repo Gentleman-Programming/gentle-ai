@@ -21,6 +21,11 @@ const (
 	compactTargetedValidatorResultFile = "result.json"
 )
 
+// ErrCompactRoleResultSlotPartiallyPublished reports the short publication
+// window where a concurrent reader observed one immutable slot sidecar before
+// its pair. Callers may retry discovery; they must never admit the partial slot.
+var ErrCompactRoleResultSlotPartiallyPublished = errors.New("provider role result slot is partially published") // refusal:by-design human-authority: interrupted immutable evidence requires maintainer inspection
+
 type compactRoleResultSlotKind string
 
 const (
@@ -282,7 +287,7 @@ func ReadCompactRoleResultSlot(storeDir string, key compactRoleResultSlotKey) (C
 		return CompactRoleResultSlot{}, nil
 	}
 	if payloadMissing || digestMissing {
-		return CompactRoleResultSlot{}, errors.New("provider role result slot is partially published") // refusal:by-design human-authority: interrupted immutable evidence requires maintainer inspection
+		return CompactRoleResultSlot{}, ErrCompactRoleResultSlotPartiallyPublished
 	}
 	digest := strings.TrimSpace(string(digestPayload))
 	if !validSHA256(digest) || compactPreservedPayloadDigest(payload) != digest {

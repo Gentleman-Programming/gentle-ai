@@ -37,7 +37,7 @@ func init() {
 			"Opt-in anyway: the core and every prior axis measure the NEGOTIATED lifecycle exclusively. This axis measures the DIRECT/manual compatibility surfaces the execution contract explicitly keeps alongside it. \"N core journeys\" and \"N plus compatibility\" must never look alike, because the whole point of #2447 is that the two populations are not interchangeable.",
 			"cw01 pins the issue #2447 fix: a direct `review start --base-ref ... --committed-only` over a candidate large enough to select a reviewer lens now refuses before creating any lineage, naming the negotiated form. Before the fix (verified by running this exact journey against a pre-fix binary) it exited 0, created a lineage, and no reviewer lens could ever complete it -- the trap the issue reports. The journey also proves the refusal is idempotent (repeating the identical call produces byte-identical output), which is this benchmark's only black-box way to show nothing was persisted on the first attempt.",
 			"cw02 pins a sibling surface of the same shape: the hyphenated `review-start` (note: no space) v1-compatibility verb, registered in internal/app/app.go alongside `review start`. It has refused unconditionally since before this axis existed. It belongs here because an axis about direct/legacy start surfaces that omitted the one already-closed door would be an incomplete map of exactly the territory #2447 is about.",
-			"cw03 proves the surface #2447's fix deliberately leaves open still completes a review end to end: `review capture-result --cwd` (review-ledger-contract.md: \"Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need --cwd\") drives a negotiated-started review through capture, finalize and a gate WITHOUT ever supplying --repository-context. This is the direct/manual capture path the execution contract still names as supported, and #2447's maintainer decision explicitly kept it: closing direct START does not close direct capture/finalize.",
+			"cw03 proves the surface #2447's fix deliberately leaves open still completes a review end to end: `review capture-result --cwd` (review-ledger-contract.md: \"Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need --cwd\") drives a negotiated-started review through the terminal capture WITHOUT ever supplying --repository-context. This is the direct/manual capture path the execution contract still names as supported, and #3587 makes its final capture close and burn the review.",
 			"cw04 reproduces issue #2885 at the public direct-route boundary, extracts the exact unbound recovery command from the refusal, and executes it without an agent guess or transport-admission failure.",
 			"Surveyed from internal/app/app.go and excluded from this slice, with reasons: `review-resume`, `review-bundle-export`, `review-bundle-import`, and `review-validate` operate over authority the core corpus's ordinary lifecycle journeys already create and exercise through their own verbs -- they are not START-shaped, so they carry none of #2447's specific gap (a route that CREATES a lineage nothing can complete). `review-step` is structurally identical to cw02's already-closed shape (a permanent read-only refusal naming the compact verb) and would duplicate it rather than add coverage. The retired `--result` finalize flag no longer exists in the flag set at all (internal/cli/review_facade.go), so it is not a surface a caller can reach and is not a corpus member.",
 		},
@@ -150,7 +150,7 @@ func compatAssertHyphenatedStartRefuses(_ *Sandbox, observation Observation) err
 }
 
 // ---------------------------------------------------------------------------
-// cw03 -- negotiated start, then the direct --cwd capture/finalize/gate path
+// cw03 -- negotiated start, then the direct --cwd last-capture closure path
 // ---------------------------------------------------------------------------
 
 // compatCaptureAllLensesDirectCwd is captureAllLenses's sibling: it drives
@@ -241,24 +241,18 @@ func compatibilityJourneys() []Journey {
 		{
 			ID:     "cw03-negotiated-start-then-direct-cwd-capture-completes",
 			Review: reviewOptedIn,
-			Title:  "A negotiated-started review completes end to end through the direct --cwd capture/finalize path, never touching a repository-context handle",
-			Source: "review-ledger-contract.md: \"Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need --cwd\" -- the surface issue #2447's fix deliberately leaves open for direct/manual callers",
+			Title:  "#3587: a negotiated-started review closes on the final direct --cwd capture, never touching a repository-context handle",
+			Source: "review-ledger-contract.md: \"Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need --cwd\"; #3587 makes that final capture the terminal event for direct/manual callers",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage auth code", Fixture: stageAuthCode},
 				{Name: "negotiated review start, run verbatim from next-transition", Requires: statusCapability,
 					Composite: executeNextTransitionVerbatim},
-				{Name: "capture every lens directly via --cwd, never --repository-context", Requires: captureResultCapability,
+				{Name: "capture every lens directly via --cwd, never --repository-context; the last capture closes", Requires: captureResultCapability,
 					Composite: compatCaptureAllLensesDirectCwd},
-				{Name: "finalize with captured results, direct --cwd", Requires: finalizeResultsCapability,
-					Args: productArgs("review", "finalize", "--captured-results=true"), After: compatAssertNoRepositoryContext},
-				// captureFinalEvidence (journeys.go) already drives `review
-				// capture-evidence --cwd ...` -- no --repository-context --
-				// so it is reused verbatim rather than duplicated here.
-				{Name: "capture final evidence directly via --cwd", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence, direct --cwd", Requires: finalizeEvidenceCapability,
-					Args: productArgs("review", "finalize", "--captured-evidence=true"), After: compatAssertNoRepositoryContext},
-				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+				{Name: "the direct final capture burns the negotiated lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageBurned(r, r.sandbox.Lineage)
+				}},
 			},
 		},
 	}

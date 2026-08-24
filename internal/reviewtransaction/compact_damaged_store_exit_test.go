@@ -116,33 +116,6 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		return err.Error()
 	}
 
-	// Wave 7 S3a: `review reconcile-authority` retired with no replacement,
-	// so a reconcilable pre-contract edge's fate now depends only on
-	// whether the successor is pristine -- this fixture's is, so reclaim
-	// names `review abandon`, the same as any other pristine forged
-	// successor (the subtest below). The renamed subtest documents that
-	// the reconcile-specific continuation this test used to pin is gone.
-	t.Run("reconcilable pre-contract edge names abandon, reconciliation retired", func(t *testing.T) {
-		repo := initSnapshotRepo(t)
-		_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
-		refusal := reclaim(t, repo, successor.State.LineageID)
-		for _, want := range []string{
-			"gentle-ai review abandon",
-			"--lineage \"" + successor.State.LineageID + "\"",
-			"--expected-revision \"" + successor.Revision + "\"",
-			CompactAbandonAuthorizationSchema,
-		} {
-			if !strings.Contains(refusal, want) {
-				t.Fatalf("reclaim refusal does not name %q:\n%s", want, refusal)
-			}
-		}
-		if strings.Contains(refusal, "gentle-ai review reconcile-authority") {
-			t.Fatalf("reclaim named the retired reconcile-authority verb:\n%s", refusal)
-		}
-		abandonPerEligibility(t, repo, successor.State.LineageID, "clear the damaged entry")
-		requireAuthoritativeInventory(t, repo)
-	})
-
 	t.Run("pristine forged successor names abandon", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, successor, _ := forgedRecoveryPair(t, repo, "reclaim", "forged reclaim target\n")

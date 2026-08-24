@@ -3,6 +3,9 @@ package assets
 import (
 	"encoding/json"
 	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -231,10 +234,12 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/commands/sdd-init.md",
 		"claude/commands/sdd-new.md",
 		"claude/commands/sdd-onboard.md",
+		"claude/commands/sdd-research.md",
 		"claude/commands/sdd-status.md",
 		"claude/commands/sdd-verify.md",
 		"claude/agents/sdd-init.md",
 		"claude/agents/sdd-onboard.md",
+		"claude/agents/sdd-research.md",
 		"claude/agents/review-risk.md",
 		"claude/agents/review-readability.md",
 		"claude/agents/review-reliability.md",
@@ -255,6 +260,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"opencode/commands/sdd-init.md",
 		"opencode/commands/sdd-new.md",
 		"opencode/commands/sdd-onboard.md",
+		"opencode/commands/sdd-research.md",
 		"opencode/commands/sdd-status.md",
 		"opencode/commands/sdd-verify.md",
 
@@ -272,6 +278,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/sdd-init.md",
 		"cursor/agents/sdd-explore.md",
 		"cursor/agents/sdd-propose.md",
+		"cursor/agents/sdd-research.md",
 		"cursor/agents/sdd-spec.md",
 		"cursor/agents/sdd-design.md",
 		"cursor/agents/sdd-tasks.md",
@@ -301,6 +308,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-init.yaml",
 		"kimi/agents/sdd-explore.yaml",
 		"kimi/agents/sdd-propose.yaml",
+		"kimi/agents/sdd-research.yaml",
 		"kimi/agents/sdd-spec.yaml",
 		"kimi/agents/sdd-design.yaml",
 		"kimi/agents/sdd-tasks.yaml",
@@ -311,6 +319,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-init.md",
 		"kimi/agents/sdd-explore.md",
 		"kimi/agents/sdd-propose.md",
+		"kimi/agents/sdd-research.md",
 		"kimi/agents/sdd-spec.md",
 		"kimi/agents/sdd-design.md",
 		"kimi/agents/sdd-tasks.md",
@@ -337,6 +346,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/sdd-design/SKILL.md",
 		"skills/sdd-explore/SKILL.md",
 		"skills/sdd-propose/SKILL.md",
+		"skills/sdd-research/SKILL.md",
 		"skills/sdd-spec/SKILL.md",
 		"skills/sdd-tasks/SKILL.md",
 		"skills/sdd-verify/SKILL.md",
@@ -348,6 +358,8 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/_shared/openspec-convention.md",
 		"skills/_shared/sdd-phase-common.md",
 		"skills/_shared/sdd-status-contract.md",
+		"skills/_shared/research-lifecycle.md",
+		"kiro/agents/sdd-research.md",
 
 		// Hermes agent files
 		"hermes/sdd-orchestrator.md",
@@ -383,6 +395,56 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 				t.Fatalf("Read(%q) content is suspiciously short (%d bytes) — possible stub", path, len(content))
 			}
 		})
+	}
+}
+
+func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
+	skill := MustRead("skills/sdd-init/SKILL.md")
+	for _, required := range []string{
+		"authoritative workspace root",
+		"Before classifying a stack or applying any no-runner fallback",
+		"Aggregate those project-to-tool associations in the one workspace-level result",
+		"non-empty discovered project set",
+		"explicit workspace-level test command",
+		"covers every in-scope project",
+		"zero projects are discovered or no explicit workspace-level test command covers every in-scope project",
+		"including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("sdd-init skill missing workspace discovery contract %q", required)
+		}
+	}
+
+	details := MustRead("skills/sdd-init/references/init-details.md")
+	for _, required := range []string{
+		"explicit workspace membership",
+		"at most two directory levels",
+		"`A/pyproject.toml` and `B/Cargo.toml`",
+		"nested-repository boundaries",
+		"`.git`, `node_modules`, `vendor`, `dist`, `build`, `out`, `target`, `.cache`, `__pycache__`, `.venv`, `venv`",
+		"`projects:` list",
+		"discovered project set is non-empty",
+		"explicit workspace-level test command",
+		"covers every in-scope project",
+		"Do not synthesize or concatenate independent project commands",
+		"zero projects are discovered or no explicit workspace-level command covers every in-scope project",
+		"including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project",
+	} {
+		if !strings.Contains(details, required) {
+			t.Fatalf("sdd-init details missing bounded discovery contract %q", required)
+		}
+	}
+
+	if discovery, fallback := strings.Index(details, "## Workspace Project Discovery"), strings.Index(details, "only then apply the no-runner fallback"); discovery < 0 || fallback < discovery {
+		t.Fatal("sdd-init details must complete workspace discovery before the no-runner fallback")
+	}
+	if workspaceDiscovery, strictTDDResolution := strings.Index(skill, "1. Identify the authoritative workspace root."), strings.Index(skill, "4. Resolve Strict TDD from an agent marker or `openspec/config.yaml`"); workspaceDiscovery < 0 || strictTDDResolution < 0 || workspaceDiscovery >= strictTDDResolution {
+		t.Fatal("sdd-init skill must place workspace discovery step 1 before Strict TDD resolution step 4")
+	}
+	for _, content := range []string{skill, details} {
+		if strings.Contains(content, "a project has no test command") {
+			t.Fatal("sdd-init fallback must not treat a missing project-local command as an independent Strict TDD disablement reason")
+		}
 	}
 }
 
@@ -497,8 +559,8 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 12 {
-		t.Fatalf("opencode commands count = %d, want 12", len(commandEntries))
+	if len(commandEntries) != 13 {
+		t.Fatalf("opencode commands count = %d, want 13", len(commandEntries))
 	}
 	wantCommands := map[string]bool{"skill-creator.md": true, "skill-registry.md": true}
 	for _, entry := range commandEntries {
@@ -741,16 +803,92 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/commands) error = %v", err)
 	}
-	if len(commandEntries) != 10 {
-		t.Fatalf("claude commands count = %d, want 10", len(commandEntries))
+	if len(commandEntries) != 11 {
+		t.Fatalf("claude commands count = %d, want 11", len(commandEntries))
 	}
 
 	agentEntries, err := FS.ReadDir("claude/agents")
 	if err != nil {
 		t.Fatalf("ReadDir(claude/agents) error = %v", err)
 	}
-	if len(agentEntries) != 18 {
-		t.Fatalf("claude agents count = %d, want 18", len(agentEntries))
+	if len(agentEntries) != 19 {
+		t.Fatalf("claude agents count = %d, want 19", len(agentEntries))
+	}
+}
+
+func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
+	tests := []struct {
+		path        string
+		declaration string
+		toolLine    string
+		toolsExact  string
+		evidence    []string
+		forbidden   []string
+		required    []string
+	}{
+		{
+			path: "claude/agents/sdd-research.md", declaration: "Evidence grants: documentation=[WebFetch]; open-web=[WebSearch,WebFetch].",
+			toolLine: "tools:", toolsExact: "tools: WebFetch, WebSearch", evidence: []string{"WebFetch", "WebSearch"},
+			forbidden: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__"},
+			required:  []string{"already-persisted intent", "Do not read or mutate repository or Engram state", "bounded evidence envelope", "The orchestrator validates and persists this envelope"},
+		},
+		{
+			path: "kiro/agents/sdd-research.md", declaration: "Evidence grants: documentation=[@context7]; open-web=[].",
+			toolLine: "tools:", evidence: []string{"@context7"},
+		},
+		{path: "cursor/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+		{path: "kimi/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			content := MustRead(tt.path)
+			for _, required := range []string{
+				tt.declaration,
+				"Persistence tools are not evidence grants.",
+				"Unsupported or undeclared classes deny admission and emit no claims.",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing %q", tt.path, required)
+				}
+			}
+
+			tools := ""
+			if tt.toolLine != "" {
+				for _, line := range strings.Split(content, "\n") {
+					if strings.HasPrefix(line, tt.toolLine) {
+						tools = line
+						break
+					}
+				}
+				if tools == "" {
+					t.Fatalf("%s missing scoped tools", tt.path)
+				}
+				if tt.toolsExact != "" && tools != tt.toolsExact {
+					t.Fatalf("%s tools = %q, want %q", tt.path, tools, tt.toolsExact)
+				}
+				for _, forbidden := range tt.forbidden {
+					if strings.Contains(tools, forbidden) {
+						t.Fatalf("%s collection-only tools retain %q", tt.path, forbidden)
+					}
+				}
+				for _, required := range tt.required {
+					if !strings.Contains(content, required) {
+						t.Fatalf("%s missing collection-only contract %q", tt.path, required)
+					}
+				}
+			}
+
+			for _, known := range []string{"WebFetch", "WebSearch", "@context7"} {
+				want := false
+				for _, grant := range tt.evidence {
+					want = want || grant == known
+				}
+				if got := strings.Contains(tools, known); got != want {
+					t.Fatalf("%s evidence tool %q present = %v, want %v in %q", tt.path, known, got, want, tools)
+				}
+			}
+		})
 	}
 }
 
@@ -884,8 +1022,7 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		"Ask before launching the next phase",
 		"Interactive approval is phase-scoped",
 		"approve only the immediate next phase",
-		"Before the `sdd-propose` phase in interactive mode",
-		"proposal question round",
+		"{{GENTLE_AI_RESEARCH_LIFECYCLE}}",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
@@ -1673,9 +1810,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 26 skill directories (10 SDD + judgment-day + 13 foundation/review + hermes-ephemeral-delegation + _shared).
-	if skillDirs != 26 {
-		t.Fatalf("expected 26 skill directories, got %d", skillDirs)
+	// We expect 27 skill directories (11 SDD + judgment-day + 13 foundation/review + hermes-ephemeral-delegation + _shared).
+	if skillDirs != 27 {
+		t.Fatalf("expected 27 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -1684,7 +1821,7 @@ func TestEmbeddedAssetCount(t *testing.T) {
 			continue
 		}
 		if entry.Name() == "_shared" {
-			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "skill-resolver.md"} {
+			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "research-lifecycle.md", "skill-resolver.md"} {
 				sharedPath := "skills/_shared/" + sharedFile
 				if _, err := Read(sharedPath); err != nil {
 					t.Fatalf("shared directory missing %q: %v", sharedFile, err)
@@ -2331,15 +2468,27 @@ func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
 		"exit \"$move_status\"",
 		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
 		"trap 'rm -rf -- \"$snapshot_root\"' EXIT",
-		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
-		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
-		"if [ -e \"openspec/changes/{change-name}\" ] || [ -L \"openspec/changes/{change-name}\" ]; then",
-		"diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
-		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
+		"source=\"openspec/changes/{change-name}\"",
+		"destination=\"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
+		"cp -R \"$source\" \"$snapshot_root/source\"",
+		"if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then",
+		"git mv \"$source\" \"$destination\"",
+		"git_mv_status=$?",
+		"if [ -e \"$source\" ] || [ -L \"$source\" ]; then",
+		"if diff -r \"$snapshot_root/source\" \"$source\"; then",
+		"if mv \"$source\" \"$destination\"; then",
+		"if [ -e \"$source\" ] || [ -L \"$source\" ]; then",
+		"if diff -r \"$snapshot_root/source\" \"$destination\"; then",
 		"only empty diff output passes",
 		"verbatim `diff -r` output from Steps 2 and 3 MUST appear in the phase result",
 		"A failed or skipped `diff -r` FAILS the phase",
 		"The `snapshot_root` is removed safely by the EXIT trap",
+		"source %s and destination %s remain unchanged",
+		"Resolve the destination collision, then rerun this archive step.",
+		"Historical Malformed Nesting Recovery (Manual Only)",
+		"if [ -e \"$active_source\" ] || [ -L \"$active_source\" ] ||",
+		"Never automatically delete, overwrite, or merge the outer archive directory.",
+		"does not provide an atomic cross-process no-clobber guarantee",
 	} {
 		if !strings.Contains(skill, required) {
 			t.Fatalf("skills/sdd-archive/SKILL.md missing pre-move snapshot wording %q", required)
@@ -2388,14 +2537,319 @@ func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
 	}
 	moveBlock := skill[moveStart : moveStart+moveEnd]
 	assertOrdered("archive move", moveBlock,
+		"source=\"openspec/changes/{change-name}\"",
+		"destination=\"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
 		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
-		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
-		"if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
-		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"cp -R \"$source\" \"$snapshot_root/source\"",
+		"if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then",
+		"if git mv \"$source\" \"$destination\"; then",
+		"else\n  git_mv_status=$?",
+		"if [ -e \"$source\" ] || [ -L \"$source\" ]; then",
+		"if diff -r \"$snapshot_root/source\" \"$source\"; then",
+		"if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then",
+		"if mv \"$source\" \"$destination\"; then",
 		"else\n    move_status=$?\n    exit \"$move_status\"",
-		"if [ -e \"openspec/changes/{change-name}\" ] || [ -L \"openspec/changes/{change-name}\" ]; then",
-		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
+		"if [ -e \"$source\" ] || [ -L \"$source\" ]; then",
+		"if diff -r \"$snapshot_root/source\" \"$destination\"; then",
 		"else\n  diff_status=$?",
 		"if [ \"$diff_status\" -ne 0 ]; then\n  exit \"$diff_status\"",
 	)
+	if guards := strings.Count(moveBlock, "if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then"); guards != 2 {
+		t.Fatalf("archive move has %d destination guards, want 2", guards)
+	}
+}
+
+func TestSDDArchiveMoveTransactionPreservesFilesystemOnCollisions(t *testing.T) {
+	shell := requireArchiveShell(t)
+	t.Setenv("BASH_ENV", "repository-sentinel.txt")
+	for _, tracked := range []bool{true, false} {
+		sourceMode := "untracked"
+		if tracked {
+			sourceMode = "tracked"
+		}
+		t.Run(sourceMode+" source moves to absent destination", func(t *testing.T) {
+			root, source, destination, sentinel := setupArchiveFixture(t, tracked)
+			output, err := runArchiveMoveTransaction(shell, root)
+			if err != nil {
+				t.Fatalf("archive transaction failed: %v\n%s", err, output)
+			}
+			if _, err := os.Lstat(source); !os.IsNotExist(err) {
+				t.Fatalf("%s remains after archive move: %v", source, err)
+			}
+			assertFileContents(t, filepath.Join(destination, "tasks.md"), "archive task bytes\n")
+			assertFileContents(t, sentinel, "exit 99\nrepository sentinel\n")
+			if tracked {
+				assertGitCommandFails(t, root, "ls-files", "--error-unmatch", "openspec/changes/change/tasks.md")
+				runGit(t, root, "ls-files", "--error-unmatch", "openspec/changes/archive/2030-01-02-change/tasks.md")
+				staged := runGit(t, root, "diff", "--cached", "--name-status")
+				if !strings.Contains(staged, "R100") {
+					t.Fatalf("tracked archive move did not stage a rename:\n%s", staged)
+				}
+			} else {
+				status := runGit(t, root, "status", "--porcelain", "--untracked-files=all")
+				if strings.Contains(status, "openspec/changes/change/") || !strings.Contains(status, "openspec/changes/archive/") {
+					t.Fatalf("untracked archive move has unexpected Git state:\n%s", status)
+				}
+			}
+		})
+		for _, collision := range []string{"directory", "regular file", "live symlink", "dangling symlink"} {
+			t.Run(sourceMode+" source preserves "+collision+" collision", func(t *testing.T) {
+				root, source, destination, sentinel := setupArchiveFixture(t, tracked)
+				createArchiveCollision(t, root, destination, collision)
+				beforeStatus := runGit(t, root, "status", "--porcelain")
+				output, err := runArchiveMoveTransaction(shell, root)
+				if err == nil {
+					t.Fatalf("archive transaction unexpectedly succeeded for %s collision:\n%s", collision, output)
+				}
+				for _, required := range []string{
+					"source openspec/changes/change and destination openspec/changes/archive/2030-01-02-change remain unchanged",
+					"Resolve the destination collision, then rerun this archive step.",
+				} {
+					if !strings.Contains(output, required) {
+						t.Fatalf("collision failure missing %q:\n%s", required, output)
+					}
+				}
+				assertFileContents(t, filepath.Join(source, "tasks.md"), "archive task bytes\n")
+				assertArchiveCollision(t, root, destination, collision)
+				assertFileContents(t, sentinel, "exit 99\nrepository sentinel\n")
+				if afterStatus := runGit(t, root, "status", "--porcelain"); afterStatus != beforeStatus {
+					t.Fatalf("collision changed Git state:\nbefore:\n%safter:\n%s", beforeStatus, afterStatus)
+				}
+			})
+		}
+	}
+}
+func TestSDDArchiveHistoricalRecoveryRefusesDanglingActiveSourceSymlink(t *testing.T) {
+	shell := requireArchiveShell(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "repository-sentinel.txt"), []byte("exit 99\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASH_ENV", "repository-sentinel.txt")
+	activeSource := filepath.Join(root, "openspec", "changes", "change")
+	nestedSource := filepath.Join(root, "openspec", "changes", "archive", "2030-01-02-change", "change")
+	if err := os.MkdirAll(nestedSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedSource, "tasks.md"), []byte("historical task bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "missing-active-source"), activeSource); err != nil {
+		t.Skipf("dangling symlink fixture is unavailable: %v", err)
+	}
+	recovery := strings.ReplaceAll(archiveFencedShellBlock("### Historical Malformed Nesting Recovery (Manual Only)"), "{change-name}", "change")
+	recovery = strings.ReplaceAll(recovery, "YYYY-MM-DD-change", "2030-01-02-change")
+	command := exec.Command(shell, "-c", recovery)
+	command.Dir = root
+	command.Env = withoutBashEnv(isolatedGitEnvironment())
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "active source must be absent") {
+		t.Fatalf("historical recovery did not fail closed for a dangling active-source symlink: %v\n%s", err, output)
+	}
+	if info, err := os.Lstat(activeSource); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("dangling active-source symlink was not preserved: %v, %v", info, err)
+	}
+	assertFileContents(t, filepath.Join(nestedSource, "tasks.md"), "historical task bytes\n")
+}
+
+func requireArchiveShell(t *testing.T) string {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("archive shell integration is skipped in short mode")
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("archive shell integration requires git: %v", err)
+	}
+	// Prefer Git's POSIX shell over a possible WSL launcher and verify candidates.
+	candidates := []string{filepath.Join(filepath.Dir(gitPath), "..", "bin", "bash.exe")}
+	if bashPath, err := exec.LookPath("bash"); err == nil {
+		candidates = append(candidates, bashPath)
+	}
+	for _, shell := range candidates {
+		if _, err := os.Stat(shell); err != nil {
+			continue
+		}
+		if err := exec.Command(shell, "-c", "exit 0").Run(); err == nil {
+			return shell
+		}
+	}
+	t.Skip("archive shell integration requires a usable POSIX shell")
+	return ""
+}
+func setupArchiveFixture(t *testing.T, tracked bool) (root, source, destination, sentinel string) {
+	t.Helper()
+	root = t.TempDir()
+	sentinel = filepath.Join(root, "repository-sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("exit 99\nrepository sentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source = filepath.Join(root, "openspec", "changes", "change")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "tasks.md"), []byte("archive task bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination = filepath.Join(root, "openspec", "changes", "archive", "2030-01-02-change")
+
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "config", "user.name", "Archive Test")
+	runGit(t, root, "config", "user.email", "archive-test@example.invalid")
+	if tracked {
+		runGit(t, root, "add", "--", "repository-sentinel.txt", "openspec/changes/change/tasks.md")
+	} else {
+		runGit(t, root, "add", "--", "repository-sentinel.txt")
+	}
+	runGit(t, root, "commit", "-qm", "archive fixture")
+	return root, source, destination, sentinel
+}
+
+func runArchiveMoveTransaction(shell, root string) (string, error) {
+	const changeName = "change"
+	transaction := archiveFencedShellBlock("### Step 3: Move to Archive")
+	transaction = strings.ReplaceAll(transaction, "{change-name}", changeName)
+	transaction = strings.ReplaceAll(transaction, "YYYY-MM-DD-"+changeName, "2030-01-02-"+changeName)
+	command := exec.Command(shell, "-c", transaction)
+	command.Dir = root
+	command.Env = withoutBashEnv(isolatedGitEnvironment())
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+func archiveFencedShellBlock(heading string) string {
+	skill := MustRead("skills/sdd-archive/SKILL.md")
+	start := strings.Index(skill, heading)
+	if start < 0 {
+		panic("sdd-archive shell section is missing")
+	}
+	opening := strings.Index(skill[start:], "```bash\n")
+	if opening < 0 {
+		panic("sdd-archive shell section is missing its opening fence")
+	}
+	start += opening + len("```bash\n")
+	end := strings.Index(skill[start:], "\n```")
+	if end < 0 {
+		panic("sdd-archive shell block is missing its closing fence")
+	}
+	return skill[start : start+end]
+}
+
+func createArchiveCollision(t *testing.T, root, destination, collision string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	switch collision {
+	case "directory":
+		if err := os.MkdirAll(destination, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(destination, "collision-sentinel"), []byte("directory sentinel\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "regular file":
+		if err := os.WriteFile(destination, []byte("file sentinel\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "live symlink":
+		target := filepath.Join(root, "live-symlink-target")
+		if err := os.WriteFile(target, []byte("live symlink sentinel\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, destination); err != nil {
+			t.Skipf("live symlink fixture is unavailable: %v", err)
+		}
+	case "dangling symlink":
+		if err := os.Symlink(filepath.Join(root, "missing-symlink-target"), destination); err != nil {
+			t.Skipf("dangling symlink fixture is unavailable: %v", err)
+		}
+	default:
+		t.Fatalf("unknown collision type %q", collision)
+	}
+}
+
+func assertArchiveCollision(t *testing.T, root, destination, collision string) {
+	t.Helper()
+	info, err := os.Lstat(destination)
+	if err != nil {
+		t.Fatalf("collision destination is missing: %v", err)
+	}
+	switch collision {
+	case "directory":
+		if !info.IsDir() {
+			t.Fatalf("collision destination is %v, want directory", info.Mode())
+		}
+		assertFileContents(t, filepath.Join(destination, "collision-sentinel"), "directory sentinel\n")
+	case "regular file":
+		if !info.Mode().IsRegular() {
+			t.Fatalf("collision destination is %v, want regular file", info.Mode())
+		}
+		assertFileContents(t, destination, "file sentinel\n")
+	case "live symlink":
+		if target, err := os.Readlink(destination); info.Mode()&os.ModeSymlink == 0 || err != nil || target != filepath.Join(root, "live-symlink-target") {
+			t.Fatalf("collision destination is %v, want live symlink to %q: target %q, error %v", info.Mode(), filepath.Join(root, "live-symlink-target"), target, err)
+		}
+		assertFileContents(t, filepath.Join(root, "live-symlink-target"), "live symlink sentinel\n")
+	case "dangling symlink":
+		if target, err := os.Readlink(destination); info.Mode()&os.ModeSymlink == 0 || err != nil || target != filepath.Join(root, "missing-symlink-target") {
+			t.Fatalf("collision destination is %v, want dangling symlink to %q: target %q, error %v", info.Mode(), filepath.Join(root, "missing-symlink-target"), target, err)
+		}
+		if _, err := os.Stat(destination); !os.IsNotExist(err) {
+			t.Fatalf("dangling symlink target is unexpectedly available: %v", err)
+		}
+	}
+}
+
+func assertFileContents(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("%s = %q, want %q", path, got, want)
+	}
+}
+
+func withoutBashEnv(env []string) []string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.ToUpper(env[i]), "BASH_ENV=") {
+			env = append(env[:i], env[i+1:]...)
+		}
+	}
+	return env
+}
+
+func runGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	command.Env = isolatedGitEnvironment()
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
+}
+
+func assertGitCommandFails(t *testing.T, root string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	command.Env = isolatedGitEnvironment()
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("git %s unexpectedly succeeded:\n%s", strings.Join(args, " "), output)
+	}
+}
+
+func isolatedGitEnvironment() []string {
+	env := os.Environ()
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.ToUpper(env[i]), "GIT_") {
+			env = append(env[:i], env[i+1:]...)
+		}
+	}
+	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull, "GIT_CONFIG_COUNT=0")
 }

@@ -391,13 +391,6 @@ func TestReviewRecoverAdoptsExplicitWorkspaceOverlayBase(t *testing.T) {
 	if snapshot.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || snapshot.BaseTree != declaredBaseTree || snapshot.BaseTree == predecessor.State.InitialSnapshot.BaseTree || snapshot.Identity == predecessor.State.InitialSnapshot.Identity {
 		t.Fatalf("recovered overlay snapshot = %#v", snapshot)
 	}
-	assessment, err := reviewtransaction.AssessCompactGateTarget(context.Background(), repo, successor.State, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if assessment.Applicability != reviewtransaction.CompactGateTargetExact || assessment.Actual.BaseTree != declaredBaseTree {
-		t.Fatalf("recovered overlay gate assessment = %#v", assessment)
-	}
 }
 
 func approvedWorkspaceOverlayRecoveryPredecessor(t *testing.T, lineage string) (string, reviewtransaction.CompactRecord) {
@@ -436,14 +429,10 @@ func approvedWorkspaceOverlayRecoveryPredecessor(t *testing.T, lineage string) (
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err := store.Replace(predecessor.Revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+	if _, err := store.Replace(predecessor.Revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 	predecessor, err = store.Load()
@@ -640,14 +629,10 @@ func TestReviewRecoverReleaseScopeExpandsMergedSliceToFirstParentDiff(t *testing
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err := store.Replace(predecessor.Revision, "review/complete-review", state)
-	if err != nil {
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+	if _, err := store.Replace(predecessor.Revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 	predecessor, err = store.Load()
@@ -756,9 +741,6 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 		if _, err := store.Load(); err != nil {
 			t.Fatalf("load compact START authority: %v", err)
 		}
-		if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
-			t.Fatalf("START unexpectedly materialized receipt %q: %v", store.ReceiptPath(), err)
-		}
 	}
 }
 
@@ -811,9 +793,6 @@ func TestReviewStartContractLeavesScopeDriftAuthoritiesIndependent(t *testing.T)
 			fresh, err := freshStore.Load()
 			if err != nil || fresh.State.State != reviewtransaction.StateReviewing {
 				t.Fatalf("fresh authority = %#v, %v", fresh, err)
-			}
-			if _, err := os.Stat(freshStore.ReceiptPath()); !os.IsNotExist(err) {
-				t.Fatalf("scope-drift START emitted a receipt: %v", err)
 			}
 		})
 	}

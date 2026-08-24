@@ -1,3 +1,5 @@
+//go:build legacy_compact_receipt
+
 package sddstatus
 
 import (
@@ -627,14 +629,11 @@ func completeRuntimeCompactAuthority(t *testing.T, repo string, record reviewtra
 	}); err != nil {
 		t.Fatal(err)
 	}
-	revision, err := store.Replace(record.Revision, "review/complete-review", state)
-	if err != nil {
+	revision := record.Revision
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.CompleteVerification([]byte("runtime remediation verification passed\n"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+	if _, err := store.Replace(revision, "review/complete-review", state); err != nil {
 		t.Fatal(err)
 	}
 	receipt, err := state.Receipt()

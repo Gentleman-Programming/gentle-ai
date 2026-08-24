@@ -53,7 +53,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - A missing, pending, invalid, or non-allow review state never suppresses tests or builds.
 - Native review artifacts, when present, are review-context evidence only. Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.
 - Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
-- Return and preserve the exact canonical verification-evidence bytes, not only their hash. The parent hashes that preimage for `complete-final-verification` and retains the same bytes for any later review-context observation; hashes cannot reconstruct artifact content.
+- Return ordinary verification evidence with the result. Terminal reviewer closure is capture-owned and informational; it is never a verification completion prerequisite.
 
 ## Decision Gates
 
@@ -144,7 +144,7 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 - A missing, pending, invalid, or non-allow review state never suppresses tests or builds.
 - Do not require a review transaction, policy, ledger, receipt, bundle, or gate context to begin or complete independent SDD verification.
 - Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
-- Return the exact verification-evidence content with the result so the parent can hash it and preserve its preimage for any later review-context observation.
+- Return ordinary verification evidence with the result. Terminal reviewer closure remains capture-owned and informational.
 - Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
 - Return minimal report

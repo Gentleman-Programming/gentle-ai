@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -31,23 +33,15 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage,
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage,
 		"--untracked-scope=select", "--expected-untracked-inventory=" + digest,
-		"--intended-untracked", "notes-a.txt", "--intended-untracked", "notes-b.txt"}, io.Discard); err != nil {
+		"--intended-untracked", "notes-a.txt", "--intended-untracked", "notes-b.txt"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	resultPath := filepath.Join(t.TempDir(), "review.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
-			ProofRefs:     []string{"differential test fails only on candidate"},
-			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
-		}}, Evidence: []string{"focused differential test failed"},
-	})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage,
-		"--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	escalateReviewForRecovery(t, repo, started)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +55,63 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 		t.Fatalf("fixture did not reach an escalated authority carrying the declared selection: %#v", predecessor.State.InitialSnapshot)
 	}
 	return repo, predecessor
+}
+
+// escalateReviewForRecovery reaches the surviving recovery predecessor through
+// reviewer capture, a status-bound correction plan, and a captured validator.
+func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeStartResult) {
+	t.Helper()
+	for order := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == 0 {
+			findings = []facadeFinding{{
+				Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
+				ProofRefs:     []string{"differential test fails only on candidate"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
+	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, 1)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var validation facadeValidationResult
+	if err := json.Unmarshal(providerTargetedValidationPayload(t, request), &validation); err != nil {
+		t.Fatal(err)
+	}
+	validation.OriginalCriteria.Passed = false
+	payload, err := json.Marshal(validation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	previous := reviewProviderRoleHostAdapter
+	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+			return payload, nil
+		})
+	}
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.Revision, "--request-hash", request.RequestHash,
+		"--agent", string(model.AgentPi), "--execute=true",
+	}, io.Discard); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v", err)
+	}
 }
 
 // TestReviewRecoverInheritsDeclaredIntendedUntracked is #3159.
