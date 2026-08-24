@@ -83,7 +83,11 @@ func TestGenerateContextForAgent_HighRiskFrontendSchemaImpact(t *testing.T) {
 	orch := New(tempDir)
 
 	artifactContent := "---\nid: feature-900\ndb_impact: high-risk\n---\n# Proposal content\n"
-	artifactPath := "openspec/changes/feature-900/proposal.md"
+	// task.md (not proposal.md): frontend-implementer's AllowedArtifactTypes
+	// is {task, spec, design-fragment} (H-08) -- a proposal-derived artifact
+	// would now be refused by the artifact-type enforcement gate before this
+	// test's DBImpact/skill assertions ever ran.
+	artifactPath := "openspec/changes/feature-900/task.md"
 	absArtifactPath := filepath.Join(tempDir, artifactPath)
 	if err := os.MkdirAll(filepath.Dir(absArtifactPath), 0755); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)

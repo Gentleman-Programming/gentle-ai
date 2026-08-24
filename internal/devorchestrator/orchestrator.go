@@ -2,9 +2,11 @@ package devorchestrator
 
 import (
 	stdctx "context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/changeowner"
@@ -20,6 +22,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
+
+// ErrArtifactTypeMismatch is returned by GenerateContextForAgent (H-08) when
+// a primaryArtifact's filename-derived type is not in the target agent's
+// Inputs.AllowedArtifactTypes. It is the last check in the fixed refusal
+// precedence: containment, then ownership, then artifact-type.
+var ErrArtifactTypeMismatch = errors.New("devorchestrator: artifact type mismatch")
 
 // Orchestrator wraps the core services required to resolve delegation contexts.
 type Orchestrator struct {
@@ -245,8 +253,20 @@ func (o *Orchestrator) GenerateContextForAgent(
 		}
 	}
 
-	// In a real implementation, we would filter `Artifacts` based on `contract.Inputs.AllowedArtifactTypes`
-	// For now, we ensure the orchestrator assigns the precise permissions mandated by the contract.
+	// 3.97 Validate Artifact-Type Enforcement (H-08). This is deliberately
+	// the LAST refusal check in GenerateContextForAgent, per the spec's
+	// Refusal Precedence Ordering requirement: containment (step 0) ->
+	// ownership (step 3.95) -> artifact-type (here). A primaryArtifact whose
+	// filename derives to "" (unclassified -- non-canonical filename, or
+	// none supplied) skips this gate entirely (accepted risk, design D5).
+	if primaryArtifact != "" {
+		if derivedType := agent.DeriveArtifactType(primaryArtifact); derivedType != "" {
+			if !slices.Contains(contract.Inputs.AllowedArtifactTypes, derivedType) {
+				return nil, fmt.Errorf("strict enforcement: %w: %q derives type %q, agent %q allows %v",
+					ErrArtifactTypeMismatch, primaryArtifact, derivedType, agentName, contract.Inputs.AllowedArtifactTypes)
+			}
+		}
+	}
 
 	// 4. Context Builder
 	req := context.BuildRequest{
