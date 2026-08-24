@@ -833,7 +833,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
-		if evidenceRemediation {
+		// The changed-candidate and fresh-evidence demands exist to stop an
+		// unreviewed no-op from DISCHARGING a failure, so they bind only the
+		// passing outcome. A truthful failed or interrupted settlement (#3422)
+		// discharges nothing: it may leave the candidate unchanged (the blocker
+		// can be environmental) and its evidence is the correction's own new
+		// failure, not proof the named failure was repaired.
+		if evidenceRemediation && request.Outcome == AttemptPassed {
 			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, status.LastRescope, chainFailedAttempt, snapshot.CandidateTree)
 			// #3073: "changed" is judged against the failed evidence's candidate
 			// snapshot, not the attempt's begin snapshot. A correction applied
@@ -2006,10 +2012,15 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// no implications while it is off), and this replay mirror has to agree
 		// with it or a legitimately committed record makes the whole chain
 		// unreplayable.
-		if event.Outcome != AttemptPassed ||
-			!chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision ||
-			(unchangedCandidate && !evidenceOnly) ||
-			event.EvidenceRevision == event.RemediatesEvidenceRevision {
+		// The binding must hold for every outcome; the changed-candidate and
+		// fresh-evidence demands bind only the passing outcome, exactly as the
+		// write-time guard in Finish decides (#3422). A truthful failed or
+		// interrupted settlement discharges nothing, so it neither needs a
+		// changed candidate nor fresh corrected evidence.
+		bindingBroken := !chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision
+		passedDemandsBroken := event.Outcome == AttemptPassed &&
+			((unchangedCandidate && !evidenceOnly) || event.EvidenceRevision == event.RemediatesEvidenceRevision)
+		if bindingBroken || passedDemandsBroken {
 			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
 			return errors.New("unmanaged remediation finish does not bind the final failed-evidence correction")
 		}
@@ -2160,7 +2171,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
-			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) ||
+			(event.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision)) ||
 			(event.AttestedVerifyReportDigest != "" && (!runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
@@ -2440,10 +2451,11 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
 	if request.RemediatesEvidenceRevision != "" {
-		if request.Outcome != AttemptPassed {
-			// refusal:by-design operator-knowledge: the caller alone knows whether its correction passed and must supply that outcome truthfully.
-			return FinishAttemptRequest{}, errors.New("failed-evidence remediation is valid only for a passed attempt")
-		}
+		// Every outcome is a truthful settlement of a declared correction
+		// (#3422): passed discharges the failure it names, failed records the
+		// correction's own new failure as the chain's bindable head, and
+		// interrupted discharges nothing. Only the binding shape is validated
+		// here; outcome-specific demands live in Finish and its replay twin.
 		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
 			return FinishAttemptRequest{}, fmt.Errorf(
 				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
