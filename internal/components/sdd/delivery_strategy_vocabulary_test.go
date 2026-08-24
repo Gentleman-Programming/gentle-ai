@@ -41,7 +41,7 @@ import (
 // delivery strategy: one backticked, pipe-separated list led by the default
 // value. Keeping the pattern anchored on that shape is what lets the guard read
 // the domain out of the shipped skill instead of hardcoding it.
-var deliveryDomainDeclaration = regexp.MustCompile("`(ask-on-risk(?: \\| [a-z][a-z0-9-]*)+)`")
+var deliveryDomainDeclaration = regexp.MustCompile("Selectable `delivery_strategy`: `(ask-on-risk(?: \\| [a-z][a-z0-9-]*)+)`")
 
 // preflightPRGroupLabels matches the user-facing PR option list the preflight
 // renders, e.g. "3. PRs: Ask me, Single PR, Auto."
@@ -76,10 +76,11 @@ func canonicalDeliveryStrategyDomain(t *testing.T) []string {
 	var domain []string
 	var source string
 	for _, path := range deliveryStrategySkillContracts {
-		matches := deliveryDomainDeclaration.FindAllStringSubmatch(assets.MustRead(path), -1)
+		githubSchema := markdownSection(t, assets.MustRead(path), "### GitHub-native schema", "### Portable schema")
+		matches := deliveryDomainDeclaration.FindAllStringSubmatch(githubSchema, -1)
 		if len(matches) != 1 {
 			t.Fatalf(
-				"%s must declare the delivery strategy domain exactly once as a backticked `a | b | ...` list; found %d declarations",
+				"%s GitHub-native schema must declare its selectable delivery strategy domain exactly once as a backticked `a | b | ...` list; found %d declarations",
 				path,
 				len(matches),
 			)
@@ -103,6 +104,40 @@ func canonicalDeliveryStrategyDomain(t *testing.T) []string {
 
 	if len(domain) == 0 {
 		t.Fatal("no delivery strategy domain could be derived from the shipped phase skills")
+	}
+	return domain
+}
+
+func portableDeliveryStrategyDomain(t *testing.T) []string {
+	t.Helper()
+
+	var domain []string
+	var source string
+	for _, path := range deliveryStrategySkillContracts {
+		portableSchema := markdownSection(t, assets.MustRead(path), "### Portable schema", "### Blocked schema")
+		matches := deliveryDomainDeclaration.FindAllStringSubmatch(portableSchema, -1)
+		if len(matches) != 1 {
+			t.Fatalf(
+				"%s portable schema must declare its selectable delivery strategy domain exactly once as a backticked `a | b | ...` list; found %d declarations",
+				path,
+				len(matches),
+			)
+		}
+
+		values := splitDeclaredDomain(matches[0][1])
+		if domain == nil {
+			domain, source = values, path
+			continue
+		}
+		if strings.Join(values, "|") != strings.Join(domain, "|") {
+			t.Fatalf(
+				"portable delivery strategy domain disagrees between shipped skills: %s declares %v, %s declares %v",
+				source,
+				domain,
+				path,
+				values,
+			)
+		}
 	}
 	return domain
 }
@@ -223,7 +258,7 @@ func TestSDDPreflightDeliveryStrategyMappingStaysInsideConsumerDomain(t *testing
 }
 
 func TestSDDPreflightStrategyChoicesStayInsideConsumerDomain(t *testing.T) {
-	domain := canonicalDeliveryStrategyDomain(t)
+	domain := portableDeliveryStrategyDomain(t)
 	allowed := map[string]bool{}
 	for _, value := range domain {
 		allowed[value] = true
@@ -535,9 +570,104 @@ func TestInjectOpenCodeMigratesRetiredChainedPRPreflightOption(t *testing.T) {
 	}
 }
 
-// preservedOrchestratorPrompt reads the preserved prompt back through JSON
-// rather than matching raw bytes: encoding/json escapes the ">" in "->", so a
-// substring match on the file would silently never fire.
+func TestSDDDeliveryRouteSchemasRequireEvidenceAndRouteConditionedValues(t *testing.T) {
+	common := assets.MustRead("skills/_shared/sdd-phase-common.md")
+	tasks := assets.MustRead("skills/sdd-tasks/SKILL.md")
+	apply := assets.MustRead("skills/sdd-apply/SKILL.md")
+	t.Run("route evidence is explicit and fail closed", func(t *testing.T) {
+		guard := markdownSection(t, common, "## E. Provider-Aware Review Workload Guard", "## F.")
+		for _, want := range []string{
+			"Repository identity", "Remote identity", "Provider/capability/route", "Pinned revision",
+			"Command-help evidence/digest", "Postcondition evidence/digest", "Observed/freshness marker",
+			"missing, blank, malformed, unverifiable, stale, or mismatched", "block", "no fallback",
+		} {
+			if !strings.Contains(strings.ToLower(guard), strings.ToLower(want)) {
+				t.Errorf("route evidence guard missing %q", want)
+			}
+		}
+		if strings.Contains(guard, "Evidence binding/freshness | Repository/remote identity") {
+			t.Error("route evidence must not be represented as one free-form binding field")
+		}
+	})
+
+	t.Run("portable exception approval binds the exact approval", func(t *testing.T) {
+		guard := markdownSection(t, common, "## E. Provider-Aware Review Workload Guard", "## F.")
+		for _, want := range []string{
+			"Exact repository identity", "Exact candidate/snapshot identity", "Exact changed-line count", "Rationale",
+			"Approving actor identity", "authorized maintainer", "authority-basis attestation", "Approval record/reference",
+			"Freshness/time", "Missing, unverifiable, or stale portable exception evidence blocks", "never grants remote mutation authority",
+		} {
+			if !strings.Contains(guard, want) {
+				t.Errorf("portable exception guard missing %q", want)
+			}
+		}
+	})
+	for name, content := range map[string]string{"tasks": tasks, "apply": apply} {
+		name, content := name, content
+		t.Run(name+" schemas are route conditioned", func(t *testing.T) {
+			github := markdownSection(t, content, "### GitHub-native schema", "### Portable schema")
+			portable := markdownSection(t, content, "### Portable schema", "### Blocked schema")
+			blocked := markdownSection(t, content, "### Blocked schema", "###")
+
+			for _, forbidden := range []string{"exception-ok", "size:exception", "feature-branch-chain", "manual fallback"} {
+				if strings.Contains(github, forbidden) {
+					t.Errorf("GitHub-native schema must not represent portable-only value %q", forbidden)
+				}
+			}
+			for _, required := range []string{"exception-ok", "size:exception", "feature-branch-chain", "manual chaining"} {
+				if !strings.Contains(portable, required) {
+					t.Errorf("portable schema missing %q", required)
+				}
+			}
+			for _, forbidden := range []string{"delivery_strategy", "chain_strategy"} {
+				if strings.Contains(strings.ToLower(blocked), forbidden) {
+					t.Errorf("blocked schema must not represent %q", forbidden)
+				}
+			}
+		})
+	}
+
+	for name, content := range map[string]string{"tasks": tasks, "apply": apply} {
+		name, content := name, content
+		t.Run(name+" has no universal portable instructions", func(t *testing.T) {
+			portable := markdownSection(t, content, "### Portable schema", "### Blocked schema")
+			for _, line := range strings.Split(content, "\n") {
+				if (strings.Contains(line, "feature-branch-chain") || strings.Contains(line, "size:exception")) &&
+					!strings.Contains(portable, line) && !strings.Contains(strings.ToLower(line), "portable") {
+					t.Errorf("portable-only instruction escapes its schema: %q", line)
+				}
+			}
+			if strings.Contains(content, "Mode: {single PR | chained PR slice | stacked PR slice | size:exception}") {
+				t.Error("apply output must not present size exception as a universal mode")
+			}
+		})
+	}
+}
+
+func TestSDDTasksReturnForecastUsesRouteConditionedStrategySchema(t *testing.T) {
+	forecast := markdownSection(t, markdownSection(t, assets.MustRead("skills/sdd-tasks/SKILL.md"), "### Step 5: Return Summary", "## Rules"), "### Review Workload Forecast", "### Next Step")
+	if strings.Contains(forecast, "exception-ok") || !strings.Contains(forecast, "Delivery strategy: {route-conditioned `delivery_strategy` value from the selected schema; omit when blocked}") {
+		t.Error("sdd-tasks return forecast must use its selected route-conditioned strategy schema/value and omit it when blocked")
+	}
+}
+
+func markdownSection(t *testing.T, content, heading, nextHeading string) string {
+	t.Helper()
+	start := strings.Index(content, heading)
+	if start < 0 {
+		t.Fatalf("missing section %q", heading)
+	}
+	section := content[start+len(heading):]
+	if nextHeading != "" {
+		if end := strings.Index(section, nextHeading); end >= 0 {
+			section = section[:end]
+		} else {
+			t.Fatalf("section %q is not followed by %q", heading, nextHeading)
+		}
+	}
+	return section
+}
+
 func preservedOrchestratorPrompt(t *testing.T, settingsPath string) string {
 	t.Helper()
 

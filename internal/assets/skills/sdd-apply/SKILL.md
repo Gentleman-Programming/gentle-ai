@@ -37,7 +37,7 @@ From the orchestrator:
 - The specific task(s) to implement (e.g., "Phase 1, tasks 1.1-1.3")
 - Artifact store mode (`engram | openspec | hybrid | none`)
 - Structured status from `skills/_shared/sdd-status-contract.md`: `schemaName`, `planningHome`, `changeRoot`, `artifactPaths`, `contextFiles`, `applyState`, task progress, dependency states, and `actionContext`
-- Delivery strategy and resolved workload decision (`ask-on-risk | auto-chain | single-pr | exception-ok`, plus PR slice or `size:exception` when applicable)
+- Resolved delivery route, route-conditioned `delivery_strategy`, and route-applicable work-unit boundary
 
 ## Execution and Persistence Contract
 
@@ -74,27 +74,29 @@ Before writing ANY code:
 5. Read existing code in affected files — understand current patterns
 6. Check the project's coding conventions from `config.yaml`
 
-#### Step 2a: Enforce Review Workload Decision
+#### Step 2a: Revalidate the Delivery Route
 
-Before implementing, inspect the tasks artifact for `Review Workload Forecast`.
+Before implementing, read the tasks artifact's `Review Workload Forecast` and `Delivery Route Fact`. Load `gentle-ai-chained-pr`. Re-read provider/runtime state before route use and independently verify every required field: Repository identity, Remote identity, Provider/capability/route, Pinned revision, Command-help evidence/digest, Postcondition evidence/digest, and Observed/freshness marker.
 
-If the forecast says any of the following:
+Block before editing with no fallback when any required field is missing, blank, malformed, unverifiable, stale, or mismatched. Do not install, use manual GitHub choreography, guess a provider, or reuse stale continuity prose.
 
-- `400-line budget risk: High`
-- `Chained PRs recommended: Yes`
-- `Decision needed before apply: Yes`
+### GitHub-native schema
 
-Then you MUST confirm the orchestrator/user provided a resolved delivery path:
+- Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr`.
+- `chain_strategy` and portable exception fields are not applicable.
+- An over-budget `single-pr` stops.
 
-1. **`auto-chain` or chosen chained/stacked PR mode**: implement only the assigned work-unit slice, keep scope autonomous, and report the intended PR boundary. Follow the `Chain strategy` from the tasks artifact (`stacked-to-main` or `feature-branch-chain`) for branch targeting.
-2. **`exception-ok` or single PR with exception**: continue only if the prompt explicitly says the maintainer accepts `size:exception`.
-3. **`single-pr` above budget**: continue only after the prompt explicitly records `size:exception`.
+### Portable schema
 
-Also check for `Chain strategy` in the tasks artifact. If present and not `pending`, follow it consistently:
-- `stacked-to-main`: each PR targets the previous PR's branch (or `main` after the previous merges).
-- `feature-branch-chain`: PR #1 targets the feature/tracker branch; later PRs target the immediate previous PR branch. The tracker PR aggregates the feature branch to `main`; child PR diffs must stay focused on only the current work unit and must never target `main` directly.
+- Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr | exception-ok`.
+- `chain_strategy` may be `stacked-to-main` or `feature-branch-chain`; manual chaining is permitted.
+- `size:exception` requires an approval bound to Exact repository identity, Exact candidate/snapshot identity, Exact changed-line count, Rationale, Approving actor identity, evidence of an authorized maintainer or authority-basis attestation, Approval record/reference, and Freshness/time. Missing, unverifiable, or stale evidence blocks and never grants remote mutation authority.
 
-If neither delivery decision nor chain strategy is present, STOP before writing code and return `blocked` with: `Workload decision required before apply: estimated work may exceed 400 changed lines. Ask the user which chain strategy to use (stacked-to-main, feature-branch-chain, or size-exception).`
+### Blocked schema
+
+Stop for GitHub unavailable/unproven or an unknown/ambiguous provider. Do not emit a delivery selection, chain choice, or exception field.
+
+When the forecast is high, implement only the assigned autonomous work-unit slice. Route facts, planning, phase approval, `auto-chain`, portable exceptions, and RDD reviews/receipts do not authorize remote create/submit/sync/update/merge operations.
 
 #### Step 2b: Read Previous Apply-Progress (if exists)
 
@@ -238,7 +240,9 @@ If none, say "None."}
 - [ ] {next task}
 
 ### Workload / PR Boundary
-- Mode: {single PR | chained PR slice | stacked PR slice | size:exception}
+- GitHub-native: Mode is `single PR`, `chained PR slice`, or `stacked PR slice`; `chain_strategy` and exception fields are not applicable.
+- Portable: Mode may additionally be `size:exception`; record its approval evidence.
+- Blocked: return blocked before this section.
 - Current work unit: {unit name or "N/A"}
 - Boundary: {what this apply batch starts from and ends with}
 - Estimated review budget impact: {brief note}
@@ -260,7 +264,7 @@ If none, say "None."}
 - If a task is blocked by something unexpected, STOP and report back
 - If workload forecast requires a decision and none was provided, STOP before writing code
 - When applying a chained/stacked PR slice, keep the batch autonomous: one deliverable scope, verification included, and clear rollback boundary
-- When applying `size:exception`, state it explicitly in apply-progress and the return summary
+- Under the portable exception schema, state the approved size exception and its evidence in apply-progress and the return summary
 - NEVER implement tasks that weren't assigned to you
 - Skill loading is handled in Step 1 — follow any loaded skills strictly when writing code
 - Apply any `rules.apply` from `openspec/config.yaml`

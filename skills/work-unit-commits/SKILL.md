@@ -68,7 +68,9 @@ When `sdd-tasks` produces a Review Workload Forecast:
 
 - Low risk: keep work-unit commits inside one PR.
 - Medium risk: commit by work unit and monitor changed lines before PR creation.
-- High risk: follow SDD `delivery_strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
+- High risk: load `gentle-ai-chained-pr` as the provider resolver. GitHub-native permits `ask-on-risk`, `auto-chain`, or `single-pr` only; portable non-GitHub routes retain all four strategies and documented or explicitly bound maintainer exceptions.
+- Record separate repository identity, remote identity, provider/capability/route, pinned revision, command-help evidence/digest, postcondition evidence/digest, and observed/freshness marker as NON-AUTHORITATIVE continuity evidence. Missing, blank, malformed, unverifiable, stale, or mismatched evidence blocks apply with no fallback.
+- A portable exception binds exact repository and candidate/snapshot identity, changed-line count, rationale, approving actor identity, authorized-maintainer evidence or authority-basis attestation, approval record/reference, and freshness/time; it never authorizes remote create/submit/sync/update/merge.
 - Count authored additions plus deletions for the `>400` threshold. Exclude generated goldens from that authored count, but include every generated file in complete snapshot identity and receipt validation.
 
 Each SDD work unit should map cleanly to a commit or PR with:

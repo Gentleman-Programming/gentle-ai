@@ -35,7 +35,7 @@ You are a sub-agent responsible for creating the TASK BREAKDOWN. You take the pr
 From the orchestrator:
 - Change name
 - Artifact store mode (`engram | openspec | hybrid | none`)
-- Delivery strategy (`ask-on-risk | auto-chain | single-pr | exception-ok`)
+- Resolved delivery route and its route-conditioned `delivery_strategy`
 
 ## Execution and Persistence Contract
 
@@ -85,14 +85,37 @@ openspec/changes/{change-name}/
 | Estimated changed lines | <rough estimate or range> |
 | 400-line budget risk | Low / Medium / High |
 | Chained PRs recommended | Yes / No |
-| Suggested split | <single PR or PR 1 → PR 2 → PR 3> |
-| Delivery strategy | <ask-on-risk / auto-chain / single-pr / exception-ok> |
-| Chain strategy | <stacked-to-main / feature-branch-chain / size-exception / pending> |
+| Suggested split | <single PR or autonomous work-unit slices> |
 
-Decision needed before apply: <Yes|No>
-Chained PRs recommended: <Yes|No>
-Chain strategy: <stacked-to-main|feature-branch-chain|size-exception|pending>
-400-line budget risk: <Low|Medium|High>
+## Delivery Route Fact (NON-AUTHORITATIVE)
+
+| Required field | Value |
+|-------|-------|
+| Repository identity | <exact repository identity> |
+| Remote identity | <exact remote/host identity> |
+| Provider/capability/route | <observed provider, capability, and route> |
+| Pinned revision | <exact candidate or runtime revision> |
+| Command-help evidence/digest | <verifiable output or digest> |
+| Postcondition evidence/digest | <verifiable observed state or digest> |
+| Observed/freshness marker | <observation time or equivalent marker> |
+
+### GitHub-native schema
+
+- Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr`.
+- `chain_strategy`: not applicable. Portable exception fields: not applicable.
+- Emit `Decision needed before apply`, `Chained PRs recommended`, and `400-line budget risk`; an over-budget `single-pr` stops.
+
+### Portable schema
+
+- Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr | exception-ok`.
+- `chain_strategy`: `stacked-to-main` or `feature-branch-chain`; manual chaining is permitted.
+- `size:exception` requires the explicit portable approval evidence from the shared protocol.
+
+### Blocked schema
+
+- Stop before a forecast decision. Do not emit a delivery selection, chain choice, or exception field.
+
+This record does not authorize remote create/submit/sync/update/merge.
 
 ### Suggested Work Units
 
@@ -141,6 +164,8 @@ Every applicable threat-matrix case MUST become an explicit RED-test task before
 
 ### Review Workload Forecast Rules
 
+Load `gentle-ai-chained-pr` as the single provider resolver; SDD must not duplicate provider detection. Before finalizing tasks, resolve the provider route through that skill and record the Delivery Route Fact above as NON-AUTHORITATIVE continuity evidence. A GitHub unavailable/unproven or unknown/ambiguous result is blocked; do not invent an install, manual, or guessed fallback.
+
 Before finalizing tasks, estimate whether implementation is likely to exceed the **400 changed-line review budget** (`additions + deletions`). This is a planning guard, not an exact diff count.
 
 Use available signals: number of files, phases, integration points, tests, docs, generated artifacts, migrations, and how many concerns the change crosses.
@@ -150,30 +175,22 @@ If the estimate is **High** or likely above 400 lines:
 1. Mark `Chained PRs recommended` as `Yes`.
 2. Split tasks into **work units** that can become chained or stacked PRs.
 3. Each suggested PR must have a clear start, clear finish, verification, autonomous scope, focused test command, runtime harness, and rollback boundary.
-4. **Ask the user which chain strategy to use** (this is a team decision):
-   - **Stacked PRs to main** — each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
-   - **Feature Branch Chain** — the feature/tracker branch accumulates the final integration; PR #1 targets the tracker branch, later PRs target the immediate previous PR branch so each child diff stays focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
-   - **size:exception** — keep it as a single PR with maintainer approval. Best for generated code, migrations, or vendor diffs.
-5. Cache the user's choice and set `Decision needed before apply` from delivery strategy:
-   - `ask-on-risk`: `Yes` — orchestrator asks before apply.
-   - `auto-chain`: `No` — orchestrator proceeds with the first slice using the chosen chain strategy.
-   - `single-pr`: `Yes` — orchestrator must require `size:exception` before apply.
-   - `exception-ok`: `No` — maintainer has accepted `size:exception`.
+4. Select only the matching route schema: GitHub-native permits `ask-on-risk`, `auto-chain`, or `single-pr`; portable non-GitHub permits all four strategies, manual chaining, feature-branch chains, and a size exception only with the recorded approval evidence; blocked routes stop without a delivery selection.
+5. Set `Decision needed before apply` from the selected schema; `ask-on-risk` asks, `auto-chain` applies the first slice, GitHub over-budget `single-pr` stops, and portable exceptions require the exact recorded evidence.
 
 Do not bury this in prose. Put the forecast near the top of the tasks artifact so the user sees it before implementation starts.
 
-The forecast MUST include these exact plain-text lines so downstream guards can match them literally:
+The route-applicable forecast MUST include these exact plain-text lines so downstream guards can match them literally:
 
 ```text
 Decision needed before apply: Yes|No
 Chained PRs recommended: Yes|No
-Chain strategy: stacked-to-main|feature-branch-chain|size-exception|pending
 400-line budget risk: Low|Medium|High
 ```
 
-You may keep the table for readability, but the plain-text lines are the guard contract.
+Portable forecasts additionally emit `Chain strategy: stacked-to-main|feature-branch-chain`; GitHub-native records `Chain strategy: not-applicable`; blocked routes emit none of these forecast decision lines. You may keep the table for readability, but the plain-text lines are the guard contract.
 
-For `feature-branch-chain`, suggested work units SHOULD name the intended base boundary: PR #1 base = feature/tracker branch; PR #2 base = PR #1 branch; PR #3 base = PR #2 branch. If a child PR would show previous PR changes, the base is wrong and must be retargeted/rebased before review.
+Under the portable `feature-branch-chain` schema, suggested work units SHOULD name the intended base boundary: PR #1 base = feature/tracker branch; PR #2 base = PR #1 branch; PR #3 base = PR #2 branch. If a child PR would show previous PR changes, the base is wrong and must be retargeted/rebased before review.
 
 ### Phase Organization Guidelines
 
@@ -232,7 +249,7 @@ Return to the orchestrator:
 - Estimated changed lines: {estimate or range}
 - 400-line budget risk: {Low | Medium | High}
 - Chained PRs recommended: {Yes | No}
-- Delivery strategy: {ask-on-risk | auto-chain | single-pr | exception-ok}
+- Delivery strategy: {route-conditioned `delivery_strategy` value from the selected schema; omit when blocked}
 - Decision needed before apply: {Yes | No}
 - Suggested work-unit PR split: {brief list or "Not needed"}
 

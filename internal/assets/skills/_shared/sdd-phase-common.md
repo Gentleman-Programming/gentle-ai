@@ -98,21 +98,44 @@ Example:
 (other values: `fallback-registry`, `fallback-path`, or `none — no registry found`)
 ```
 
-## E. Review Workload Guard
+## E. Provider-Aware Review Workload Guard
 
-SDD must protect reviewer cognitive load, not only generate tasks.
+SDD must protect reviewer cognitive load without guessing a remote provider. The default PR review budget is **400 changed lines** (`additions + deletions`); generated goldens are excluded from authored risk count but remain in snapshot identity and receipt validation. Load `gentle-ai-chained-pr` as the single provider resolver; SDD must not duplicate provider detection.
 
-- The default PR review budget is **400 changed lines** (`additions + deletions`).
-- Count authored text additions plus deletions only for this threshold. Generated goldens are excluded from authored risk count but remain included in complete snapshot identity and receipt validation.
-- The orchestrator MUST cache a delivery strategy at session start: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Those four are the whole domain.
-- Any other `delivery_strategy` value is invalid. A phase MUST NOT map it to the nearest branch, MUST NOT record it in an artifact, and MUST NOT forward it: report the unrecognised value and stop.
-- The orchestrator MUST pass `delivery_strategy` to `sdd-tasks` and the resolved decision to `sdd-apply`.
-- `sdd-tasks` MUST forecast whether the planned work may exceed that budget.
-- The forecast MUST include exact plain-text guard lines: `Decision needed before apply: Yes|No`, `Chained PRs recommended: Yes|No`, and `400-line budget risk: Low|Medium|High`.
-- If the forecast is high, `sdd-tasks` MUST recommend chained or stacked PRs using deliverable work units.
-- `sdd-apply` MUST NOT start oversized work unless the delivery strategy resolves to chained/stacked PR slices or explicitly accepted `size:exception`.
-- Each chained PR slice must have a clear start, clear finish, autonomous scope, verification, and reasonable rollback.
-- In a Feature Branch Chain, PR #1 targets the feature/tracker branch and later child PRs target the immediate previous PR branch; if GitHub shows previous slices in a child diff, retarget/rebase until the diff is clean.
+Every Delivery Route Fact is NON-AUTHORITATIVE continuity evidence with these separate required fields:
+
+| Required field | Required evidence |
+| --- | --- |
+| Repository identity | Exact repository identity |
+| Remote identity | Exact remote/host identity |
+| Provider/capability/route | Observed provider, capability, and selected route |
+| Pinned revision | Exact candidate or runtime revision |
+| Command-help evidence/digest | Verifiable command-help output or digest |
+| Postcondition evidence/digest | Verifiable observed postcondition or digest |
+| Observed/freshness marker | Observation time or equivalent freshness marker |
+
+Each field must be present, non-blank, well-formed, verifiable, fresh, and mutually matched. Missing, blank, malformed, unverifiable, stale, or mismatched route evidence blocks apply with no fallback.
+
+### GitHub-native schema
+
+- Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr`.
+- `chain_strategy`: not applicable. Portable exception fields: not applicable.
+- GHES requires exact host/build proof. An over-budget `single-pr` stops.
+
+### Portable schema
+
+Use this schema only for a positively identified non-GitHub provider.
+
+- Selectable `delivery_strategy`: `ask-on-risk | auto-chain | single-pr | exception-ok`.
+- `chain_strategy` may be `stacked-to-main` or `feature-branch-chain`; manual chaining is permitted.
+- A portable size exception requires either repository-documented maintainer-controlled evidence or an explicit human approval record. That approval must bind Exact repository identity, Exact candidate/snapshot identity, Exact changed-line count, Rationale, Approving actor identity, evidence that the actor is an authorized maintainer (or an authority-basis attestation when provider lookup is unavailable), Approval record/reference, and Freshness/time.
+- Missing, unverifiable, or stale portable exception evidence blocks. It never grants remote mutation authority.
+
+### Blocked schema
+
+Stop for GitHub unavailable or unproven, or an unknown or ambiguous provider. Do not install, guess, or use a manual fallback. Do not emit any delivery selection, chain choice, or exception field.
+
+The orchestrator passes the resolved route decision to `sdd-tasks` and `sdd-apply`; tasks forecast budget risk and retain only the route-applicable guard lines. Each chain slice has an autonomous scope, verification, and rollback boundary. Route facts, issue/planning/phase approval, `auto-chain`, portable exception approval, and RDD reviews/receipts do not authorize remote create/submit/sync/update/merge operations.
 
 This guard exists to reduce reviewer burnout and keep implementation delivery safe. Do not treat it as optional process noise.
 
