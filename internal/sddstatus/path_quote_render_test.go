@@ -7,21 +7,6 @@ import (
 	"testing"
 )
 
-// Issue #2498: rendering the workspace root through fmt's %q escapes every
-// backslash, so a Windows path prints with doubled separators in the exact
-// `gentle-ai sdd-attempt` invocation the refusal tells the operator to run.
-// This test pins the correct behavior: the printed invocation contains the
-// path as the filesystem knows it, quoted, with single separators.
-
-func TestArchiveReVerifyContinuationRendersWindowsPathVerbatim(t *testing.T) {
-	workspace := `C:\Users\dev\repo`
-	got := archiveReVerifyContinuation(workspace, "my-change", RuntimeStatus{Revision: "abc123"})
-	want := `--cwd "C:\Users\dev\repo"`
-	if occurrences := strings.Count(got, want); occurrences != 2 {
-		t.Fatalf("begin+finish continuation renders --cwd twice and both must carry the verbatim path:\nwant 2 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
-	}
-}
-
 func TestApplyNativeRuntimeErrorRoutingRendersWindowsPathVerbatim(t *testing.T) {
 	change := "my-change"
 	status := &Status{ChangeName: &change}
@@ -55,8 +40,8 @@ func TestNativeRuntimeInstructionsRenderWindowsPathVerbatim(t *testing.T) {
 	status.ActionContext.WorkspaceRoot = `C:\Users\dev\repo`
 	got := strings.Join(nativeRuntimeInstructions(status, "my-change"), "\n")
 	want := `--cwd "C:\Users\dev\repo"`
-	if occurrences := strings.Count(got, want); occurrences != 4 {
-		t.Fatalf("runtime instructions must all carry the verbatim path:\nwant 4 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
+	if occurrences := strings.Count(got, want); occurrences != 3 {
+		t.Fatalf("runtime instructions must all carry the verbatim path:\nwant 3 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
 	}
 }
 
@@ -66,7 +51,6 @@ func TestNonPhaseRoutingInstructionsRenderWindowsPathVerbatim(t *testing.T) {
 		next        string
 		occurrences int
 	}{
-		{next: "resolve-review", occurrences: 1},
 		{next: "select-change", occurrences: 2},
 	}
 	for _, tt := range tests {

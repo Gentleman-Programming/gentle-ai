@@ -105,11 +105,14 @@ func (counters *Counters) UnmarshalJSON(payload []byte) error {
 }
 
 type Start struct {
-	LineageID            string
-	Mode                 Mode
-	Generation           int
-	Snapshot             Snapshot
-	PolicyHash           string
+	LineageID  string
+	Mode       Mode
+	Generation int
+	Snapshot   Snapshot
+	PolicyHash string
+	// PolicyContent preserves the exact bytes START already read and hashed when
+	// creating compact authority. Nil is retained only for historical authority.
+	PolicyContent        *string
 	RiskLevel            RiskLevel
 	SelectedLenses       []string
 	OriginalChangedLines *int
@@ -909,23 +912,6 @@ func (transaction *Transaction) CompleteFinalVerification(evidenceHash string, a
 		transaction.State = StateEscalated
 	}
 	return nil
-}
-
-func ParseTransaction(payload []byte) (Transaction, error) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var transaction Transaction
-	if err := decoder.Decode(&transaction); err != nil {
-		return Transaction{}, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return Transaction{}, errors.New("multiple JSON values in review transaction")
-	}
-	if err := transaction.validate(); err != nil {
-		return Transaction{}, err
-	}
-	return transaction, nil
 }
 
 func (transaction *Transaction) UnmarshalJSON(payload []byte) error {

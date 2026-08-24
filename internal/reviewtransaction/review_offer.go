@@ -1,8 +1,5 @@
-// Package reviewtransaction — the Wave-4 offer API (design decision 8, Wave
-// 3 Slice 5, task 6.5; wired Wave 4 S3b/S5b). OfferReviewAfterVerify is
-// design decision 8's literal signature, now called from internal/sddstatus
-// (S3b's applyReviewOfferRouting, through review_door.go's
-// reviewOfferForVerify).
+// Package reviewtransaction manages native review transaction state and exposes
+// the mode-only post-verification offer consumed by SDD status.
 package reviewtransaction
 
 import (
@@ -14,30 +11,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
-// OfferRequest names the one candidate an offer decision would be made for.
-// Receipt is Wave 4 S5b's closed loop: the caller's own-looked-up terminal
-// receipt for this candidate, read from SDD's own runtime ledger
-// (sddstatus.RuntimeStatus.Receipt) and passed in. reviewtransaction never
-// looks this up itself — internal/sddstatus already imports
-// internal/reviewtransaction, so the reverse import would cycle; the
-// package boundary is why the caller resolves it, not this function.
-type OfferRequest struct {
-	LineageID string
-	Receipt   *SDDReceiptRef
-}
-
-// Offer is OfferReviewAfterVerify's exact result shape. Available false
-// never means "denied" — it means no offer is made for this call; Wave 4's
-// wiring is what turns this into a genuinely actionable choice.
+// Offer is OfferReviewAfterVerify's complete mode-only result. Available
+// false never means "denied" — it means no offer is made for this call.
 type Offer struct {
 	Available bool
-	LineageID string
 }
 
-// OfferReviewAfterVerify is Wave 4's post-verify offer point (design decision
-// 8's literal signature): after a candidate's independent verification
-// evidence exists, this asks whether receipt-driven development should now
-// offer a review for it.
+// OfferReviewAfterVerify is the post-verify offer point: after independent SDD
+// verification succeeds, it asks whether receipt-driven development should now
+// offer a fresh review.
 //
 // The kill switch is evaluated at its EFFECTIVE scope — global mode combined
 // with this clone's off-only local override, through the exact same
@@ -53,16 +35,9 @@ type Offer struct {
 // side effect — it never writes, so the "zero side effects while disabled"
 // property this function must uphold is unaffected.
 //
-// Wave 4 S5b closes the loop design decision 8 left open: when the switch is
-// on, the real decision is receipt discovery, not a fabricated fixed
-// answer. request.Receipt (the caller's own-looked-up terminal receipt, if
-// the runtime ledger has one for this lineage) is re-validated through
-// ValidateSDDReceiptRef — the same one native validation entry point every
-// other consumer uses, never a re-derivation. A receipt that still resolves
-// GateAllow already governs this exact candidate: nothing to offer.
-// Anything else (no receipt recorded yet, or one that no longer resolves
-// allow) is a genuine invitation to start a review.
-func OfferReviewAfterVerify(ctx context.Context, repo string, request OfferRequest) (Offer, error) {
+// When enabled, an offer remains a genuine invitation to start a review. It
+// does not inspect or replay compact receipt authority.
+func OfferReviewAfterVerify(ctx context.Context, repo string) (Offer, error) {
 	if err := ctx.Err(); err != nil {
 		return Offer{}, err
 	}
@@ -75,16 +50,9 @@ func OfferReviewAfterVerify(ctx context.Context, repo string, request OfferReque
 		return Offer{}, resolveErr
 	}
 	if !status.Enabled() {
-		return Offer{Available: false, LineageID: request.LineageID}, nil
+		return Offer{Available: false}, nil
 	}
-	available := true
-	if request.Receipt != nil {
-		result, _, validateErr := ValidateSDDReceiptRef(ctx, repo, *request.Receipt)
-		if validateErr == nil && result == GateAllow {
-			available = false
-		}
-	}
-	return Offer{Available: available, LineageID: request.LineageID}, nil
+	return Offer{Available: true}, nil
 }
 
 // readGlobalRDDModeForOffer reads only the uncommitted global kill-switch

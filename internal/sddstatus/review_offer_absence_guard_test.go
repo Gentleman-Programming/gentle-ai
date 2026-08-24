@@ -74,7 +74,7 @@ import (
 )
 
 func example(ctx context.Context) {
-	reviewtransaction.OfferReviewAfterVerify(ctx, "", reviewtransaction.OfferRequest{})
+	reviewtransaction.OfferReviewAfterVerify(ctx, "")
 }
 `,
 			wantViolation: true,

@@ -190,20 +190,6 @@ func TestUntouchedJourneyNeverTouchesTheSwitch(t *testing.T) {
 	}
 }
 
-func TestSandboxEnvIncludesBenchReceiptMutationPath(t *testing.T) {
-	sandbox, err := newSandbox("gentle-ai", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	sandbox.BenchReceiptMutationPath = filepath.Join(sandbox.Root, "receipt.json")
-	for _, entry := range sandbox.env() {
-		if entry == "GENTLE_AI_BENCH_MUTATE_RECEIPT="+sandbox.BenchReceiptMutationPath {
-			return
-		}
-	}
-	t.Fatal("sandbox environment has no benchmark receipt mutation path")
-}
-
 func TestSandboxEnvKeepsTempFilesInsideTheSandbox(t *testing.T) {
 	sandbox, err := newSandbox("gentle-ai", t.TempDir())
 	if err != nil {

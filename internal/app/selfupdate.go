@@ -32,8 +32,13 @@ const (
 	envYesUpdate      = "GENTLE_AI_YES"
 )
 
+// isTerminal reports whether fd belongs to a native or Cygwin/MSYS2 terminal.
+func isTerminal(fd uintptr) bool {
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
 // isattyFn is a package-level var for TTY detection, injectable for tests.
-var isattyFn = func(fd uintptr) bool { return isatty.IsTerminal(fd) }
+var isattyFn = isTerminal
 
 // selfUpdateYesFn returns true when the caller wants the upgrade to proceed
 // without an interactive prompt. Set GENTLE_AI_YES=1 for scripted upgrades.

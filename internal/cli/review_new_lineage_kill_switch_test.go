@@ -16,9 +16,8 @@ import (
 // "Kill-Switch-Off Is Structurally Unfailable and Creates Nothing" -> "Kill
 // switch off produces no side effect". Prior coverage proved this only for
 // the unwired OfferReviewAfterVerify (review_offer_test.go); it was never
-// proven for the facade at its five observed gate call sites, nor with the
-// new-lineage activation switch itself turned on. No production behavior
-// changes here — this is a new test only.
+// proven for the facade at its five observed gate call sites. No production
+// behavior changes here — this is a new test only.
 
 // snapshotAuthorityTree returns a canonical, comparable representation of
 // every regular file under root — relative path plus exact byte content —
@@ -72,13 +71,12 @@ func snapshotAuthorityTree(t *testing.T, root string) string {
 // TestNewLineageKillSwitchOffProducesZeroSideEffectsAcrossEntrySurfaces
 // drives every new-lineage-adjacent read surface — all five `review
 // validate` gates plus OfferReviewAfterVerify's own guard path — with the
-// kill switch off and the new-lineage activation env var on, twice against
-// the identical fixture (same-fixture double-eval), and proves the entire
+// kill switch off, twice against the identical fixture (same-fixture
+// double-eval), and proves the entire
 // .git/gentle-ai subtree is byte-identical before and after each pass.
 func TestNewLineageKillSwitchOffProducesZeroSideEffectsAcrossEntrySurfaces(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("kill-switch-off fixture\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +110,7 @@ func TestNewLineageKillSwitchOffProducesZeroSideEffectsAcrossEntrySurfaces(t *te
 			}
 		}
 
-		offer, offerErr := reviewtransaction.OfferReviewAfterVerify(context.Background(), repo, reviewtransaction.OfferRequest{LineageID: "kill-switch-off-lineage"})
+		offer, offerErr := reviewtransaction.OfferReviewAfterVerify(context.Background(), repo)
 		if offerErr != nil {
 			t.Fatalf("%s: OfferReviewAfterVerify produced an error while the kill switch is off: %v", pass, offerErr)
 		}
