@@ -18,7 +18,7 @@ Load this skill whenever you need to:
 
 ## Critical Rules
 
-1. **Every PR MUST link an approved issue** — `Closes/Fixes/Resolves #<N>` in the PR body, and that issue MUST have `status:approved`. PRs without this are **automatically rejected** by CI.
+1. **Every PR MUST visibly link an approved base-repository issue** — `Closes/Fixes/Resolves #<N>` closes it on merge; `Refs #<N>` is non-closing. Every accepted reference MUST have `status:approved`; malformed, cross-repository, or mixed closing/non-closing references are rejected by CI.
 2. **Exactly one `type:*` label** — apply exactly ONE type label to the PR. CI will reject PRs with zero or multiple type labels.
 3. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or request/obtain maintainer-applied `size:exception` with rationale documented.
 4. **Automated checks must pass** — see the Automated Checks table below.
@@ -84,7 +84,7 @@ The PR body must follow the template at `.github/PULL_REQUEST_TEMPLATE.md`. All 
 ```markdown
 ## 🔗 Linked Issue
 
-Closes #<N>
+Closes #<N> (or `Refs #<N>` for a visible, non-closing link to an approved issue in the base repository)
 
 ## 🏷️ PR Type
 
@@ -148,7 +148,7 @@ These checks run on every PR and **all must pass** before merge:
 | Check | What It Verifies | How to Fix |
 |-------|-----------------|------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) or has `size:exception` | Split the PR, or request/obtain maintainer-applied `size:exception` and document the rationale |
-| **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` | Add `Closes #<N>` to the PR body |
+| **Check Issue Reference** | PR body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or `Refs #N` | Add one valid reference; malformed, cross-repository, and mixed closing/non-closing references fail |
 | **Check Issue Has `status:approved`** | Linked issue has been approved by a maintainer | Wait for maintainer to add `status:approved` to the issue |
 | **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Ask a maintainer to add the correct label; remove extras |
 | **Unit Tests** | `go test ./...` passes | Fix failing tests before pushing |

@@ -18,7 +18,7 @@ Use this skill when:
 
 ## Critical Rules
 
-1. **Every PR MUST link an approved issue** — no exceptions
+1. **Every PR MUST visibly link an approved base-repository issue** — `Closes/Fixes/Resolves #N` closes it on merge; `Refs #N` is non-closing; malformed, cross-repository, and mixed closing/non-closing references are rejected
 2. **Every PR MUST have exactly one `type:*` label**
 3. **Automated checks must pass** before merge is possible
 4. **Blank PRs without issue linkage will be blocked** by GitHub Actions
@@ -75,7 +75,7 @@ The PR template is at `.github/PULL_REQUEST_TEMPLATE.md`. Every PR body MUST con
 Closes #<issue-number>
 ```
 
-Valid keywords: `Closes #N`, `Fixes #N`, `Resolves #N` (case insensitive).
+Valid keywords: `Closes #N`, `Fixes #N`, `Resolves #N` (case insensitive) close the issue on merge; `Refs #N` is a non-closing link. Use only visible, well-formed references to approved issues in the base repository.
 The linked issue MUST have the `status:approved` label.
 
 ### 2. PR Type (REQUIRED)
@@ -128,7 +128,7 @@ All boxes must be checked:
 
 | Check | Job name | What it verifies |
 |-------|----------|-----------------|
-| PR Validation | `Check Issue Reference` | Body contains `Closes/Fixes/Resolves #N` |
+| PR Validation | `Check Issue Reference` | Body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or `Refs #N` |
 | PR Validation | `Check Issue Has status:approved` | Linked issue has `status:approved` |
 | PR Validation | `Check PR Has type:* Label` | PR has exactly one `type:*` label |
 | CI | `Shellcheck` | Shell scripts pass `shellcheck` |
