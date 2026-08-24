@@ -39,14 +39,8 @@ func TestDisabledReviewAdmitsUnmanagedRemediationForAdmittedFailure(t *testing.T
 	if status.NextRecommended != "remediate" {
 		t.Fatalf("nextRecommended = %q, want remediate", status.NextRecommended)
 	}
-	// The switch removes the review obligation; it must never fabricate the
-	// approval that obligation would have produced.
-	if status.ReviewGate != nil {
-		t.Fatalf("disabled review published a gate result: %#v", status.ReviewGate)
-	}
-	if state := status.RemediationState; state.LineageID != "" || state.Generation != 0 || state.FixBatch != 0 ||
-		state.CorrectionBudgetTotal != 0 || state.CorrectionBudgetRemaining != 0 {
-		t.Fatalf("unmanaged remediation invented review-authority provenance: %#v", state)
+	if state := status.RemediationState; state.Complete || state.Reason == "" {
+		t.Fatalf("failed SDD evidence must remain an incomplete, explained remediation: %#v", state)
 	}
 }
 
@@ -85,7 +79,7 @@ func TestDisabledStatusWithoutAnUnmanagedCorrectionDoesNotBlockAfterReenable(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reenabled.Dependencies.Archive != DependencyReady || reenabled.NextRecommended != "archive" || reenabled.ReviewGate != nil {
-		t.Fatalf("re-enabled status without an unmanaged correction = archive %q next %q gate=%#v", reenabled.Dependencies.Archive, reenabled.NextRecommended, reenabled.ReviewGate)
+	if reenabled.Dependencies.Archive != DependencyReady || reenabled.NextRecommended != "archive" {
+		t.Fatalf("re-enabled status without an unmanaged correction = archive %q next %q", reenabled.Dependencies.Archive, reenabled.NextRecommended)
 	}
 }

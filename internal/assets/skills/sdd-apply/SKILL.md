@@ -155,7 +155,7 @@ If design/tasks contain applicable threat-matrix cases, write and run each mappe
 
 After all implementation work units finish, return control to the parent orchestrator for independent SDD verification. Do not launch or recommend review directly after apply. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator. Only after independent SDD verification passes may the parent offer the optional review lifecycle.
 
-Focused remediation is the sole `applyState: all_done` exception. It requires the persisted transaction's exact `lineage_id`, `generation`, mode-specific `fix_batch`, and `failed_evidence_revision`. Record those values in both the `gentle-ai.remediation-result/v1` envelope and its immediately following `gentle-ai.remediation-evidence/v1` JSON. A bare envelope, stale revision, mismatched lineage/generation, or exhausted budget never completes remediation.
+Focused remediation is the sole `applyState: all_done` exception. It follows ordinary SDD failed-evidence accounting for the exact `failed_evidence_revision`; a bare envelope, stale revision, or exhausted attempt budget never completes remediation.
 
 ### Step 4: Implement Tasks (Standard Workflow)
 
@@ -304,7 +304,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - Consume structured status when provided; stop on `blocked`, `all_done`, or unsafe `actionContext`
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
-- Focused remediation is the sole `all_done` exception and must bind both evidence blocks to the exact lineage_id, generation, fix_batch, and failed_evidence_revision from native status
+- Focused remediation is the sole `all_done` exception and must bind evidence to the exact failed_evidence_revision from native status
 
 ## Steps
 

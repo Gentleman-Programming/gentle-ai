@@ -1,8 +1,5 @@
-// Package reviewtransaction — the Wave-4 offer API (design decision 8, Wave
-// 3 Slice 5, task 6.5; wired Wave 4 S3b/S5b). OfferReviewAfterVerify is
-// design decision 8's literal signature, now called from internal/sddstatus
-// (S3b's applyReviewOfferRouting, through review_door.go's
-// reviewOfferForVerify).
+// Package reviewtransaction manages native review transaction state and exposes
+// the mode-only post-verification offer consumed by SDD status.
 package reviewtransaction
 
 import (
@@ -14,24 +11,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
-// OfferRequest names the one candidate an offer decision would be made for.
-// Offers are informational and do not consult terminal receipt authority.
-type OfferRequest struct {
-	LineageID string
-}
-
-// Offer is OfferReviewAfterVerify's exact result shape. Available false
-// never means "denied" — it means no offer is made for this call; Wave 4's
-// wiring is what turns this into a genuinely actionable choice.
+// Offer is OfferReviewAfterVerify's complete mode-only result. Available
+// false never means "denied" — it means no offer is made for this call.
 type Offer struct {
 	Available bool
-	LineageID string
 }
 
-// OfferReviewAfterVerify is Wave 4's post-verify offer point (design decision
-// 8's literal signature): after a candidate's independent verification
-// evidence exists, this asks whether receipt-driven development should now
-// offer a review for it.
+// OfferReviewAfterVerify is the post-verify offer point: after independent SDD
+// verification succeeds, it asks whether receipt-driven development should now
+// offer a fresh review.
 //
 // The kill switch is evaluated at its EFFECTIVE scope — global mode combined
 // with this clone's off-only local override, through the exact same
@@ -49,7 +37,7 @@ type Offer struct {
 //
 // When enabled, an offer remains a genuine invitation to start a review. It
 // does not inspect or replay compact receipt authority.
-func OfferReviewAfterVerify(ctx context.Context, repo string, request OfferRequest) (Offer, error) {
+func OfferReviewAfterVerify(ctx context.Context, repo string) (Offer, error) {
 	if err := ctx.Err(); err != nil {
 		return Offer{}, err
 	}
@@ -62,9 +50,9 @@ func OfferReviewAfterVerify(ctx context.Context, repo string, request OfferReque
 		return Offer{}, resolveErr
 	}
 	if !status.Enabled() {
-		return Offer{Available: false, LineageID: request.LineageID}, nil
+		return Offer{Available: false}, nil
 	}
-	return Offer{Available: true, LineageID: request.LineageID}, nil
+	return Offer{Available: true}, nil
 }
 
 // readGlobalRDDModeForOffer reads only the uncommitted global kill-switch

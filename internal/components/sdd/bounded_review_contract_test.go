@@ -65,7 +65,6 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"one lossless grouped prompt",
 		"persist the pending state before prompting",
 		"STOP without invoking `sdd-propose`",
-		"Native `gentle-ai.sdd-status/v1` remains unchanged",
 	}
 }
 
@@ -591,8 +590,7 @@ func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testi
 			content := assets.MustRead(path)
 			for _, required := range []string{
 				"`reviewOffer` is optional and never an archive or delivery gate",
-				"Review approval is terminal and burns its authority",
-				"archive never requires `reviewGate`, a receipt, a ledger, or gate-context artifacts",
+				"Archive reads only task completion and independent verification",
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("%s missing archive non-gate rule %q", path, required)
