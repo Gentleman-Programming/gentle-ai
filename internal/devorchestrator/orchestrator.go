@@ -105,6 +105,21 @@ func (o *Orchestrator) GenerateContextForAgent(
 	sourceArtifact string,
 ) (*context.Package, error) {
 
+	// 0. T1 path containment. Must run before any filepath.Join/os.Stat on a
+	// caller-supplied path and before ownership (refusal precedence #1: this
+	// is what makes the reachable route/context/dispatch CLI verbs (H-01)
+	// safe against a traversal escaping the intended change tree).
+	if primaryArtifact != "" {
+		if err := intent.ValidateContainedPath(o.WorkspaceRoot, primaryArtifact); err != nil {
+			return nil, err
+		}
+	}
+	if sourceArtifact != "" {
+		if err := intent.ValidateContainedPath(o.WorkspaceRoot, sourceArtifact); err != nil {
+			return nil, err
+		}
+	}
+
 	// 1. Trace Resolver
 	var traceNode trace.Node
 	if primaryArtifact != "" {

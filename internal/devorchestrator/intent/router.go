@@ -30,20 +30,33 @@ func New(workspaceRoot string) *Router {
 	}
 }
 
+// NormalizeChangeID derives the on-disk change identifier from a raw source
+// identifier, exactly as RouteIntent applies it internally. Exported so
+// callers (e.g. the CLI's Engram-mode write refusal check) can determine
+// which change a routing request targets before RouteIntent runs.
+func NormalizeChangeID(sourceID string) string {
+	rawSource := strings.TrimSpace(sourceID)
+	if rawSource == "" {
+		return "feature-auto-generated"
+	}
+	changeID := strings.Split(rawSource, "@")[0] // Use just the prefix for the folder
+	changeID = strings.ReplaceAll(changeID, " ", "-")
+	return strings.ToLower(changeID)
+}
+
 // RouteIntent analyzes the input text, generates an ID (if not provided), and creates
 // the first tracking artifact in openspec/changes/<changeID>/.
 func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, error) {
 	// 1. Determine Change ID
 	rawSource := strings.TrimSpace(sourceID)
-	changeID := rawSource
-	if changeID == "" {
-		// A real implementation might hash the intentText or ask an LLM to generate a slug
-		changeID = "feature-auto-generated"
-	} else {
-		// Normalize ID for filesystem, especially if it contains a timestamp (e.g., BS-42@2026-...)
-		changeID = strings.Split(changeID, "@")[0] // Use just the prefix for the folder
-		changeID = strings.ReplaceAll(changeID, " ", "-")
-		changeID = strings.ToLower(changeID)
+	changeID := NormalizeChangeID(sourceID)
+
+	// T1: reject a change ID that would escape openspec/changes/<id> before
+	// any AssertCanWrite/MkdirAll/WriteFile call. Containment precedes
+	// ownership in the refusal precedence ordering (spec, Refusal Precedence
+	// Ordering requirement).
+	if err := ValidateIdentifier(changeID); err != nil {
+		return IntentResult{}, err
 	}
 
 	// 2. Determine initial phase/artifact

@@ -1,10 +1,13 @@
 package devorchestrator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/intent"
 )
 
 func TestGenerateContextForAgent(t *testing.T) {
@@ -367,4 +370,58 @@ func TestGenerateContextForAgent_OwnershipEnforcement(t *testing.T) {
 			t.Fatalf("expected no error for dev-orchestrator-owned change, got: %v", err)
 		}
 	})
+}
+
+// TestGenerateContextForAgent_ContainmentRefusal covers T1: a primaryArtifact
+// or sourceArtifact whose resolved path would escape WorkspaceRoot must be
+// refused with a typed containment error, with zero filesystem side effects.
+func TestGenerateContextForAgent_ContainmentRefusal(t *testing.T) {
+	t.Run("primaryArtifact escapes workspace root", func(t *testing.T) {
+		tempDir := t.TempDir()
+		orch := New(tempDir)
+
+		before, _ := os.ReadDir(tempDir)
+		_, err := orch.GenerateContextForAgent(
+			"EXEC-T1", "dev-explorer", "../../../etc/passwd", nil, "", nil, "", "", "",
+		)
+		if !errors.Is(err, intent.ErrIdentifierContainment) {
+			t.Fatalf("GenerateContextForAgent() error = %v, want ErrIdentifierContainment", err)
+		}
+		after, _ := os.ReadDir(tempDir)
+		if len(after) != len(before) {
+			t.Fatalf("GenerateContextForAgent() created filesystem entries on containment refusal: before=%v after=%v", before, after)
+		}
+	})
+
+	t.Run("sourceArtifact escapes workspace root", func(t *testing.T) {
+		tempDir := t.TempDir()
+		orch := New(tempDir)
+
+		_, err := orch.GenerateContextForAgent(
+			"EXEC-T1-SRC", "dev-explorer", "", nil, "", nil, "", "", "../outside/proposal.md",
+		)
+		if !errors.Is(err, intent.ErrIdentifierContainment) {
+			t.Fatalf("GenerateContextForAgent() error = %v, want ErrIdentifierContainment", err)
+		}
+	})
+}
+
+// TestGenerateContextForAgent_ContainmentPrecedesOwnership covers the spec's
+// Refusal Precedence Ordering requirement: when both containment and
+// ownership would refuse the same call, containment fires first and the
+// ownership check (whose refusal always mentions "strict enforcement") never
+// runs or surfaces its own message.
+func TestGenerateContextForAgent_ContainmentPrecedesOwnership(t *testing.T) {
+	tempDir := t.TempDir()
+	orch := New(tempDir)
+
+	_, err := orch.GenerateContextForAgent(
+		"EXEC-T1-PRECEDENCE", "dev-explorer", "../outside/proposal.md", nil, "", nil, "", "", "",
+	)
+	if !errors.Is(err, intent.ErrIdentifierContainment) {
+		t.Fatalf("GenerateContextForAgent() error = %v, want ErrIdentifierContainment (containment must precede ownership)", err)
+	}
+	if strings.Contains(err.Error(), "strict enforcement") {
+		t.Fatalf("ownership check ran despite containment refusal: %v", err)
+	}
 }
