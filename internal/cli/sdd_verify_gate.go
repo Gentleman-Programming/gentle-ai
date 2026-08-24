@@ -56,6 +56,7 @@ func RunSDDVerifyGate(args []string, stdout io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(parsed.ChangeName) == "" {
+		// refusal:by-design operator-knowledge: only the operator knows which SDD change they meant; the message already names the required argument, and no runnable command can supply that value for them
 		return errors.New("sdd-verify-gate requires <change>")
 	}
 
@@ -90,6 +91,7 @@ func RunSDDVerifyGate(args []string, stdout io.Writer) error {
 	if advisory || verdict.Passing {
 		return nil
 	}
+	// refusal:by-design operator-knowledge: the message already inlines nextRecommended and the exact blocked reasons, so the operator has everything needed to pick the right next command themselves; which SDD phase to run next depends on those reasons and varies per invocation, so no single fixed command name would be honest here
 	return fmt.Errorf("sdd-verify-gate: %s is not clean (nextRecommended=%s): %s",
 		verdict.ChangeName, verdict.NextRecommended, sddVerifyGateReasonsSummary(verdict.BlockedReasons))
 }
