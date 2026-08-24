@@ -57,6 +57,14 @@ permissions:
 {{ .Pkg.ArchitectureProfile }}
 </architecture_profile>
 {{- end }}
+
+{{- if .Pkg.Skills }}
+<skills>
+{{- range .Pkg.Skills }}
+  - {{ . }}
+{{- end }}
+</skills>
+{{- end }}
 `
 
 // FormatPromptSignature takes a base instruction and a structured Context Package,

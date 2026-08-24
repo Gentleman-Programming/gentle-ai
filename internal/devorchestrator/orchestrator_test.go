@@ -236,6 +236,38 @@ func TestGenerateContextForAgent_TraceabilityManagerEnforcement(t *testing.T) {
 	})
 }
 
+// TestGenerateContextForAgent_SkillResolutionErrorPropagates covers H-04:
+// GenerateContextForAgent must surface a skill-resolution failure to the
+// caller instead of silently continuing with a partial context package. The
+// unresolvable skill name below has no matching directory under the
+// workspace's "skills" tree, so skill.Resolver.Resolve returns a non-nil
+// error the same way it would for any genuinely missing skill.
+func TestGenerateContextForAgent_SkillResolutionErrorPropagates(t *testing.T) {
+	tempDir := t.TempDir()
+	orch := New(tempDir)
+
+	pkg, err := orch.GenerateContextForAgent(
+		"EXEC-SKILL-ERR",
+		"dev-explorer",
+		"",
+		nil,
+		"",
+		[]string{"nonexistent-skill"},
+		"",
+		"",
+		"",
+	)
+	if err == nil {
+		t.Fatalf("expected error when skill resolution fails, got nil")
+	}
+	if pkg != nil {
+		t.Fatalf("expected nil package when skill resolution fails, got %#v", pkg)
+	}
+	if !strings.Contains(err.Error(), "resolve skills") {
+		t.Errorf("expected error to mention resolve skills, got: %v", err)
+	}
+}
+
 func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
 	tempDir := t.TempDir()
 	orch := New(tempDir)

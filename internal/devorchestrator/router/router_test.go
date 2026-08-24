@@ -74,6 +74,50 @@ func TestFormatPromptSignature(t *testing.T) {
 	}
 }
 
+// TestFormatPromptSignature_RendersSkillsWhenPresent covers H-10: resolved
+// skills must appear in the rendered agent prompt.
+func TestFormatPromptSignature_RendersSkillsWhenPresent(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-2",
+		Agent:       "backend-implementer",
+		Skills: []string{
+			"skills/backend-implementer/SKILL.md",
+			"skills/database-specialist/SKILL.md",
+		},
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "<skills>") {
+		t.Errorf("Expected output to contain <skills> tag when skills are resolved, got: %s", out)
+	}
+	for _, s := range pkg.Skills {
+		if !strings.Contains(out, s) {
+			t.Errorf("Expected output to contain resolved skill %q, got: %s", s, out)
+		}
+	}
+}
+
+// TestFormatPromptSignature_OmitsSkillsBlockWhenEmpty covers H-10's negative
+// case: when no skills resolve, the skills block must be entirely absent,
+// not rendered as an empty section.
+func TestFormatPromptSignature_OmitsSkillsBlockWhenEmpty(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-3",
+		Agent:       "backend-implementer",
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if strings.Contains(out, "<skills>") {
+		t.Errorf("Expected no <skills> block when no skills resolved, got: %s", out)
+	}
+}
+
 func TestFormatPromptSignature_NilPackage(t *testing.T) {
 	_, err := FormatPromptSignature("instruction", nil)
 	if err == nil {

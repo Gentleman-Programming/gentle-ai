@@ -191,8 +191,7 @@ func (o *Orchestrator) GenerateContextForAgent(
 
 	resolvedSkills, err := o.ResolveSkills(requiredSkills)
 	if err != nil {
-		// Non-fatal, just log or ignore for now, we pass whatever we could resolve
-		// In a real implementation we might fail hard
+		return nil, fmt.Errorf("resolve skills: %w", err)
 	}
 
 	// 3.9 Validate Agent Contract — derived from canonical claude/agents/*.md
