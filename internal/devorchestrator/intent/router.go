@@ -30,6 +30,40 @@ func New(workspaceRoot string) *Router {
 	}
 }
 
+// RouteRequest carries an explicit intent to classify. Phase, when
+// non-empty, is a structured field supplied by the caller (H-06) and is the
+// PRIMARY classification signal -- it takes precedence over intentText's
+// substring content entirely. Phase is case-insensitive and recognizes
+// "DISCOVERY" and "PROPOSE"; any other value (including empty) falls back to
+// the heuristic below.
+type RouteRequest struct {
+	IntentText string
+	SourceID   string
+	Phase      string
+}
+
+// classifyIntent decides the artifact filename and phase for a routing
+// request (H-06). A caller-supplied req.Phase is the primary signal; when
+// absent or unrecognized, this falls back to the pre-existing naive
+// substring heuristic below, unchanged and still documented as naive -- it
+// is known to misclassify inputs like "a proposal to explore options", which
+// is exactly why the structured field exists as the preferred signal.
+func classifyIntent(req RouteRequest) (artifactName string, phase string) {
+	switch strings.ToUpper(strings.TrimSpace(req.Phase)) {
+	case "DISCOVERY":
+		return "explore.md", "DISCOVERY"
+	case "PROPOSE":
+		return "proposal.md", "PROPOSE"
+	}
+
+	// Fallback: naive heuristic, kept for the sake of architecture
+	// fulfillment when no structured field is supplied.
+	if strings.Contains(strings.ToLower(req.IntentText), "explore") || strings.Contains(strings.ToLower(req.IntentText), "bug") {
+		return "explore.md", "DISCOVERY"
+	}
+	return "proposal.md", "PROPOSE"
+}
+
 // NormalizeChangeID derives the on-disk change identifier from a raw source
 // identifier, exactly as RouteIntent applies it internally. Exported so
 // callers (e.g. the CLI's Engram-mode write refusal check) can determine
@@ -45,11 +79,21 @@ func NormalizeChangeID(sourceID string) string {
 }
 
 // RouteIntent analyzes the input text, generates an ID (if not provided), and creates
-// the first tracking artifact in openspec/changes/<changeID>/.
+// the first tracking artifact in openspec/changes/<changeID>/. It is a thin
+// wrapper over RouteIntentRequest with no structured Phase field, so its
+// classification always falls back to the substring heuristic (H-06):
+// existing callers keep their exact prior behavior.
 func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, error) {
+	return r.RouteIntentRequest(RouteRequest{IntentText: intentText, SourceID: sourceID})
+}
+
+// RouteIntentRequest is RouteIntent's structured-input entry point (H-06):
+// req.Phase, when set, is the primary classification signal and takes
+// precedence over req.IntentText's substring content.
+func (r *Router) RouteIntentRequest(req RouteRequest) (IntentResult, error) {
 	// 1. Determine Change ID
-	rawSource := strings.TrimSpace(sourceID)
-	changeID := NormalizeChangeID(sourceID)
+	rawSource := strings.TrimSpace(req.SourceID)
+	changeID := NormalizeChangeID(req.SourceID)
 
 	// T1: reject a change ID that would escape openspec/changes/<id> before
 	// any AssertCanWrite/MkdirAll/WriteFile call. Containment precedes
@@ -59,16 +103,9 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 		return IntentResult{}, err
 	}
 
-	// 2. Determine initial phase/artifact
-	// If it's a bug or complex feature -> explore.md
-	// If it's simple -> proposal.md directly
-	// We do a naive heuristic here for the sake of architecture fulfillment
-	artifactName := "proposal.md"
-	phase := "PROPOSE"
-	if strings.Contains(strings.ToLower(intentText), "explore") || strings.Contains(strings.ToLower(intentText), "bug") {
-		artifactName = "explore.md"
-		phase = "DISCOVERY"
-	}
+	// 2. Determine initial phase/artifact (H-06: structured field first,
+	// naive substring heuristic as documented fallback).
+	artifactName, phase := classifyIntent(req)
 
 	// 3. Create the directory and artifact
 	changesDir := filepath.Join(r.WorkspaceRoot, "openspec", "changes", changeID)
@@ -89,7 +126,7 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 	}
 
 	// 2.5 Greenfield detection
-	intentLower := strings.ToLower(intentText)
+	intentLower := strings.ToLower(req.IntentText)
 	isGreenfield := strings.Contains(intentLower, "greenfield") || strings.Contains(intentLower, "new project") || strings.Contains(intentLower, "nuevo proyecto")
 
 	frontmatterType := ""
@@ -115,7 +152,7 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 	frontmatterBody := fmt.Sprintf("id: %s\n%soriginates-from:\n  - %s\n", changeID, frontmatterType, rawSource)
 	frontmatterBody = changeowner.Stamp(frontmatterBody, changeowner.EngineDev)
 	frontmatter := "---\n" + frontmatterBody + "---\n"
-	content := frontmatter + "# Intake Request\n\n" + intentText + "\n"
+	content := frontmatter + "# Intake Request\n\n" + req.IntentText + "\n"
 
 	err = os.WriteFile(artifactPath, []byte(content), 0644)
 	if err != nil {

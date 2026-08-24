@@ -246,3 +246,118 @@ func TestRouteIntentAcceptsWellFormedID(t *testing.T) {
 		t.Fatalf("ChangeID = %q, want well-formed-id", res.ChangeID)
 	}
 }
+
+// TestClassifyIntent_StructuredFieldTakesPrecedence covers H-06: when a
+// caller supplies an explicit Phase, classification MUST use it and ignore
+// substring content entirely -- including text that would otherwise trip the
+// heuristic in the opposite direction.
+func TestClassifyIntent_StructuredFieldTakesPrecedence(t *testing.T) {
+	cases := []struct {
+		name             string
+		phase            string
+		intentText       string
+		wantPhase        string
+		wantArtifactName string
+	}{
+		{
+			name:             "explicit PROPOSE overrides heuristic-triggering bug text",
+			phase:            "PROPOSE",
+			intentText:       "Fix a bug in the payment module.",
+			wantPhase:        "PROPOSE",
+			wantArtifactName: "proposal.md",
+		},
+		{
+			name:             "explicit DISCOVERY overrides heuristic-silent text",
+			phase:            "DISCOVERY",
+			intentText:       "Add a new button to the dashboard.",
+			wantPhase:        "DISCOVERY",
+			wantArtifactName: "explore.md",
+		},
+		{
+			name:             "explicit phase is case-insensitive",
+			phase:            "discovery",
+			intentText:       "Add a new button to the dashboard.",
+			wantPhase:        "DISCOVERY",
+			wantArtifactName: "explore.md",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			artifactName, phase := classifyIntent(RouteRequest{IntentText: tc.intentText, Phase: tc.phase})
+			if phase != tc.wantPhase {
+				t.Errorf("phase = %q, want %q", phase, tc.wantPhase)
+			}
+			if artifactName != tc.wantArtifactName {
+				t.Errorf("artifactName = %q, want %q", artifactName, tc.wantArtifactName)
+			}
+		})
+	}
+}
+
+// TestClassifyIntent_FallbackHeuristicPreservedWhenFieldAbsent covers H-06's
+// second scenario: with no structured Phase supplied, the existing
+// strings.Contains heuristic MUST still run, unchanged -- including its
+// known misclassification of adversarial inputs, since fixing the heuristic
+// itself is explicitly out of scope for this requirement.
+func TestClassifyIntent_FallbackHeuristicPreservedWhenFieldAbsent(t *testing.T) {
+	cases := []struct {
+		name             string
+		intentText       string
+		wantPhase        string
+		wantArtifactName string
+	}{
+		{
+			name:             "bug text routes to DISCOVERY via heuristic",
+			intentText:       "Fix a bug in the payment module.",
+			wantPhase:        "DISCOVERY",
+			wantArtifactName: "explore.md",
+		},
+		{
+			name:             "plain feature text routes to PROPOSE via heuristic",
+			intentText:       "Add a new button to the dashboard.",
+			wantPhase:        "PROPOSE",
+			wantArtifactName: "proposal.md",
+		},
+		{
+			name:             "adversarial: 'proposal to explore options' still misclassifies as DISCOVERY (documented heuristic limitation, unchanged by H-06)",
+			intentText:       "This is a proposal to explore options for the API.",
+			wantPhase:        "DISCOVERY",
+			wantArtifactName: "explore.md",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			artifactName, phase := classifyIntent(RouteRequest{IntentText: tc.intentText})
+			if phase != tc.wantPhase {
+				t.Errorf("phase = %q, want %q", phase, tc.wantPhase)
+			}
+			if artifactName != tc.wantArtifactName {
+				t.Errorf("artifactName = %q, want %q", artifactName, tc.wantArtifactName)
+			}
+		})
+	}
+}
+
+// TestRouteIntentRequest_StructuredFieldEndToEnd proves the structured field
+// drives the real, file-writing RouteIntentRequest path (not just the pure
+// classifier), and that RouteIntent(text, sourceID) remains a thin wrapper
+// with unchanged behavior for existing callers.
+func TestRouteIntentRequest_StructuredFieldEndToEnd(t *testing.T) {
+	tempDir := t.TempDir()
+	router := New(tempDir)
+
+	res, err := router.RouteIntentRequest(RouteRequest{
+		IntentText: "Fix a bug in the payment module.", // heuristic would say DISCOVERY
+		SourceID:   "structured-propose",
+		Phase:      "PROPOSE", // structured field must win
+	})
+	if err != nil {
+		t.Fatalf("RouteIntentRequest() error = %v", err)
+	}
+	if res.Phase != "PROPOSE" {
+		t.Errorf("Phase = %q, want PROPOSE", res.Phase)
+	}
+	if !strings.HasSuffix(res.ArtifactPath, "proposal.md") {
+		t.Errorf("ArtifactPath = %q, want suffix proposal.md", res.ArtifactPath)
+	}
+}
