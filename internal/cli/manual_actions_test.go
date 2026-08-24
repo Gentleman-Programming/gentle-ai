@@ -1,11 +1,16 @@
 package cli
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // TestRenderInstallManualActions pins the CLI renderer. It previously read only
@@ -55,5 +60,67 @@ func TestRenderInstallManualActions(t *testing.T) {
 func TestRenderInstallManualActionsEmptyRendersNothing(t *testing.T) {
 	if out := RenderInstallManualActions(InstallResult{}); out != "" {
 		t.Fatalf("RenderInstallManualActions() = %q, want empty", out)
+	}
+}
+
+// manualActionProbeStep is a stand-in apply step that raises one manual action.
+// It keeps the propagation from runtimeState into the execution result pinned
+// on its own, independently of componentApplyStep, so a change to the GGA
+// producer cannot quietly take the propagation down with it.
+type manualActionProbeStep struct {
+	state  *runtimeState
+	action string
+}
+
+func (s manualActionProbeStep) ID() string { return "test:manual-action-probe" }
+
+func (s manualActionProbeStep) Run() error {
+	s.state.manualActions = append(s.state.manualActions, s.action)
+	return nil
+}
+
+// TestExecuteTUIInstallPropagatesManualActions pins the TUI half of the
+// propagation. The TUI completion screen reads ExecutionResult.ManualActions,
+// so an action a step collects in runtimeState reaches a user only if
+// executeTUIInstallWithBackground copies it across. Without this test the copy
+// could be deleted and every other test in the package would stay green.
+func TestExecuteTUIInstallPropagatesManualActions(t *testing.T) {
+	home := t.TempDir()
+	action := "Something optional was skipped; here is how to finish it."
+
+	// The probe is the only thing under test here, so the pipeline must not
+	// reach the machine: without these seams the run would consult the host's
+	// PATH and could execute a real installer.
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreHome := osUserHomeDir
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		osUserHomeDir = restoreHome
+	})
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(string) (string, error) { return "", errors.New("not found") }
+	osUserHomeDir = func() (string, error) { return home, nil }
+
+	previous := tuiInstallStagePlan
+	t.Cleanup(func() { tuiInstallStagePlan = previous })
+	tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
+		plan := previous(runtime)
+		plan.Apply = append(plan.Apply, manualActionProbeStep{state: runtime.state, action: action})
+		return plan
+	}
+
+	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}}
+	resolved := planner.ResolvedPlan{OrderedComponents: selection.Components}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
+
+	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(
+		home, selection, resolved, profile,
+		model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil,
+	)
+
+	if !slices.Contains(result.ManualActions, action) {
+		t.Fatalf("TUI execution result dropped the manual action: %v", result.ManualActions)
 	}
 }
