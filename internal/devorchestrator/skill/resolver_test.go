@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,4 +55,71 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("expected 1 path resolved, got %d", len(paths))
 		}
 	})
+}
+
+// TestResolve_MissingSkillIsCleanNotFound is a regression covering today's
+// message shape: a genuinely missing skill must surface as ErrSkillNotFound,
+// never as an unexpected filesystem error.
+func TestResolve_MissingSkillIsCleanNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+
+	angularDir := filepath.Join(tempDir, "skills", "technology", "angular")
+	if err := os.MkdirAll(angularDir, 0755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(angularDir, "SKILL.md"), []byte("angular profile"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	resolver := New(tempDir)
+
+	_, err := resolver.Resolve([]string{"angular", "nonexistent"})
+	if err == nil {
+		t.Fatalf("expected error for missing skill")
+	}
+	if !errors.Is(err, ErrSkillNotFound) {
+		t.Fatalf("expected ErrSkillNotFound, got %v", err)
+	}
+	if errors.Is(err, ErrSkillLookup) {
+		t.Fatalf("missing skill must not be classified as an unexpected lookup error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error should mention missing skill, got %v", err)
+	}
+}
+
+// TestResolve_SurfacesUnexpectedFilesystemError proves a non-not-found
+// filesystem error (e.g. an unreadable category directory) is returned to
+// the caller wrapped in ErrSkillLookup, instead of being silently discarded
+// like the old filepath.Walk "ignore errors" implementation did.
+func TestResolve_SurfacesUnexpectedFilesystemError(t *testing.T) {
+	tempDir := t.TempDir()
+
+	skillsDir := filepath.Join(tempDir, "skills")
+	restrictedCategory := filepath.Join(skillsDir, "restricted")
+	if err := os.MkdirAll(restrictedCategory, 0755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	resolver := New(tempDir)
+
+	restrictedSkillMd := filepath.Join(restrictedCategory, "angular", "SKILL.md")
+	injectedErr := &os.PathError{Op: "stat", Path: restrictedSkillMd, Err: os.ErrPermission}
+	resolver.stat = func(name string) (os.FileInfo, error) {
+		if name == restrictedSkillMd {
+			return nil, injectedErr
+		}
+		return os.Stat(name)
+	}
+
+	_, err := resolver.Resolve([]string{"angular"})
+	if err == nil {
+		t.Fatalf("expected error to surface, got nil")
+	}
+	if !errors.Is(err, ErrSkillLookup) {
+		t.Fatalf("expected ErrSkillLookup, got %v", err)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected wrapped permission error to be inspectable via errors.Is, got %v", err)
+	}
 }
