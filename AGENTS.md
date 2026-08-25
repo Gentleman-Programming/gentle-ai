@@ -26,15 +26,22 @@ Naming convention: `gentle-ai-*` skills are repo-specific workflow skills. Unpre
 | `issue-root-resolution` | When auditing backlog roots, proposing cluster fixes, or closing resolved/outdated issues. | [`skills/legacy/issue-root-resolution/SKILL.md`](skills/legacy/issue-root-resolution/SKILL.md) |
 | `systemic-issue-triage` | When triaging issues, bugs, backlogs, root causes, dead ends, or blocked users. | [`skills/legacy/systemic-issue-triage/SKILL.md`](skills/legacy/systemic-issue-triage/SKILL.md) |
 | `gentle-ai-bench` | When touching `bench/`, journeys, driven mode, the journey corpus, or bench axes. | [`skills/legacy/gentle-ai-bench/SKILL.md`](skills/legacy/gentle-ai-bench/SKILL.md) |
-| `dev-orchestrator` | When coordinating the SDD process, delegating to specialists, or managing human gates. | [`skills/agents/dev-orchestrator/SKILL.md`](skills/agents/dev-orchestrator/SKILL.md) |
-| `dev-explorer` | When exploring a repository to analyze structure, dependencies, and risks. | [`skills/agents/dev-explorer/SKILL.md`](skills/agents/dev-explorer/SKILL.md) |
-| `dev-proposer` | When proposing technical approaches, alternatives, and architecture decisions. | [`skills/agents/dev-proposer/SKILL.md`](skills/agents/dev-proposer/SKILL.md) |
-| `dev-specifier` | When writing verifiable functional criteria using Given/When/Then format. | [`skills/agents/dev-specifier/SKILL.md`](skills/agents/dev-specifier/SKILL.md) |
-| `dev-designer` | When defining technical design and architecture for specifications. | [`skills/agents/dev-designer/SKILL.md`](skills/agents/dev-designer/SKILL.md) |
-| `dev-task-planner` | When decomposing specs and design into actionable tasks. | [`skills/agents/dev-task-planner/SKILL.md`](skills/agents/dev-task-planner/SKILL.md) |
-| `backend-implementer` | When writing backend code for approved specs and design. | [`skills/agents/backend-implementer/SKILL.md`](skills/agents/backend-implementer/SKILL.md) |
-| `frontend-implementer` | When writing frontend code for approved specs and design. | [`skills/agents/frontend-implementer/SKILL.md`](skills/agents/frontend-implementer/SKILL.md) |
-| `database-specialist` | When handling complex DB migrations, schema changes, and high-risk DB tasks. | [`skills/agents/database-specialist/SKILL.md`](skills/agents/database-specialist/SKILL.md) |
-| `dev-verifier` | When validating implementations strictly against tasks and specs. | [`skills/agents/dev-verifier/SKILL.md`](skills/agents/dev-verifier/SKILL.md) |
-| `solution-architect` | When starting a new Greenfield project or module. | [`skills/agents/solution-architect/SKILL.md`](skills/agents/solution-architect/SKILL.md) |
-| `project-bootstrap` | When initializing a new repository from an approved Blueprint. | [`skills/agents/project-bootstrap/SKILL.md`](skills/agents/project-bootstrap/SKILL.md) |
+
+## Subagents (Invoke via `task` tool)
+
+The following are **Subagents**, NOT skills. Do NOT try to load them via SKILL.md files. When the trigger condition is met, delegate to them using your `task()` tool.
+
+| Subagent | Trigger |
+|----------|---------|
+| `dev-orchestrator` | When coordinating the SDD process, delegating to specialists, or managing human gates. |
+| `dev-explorer` | When exploring a repository to analyze structure, dependencies, and risks. |
+| `dev-proposer` | When proposing technical approaches, alternatives, and architecture decisions. |
+| `dev-specifier` | When writing verifiable functional criteria using Given/When/Then format. |
+| `dev-designer` | When defining technical design and architecture for specifications. |
+| `dev-task-planner` | When decomposing specs and design into actionable tasks. |
+| `backend-implementer` | When writing backend code for approved specs and design. |
+| `frontend-implementer` | When writing frontend code for approved specs and design. |
+| `database-specialist` | When handling complex DB migrations, schema changes, and high-risk DB tasks. |
+| `dev-verifier` | When validating implementations strictly against tasks and specs. |
+| `solution-architect` | When starting a new Greenfield project or module. |
+| `project-bootstrap` | When initializing a new repository from an approved Blueprint. |
