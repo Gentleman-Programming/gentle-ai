@@ -15,9 +15,14 @@ write code, create migrations, edit components, or resolve bugs directly.
 
 ## Instructions
 
-Also read shared conventions at your agent's own `_shared/sdd-phase-common.md` (e.g.
-`~/.claude/skills/_shared/sdd-phase-common.md` for Claude Code — for other agent tools, resolve
-via your own skills root, not necessarily Claude's).
+## REGLA CERO (Obligatoria antes de delegar)
+
+Eres el orquestador exclusivo de la familia `dev-*`. **TIENES ESTRICTAMENTE PROHIBIDO** invocar, sugerir, o delegar tareas a cualquier subagente del ciclo SDD original (ej. `sdd-explore`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`). 
+Tu contrato de herramientas bloquea el acceso a estos subagentes. Cualquier intento de usar un `sdd-*` subagente resultará en un fallo técnico inmediato (denied tool call).
+
+**DEBES usar ÚNICA Y EXCLUSIVAMENTE** la familia `dev-*` para todas las delegaciones: `dev-explorer`, `dev-proposer`, `dev-specifier`, `dev-designer`, `dev-task-planner`, `backend-implementer`, `frontend-implementer`, `database-specialist`, `dev-verifier`.
+
+Nota: Aunque los artefactos de estado que lees sigan utilizando la ruta `sdd/{change-name}/*`, los **agentes ejecutores** a los que llamas JAMÁS deben empezar con `sdd-`.
 
 ## Hard Rules
 

@@ -54,7 +54,7 @@ func RunDevOrchestrator(args []string, stdout io.Writer) error {
 // under cwd, so callers can inspect ArtifactStore before any write.
 func devOrchestratorProjection(cwd, change string) (sddstatus.StatusV1Projection, error) {
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD: cwd, ChangeName: change, ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
+		CWD: cwd, ChangeName: change, Engine: "dev-orchestrator", ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
 	})
 	if err != nil {
 		return sddstatus.StatusV1Projection{}, fmt.Errorf("resolve sdd status: %w", err)

@@ -324,7 +324,7 @@ func TestResolveEngramArchiveRecoversRetainedPolicyWithoutSourceArtifacts(t *tes
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -356,7 +356,7 @@ func TestResolveEngramArchiveIgnoresNonAuthoritativeRetainedPolicy(t *testing.T)
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -457,7 +457,7 @@ func TestResolveEngramBridgesCompactAuthorityOverIncompatibleTransactionArtifact
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -508,7 +508,7 @@ func TestResolveEngramSkipsPreVerifyCompactBridgeRegardlessOfTransactionValidity
 	// regardless of the transaction payload's validity — there is no more
 	// "block on malformed" or "bridge on approved compact authority" branch
 	// to distinguish between.
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -520,7 +520,7 @@ func TestResolveEngramSkipsPreVerifyCompactBridgeRegardlessOfTransactionValidity
 	}
 	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
 		observations[len(observations)-1].Content = payload
-		status, _, err = resolveEngramStatus(root, "thin", false, false)
+		status, _, err = resolveEngramStatus(root, "thin", "", false, false)
 		if err != nil {
 			t.Fatalf("resolveEngramStatus(%s) error = %v", payload, err)
 		}
@@ -550,7 +550,7 @@ func TestResolveEngramSkipsPreVerifyConsultationForIncompatibleTransaction(t *te
 	// that read it for that purpose were removed), so verify is ready
 	// regardless. readReviewTransaction's own parse-failure handling must
 	// still not leak a raw JSON error into BlockedReasons.
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -1250,7 +1250,7 @@ func TestResolveEngramRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAutho
 	})
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -1329,7 +1329,7 @@ func TestResolveEngramRoutesStalePassWithDisabledBlockingAuthority(t *testing.T)
 			restore := stubEngramExport(t, observations)
 			defer restore()
 
-			status, ok, err := resolveEngramStatus(root, "thin", false, true)
+			status, ok, err := resolveEngramStatus(root, "thin", "", false, true)
 			if err != nil || !ok {
 				t.Fatalf("resolveEngramStatus() = ok %v, error %v", ok, err)
 			}
@@ -1367,7 +1367,7 @@ func TestResolveEngramRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *te
 	})
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false, false)
+	status, ok, err := resolveEngramStatus(root, "thin", "", false, false)
 	if err != nil || !ok {
 		t.Fatalf("resolveEngramStatus() = ok %v, error %v", ok, err)
 	}

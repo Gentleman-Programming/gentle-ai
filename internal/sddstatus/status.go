@@ -326,6 +326,7 @@ type ResolveOptions struct {
 	CWD                 string
 	WorkspaceRoot       string
 	ChangeName          string
+	Engine              string
 	IncludeInstructions bool
 	// ReviewDisabled records that the user's receipt-driven-development kill
 	// switch is off for this clone. While it is off receipt-driven development
@@ -518,7 +519,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 					),
 				}, options.IncludeInstructions), nil
 			}
-			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.Engine, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
@@ -530,7 +531,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
-		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.Engine, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
 		}
 		return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
@@ -680,7 +681,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		readText(firstPath(artifactPaths.ApplyProgress)),
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(readText(firstPath(artifactPaths.Proposal))), readText(firstPath(artifactPaths.Explore)), readText(firstPath(artifactPaths.Proposal)))
-	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState, options.Engine)
 	slugs := declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks)))
 	repoProgress := buildRepoProgress(slugs, applyProgressStateBySlug(artifactPaths.ApplyProgress))
 	targetRepos := resolveTargetRepositories(slugs, workspaceRoot)
@@ -1062,7 +1063,7 @@ func authorityFailureFields(report string) (map[string]string, bool) {
 	return parsed.Fields, true
 }
 
-func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions, reviewDisabled bool) (Status, bool, error) {
+func resolveEngramStatus(workspaceRoot string, requestedChange string, engine string, includeInstructions, reviewDisabled bool) (Status, bool, error) {
 	if !shouldTryEngram(workspaceRoot) {
 		return Status{}, false, nil
 	}
@@ -1181,7 +1182,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(artifactsByType["proposal"].Content), artifactsByType["explore"].Content, artifactsByType["proposal"].Content)
-	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState, engine)
 	slugs := declaredRepoSlugs(artifactsByType["tasks"].Content)
 	repoProgress := buildRepoProgress(slugs, engramApplyProgressStateBySlug(artifactsByType))
 	targetRepos := resolveTargetRepositories(slugs, workspaceRoot)
@@ -2308,58 +2309,63 @@ func artifactDependency(state ArtifactState) DependencyState {
 	return DependencyBlocked
 }
 
-func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, verifyReportDone bool, remediation RemediationState) string {
+func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, verifyReportDone bool, remediation RemediationState, engine string) string {
+	var nextPhase string
 	// Prefer apply over verify when there is still remaining implementation work.
 	if dependencies.Apply == DependencyReady {
-		return string(PhaseApply)
-	}
-	if dependencies.Verify == DependencyReady {
-		return string(PhaseVerify)
-	}
-	if applyState == ApplyAllDone && verifyReportDone && dependencies.Verify != DependencyAllDone {
+		nextPhase = string(PhaseApply)
+	} else if dependencies.Verify == DependencyReady {
+		nextPhase = string(PhaseVerify)
+	} else if applyState == ApplyAllDone && verifyReportDone && dependencies.Verify != DependencyAllDone {
 		if remediation.Required {
-			return "remediate"
+			nextPhase = "remediate"
+		} else {
+			nextPhase = "resolve-review"
 		}
-		return "resolve-review"
-	}
-	if dependencies.Verify == DependencyAllDone && applyState == ApplyAllDone {
-		return string(PhaseArchive)
-	}
-
-	// Route toward the next missing planning artifact in dependency order.
-	// Missing planning artifacts are the expected output of planning phases,
-	// not genuine blockers. Reserve resolve-blockers for genuine anomalies.
-	if dependencies.Explore != DependencyAllDone {
-		return "sdd-explore"
-	}
-	if dependencies.Blueprint != DependencyAllDone {
-		return "solution-architect"
-	}
-	if dependencies.Proposal != DependencyAllDone {
-		return string(PhasePropose)
-	}
-	if dependencies.Gate1Scope != DependencyAllDone {
-		return string(PhaseApproveGate1)
-	}
-	if dependencies.Specs != DependencyAllDone {
-		return string(PhaseSpec)
-	}
-	if dependencies.Design != DependencyAllDone {
-		return string(PhaseDesign)
-	}
-	if dependencies.Gate2Technical != DependencyAllDone {
-		return string(PhaseApproveGate2)
-	}
-	if dependencies.Tasks != DependencyAllDone {
-		return string(PhaseTasks)
-	}
-	if dependencies.Gate3Implementation != DependencyAllDone {
-		return string(PhaseApproveGate3)
+	} else if dependencies.Verify == DependencyAllDone && applyState == ApplyAllDone {
+		nextPhase = string(PhaseArchive)
+	} else if dependencies.Explore != DependencyAllDone {
+		nextPhase = "sdd-explore"
+	} else if dependencies.Blueprint != DependencyAllDone {
+		nextPhase = "solution-architect"
+	} else if dependencies.Proposal != DependencyAllDone {
+		nextPhase = string(PhasePropose)
+	} else if dependencies.Gate1Scope != DependencyAllDone {
+		nextPhase = string(PhaseApproveGate1)
+	} else if dependencies.Specs != DependencyAllDone {
+		nextPhase = string(PhaseSpec)
+	} else if dependencies.Design != DependencyAllDone {
+		nextPhase = string(PhaseDesign)
+	} else if dependencies.Gate2Technical != DependencyAllDone {
+		nextPhase = string(PhaseApproveGate2)
+	} else if dependencies.Tasks != DependencyAllDone {
+		nextPhase = string(PhaseTasks)
+	} else if dependencies.Gate3Implementation != DependencyAllDone {
+		nextPhase = string(PhaseApproveGate3)
+	} else {
+		nextPhase = "resolve-blockers"
 	}
 
-	// Genuine anomaly: all planning artifacts are done but apply is still blocked.
-	// This indicates a corrupted or ambiguous state that needs human intervention.
-	return "resolve-blockers"
+	if engine == "dev-orchestrator" {
+		switch nextPhase {
+		case "sdd-explore":
+			return "dev-explorer"
+		case string(PhasePropose):
+			return "dev-proposer"
+		case string(PhaseSpec):
+			return "dev-specifier"
+		case string(PhaseDesign):
+			return "dev-designer"
+		case string(PhaseTasks):
+			return "dev-task-planner"
+		case string(PhaseApply):
+			return "backend-implementer" // Default assumption; orchestrator evaluates tasks later.
+		case string(PhaseVerify):
+			return "dev-verifier"
+		}
+	}
+
+	return nextPhase
 }
 
 const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
