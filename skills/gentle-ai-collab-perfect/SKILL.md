@@ -217,6 +217,7 @@ Before recommending any action that touches permissions, label state, or commit 
    ```
 
 4. **After applying a body rewrite**, round-trip the body and confirm `Check Issue Reference` passes. For `Closes`/`Fixes`/`Resolves`, also confirm `closingIssuesReferences` is populated; `Refs #N` is verified by the body and check result alone:
+
    ```bash
    gh pr view <N> --json body --jq '.body'             # round-trip
    gh pr checks <N> --json name,state                   # confirm Check Issue Reference passes
