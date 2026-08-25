@@ -16,12 +16,11 @@ const {
 const policyPath = path.join(__dirname, '..', 'grandfather-size-exceptions.json');
 const workflowPath = path.join(__dirname, '..', 'workflows', 'pr-size-policy.yml');
 
-function topLevelPermissions(workflow) {
-  const match = workflow.match(/^permissions:[ \t]*\r?\n(?<mapping>(?:^[ \t]+[^\r\n]*(?:\r?\n|$))*)/m);
-  assert.ok(match, 'workflow must declare a top-level permissions mapping');
+function yamlMapping(workflow, key, indent = '') {
+  const match = workflow.match(new RegExp(`^${indent}${key}:[ \\t]*\\r?\\n(?<mapping>(?:^${indent}  [^\\r\\n]*(?:\\r?\\n|$))*)`, 'm'));
+  assert.ok(match, `workflow must declare a ${indent ? 'nested' : 'top-level'} ${key} mapping`);
   return match.groups.mapping;
 }
-
 function dormantPolicy(overrides = {}) {
   return { version: 1, enforcement: 'dormant', limit: REVIEW_BUDGET_LIMIT, activation_snapshot: null, grandfathered_prs: [], ...overrides };
 }
@@ -29,14 +28,12 @@ function dormantPolicy(overrides = {}) {
 function pullRequest(overrides = {}) {
   return { number: 3586, additions: 200, deletions: 200, labels: [], ...overrides };
 }
-
 test('400 is within the dormant review budget', () => {
   const result = evaluatePrSize(pullRequest(), dormantPolicy());
   assert.equal(result.total, 400);
   assert.equal(result.outcome, 'pass');
   assert.equal(result.enforced, false);
 });
-
 test('401 is reported but not enforced while the policy is dormant', () => {
   const result = evaluatePrSize(pullRequest({ additions: 401, deletions: 0 }), dormantPolicy());
   assert.equal(result.total, 401);
@@ -44,7 +41,6 @@ test('401 is reported but not enforced while the policy is dormant', () => {
   assert.equal(result.enforced, false);
   assert.match(result.message, /dormant/i);
 });
-
 test('missing, null, non-integer, and negative API counts fail closed', () => {
   for (const additions of [undefined, null, '400', 400.5, -1]) {
     assert.throws(() => evaluatePrSize(pullRequest({ additions }), dormantPolicy()), /additions must be a non-negative integer/);
@@ -117,9 +113,9 @@ test('policy transitions allow only closed or merged grandfather removals after 
 
 test('workflow is trusted, read-only, and never evaluates merge queue or candidate bytes', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
-  const permissions = topLevelPermissions(workflow);
-  assert.match(workflow, /pull_request_target:/);
-  assert.match(workflow, /types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]/);
+  const lifecycle = yamlMapping(yamlMapping(workflow, 'on'), 'pull_request_target', '  ');
+  const permissions = yamlMapping(workflow, 'permissions');
+  assert.match(lifecycle, /^    types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]\r?$/m);
   assert.match(permissions, /^[ \t]+contents:[ \t]+read[ \t]*$/m);
   assert.match(permissions, /^[ \t]+pull-requests:[ \t]+read[ \t]*$/m);
   assert.match(permissions, /^[ \t]+issues:[ \t]+read[ \t]*$/m);
@@ -133,16 +129,23 @@ test('workflow is trusted, read-only, and never evaluates merge queue or candida
   assert.doesNotMatch(workflow, /github\.event\.pull_request\.head/);
 });
 
-test('workflow permissions ignore similarly named job commands', () => {
-  const permissions = topLevelPermissions([
+test('workflow lifecycle and permissions ignore similarly named job commands', () => {
+  const workflow = [
+    'on:',
+    '  pull_request_target:',
+    '    types: [opened]',
     'permissions:',
     '  contents: write',
     'jobs:',
     '  policy:',
     '    steps:',
     '      - run: |',
+    '          pull_request_target:',
+    '            types: [opened, reopened, synchronize, edited, labeled, unlabeled]',
     '          contents: read',
-  ].join('\n'));
+  ].join('\n');
+  const lifecycle = yamlMapping(yamlMapping(workflow, 'on'), 'pull_request_target', '  '), permissions = yamlMapping(workflow, 'permissions');
 
+  assert.doesNotMatch(lifecycle, /^    types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]\r?$/m);
   assert.doesNotMatch(permissions, /^[ \t]+contents:[ \t]+read[ \t]*$/m);
 });
