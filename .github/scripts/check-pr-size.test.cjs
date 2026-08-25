@@ -16,6 +16,12 @@ const {
 const policyPath = path.join(__dirname, '..', 'grandfather-size-exceptions.json');
 const workflowPath = path.join(__dirname, '..', 'workflows', 'pr-size-policy.yml');
 
+function topLevelPermissions(workflow) {
+  const match = workflow.match(/^permissions:[ \t]*\r?\n(?<mapping>(?:^[ \t]+[^\r\n]*(?:\r?\n|$))*)/m);
+  assert.ok(match, 'workflow must declare a top-level permissions mapping');
+  return match.groups.mapping;
+}
+
 function dormantPolicy(overrides = {}) {
   return { version: 1, enforcement: 'dormant', limit: REVIEW_BUDGET_LIMIT, activation_snapshot: null, grandfathered_prs: [], ...overrides };
 }
@@ -111,11 +117,12 @@ test('policy transitions allow only closed or merged grandfather removals after 
 
 test('workflow is trusted, read-only, and never evaluates merge queue or candidate bytes', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const permissions = topLevelPermissions(workflow);
   assert.match(workflow, /pull_request_target:/);
   assert.match(workflow, /types: \[opened, reopened, synchronize, edited, labeled, unlabeled\]/);
-  assert.match(workflow, /^\s*contents:\s+read\s*$/m);
-  assert.match(workflow, /^\s*pull-requests:\s+read\s*$/m);
-  assert.match(workflow, /^\s*issues:\s+read\s*$/m);
+  assert.match(permissions, /^[ \t]+contents:[ \t]+read[ \t]*$/m);
+  assert.match(permissions, /^[ \t]+pull-requests:[ \t]+read[ \t]*$/m);
+  assert.match(permissions, /^[ \t]+issues:[ \t]+read[ \t]*$/m);
   assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /sparse-checkout: \|/);
@@ -124,4 +131,18 @@ test('workflow is trusted, read-only, and never evaluates merge queue or candida
   assert.doesNotMatch(workflow, /merge_group/);
   assert.doesNotMatch(workflow, /refs\/pull/);
   assert.doesNotMatch(workflow, /github\.event\.pull_request\.head/);
+});
+
+test('workflow permissions ignore similarly named job commands', () => {
+  const permissions = topLevelPermissions([
+    'permissions:',
+    '  contents: write',
+    'jobs:',
+    '  policy:',
+    '    steps:',
+    '      - run: |',
+    '          contents: read',
+  ].join('\n'));
+
+  assert.doesNotMatch(permissions, /^[ \t]+contents:[ \t]+read[ \t]*$/m);
 });
