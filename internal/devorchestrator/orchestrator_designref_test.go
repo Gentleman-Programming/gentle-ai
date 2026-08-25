@@ -220,5 +220,12 @@ func TestGenerateContextForAgent_DesignRefNonInterference(t *testing.T) {
 		if !strings.Contains(out, "db_impact: high-risk") {
 			t.Errorf("expected rendered prompt to still contain db_impact line unaffected by design_ref, got: %s", out)
 		}
+		// The skill must reach the agent's actual rendered prompt, not merely
+		// pkg.Skills. Asserting resolution alone leaves the H-10 <skills>
+		// rendering path unproven: a template regression there would drop the
+		// skill silently while every other assertion here still passed.
+		if !strings.Contains(out, "figma-analyzer") {
+			t.Errorf("expected rendered prompt to name the figma-analyzer skill, got: %s", out)
+		}
 	})
 }
