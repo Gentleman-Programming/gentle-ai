@@ -23,6 +23,14 @@ type Package struct {
 	// frontend-implementer -- are told about DB/schema impact explicitly
 	// rather than only inferring it from an injected skill.
 	DBImpact string `json:"db_impact,omitempty" yaml:"db_impact,omitempty"`
+	// DesignRef carries the canonical Figma reference string (design.Ref.
+	// Canonical()) of the primary artifact, when one was recognized. It is
+	// rendered into the agent prompt so agents -- especially
+	// frontend-implementer and solution-architect -- know WHICH design to
+	// analyze, not only that the figma-analyzer skill was injected. Only the
+	// reconstructed canonical form is ever assigned here, never raw input
+	// bytes (design decision D-A).
+	DesignRef string `json:"design_ref,omitempty" yaml:"design_ref,omitempty"`
 }
 
 type Scope struct {
@@ -58,6 +66,7 @@ type BuildRequest struct {
 	ExpectedType        string
 	ExpectedID          string
 	DBImpact            string
+	DesignRef           string
 }
 
 // Build creates a new Context Package based on the provided request.
@@ -77,6 +86,7 @@ func Build(req BuildRequest) Package {
 		RepoProfile:         req.RepoProfile,
 		ArchitectureProfile: req.ArchitectureProfile,
 		DBImpact:            req.DBImpact,
+		DesignRef:           req.DesignRef,
 		Permissions: Permissions{
 			Code: "read", // default to read, orchestrator overrides if execution
 			Git:  "read",

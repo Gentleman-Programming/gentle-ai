@@ -4,9 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/design"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/router"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/skill"
 )
 
@@ -86,4 +88,137 @@ func TestFigmaDesignSkillsResolveOnDisk(t *testing.T) {
 			t.Errorf("figmaDesignSkills can emit %q, which does not resolve under the real workspace skills/ directory: %v", s, resolveErr)
 		}
 	}
+}
+
+// TestGenerateContextForAgent_DesignRefNonInterference covers the spec's
+// "Non-Interference Invariants" requirement end to end (folding in the
+// integration scenario dropped from S2a for budget reasons): (a) an artifact
+// with db_impact: set and no design_ref: must resolve DBImpact and skills
+// exactly as before this change, with no figma-analyzer skill and no
+// design_ref line rendered; (b) an artifact with design_ref: on tasks.md for
+// frontend-implementer must resolve figma-analyzer in skills AND render
+// design_ref: in the final prompt, without disturbing db_impact.
+func TestGenerateContextForAgent_DesignRefNonInterference(t *testing.T) {
+	setupSkills := func(t *testing.T, tempDir string, names ...string) {
+		t.Helper()
+		for _, name := range names {
+			skillDir := filepath.Join(tempDir, "skills", name)
+			if err := os.MkdirAll(skillDir, 0755); err != nil {
+				t.Fatalf("MkdirAll(%s) error = %v", name, err)
+			}
+			if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(name+" skill"), 0644); err != nil {
+				t.Fatalf("WriteFile(%s) error = %v", name, err)
+			}
+		}
+	}
+
+	t.Run("db_impact only: unaffected by this change", func(t *testing.T) {
+		tempDir := t.TempDir()
+		orch := New(tempDir)
+		setupSkills(t, tempDir, "frontend-implementer")
+
+		artifactContent := "---\nid: feature-901\ndb_impact: simple\n---\n# Task content\n"
+		artifactPath := "openspec/changes/feature-901/task.md"
+		absArtifactPath := filepath.Join(tempDir, artifactPath)
+		if err := os.MkdirAll(filepath.Dir(absArtifactPath), 0755); err != nil {
+			t.Fatalf("MkdirAll error = %v", err)
+		}
+		if err := os.WriteFile(absArtifactPath, []byte(artifactContent), 0644); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+
+		pkg, err := orch.GenerateContextForAgent(
+			"EXEC-NON-INTERFERENCE-1",
+			"frontend-implementer",
+			artifactPath,
+			nil,
+			"",
+			[]string{"frontend-implementer"},
+			"COMMIT",
+			"APPLY-901",
+			"",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if pkg.DBImpact != "simple" {
+			t.Errorf("expected DBImpact = %q, got %q", "simple", pkg.DBImpact)
+		}
+		if pkg.DesignRef != "" {
+			t.Errorf("expected DesignRef = %q, got %q", "", pkg.DesignRef)
+		}
+		for _, s := range pkg.Skills {
+			if strings.Contains(s, "figma-analyzer") {
+				t.Errorf("expected no figma-analyzer skill without design_ref, got skills: %v", pkg.Skills)
+			}
+		}
+
+		out, err := router.FormatPromptSignature("Do work.", pkg)
+		if err != nil {
+			t.Fatalf("FormatPromptSignature error = %v", err)
+		}
+		if strings.Contains(out, "design_ref") {
+			t.Errorf("expected no design_ref substring anywhere in rendered prompt, got: %s", out)
+		}
+	})
+
+	t.Run("design_ref present: skill injected and rendered, db_impact untouched", func(t *testing.T) {
+		tempDir := t.TempDir()
+		orch := New(tempDir)
+		setupSkills(t, tempDir, "frontend-implementer", "figma-analyzer", "database-specialist")
+
+		artifactContent := "---\nid: feature-902\ndb_impact: high-risk\ndesign_ref: https://www.figma.com/design/ABC12345XY\n---\n# Task content\n"
+		artifactPath := "openspec/changes/feature-902/task.md"
+		absArtifactPath := filepath.Join(tempDir, artifactPath)
+		if err := os.MkdirAll(filepath.Dir(absArtifactPath), 0755); err != nil {
+			t.Fatalf("MkdirAll error = %v", err)
+		}
+		if err := os.WriteFile(absArtifactPath, []byte(artifactContent), 0644); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+
+		pkg, err := orch.GenerateContextForAgent(
+			"EXEC-NON-INTERFERENCE-2",
+			"frontend-implementer",
+			artifactPath,
+			nil,
+			"",
+			[]string{"frontend-implementer"},
+			"COMMIT",
+			"APPLY-902",
+			"",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if pkg.DBImpact != "high-risk" {
+			t.Errorf("expected DBImpact = %q, got %q", "high-risk", pkg.DBImpact)
+		}
+		if pkg.DesignRef != "https://www.figma.com/design/ABC12345XY" {
+			t.Errorf("expected DesignRef = %q, got %q", "https://www.figma.com/design/ABC12345XY", pkg.DesignRef)
+		}
+
+		hasFigma := false
+		for _, s := range pkg.Skills {
+			if strings.Contains(s, "figma-analyzer") {
+				hasFigma = true
+			}
+		}
+		if !hasFigma {
+			t.Errorf("expected figma-analyzer to be resolved when design_ref is present, got skills: %v", pkg.Skills)
+		}
+
+		out, err := router.FormatPromptSignature("Do work.", pkg)
+		if err != nil {
+			t.Fatalf("FormatPromptSignature error = %v", err)
+		}
+		if !strings.Contains(out, "design_ref: https://www.figma.com/design/ABC12345XY") {
+			t.Errorf("expected rendered prompt to contain design_ref line, got: %s", out)
+		}
+		if !strings.Contains(out, "db_impact: high-risk") {
+			t.Errorf("expected rendered prompt to still contain db_impact line unaffected by design_ref, got: %s", out)
+		}
+	})
 }

@@ -260,6 +260,43 @@ func TestRefStructHygiene(t *testing.T) {
 	}
 }
 
+// TestCanonical covers design decision D-D/D-A: Canonical() reconstructs a
+// normalized reference string from validated FileKey/NodeID components only
+// -- the rendering-safe form the router package renders into the agent
+// prompt (S3), never any caller-supplied substring.
+func TestCanonical(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  Ref
+		want string
+	}{
+		{
+			name: "file key only",
+			ref:  Ref{FileKey: "ABC12345XY"},
+			want: "https://www.figma.com/design/ABC12345XY",
+		},
+		{
+			name: "file key with node-id",
+			ref:  Ref{FileKey: "ABC12345XY", NodeID: "1-2"},
+			want: "https://www.figma.com/design/ABC12345XY?node-id=1-2",
+		},
+		{
+			name: "zero value produces empty string",
+			ref:  Ref{},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.ref.Canonical()
+			if got != tt.want {
+				t.Errorf("Canonical() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestEvaluateRef_NilReceiverDoesNotPanic proves design Risk 3's mitigation:
 // EvaluateRef must never dereference its receiver, so a literal-constructed
 // Orchestrator{} (leaving DesignRouter nil, bypassing New()) stays safe when

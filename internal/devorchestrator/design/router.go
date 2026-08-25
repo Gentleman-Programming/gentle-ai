@@ -25,16 +25,31 @@ import (
 // injection vector this design exists to close (design decision D-A/D-B).
 type Ref struct {
 	FileKey string
-	// NodeID is write-only until S3's Ref.Canonical() reads it (design
-	// Risk 5). This is a deliberate one-slice gap, not a bug: the deadcode
-	// ratchet cannot flag an unread struct field, so this comment is the
-	// accepted, sufficient mitigation until Canonical() lands.
+	// NodeID is optional; Canonical() below is its only reader.
 	NodeID string
 }
 
 // Present reports whether ref carries a recognized design reference.
 func (r Ref) Present() bool {
 	return r.FileKey != ""
+}
+
+// Canonical reconstructs a normalized Figma reference string from r's
+// validated FileKey/NodeID components only -- never from any caller-supplied
+// input bytes, since none survive recognition (design decision D-A). Because
+// both components are charset-bounded by construction
+// (fileKeyPattern/nodeIDPattern below), the output cannot contain a newline,
+// quote, or angle bracket: this is what makes rendering Canonical() into the
+// unescaped text/template prompt (router.promptTemplate) safe. Returns "" for
+// a zero Ref.
+func (r Ref) Canonical() string {
+	if r.FileKey == "" {
+		return ""
+	}
+	if r.NodeID != "" {
+		return "https://www.figma.com/design/" + r.FileKey + "?node-id=" + r.NodeID
+	}
+	return "https://www.figma.com/design/" + r.FileKey
 }
 
 // frontmatter represents the metadata block at the top of an artifact,

@@ -155,6 +155,80 @@ func TestFormatPromptSignature_OmitsDBImpactWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestFormatPromptSignature_RendersDesignRefWhenPresent covers design
+// decision D-D: when a design reference was recognized for the primary
+// artifact, it must appear in the rendered prompt as "design_ref: <value>",
+// mirroring how db_impact is rendered (see
+// TestFormatPromptSignature_RendersDBImpactWhenPresent above).
+func TestFormatPromptSignature_RendersDesignRefWhenPresent(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-6",
+		Agent:       "frontend-implementer",
+		DesignRef:   "https://www.figma.com/design/ABC12345XY",
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "design_ref: https://www.figma.com/design/ABC12345XY") {
+		t.Errorf("Expected output to contain 'design_ref: https://www.figma.com/design/ABC12345XY', got: %s", out)
+	}
+}
+
+// TestFormatPromptSignature_OmitsDesignRefWhenEmpty covers the negative
+// case: when no design reference was recognized, no substring "design_ref"
+// may appear anywhere in the rendered prompt.
+func TestFormatPromptSignature_OmitsDesignRefWhenEmpty(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-7",
+		Agent:       "backend-implementer",
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if strings.Contains(out, "design_ref") {
+		t.Errorf("Expected no design_ref line when DesignRef is empty, got: %s", out)
+	}
+}
+
+// TestFormatPromptSignature_DesignRefCannotBreakOutOfContextPackage covers
+// the spec's only Applicable Threat Matrix row on the rendering side:
+// db_impact rendering is unaffected by DesignRef being set (non-interference
+// invariant), and the rendered design_ref line contains no embedded newline
+// -- since Canonical() only ever emits a charset-bounded URL, this proves
+// the rendering side never receives a payload capable of breaking out of
+// <context_package>.
+func TestFormatPromptSignature_DesignRefCannotBreakOutOfContextPackage(t *testing.T) {
+	pkg := &context.Package{
+		ExecutionID: "exec-8",
+		Agent:       "frontend-implementer",
+		DBImpact:    "high-risk",
+		DesignRef:   "https://www.figma.com/design/ABC12345XY?node-id=1-2",
+	}
+
+	out, err := FormatPromptSignature("Do work.", pkg)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "db_impact: high-risk") {
+		t.Errorf("Expected db_impact rendering unaffected by DesignRef, got: %s", out)
+	}
+	if !strings.Contains(out, "design_ref: https://www.figma.com/design/ABC12345XY?node-id=1-2") {
+		t.Errorf("Expected design_ref line to render fully on one line, got: %s", out)
+	}
+
+	designRefLineStart := strings.Index(out, "design_ref: ")
+	restAfterLabel := out[designRefLineStart+len("design_ref: "):]
+	firstNewline := strings.IndexByte(restAfterLabel, '\n')
+	renderedValue := restAfterLabel[:firstNewline]
+	if strings.ContainsAny(renderedValue, "\n\r\"'<>") {
+		t.Errorf("Expected rendered design_ref value to contain no newline/quote/angle-bracket, got: %q", renderedValue)
+	}
+}
+
 func TestFormatPromptSignature_NilPackage(t *testing.T) {
 	_, err := FormatPromptSignature("instruction", nil)
 	if err == nil {

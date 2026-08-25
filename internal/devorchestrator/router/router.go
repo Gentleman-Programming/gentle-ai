@@ -47,6 +47,9 @@ permissions:
 {{- if .Pkg.DBImpact }}
 db_impact: {{ .Pkg.DBImpact }}
 {{- end }}
+{{- if .Pkg.DesignRef }}
+design_ref: {{ .Pkg.DesignRef }}
+{{- end }}
 </context_package>
 
 {{- if .Pkg.RepoProfile }}

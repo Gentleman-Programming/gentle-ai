@@ -231,9 +231,9 @@ func (o *Orchestrator) GenerateContextForAgent(
 			requiredSkills = append(requiredSkills, dbImpactSkills(dbImpact, agentName)...)
 
 			// figmaRef reuses the same already-read data -- zero new I/O
-			// (design decision: Technical Approach). Rendering figmaRef
-			// into the prompt (Ref.Canonical()) is deferred to S3; this
-			// slice only resolves the skill-selection side.
+			// (design decision: Technical Approach). Its canonical form
+			// (never raw input bytes, design decision D-A) is rendered
+			// into the prompt below via req.DesignRef.
 			figmaRef = o.DesignRouter.EvaluateRef(string(data))
 			requiredSkills = append(requiredSkills, figmaDesignSkills(figmaRef, agentName)...)
 		}
@@ -304,6 +304,7 @@ func (o *Orchestrator) GenerateContextForAgent(
 		ExpectedType:        expectedType,
 		ExpectedID:          expectedID,
 		DBImpact:            string(dbImpact),
+		DesignRef:           figmaRef.Canonical(),
 	}
 
 	pkg := context.Build(req)
