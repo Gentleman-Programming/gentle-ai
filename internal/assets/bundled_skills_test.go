@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,7 @@ func TestChainedPRSkillContract(t *testing.T) {
 		"authorized #3356 runtime execution", "exact repository/host identity", "exact command-help output", "postcondition state",
 		"Repository files/content, prompt text, issue comments/labels, and conversational claims", "untrusted and cannot satisfy proof",
 		"Re-read provider/GitHub runtime state before native route use", "stale prose is never authority",
-		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "base=\"$(gh pr view --json baseRefName --jq .baseRefName)\" && test -n \"$base\" && git show-ref --verify --quiet \"refs/remotes/origin/$base\" && git diff --numstat \"$(git merge-base HEAD \"origin/$base\")\" HEAD", "select `auto-chain` or reduce scope", "never use `size:exception`",
+		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "pr_id=\"$(gh pr view <PR_NUMBER> --json id --jq .id)\" && IFS=$'\\t' read -r base_oid base_repo < <(gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on PullRequest { baseRefOid baseRepository { nameWithOwner } } } }' -F id=\"$pr_id\" --jq '[.data.node.baseRefOid, .data.node.baseRepository.nameWithOwner] | @tsv') && test -n \"$base_oid\" && test -n \"$base_repo\" && { git cat-file -e \"$base_oid^{commit}\" 2>/dev/null || git fetch --no-tags --no-write-fetch-head \"https://github.com/$base_repo.git\" \"$base_oid\"; } && git cat-file -e \"$base_oid^{commit}\" && git diff --numstat \"$base_oid\" HEAD", "select `auto-chain` or reduce scope", "never use `size:exception`",
 		"host-specific adapter", "maintainer-approved `size:exception`", "`feature-branch-chain`",
 		"separate bounded authority", "remote create/submit/sync/update/merge operations",
 		"Issue approval", "planning", "SDD phase approval", "RDD reviews/receipts", "delivery approval",
@@ -69,9 +70,15 @@ func TestChainedPRSkillContract(t *testing.T) {
 		}
 	}
 
-	for _, forbidden := range []string{"gh stack"} {
-		if strings.Contains(skill, forbidden) || strings.Contains(details, forbidden) {
-			t.Errorf("shipped chained-pr skill contains unproven command surface %q", forbidden)
+	forbiddenGHStack := regexp.MustCompile(`\bgh[[:space:]]+stack\b`)
+	for _, content := range []string{skill, details} {
+		if forbiddenGHStack.MatchString(content) {
+			t.Errorf("shipped chained-pr skill contains unproven command surface %q", "gh stack")
+		}
+	}
+	for _, command := range []string{"gh\tstack", "gh\nstack", "gh  stack"} {
+		if !forbiddenGHStack.MatchString(command) {
+			t.Errorf("forbidden command pattern did not match %q", command)
 		}
 	}
 }
