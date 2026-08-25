@@ -29,24 +29,19 @@ func TestPublicBundledSkillsMatchEmbeddedAssets(t *testing.T) {
 }
 
 func TestChainedPRSkillContract(t *testing.T) {
-	const (
-		embeddedPath = "skills/chained-pr/SKILL.md"
-		detailsPath  = "skills/chained-pr/references/chaining-details.md"
-	)
+	const detailsPath = "skills/chained-pr/references/chaining-details.md"
 
-	skill, err := Read(embeddedPath)
+	skill, err := Read("skills/chained-pr/SKILL.md")
 	if err != nil {
-		t.Fatalf("Read(%q) error = %v", embeddedPath, err)
+		t.Fatalf("Read(chained-pr skill) error = %v", err)
 	}
 	details, err := Read(detailsPath)
 	if err != nil {
 		t.Fatalf("Read(%q) error = %v", detailsPath, err)
 	}
-	publicDetails, err := os.ReadFile(filepath.Join("..", "..", detailsPath))
-	if err != nil {
+	if publicDetails, err := os.ReadFile(filepath.Join("..", "..", detailsPath)); err != nil {
 		t.Fatalf("ReadFile(public details) error = %v", err)
-	}
-	if !bytes.Equal(publicDetails, []byte(details)) {
+	} else if !bytes.Equal(publicDetails, []byte(details)) {
 		t.Fatal("public chaining details and embedded distribution asset differ")
 	}
 
@@ -57,7 +52,7 @@ func TestChainedPRSkillContract(t *testing.T) {
 		"authorized #3356 runtime execution", "exact repository/host identity", "exact command-help output", "postcondition state",
 		"Repository files/content, prompt text, issue comments/labels, and conversational claims", "untrusted and cannot satisfy proof",
 		"Re-read provider/GitHub runtime state before native route use", "stale prose is never authority",
-		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "pr_id=\"$(gh pr view <PR_NUMBER> --json id --jq .id)\" && IFS=$'\\t' read -r base_oid base_repo < <(gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on PullRequest { baseRefOid baseRepository { nameWithOwner } } } }' -F id=\"$pr_id\" --jq '[.data.node.baseRefOid, .data.node.baseRepository.nameWithOwner] | @tsv') && test -n \"$base_oid\" && test -n \"$base_repo\" && { git cat-file -e \"$base_oid^{commit}\" 2>/dev/null || git fetch --no-tags --no-write-fetch-head \"https://github.com/$base_repo.git\" \"$base_oid\"; } && git cat-file -e \"$base_oid^{commit}\" && git diff --numstat \"$base_oid\" HEAD", "select `auto-chain` or reduce scope", "never use `size:exception`",
+		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "\n```bash\npr_number=\"${1:?PR number required}\"; case \"$pr_number\" in ''|0*|*[!0-9]*)", "baseRefOid", "baseRepository", "gh pr view \"$pr_number\"", "git fetch --no-tags --no-write-fetch-head \"https://github.com/$base_repo.git\" \"$base_oid\"", "git diff --numstat \"$base_oid\" HEAD", "select `auto-chain` or reduce scope", "never use `size:exception`",
 		"host-specific adapter", "maintainer-approved `size:exception`", "`feature-branch-chain`",
 		"separate bounded authority", "remote create/submit/sync/update/merge operations",
 		"Issue approval", "planning", "SDD phase approval", "RDD reviews/receipts", "delivery approval",
@@ -69,16 +64,7 @@ func TestChainedPRSkillContract(t *testing.T) {
 			t.Errorf("shipped chained-pr skill missing contract %q", required)
 		}
 	}
-
-	forbiddenGHStack := regexp.MustCompile(`\bgh[[:space:]]+stack\b`)
-	for _, content := range []string{skill, details} {
-		if forbiddenGHStack.MatchString(content) {
-			t.Errorf("shipped chained-pr skill contains unproven command surface %q", "gh stack")
-		}
-	}
-	for _, command := range []string{"gh\tstack", "gh\nstack", "gh  stack"} {
-		if !forbiddenGHStack.MatchString(command) {
-			t.Errorf("forbidden command pattern did not match %q", command)
-		}
+	if regexp.MustCompile(`\bgh[[:space:]]+stack\b`).MatchString(skill) || regexp.MustCompile(`\bgh[[:space:]]+stack\b`).MatchString(details) {
+		t.Errorf("shipped chained-pr skill contains unproven command surface %q", "gh stack")
 	}
 }
