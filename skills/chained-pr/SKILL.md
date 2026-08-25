@@ -35,7 +35,7 @@ Load when a planned PR may exceed **400 changed lines**, SDD forecasts chain ris
 pr_number="${1:?PR number required}"; case "$pr_number" in ''|0*|*[!0-9]*) printf '%s\n' 'PR number must be a positive integer' >&2; exit 2;; esac
 pr_id="$(gh pr view "$pr_number" --json id --jq .id)"
 IFS=$'\t' read -r base_oid base_repo < <(gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on PullRequest { baseRefOid baseRepository { nameWithOwner } } } }' -F id="$pr_id" --jq '[.data.node.baseRefOid, .data.node.baseRepository.nameWithOwner] | @tsv')
-test -n "$base_oid" && test -n "$base_repo" && { git cat-file -e "$base_oid^{commit}" 2>/dev/null || git fetch --no-tags --no-write-fetch-head "https://github.com/$base_repo.git" "$base_oid"; } && git cat-file -e "$base_oid^{commit}" && git diff --numstat "$base_oid" HEAD
+test -n "$base_oid" && test -n "$base_repo" && { git cat-file -e "$base_oid^{commit}" 2>/dev/null || git fetch --no-tags --no-write-fetch-head "https://github.com/$base_repo.git" "$base_oid"; } && git cat-file -e "$base_oid^{commit}" && (set -o pipefail; git diff --numstat "$base_oid" HEAD | awk -F '\t' '$1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad=1; next } { total += $1 + $2 } END { exit bad || total > 400 }')
 ```
 
 ## Execution Steps
