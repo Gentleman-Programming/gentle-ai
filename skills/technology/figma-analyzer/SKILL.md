@@ -16,6 +16,51 @@ a Figma design and the requesting agent implements or plans UI (see the
 carrier-placement convention docs for the exact gated agents and carrier
 artifacts). It governs how to use that reference safely.
 
+## Carrier Placement
+
+`design_ref:` frontmatter is only actionable when it reaches an agent that
+can use it. The dev-orchestrator's artifact-type gate (`AllowedArtifactTypes`)
+refuses an artifact whose derived type is not allowed for the target agent
+*before the prompt is ever built* — this skill never gets a chance to run:
+
+| Gated agent | Usable `design_ref` carrier filenames |
+|---|---|
+| `frontend-implementer` | `tasks.md`, `spec.md` |
+| `solution-architect` | `explore.md` |
+
+Placing `design_ref:` on `proposal.md` or `design.md` is silently useless:
+neither filename derives an artifact type either gated agent accepts, so the
+artifact is refused before this skill is ever injected. This is a
+documentation constraint only — no artifact type is added or widened to work
+around it.
+
+No agent outside this table ever receives `figma-analyzer`. The gate is
+closed and exhaustive, not a heuristic: an unlisted agent gets nothing,
+regardless of whether `design_ref:` is present on the artifact it reads.
+
+## Value Shape
+
+Only a value that parses as an HTTPS `figma.com`/`www.figma.com` URL with a
+recognized path prefix (`file`, `design`, or `proto`) and a file key matching
+`^[A-Za-z0-9]{8,64}$` is recognized; anything else is treated as absent. That
+charset is deliberately **stricter** than Figma's real key alphabet: a real
+key can be rejected (fails safe to "no reference"), but nothing outside this
+charset can ever be accepted. Do not loosen it to accept more real keys —
+that trade only runs in the false-negative direction. What renders into
+`<context_package>` as `design_ref:` is always the reconstructed canonical
+form `https://www.figma.com/design/<file-key>[?node-id=<node-id>]`, never the
+raw frontmatter value.
+
+## What This Skill Does Not Do
+
+Real Figma retrieval is **not implemented** by this skill or by any part of
+the dev-orchestrator today. `design_ref:` only tells you *which* design was
+meant — it does not connect you to it. The "No Access, No Invention" rule
+below is not an edge-case fallback; it is the expected path for every
+session, unless you already have your own separate retrieval connection (for
+example a Figma Dev Mode MCP server, or design detail the user pastes
+directly into the conversation).
+
 ## Mandatory: No Access, No Invention
 
 If you cannot actually retrieve the referenced design, STOP and report explicitly that you do not have design access.

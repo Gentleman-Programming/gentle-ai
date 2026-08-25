@@ -33,6 +33,21 @@ via your own skills root, not necessarily Claude's).
   db_impact: simple
   ---
   ```
+- **OPTIONAL**: If this change carries a Figma design to implement against, declare it in the
+  same frontmatter block using the `design_ref` field: a full HTTPS Figma URL, for example
+  `https://www.figma.com/design/<file-key>[?node-id=<node-id>]`. Only that exact shape is
+  recognized — an unrecognized or malformed value is silently ignored, never invented or
+  substituted. Example:
+  ```yaml
+  ---
+  db_impact: simple
+  design_ref: https://www.figma.com/design/ABCDEFGH1234?node-id=12-34
+  ---
+  ```
+  `design_ref` on `tasks.md` (this agent's own output) is consumed by `frontend-implementer`.
+  The same field is also valid on `spec.md` and `explore.md` for their respective consuming
+  agents — see `skills/technology/figma-analyzer/SKILL.md`'s Carrier Placement section for the
+  complete table and why every other artifact filename is not a working carrier.
 
 ## Decision Gates
 
