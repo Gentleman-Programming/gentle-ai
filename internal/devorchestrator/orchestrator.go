@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/batch"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/db"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/design"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/executor"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/intent"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/router"
@@ -35,6 +36,12 @@ type Orchestrator struct {
 	IntentRouter  *intent.Router
 	SkillResolver *skill.Resolver
 	DBRouter      *db.Router
+	// DesignRouter parses Figma design references from an artifact's
+	// design_ref frontmatter (see internal/devorchestrator/design). A
+	// literal-constructed Orchestrator{} (bypassing New()) leaves this nil,
+	// which stays safe because design.Router.EvaluateRef never dereferences
+	// its receiver (design decision D-C, Risk 3).
+	DesignRouter *design.Router
 	// TraceManager validates phase-transition traceability (Implements /
 	// OriginatesFrom) between a source artifact and the artifact being
 	// generated for. See GenerateContextForAgent's sourceArtifact parameter.
@@ -61,6 +68,7 @@ func New(workspaceRoot string) *Orchestrator {
 		IntentRouter:  intent.New(workspaceRoot),
 		SkillResolver: skill.New(workspaceRoot),
 		DBRouter:      db.New(),
+		DesignRouter:  design.New(),
 		TraceManager:  trace.NewManager(),
 		agentRegistry: registry,
 	}
@@ -214,12 +222,20 @@ func (o *Orchestrator) GenerateContextForAgent(
 	// frontend-implementer gets a schema-impact-aware branch when impact is
 	// high risk.
 	var dbImpact db.Impact
+	var figmaRef design.Ref
 	if primaryArtifact != "" {
 		absPath := filepath.Join(o.WorkspaceRoot, primaryArtifact)
 		data, err := os.ReadFile(absPath)
 		if err == nil {
 			dbImpact = o.DBRouter.EvaluateImpact(string(data))
 			requiredSkills = append(requiredSkills, dbImpactSkills(dbImpact, agentName)...)
+
+			// figmaRef reuses the same already-read data -- zero new I/O
+			// (design decision: Technical Approach). Rendering figmaRef
+			// into the prompt (Ref.Canonical()) is deferred to S3; this
+			// slice only resolves the skill-selection side.
+			figmaRef = o.DesignRouter.EvaluateRef(string(data))
+			requiredSkills = append(requiredSkills, figmaDesignSkills(figmaRef, agentName)...)
 		}
 	}
 
@@ -334,6 +350,28 @@ func dbImpactSkills(impact db.Impact, agentName string) []string {
 	switch agentName {
 	case "backend-implementer", "frontend-implementer":
 		return []string{"database-specialist"}
+	}
+	return nil
+}
+
+// figmaDesignSkills is the closed (ref-present, agentName) gate from spec
+// requirement "Closed Agent Gate for Design Skill Injection" (design
+// decision D-A/D-B, Data Flow section): it injects figma-analyzer only when
+// a recognized design reference is present AND the requesting agent is in
+// the closed set {frontend-implementer, solution-architect}. It mirrors
+// dbImpactSkills's exact shape -- a closed switch on agentName, never a
+// free-text match -- so an unlisted agent (e.g. backend-implementer,
+// database-specialist) always resolves to nil, even with a present ref.
+//
+// TestFigmaDesignSkillsResolveOnDisk guards every skill name this function
+// can ever emit against the real workspace skills/ directory.
+func figmaDesignSkills(ref design.Ref, agentName string) []string {
+	if !ref.Present() {
+		return nil
+	}
+	switch agentName {
+	case "frontend-implementer", "solution-architect":
+		return []string{"figma-analyzer"}
 	}
 	return nil
 }
