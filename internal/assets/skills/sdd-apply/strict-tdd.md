@@ -36,11 +36,17 @@ FOR EACH TASK:
 ├── 2. RED — Write a failing test FIRST
 │   ├── Write test(s) that describe the expected behavior from the spec
 │   ├── Prefer pure functions where possible (no side effects = easy to test)
-│   ├── The test MUST reference production code that does NOT exist yet
-│   │   (this guarantees failure — no need to execute to confirm)
+│   ├── For qualifying behavioral work, execute the focused test and capture
+│   │   the assertion/observable-behavior failure; a written claim is invalid
+│   ├── A missing-symbol or compile failure is structural RED and does not
+│   │   satisfy behavioral RED; make the smallest compilable surface first
 │   ├── If the production code/function already exists:
-│   │   └── Write a test for the NEW behavior that is NOT yet implemented
-│   └── GATE: Do NOT proceed to GREEN until the test is written
+│   │   └── Write and execute a test for the NEW behavior that is not implemented
+│   └── GATE: For qualifying behavioral work, do NOT proceed to GREEN until
+│       executed behavioral RED is captured (assertion/observable-behavior
+│       failure with command, exit status, failure class, and bounded output).
+│       A written-only or structural RED is insufficient. For other work, do NOT
+│       proceed to GREEN until the test is written
 │
 ├── 3. GREEN — Write the MINIMUM code to pass
 │   ├── Implement ONLY what the failing test needs
@@ -57,9 +63,9 @@ FOR EACH TASK:
 │   │   └── Generalize to real logic (this is the whole point)
 │   ├── Repeat until ALL spec scenarios for this task are covered
 │   ├── Each triangulation pass: write test → run → fix implementation
-│   ├── MINIMUM: at least 2 test cases per behavior (happy path + one edge case)
-│   │   ├── One test with data that produces a NON-EMPTY/NON-TRIVIAL result
-│   │   └── One test with data that exercises a DIFFERENT code path
+│   ├── For behavioral work, use semantic partitions rather than a fixed case
+│   │   count. Include the cases needed to reject the simplest constant, literal,
+│   │   or single-example special-case implementation (anti-Fake-It).
 │   ├── WATCH OUT for GREEN that passes trivially:
 │   │   ├── If your test passes because the component/element isn't rendered → NOT a real GREEN
 │   │   ├── If your test passes because a loop iterates 0 times → NOT a real GREEN
@@ -197,9 +203,9 @@ When Strict TDD Mode is active, your return summary MUST include this section:
 
 **Column definitions**:
 - **Safety Net**: Pre-existing tests run before modifying files. "N/A (new)" for new files.
-- **RED**: Test written first, referencing code that doesn't exist yet. Always "✅ Written".
-- **GREEN**: Tests executed and passing after minimal implementation. Must show execution result.
-- **TRIANGULATE**: Additional test cases added to force real logic. "➖ Single" if spec has only one scenario.
+- **RED**: Test written first and, for qualifying behavior, an executed behavioral failure with command, exit status, class, and bounded output.
+- **GREEN**: Tests executed and passing after minimal implementation. Must show execution result and the candidate production identity.
+- **TRIANGULATE**: Semantic partitions and the verifier-owned anti-Fake-It decision, not a raw case-count score.
 - **REFACTOR**: Code improved with tests still passing. "➖ None needed" if code was already clean.
 
 ## Assertion Quality Rules (MANDATORY)
@@ -362,3 +368,90 @@ expect(screen.getByRole("button")).toBeDisabled();
 - Prefer pure functions — but don't force it where it doesn't fit (e.g., React components with state)
 - For refactoring tasks, ALWAYS write approval tests before touching code
 - Run ONLY the relevant test file during the cycle, not the full suite
+
+## Behavioral Falsification Evidence Contract
+
+This is the canonical prompt/artifact contract for a qualifying behavioral Strict TDD work unit. It supplements the ordinary TDD cycle; it does not create a native ledger or runtime enforcement.
+
+### Qualification and artifact schema
+
+Apply this contract only when the work has an implementation-independent oracle from an approved spec scenario, protocol, business rule, or invariant; a deterministic focused command passes on the candidate; the repository is Git-backed; and an exact disposable worktree can be reconstructed. Documentation, formatting, generated-only, structural-only, and infrastructure-only work remains on its existing evidence method.
+
+The apply artifact MUST record these identities and fields:
+
+| Field | Required evidence |
+|---|---|
+| `behavior_id` | Protected behavior and its boundary. |
+| `oracle_source` | Implementation-independent source and the scenario/invariant it defines. |
+| `focused_command` | Exact deterministic command, working directory, timeout, and exit status. |
+| `test_identity` | Full focused test-source manifest: path, mode, and SHA-256 for every test, fixture, and test configuration file. |
+| `production_identity` | A manifest and SHA-256 root for affected production paths before and after GREEN. |
+| `base_revision` | Base commit SHA used for every reconstruction. |
+| `pre_green_snapshot` | Content-addressed, reconstructible snapshot retained until counterfactual verification completes. |
+| `verification_handoff` | `verifier_selection: pending`, `verifier_execution: pending`, and actor-described `initial_residual_risk`; verifier alone records final `fault`, `counterfactual_result`, and residual-risk decision. |
+| `red` / `green` | Result class, exit status, bounded output excerpt, command, and the matching source identities. |
+
+### Executed RED and renewal
+
+The qualifying RED gate MUST require an executed behavioral failure before GREEN; a written-only or structural RED is insufficient.
+
+Behavioral RED MUST be executed, not merely written or inferred. Record the exact evidence label `executed behavioral RED`; it must fail at the assertion or observable-behavior level for the named behavior. A missing-symbol compile failure is `structural RED`; structural RED does not satisfy behavioral RED. Record `expected_failure_class`, `observed_failure_class`, exit status, and a bounded output excerpt.
+
+The `pre_green_snapshot` MUST contain the base commit SHA, retained binary diff of the full pre-GREEN tracked tree from that base, retained untracked-file bytes, a sorted full-worktree path/mode/SHA-256 index, and the SHA-256 of the canonical bundle index. Retain it until counterfactual verification completes; the current production tree is not a substitute.
+
+Any material test changes after RED invalidate the prior RED. If the oracle, focused setup, fixture, command, test, or test configuration changes materially after RED, overlay the changed test inputs on a materialization of the retained `pre_green_snapshot`, execute the focused command again, and record renewed RED. Missing, hash-mismatched, or non-reconstructible snapshot evidence is `unavailable` and blocks renewed RED.
+
+### GREEN, partitions, and anti-Fake-It
+
+GREEN runs the same `focused_command` against the implementation candidate and records the candidate `production_identity`, test identity, exit status, and successful output. Freeze the focused command and full test-source manifest after GREEN and before fault selection.
+
+Choose semantic partitions that rule out the simplest constant, literal, or single-example special-case implementation. Transformations need discriminating input/output pairs and defined boundaries; stateful behavior needs distinct transitions or repeated calls; error behavior needs each contract-relevant success/failure partition. A true single-point invariant may use one case only when the artifact explains why no meaningful second partition exists. Additional cases count only when they reject a distinct simple implementation, exercise a distinct contract partition, or protect a distinct state transition.
+
+The verifier owns the anti-Fake-It decision and records exactly:
+
+- `anti_fake_it.applicable`;
+- `anti_fake_it.simplest_rejected_implementation`;
+- `anti_fake_it.discriminating_tests`;
+- `anti_fake_it.decision` (`pass` or `fail`); and
+- `anti_fake_it.rationale`.
+
+The primary fault MUST target the recorded simplest rejected implementation when `anti_fake_it.applicable` is true. If it is not applicable, the verifier records why. A failed anti-Fake-It decision blocks fault execution; raw test count and coverage are informational only.
+
+### Canonical candidate and disposable isolation
+
+Before any execution, the verifier retains the binary tracked delta and untracked bytes and creates one canonical candidate manifest. Its canonical UTF-8 JSON index contains the base commit SHA, the SHA-256 of the retained binary tracked delta, and lexicographically sorted entries for every candidate path, including intended untracked files, with path, mode, and SHA-256. `candidate_root` is the SHA-256 of those exact JSON bytes.
+
+The identity predicate is: materialize the base, apply the indexed tracked delta, copy only the indexed untracked files, recompute the complete index, and require byte-for-byte index equality and the same `candidate_root`. Before every execution, a mismatch is `unavailable`. The fault is never applied to the source worktree or candidate.
+
+Use one exact disposable detached Git worktree for each independent materialization. Record cleanup on every exit path; cleanup failure is reported explicitly and never mutates the source worktree. Unsupported submodules, sparse checkouts, ignored runtime dependencies, or any candidate that cannot be reconstructed exactly are `unavailable` unless the verifier proves an exact candidate-manifest match.
+
+### Verifier-owned fault and fixed stability budget
+
+After test freeze and a passing anti-Fake-It decision, the verifier-owned fault selection—not the implementation actor—chooses one plausible production-only fault from the approved oracle, changed control flow, boundary, error path, or state transition. Never derive a fault by changing an expected value to a random alternative.
+
+The fixed stability budget is exactly two candidate runs plus two counterfactual runs: two independently materialized unmodified candidates must pass at the canonical `candidate_root`; then two independently materialized counterfactuals with the verifier-selected production-only patch must run the same focused command at the recorded post-fault production root. There is no rerun loop and no additional rerun loop. Both counterfactuals must fail for the protected behavior with the expected failure class and matching bounded output evidence. Any disagreement, compile/setup/unrelated-crash/timeout failure, missing protected-test result, class mismatch, or identity mismatch is `invalid` or `unavailable`, never `killed`.
+
+Fault selection is verifier-owned and limited to one primary and one replacement only when the primary outcome is `equivalent` or `invalid`. A valid `survived` fault is not replaceable. If both selections are equivalent or invalid, report `inconclusive` and exhaust the replacement budget.
+
+### Exact outcomes and degradation
+
+Each attempt records exactly one outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `killed` | Both candidate runs pass and both valid counterfactual runs fail the protected behavior at the recorded post-fault production root. |
+| `survived` | Candidate and valid counterfactual both pass. |
+| `equivalent` | The plausible fault does not change observable behavior under the approved oracle. |
+| `invalid` | The intended plausible fault is not materialized, frozen scope changes, or an unrelated compile/setup/crash/timeout/harness failure occurs. |
+| `unavailable` | Exact isolation or deterministic execution cannot be established. |
+| `not-applicable` | The work unit is outside qualifying behavioral scope and uses its existing evidence method. |
+
+Every record includes `protected_test_or_behavior`, `expected_failure_class`, `observed_failure_class`, `observed_output_excerpt`, and `post_fault_production_root`. Only `killed` is successful falsification; no other outcome inflates success.
+
+`survived` is always a CRITICAL verification finding. `inconclusive` and `unavailable` are WARNING for ordinary behavior and CRITICAL for authorization, security, update, delivery, payment, migration/persistence, or data-loss behavior. `not-applicable` is informational. `killed` passes this evidence gate but retains residual risk and does not replace requirements verification. A CRITICAL result blocks verification; remediation requires a new executed RED/GREEN cycle and test freeze, with at most one bounded remediation attempt.
+
+### Issue boundaries and pilot disclosure
+
+#3727 owns this behavioral falsification prompt/artifact pilot. #262 owns mandatory phase progression, native settlement, and guarantees that verification cannot be skipped. #986 owns project-wide risk classification and evidence-method rubrics. #1263 owns optional mutation-provider integration and Gherkin; no universal mutation-score threshold is adopted here.
+
+This pilot does not claim native historical proof or universal enforcement. Native ledgers, runtime/CLI enforcement, project-wide classification, mutation providers, Gherkin, and broad mutation campaigns are out of scope. Benchmark the pilot on the approved corpus before proposing native ledger work.

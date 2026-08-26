@@ -44,6 +44,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - Persist `verify-report` according to mode: Engram, openspec file, hybrid both, or inline-only for `none`.
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
+- For qualifying behavioral work, validate the **Behavioral Falsification Verification Contract** in `strict-tdd-verify.md`, including executed behavioral RED, structural RED classification, exact identities, four-run stability, bounded replacement, outcome classification, blocking/degradation, and residual risk.
 - Return the Section D envelope from `../_shared/sdd-phase-common.md`.
 - Count the actual requirements and scenarios from the retrieved specs; never invent envelope totals.
 - Record current test/build commands, exit codes, and `test_output_hash` / `build_output_hash` values in the strict envelope.

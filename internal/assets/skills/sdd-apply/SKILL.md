@@ -141,6 +141,8 @@ If Strict TDD Mode is active (either from orchestrator injection or self-discove
 
 **There is no silent fallback.** If you resolved Strict TDD as active, you follow it or you report failure. You do NOT quietly switch to Standard Mode.
 
+For qualifying behavioral work, read the **Behavioral Falsification Evidence Contract** in `strict-tdd.md`. Its artifact schema, executed behavioral RED requirement, identity bindings, and outcome rules are authoritative and MUST be represented in apply-progress; a written or structural RED is not a substitute.
+
 #### Hard Gate (All Modes): Work Unit Evidence
 
 Every assigned work unit, including standard mode, MUST produce a **Work Unit Evidence** table before its tasks are marked complete:
