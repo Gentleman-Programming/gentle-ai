@@ -63,7 +63,7 @@ Gentle-AI is NOT an AI agent installer. It adapts the agent runtime(s) already o
 | **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
 | **Trae**            |            Solo-agent            | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
 | **Pi**              | Full (package-managed subagents) | First-class `gentle-pi` harness with Pi-native persona/models, SDD, and Engram memory |
-| **Hermes**          |    Detect-only (manual install)    | Skills, `SOUL.md` system prompt, and MCP via YAML; no subagents, slash commands, or output styles |
+| **Hermes**          |    Detect-only (manual install)    | Skills, `SOUL.md` system prompt, MCP via YAML, and native ephemeral delegation through `delegate_task`; Gentle AI does not install or manage persistent Hermes subagent files |
 
 > **Pi is package-managed, not just configured.** Selecting Pi installs the first-class [`gentle-pi`](docs/pi.md) harness, which owns Pi-native persona and model controls, SDD assets, chains, and memory wiring.
 

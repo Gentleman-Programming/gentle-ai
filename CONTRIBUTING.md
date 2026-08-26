@@ -134,11 +134,13 @@ Hermes supports:
 
 - **Skills** in `~/.hermes/skills/`
 - **System prompt** in `~/.hermes/SOUL.md`, using marker-based Markdown sections
-- **MCP servers** in `~/.hermes/config.yaml`, using Hermes's YAML configuration format
+- **MCP servers** in `~/.hermes/config.yaml`, using `StrategyMergeIntoYAML` to merge server blocks into the existing file, preserve unrelated YAML, and replace an existing block with the same server ID
 
-Hermes does not support subagents, slash commands, or output styles. When
-changing Hermes integration code, start with `internal/agents/hermes/adapter.go`
-and keep its global `~/.hermes` paths and manual-install boundary intact.
+Gentle AI does not install or manage persistent Hermes subagent files. Hermes
+supports native ephemeral delegation through `delegate_task`. It also has no
+slash commands or output styles. When changing Hermes integration code, start
+with `internal/agents/hermes/adapter.go` and keep its global `~/.hermes` paths
+and manual-install boundary intact.
 
 ---
 
