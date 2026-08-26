@@ -175,7 +175,9 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 	_, store, record, handle := piRefuterReview(t)
 	previous := reviewProviderRoleCaptureTimeout
 	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
-	reviewProviderRoleCaptureTimeout = 100 * time.Millisecond
+	// Leave enough budget for immutable context assembly under package load;
+	// the stalled transport still exceeds this bound by a factor of five.
+	reviewProviderRoleCaptureTimeout = 2 * time.Second
 	stalled := filepath.Join(t.TempDir(), "stalled-pi")
 	if err := os.WriteFile(stalled, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)
