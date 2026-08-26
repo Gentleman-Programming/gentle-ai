@@ -162,7 +162,7 @@ func TestNativeAttemptInputIdentitiesRejectsUnsafePaths(t *testing.T) {
 	if _, err := nativeAttemptInputIdentities(t.Context(), identity, "missing"); err == nil {
 		t.Fatal("accepted missing input")
 	}
-	if _, err := nativeAttemptInputIdentities(t.Context(), identity, ".git"); err == nil {
+	if _, err := nativeAttemptCanonicalPath(repo, ".GIT"); err == nil {
 		t.Fatal("accepted unsupported repository control directory")
 	}
 }

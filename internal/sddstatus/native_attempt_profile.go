@@ -33,7 +33,7 @@ type nativeAttemptFileIdentity struct {
 func ResolveNativeAttemptIdentity(ctx context.Context, repo string) (NativeAttemptIdentity, error) {
 	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
-		return NativeAttemptIdentity{}, errors.New("native attempt repository is unavailable")
+		return NativeAttemptIdentity{}, errors.New("native attempt repository is unavailable") // refusal:by-design world-action: repository discovery must succeed before an immutable identity can be captured
 	}
 	value := lease.Identity()
 	return NativeAttemptIdentity{Root: value.RepositoryRoot, RepositoryRef: value.RepositoryRef, lease: lease}, nil
@@ -41,12 +41,12 @@ func ResolveNativeAttemptIdentity(ctx context.Context, repo string) (NativeAttem
 
 func (identity NativeAttemptIdentity) Validate(ctx context.Context) error {
 	if identity.lease == nil || identity.Root == "" || identity.RepositoryRef == "" || identity.lease.Validate(ctx) != nil {
-		return errors.New("native attempt repository identity changed")
+		return errors.New("native attempt repository identity changed") // refusal:by-design world-action: repository drift must be repaired before validation
 	}
 	for _, input := range identity.inputs {
 		live, err := captureNativeAttemptFileIdentity(identity.Root, input.path)
 		if err != nil || !nativeAttemptSameFileIdentity(input, live) {
-			return errors.New("native attempt input identity changed")
+			return errors.New("native attempt input identity changed") // refusal:by-design world-action: a changed immutable input must be restored or recaptured
 		}
 	}
 	return nil
@@ -54,13 +54,13 @@ func (identity NativeAttemptIdentity) Validate(ctx context.Context) error {
 
 func nativeAttemptInputIdentities(ctx context.Context, identity NativeAttemptIdentity, paths ...string) (NativeAttemptIdentity, error) {
 	if identity.lease == nil || identity.Validate(ctx) != nil {
-		return NativeAttemptIdentity{}, errors.New("native attempt repository identity changed")
+		return NativeAttemptIdentity{}, errors.New("native attempt repository identity changed") // refusal:by-design world-action: repository drift must be repaired before input capture
 	}
 	identity.inputs = nil
 	for _, path := range paths {
 		input, err := captureNativeAttemptFileIdentity(identity.Root, path)
 		if err != nil {
-			return NativeAttemptIdentity{}, errors.New("native attempt input is invalid")
+			return NativeAttemptIdentity{}, errors.New("native attempt input is invalid") // refusal:by-design world-action: the requested input must be made safe before capture
 		}
 		identity.inputs = append(identity.inputs, input)
 	}
@@ -92,7 +92,7 @@ func captureNativeAttemptFileIdentity(root, path string) (nativeAttemptFileIdent
 		return value, nil
 	}
 	if !info.Mode().IsRegular() {
-		return nativeAttemptFileIdentity{}, errors.New("unsafe input type")
+		return nativeAttemptFileIdentity{}, errors.New("unsafe input type") // refusal:by-design world-action: a captured input must be a regular file or directory
 	}
 	file, err := os.Open(nativeAttemptPath(root, path))
 	if err != nil {
@@ -101,7 +101,7 @@ func captureNativeAttemptFileIdentity(root, path string) (nativeAttemptFileIdent
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return nativeAttemptFileIdentity{}, errors.New("input changed while opening")
+		return nativeAttemptFileIdentity{}, errors.New("input changed while opening") // refusal:by-design world-action: the input must remain stable during capture
 	}
 	hash := sha256.New()
 	if _, err = io.Copy(hash, file); err != nil {
@@ -110,7 +110,7 @@ func captureNativeAttemptFileIdentity(root, path string) (nativeAttemptFileIdent
 	after, err := file.Stat()
 	latest, latestErr := nativeAttemptLstat(root, path)
 	if err != nil || latestErr != nil || !os.SameFile(info, after) || !os.SameFile(info, latest) || !nativeAttemptMetadataEqual(info, after) || !nativeAttemptMetadataEqual(info, latest) {
-		return nativeAttemptFileIdentity{}, errors.New("input changed while reading")
+		return nativeAttemptFileIdentity{}, errors.New("input changed while reading") // refusal:by-design world-action: the input must remain stable during capture
 	}
 	copy(value.digest[:], hash.Sum(nil))
 	return value, nil
@@ -132,10 +132,11 @@ func nativeAttemptCanonicalPath(root, path string) (string, error) {
 	path = filepath.Clean(path)
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("unsafe input path")
+		return "", errors.New("unsafe input path") // refusal:by-design world-action: only paths below the repository root can be captured
 	}
-	if relative == ".git" || strings.HasPrefix(relative, ".git"+string(filepath.Separator)) {
-		return "", errors.New("unsafe input path")
+	first, _, _ := strings.Cut(relative, string(filepath.Separator))
+	if strings.EqualFold(first, ".git") {
+		return "", errors.New("unsafe input path") // refusal:by-design world-action: repository control files cannot be captured as inputs
 	}
 	return relative, nil
 }
@@ -146,7 +147,7 @@ func nativeAttemptLstat(root, path string) (fs.FileInfo, error) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			return nil, errors.New("unsafe input path")
+			return nil, errors.New("unsafe input path") // refusal:by-design world-action: symlinked paths cannot be captured safely
 		}
 	}
 	return os.Lstat(current)
