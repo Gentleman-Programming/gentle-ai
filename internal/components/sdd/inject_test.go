@@ -622,6 +622,79 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeGrantsSDDPhaseEngramTools(t *testing.T) {
+	required := []string{
+		"engram_mem_save",
+		"engram_mem_search",
+		"engram_mem_get_observation",
+		"engram_mem_update",
+	}
+	forbidden := []string{
+		"engram_mem_session_summary",
+		"engram_mem_current_project",
+		"engram_mem_suggest_topic_key",
+	}
+
+	for _, mode := range []model.SDDModeID{model.SDDModeSingle, model.SDDModeMulti} {
+		t.Run(string(mode), func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			profile := makeHaikuProfile()
+			profile.PhaseAssignments["jd-judge-a"] = model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}
+
+			if _, err := Inject(home, opencodeAdapter(), mode, InjectOptions{
+				Profiles: []model.Profile{profile},
+			}); err != nil {
+				t.Fatalf("Inject(%s) error = %v", mode, err)
+			}
+
+			agents := readOpenCodeAgents(t, opencodeAdapter().SettingsPath(home))
+			for _, phase := range profilePhaseOrder {
+				for _, key := range []string{phase, phase + "-cheap"} {
+					agent, ok := agents[key].(map[string]any)
+					if !ok {
+						t.Fatalf("installed config missing SDD phase agent %q", key)
+					}
+					tools, ok := agent["tools"].(map[string]any)
+					if !ok {
+						t.Fatalf("SDD phase agent %q tools = %#v, want object", key, agent["tools"])
+					}
+					for _, tool := range required {
+						if enabled, _ := tools[tool].(bool); !enabled {
+							t.Errorf("SDD phase agent %q tool %q = %#v, want true", key, tool, tools[tool])
+						}
+					}
+					for _, existing := range []string{"read", "write", "edit", "bash"} {
+						if enabled, _ := tools[existing].(bool); !enabled {
+							t.Errorf("SDD phase agent %q lost existing tool %q", key, existing)
+						}
+					}
+					for _, tool := range forbidden {
+						if enabled, _ := tools[tool].(bool); enabled {
+							t.Errorf("SDD phase agent %q gained unnecessary tool %q", key, tool)
+						}
+					}
+					if enabled, _ := tools["task"].(bool); enabled {
+						t.Errorf("SDD phase agent %q gained task delegation: %#v", key, tools)
+					}
+				}
+			}
+
+			nonSDDAgents := append(opencodemodel.JDPhases(), opencodemodel.ReviewPhases()...)
+			nonSDDAgents = append(nonSDDAgents, "jd-judge-a-cheap")
+			for _, key := range nonSDDAgents {
+				agent := agents[key].(map[string]any)
+				tools := agent["tools"].(map[string]any)
+				for _, tool := range required {
+					if enabled, _ := tools[tool].(bool); enabled {
+						t.Errorf("non-SDD agent %q gained phase tool %q", key, tool)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)

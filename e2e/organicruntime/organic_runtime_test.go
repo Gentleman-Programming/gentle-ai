@@ -76,6 +76,7 @@ const (
 	organicProviderCaptureFakePayloadEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_PAYLOAD"
 	organicProviderCaptureFakeFailureEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_FAILURE"
 	organicProviderCaptureFakeInvocationEnvironment = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_INVOCATION"
+	organicMCPFixtureEnvironment                    = "GENTLE_AI_ORGANIC_MCP_FIXTURE"
 
 	organicActorRoleDirect    = "direct"
 	organicActorRoleDelegated = "delegated"
@@ -107,6 +108,9 @@ const (
 var organicBinary string
 
 func TestMain(m *testing.M) {
+	if os.Getenv(organicMCPFixtureEnvironment) == "1" {
+		os.Exit(runOrganicMCPFixture())
+	}
 	if agent := strings.TrimSpace(os.Getenv(organicProviderCaptureFakeAgentEnvironment)); agent != "" {
 		os.Exit(runOrganicProviderCaptureFake(agent))
 	}
@@ -137,6 +141,61 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(workspace)
 	os.Exit(code)
+}
+
+func runOrganicMCPFixture() int {
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for {
+		var request struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Method  string          `json:"method"`
+			Params  struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			} `json:"params"`
+		}
+		if err := decoder.Decode(&request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0
+			}
+			fmt.Fprintf(os.Stderr, "decode MCP request: %v\n", err)
+			return 1
+		}
+		if len(request.ID) == 0 {
+			continue
+		}
+
+		response := map[string]any{"jsonrpc": "2.0", "id": request.ID}
+		switch request.Method {
+		case "initialize":
+			protocolVersion := request.Params.ProtocolVersion
+			if protocolVersion == "" {
+				protocolVersion = "2024-11-05"
+			}
+			response["result"] = map[string]any{
+				"protocolVersion": protocolVersion,
+				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+				"serverInfo":      map[string]any{"name": "organic-engram-fixture", "version": "0"},
+			}
+		case "tools/list":
+			tools := make([]map[string]any, 0, 4)
+			for _, name := range []string{"mem_save", "mem_search", "mem_get_observation", "mem_update"} {
+				tools = append(tools, map[string]any{
+					"name":        name,
+					"description": "Organic runtime fixture tool",
+					"inputSchema": map[string]any{"type": "object", "additionalProperties": true},
+				})
+			}
+			response["result"] = map[string]any{"tools": tools}
+		default:
+			response["error"] = map[string]any{"code": -32601, "message": "method not found"}
+		}
+		if err := encoder.Encode(response); err != nil {
+			fmt.Fprintf(os.Stderr, "encode MCP response: %v\n", err)
+			return 1
+		}
+	}
 }
 
 // runOrganicActor is the implementation actor. It edits exactly one already
@@ -3962,7 +4021,7 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 				"XDG_CACHE_HOME="+sharedCache,
 				"OPENCODE_CONFIG_DIR="+filepath.Join(sharedConfig, "opencode"),
 				"OPENCODE_TEST_HOME="+filepath.Join(home, "opencode"),
-				"OPENCODE_CONFIG_CONTENT="+organicOpenCodeConfig(t, model.URL),
+				"OPENCODE_CONFIG_CONTENT="+organicOpenCodeConfig(t, model.URL, nil),
 				"OPENCODE_AUTH_CONTENT={}",
 				"OPENCODE_DISABLE_PROJECT_CONFIG=1",
 				"OPENCODE_DISABLE_AUTOUPDATE=1",
@@ -4049,7 +4108,7 @@ func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
 	fixture.actorCommand = "echo " + executorNonce
 
 	settingsPath := filepath.Join(configRoot, "opencode", "opencode.json")
-	if err := os.WriteFile(settingsPath, []byte(organicOpenCodeConfig(t, fixture.URL)), 0o600); err != nil {
+	if err := os.WriteFile(settingsPath, []byte(organicOpenCodeConfig(t, fixture.URL, []string{os.Args[0]})), 0o600); err != nil {
 		t.Fatalf("write OpenCode fixture config: %v", err)
 	}
 	if _, err := sdd.Inject(home, opencode.NewAdapter(), model.SDDModeMulti); err != nil {
@@ -4372,6 +4431,12 @@ func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer htt
 			return false
 		}
 	}
+	requiredTools := map[string]bool{
+		"engram_mem_save":            false,
+		"engram_mem_search":          false,
+		"engram_mem_get_observation": false,
+		"engram_mem_update":          false,
+	}
 	for _, rawTool := range input.Tools {
 		var tool struct {
 			Function struct {
@@ -4384,6 +4449,15 @@ func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer htt
 		}
 		if tool.Function.Name == "task" {
 			fixture.fail(writer, "installed sdd-apply executor was offered the task delegation tool")
+			return false
+		}
+		if _, required := requiredTools[tool.Function.Name]; required {
+			requiredTools[tool.Function.Name] = true
+		}
+	}
+	for tool, exposed := range requiredTools {
+		if !exposed {
+			fixture.fail(writer, "installed sdd-apply executor was not offered required tool %q", tool)
 			return false
 		}
 	}
@@ -4572,7 +4646,7 @@ func (fixture *openCodeFixtureServer) assertComplete(t *testing.T, wantSubagent 
 	}
 }
 
-func organicOpenCodeConfig(t *testing.T, serverURL string) string {
+func organicOpenCodeConfig(t *testing.T, serverURL string, mcpCommand []string) string {
 	t.Helper()
 	config := map[string]any{
 		"provider": map[string]any{
@@ -4593,6 +4667,16 @@ func organicOpenCodeConfig(t *testing.T, serverURL string) string {
 		},
 		"plugin":     []any{},
 		"compaction": map[string]any{"auto": false},
+	}
+	if len(mcpCommand) > 0 {
+		config["mcp"] = map[string]any{
+			"engram": map[string]any{
+				"type":        "local",
+				"command":     mcpCommand,
+				"enabled":     true,
+				"environment": map[string]string{organicMCPFixtureEnvironment: "1"},
+			},
+		}
 	}
 	encoded, err := json.Marshal(config)
 	if err != nil {

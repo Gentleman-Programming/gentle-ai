@@ -515,6 +515,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// NOT contain model fields — otherwise the deep merge overwrites
 			// whatever the user already has in opencode.json.
 			overlayBytes := []byte(overlayContent)
+			overlayBytes, err = projectOpenCodeSDDPhaseTools(overlayBytes, "", adapter.Agent() == model.AgentOpenCode)
+			if err != nil {
+				return InjectionResult{}, err
+			}
 			if adapter.Agent() == model.AgentKilocode {
 				overlayBytes, err = stripOpenCodeNativeFallbackAgents(overlayBytes)
 				if err != nil {
@@ -610,6 +614,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown, opts.orchestratorPolicyRenderOptions())
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
+				}
+				if adapter.Agent() == model.AgentKilocode {
+					profileOverlay, profileErr = projectOpenCodeSDDPhaseTools(profileOverlay, "-"+profile.Name, false)
+					if profileErr != nil {
+						return InjectionResult{}, fmt.Errorf("strip OpenCode-only profile tools %q: %w", profile.Name, profileErr)
+					}
 				}
 				profileResult, profileErr := mergeJSONFile(settingsPath, profileOverlay)
 				if profileErr != nil {
