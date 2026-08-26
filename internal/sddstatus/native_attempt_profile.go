@@ -13,7 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// NativeAttemptIdentity binds a repository and immutable input snapshots before authority opens.
+// NativeAttemptIdentity binds a repository and immutable input snapshots before authority opens; input capture fails closed on symlinks at any depth.
 type NativeAttemptIdentity struct {
 	Root, RepositoryRef string
 	lease               *reviewtransaction.RepositoryIdentityLease
@@ -23,9 +23,6 @@ type NativeAttemptIdentity struct {
 type nativeAttemptFileIdentity struct {
 	path     string
 	info     fs.FileInfo
-	mode     fs.FileMode
-	size     int64
-	mtime    int64
 	digest   [sha256.Size]byte
 	children []nativeAttemptFileIdentity
 }
@@ -33,6 +30,9 @@ type nativeAttemptFileIdentity struct {
 func ResolveNativeAttemptIdentity(ctx context.Context, repo string) (NativeAttemptIdentity, error) {
 	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return NativeAttemptIdentity{}, ctxErr
+		}
 		return NativeAttemptIdentity{}, errors.New("native attempt repository is unavailable") // refusal:by-design world-action: repository discovery must succeed before an immutable identity can be captured
 	}
 	value := lease.Identity()
@@ -76,9 +76,9 @@ func captureNativeAttemptFileIdentity(root, path string) (nativeAttemptFileIdent
 	if err != nil {
 		return nativeAttemptFileIdentity{}, err
 	}
-	value := nativeAttemptFileIdentity{path: path, info: info, mode: info.Mode(), size: info.Size(), mtime: info.ModTime().UnixNano()}
+	value := nativeAttemptFileIdentity{path: path, info: info}
 	if info.IsDir() {
-		entries, err := os.ReadDir(nativeAttemptPath(root, path))
+		entries, err := os.ReadDir(filepath.Join(root, path))
 		if err != nil {
 			return nativeAttemptFileIdentity{}, err
 		}
@@ -89,12 +89,15 @@ func captureNativeAttemptFileIdentity(root, path string) (nativeAttemptFileIdent
 			}
 			value.children = append(value.children, child)
 		}
+		if latest, err := nativeAttemptLstat(root, path); err != nil || !os.SameFile(info, latest) || !nativeAttemptMetadataEqual(info, latest) {
+			return nativeAttemptFileIdentity{}, errors.New("input changed while reading") // refusal:by-design world-action: the input must remain stable during capture
+		}
 		return value, nil
 	}
 	if !info.Mode().IsRegular() {
 		return nativeAttemptFileIdentity{}, errors.New("unsafe input type") // refusal:by-design world-action: a captured input must be a regular file or directory
 	}
-	file, err := os.Open(nativeAttemptPath(root, path))
+	file, err := os.Open(filepath.Join(root, path))
 	if err != nil {
 		return nativeAttemptFileIdentity{}, err
 	}
@@ -142,26 +145,22 @@ func nativeAttemptCanonicalPath(root, path string) (string, error) {
 }
 
 func nativeAttemptLstat(root, path string) (fs.FileInfo, error) {
-	current := filepath.VolumeName(nativeAttemptPath(root, path)) + string(filepath.Separator)
-	for _, part := range strings.Split(strings.TrimPrefix(nativeAttemptPath(root, path), current), string(filepath.Separator)) {
+	current := root
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
 			return nil, errors.New("unsafe input path") // refusal:by-design world-action: symlinked paths cannot be captured safely
 		}
 	}
 	return os.Lstat(current)
 }
 
-func nativeAttemptPath(root, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(root, path)
-}
-
 func nativeAttemptSameFileIdentity(left, right nativeAttemptFileIdentity) bool {
-	if left.path != right.path || !os.SameFile(left.info, right.info) || left.mode != right.mode || left.size != right.size || left.mtime != right.mtime || left.digest != right.digest || len(left.children) != len(right.children) {
+	if left.path != right.path || !os.SameFile(left.info, right.info) || !nativeAttemptMetadataEqual(left.info, right.info) || left.digest != right.digest || len(left.children) != len(right.children) {
 		return false
 	}
 	for index := range left.children {

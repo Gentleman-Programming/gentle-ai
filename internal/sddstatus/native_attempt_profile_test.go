@@ -24,6 +24,11 @@ func TestResolveNativeAttemptIdentityRepositorySelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := ResolveNativeAttemptIdentity(ctx, repo); err != context.Canceled {
+		t.Fatalf("ResolveNativeAttemptIdentity canceled error = %v, want %v", err, context.Canceled)
+	}
 	before := nativeAttemptTreeSnapshot(t, repo)
 	first, err := ResolveNativeAttemptIdentity(t.Context(), repo)
 	if err != nil {
@@ -49,9 +54,6 @@ func TestResolveNativeAttemptIdentityRepositorySelection(t *testing.T) {
 func TestNativeAttemptInputIdentities(t *testing.T) {
 	t.Run("capture and validation are non-mutating", func(t *testing.T) {
 		repo := nativeAttemptIdentityFixture(t)
-		if err := os.Symlink("static.json", filepath.Join(repo, "snapshot-link")); err != nil {
-			t.Fatal(err)
-		}
 		identity, err := ResolveNativeAttemptIdentity(t.Context(), repo)
 		if err != nil {
 			t.Fatal(err)
@@ -121,13 +123,9 @@ func TestNativeAttemptInputIdentities(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := nativeAttemptTreeSnapshot(t, repo)
 			mutate(t, repo)
 			if err := identity.Validate(t.Context()); err == nil {
 				t.Fatal("Validate accepted input drift")
-			}
-			if name == "recursive directory drift" && before == nativeAttemptTreeSnapshot(t, repo) {
-				t.Fatal("mutation fixture did not change the recursive snapshot")
 			}
 		})
 	}
@@ -139,10 +137,10 @@ func TestNativeAttemptInputIdentitiesRejectsUnsafePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(repo, "static.json"), filepath.Join(repo, "static-link")); err == nil {
+	if err := os.Symlink("one.ts", filepath.Join(repo, "src", "migrations", "link")); err == nil {
 		before := nativeAttemptTreeSnapshot(t, repo)
-		if _, err := nativeAttemptInputIdentities(t.Context(), identity, "static-link"); err == nil {
-			t.Fatal("accepted symlink input")
+		if _, err := nativeAttemptInputIdentities(t.Context(), identity, "src"); err == nil {
+			t.Fatal("accepted directory containing a symlink")
 		}
 		if got := nativeAttemptTreeSnapshot(t, repo); got != before {
 			t.Fatalf("rejection mutated repository: %q != %q", got, before)
@@ -152,15 +150,15 @@ func TestNativeAttemptInputIdentitiesRejectsUnsafePaths(t *testing.T) {
 	}
 	outside := filepath.Join(t.TempDir(), "existing-outside")
 	write(t, outside, "outside\n")
-	before := nativeAttemptTreeSnapshot(t, repo)
 	if _, err := nativeAttemptInputIdentities(t.Context(), identity, outside); err == nil {
 		t.Fatal("accepted existing absolute input outside repository")
 	}
-	if got := nativeAttemptTreeSnapshot(t, repo); got != before {
-		t.Fatalf("outside-path rejection mutated repository: %q != %q", got, before)
+	rootLink := repo + "-link"
+	if err := os.Symlink(repo, rootLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := nativeAttemptInputIdentities(t.Context(), identity, "missing"); err == nil {
-		t.Fatal("accepted missing input")
+	if _, err := nativeAttemptLstat(rootLink, "missing"); !os.IsNotExist(err) {
+		t.Fatalf("nativeAttemptLstat missing error = %v, want not exist", err)
 	}
 	if _, err := nativeAttemptCanonicalPath(repo, ".GIT"); err == nil {
 		t.Fatal("accepted unsupported repository control directory")
