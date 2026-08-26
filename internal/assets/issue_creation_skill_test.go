@@ -124,3 +124,116 @@ func fencedBashCommands(t *testing.T, executionSteps string) []string {
 	}
 	return commands
 }
+
+func TestIssueCreationSkillOwnershipGate(t *testing.T) {
+	content := strings.ReplaceAll(MustRead("skills/issue-creation/SKILL.md"), "\r\n", "\n")
+
+	ownershipContracts := []struct {
+		name  string
+		terms []string
+	}{
+		{
+			"narrow mutation and target scope",
+			[]string{
+				"ownership gate applies only when the selected mutation is **new issue creation**",
+				"proposed target is exactly `github.com/Gentleman-Programming/gentle-ai`",
+				"before that official target is offered",
+				"before new-issue answers are materialized",
+				"Comments, triage, approval, and every explicit non-Gentle-AI target retain the existing canonical issue-creation workflow unchanged",
+			},
+		},
+		{
+			"confirmed defect evidence",
+			[]string{
+				"concrete evidence",
+				"a Gentle AI change is independently necessary or actionable",
+				"Gentle AI behavior worsened",
+				"reproducible Gentle AI contract violation",
+				"minimal reproduction",
+				"before/after comparison",
+				"Mere presence in the workflow is insufficient",
+			},
+		},
+		{
+			"feature and policy route",
+			[]string{
+				"explicitly seeks a change to Gentle AI behavior or policy",
+				"not presented as a defect",
+				"without false defect classification",
+			},
+		},
+		{
+			"external routing destinations",
+			[]string{
+				"user project",
+				"repository configuration",
+				"dependency",
+				"host agent/tooling/environment",
+				"exactly one external destination",
+				"route away from Gentle AI",
+			},
+		},
+		{
+			"fail-closed ambiguity",
+			[]string{
+				"insufficient evidence",
+				"equally supported external destinations",
+				"unresolved mixed causes",
+				"smallest missing evidence",
+				"fail closed",
+			},
+		},
+	}
+	for _, contract := range ownershipContracts {
+		t.Run(contract.name, func(t *testing.T) {
+			for _, term := range contract.terms {
+				if !strings.Contains(content, term) {
+					t.Errorf("issue-creation skill is missing ownership-gate contract marker %q", term)
+				}
+			}
+		})
+	}
+
+	orderedRoutes := []string{
+		"**Confirmed Gentle AI defect**",
+		"**Gentle AI feature or policy request**",
+		"**External routing destination**",
+		"**Ambiguous or unproven ownership**",
+	}
+	previous := -1
+	for _, route := range orderedRoutes {
+		current := strings.Index(content, route)
+		if current == -1 {
+			t.Errorf("issue-creation skill is missing ownership route %q", route)
+			continue
+		}
+		if current <= previous {
+			t.Errorf("ownership routes must remain ordered, found %q at %d after %d", route, current, previous)
+		}
+		previous = current
+	}
+
+	executionStart := strings.Index(content, "## Execution Steps\n")
+	executionEnd := strings.Index(content, "## Output Contract\n")
+	if executionStart == -1 || executionEnd == -1 || executionStart >= executionEnd {
+		t.Fatal("issue-creation skill must contain an executable ownership gate before its Output Contract")
+	}
+	execution := content[executionStart:executionEnd]
+	gateIndex := strings.Index(execution, "Apply the ownership gate")
+	if gateIndex == -1 {
+		t.Fatal("issue-creation skill must apply the ownership gate in Execution Steps")
+	}
+	for _, marker := range []string{
+		"offering the official Gentle AI target",
+		"materializing any new-issue answers",
+		"publication",
+		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"`,
+	} {
+		index := strings.Index(execution, marker)
+		if index == -1 {
+			t.Errorf("issue-creation skill is missing ownership ordering marker %q", marker)
+		} else if gateIndex > index {
+			t.Errorf("ownership gate must precede %q", marker)
+		}
+	}
+}
