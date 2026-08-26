@@ -17,6 +17,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 
 - Prefer the fast path: reuse verified current-session facts while they remain current; discover only missing or stale facts.
 - Before any needed target policy read or write, resolve the exact target as `[HOST/]OWNER/REPO`. Never assume the current repository.
+- The ownership gate applies only when the selected mutation is **new issue creation** and the proposed target is exactly `github.com/Gentleman-Programming/gentle-ai`. Run it before that official target is offered, before new-issue answers are materialized, and before publication. Comments, triage, approval, and every explicit non-Gentle-AI target retain the existing canonical issue-creation workflow unchanged.
 - YAML Issue Forms are the single format authority. Never use Markdown, a blank body, an alternate publisher, or a browser route as a fallback.
 - Complete one open-and-closed duplicate search before a write. Reuse that result while it remains current.
 - Never invent required facts, selections, first-person affirmations, labels, approval, or policy. Ask for the smallest missing fact.
@@ -28,6 +29,10 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 
 | Path | Use when | Action |
 | --- | --- | --- |
+| **Confirmed Gentle AI defect** | Proceed only with concrete evidence that a Gentle AI change is independently necessary or actionable, Gentle AI behavior worsened, or a reproducible Gentle AI contract violation exists. A minimal reproduction, before/after comparison, or identified contract violation can establish it. Mere presence in the workflow is insufficient. | Continue through the existing target-policy, Issue Form, duplicate, privacy, mutation, and read-back flow. |
+| **Gentle AI feature or policy request** | The requester explicitly seeks a change to Gentle AI behavior or policy and it is not presented as a defect. | Continue through the existing target-policy, Issue Form, duplicate, privacy, mutation, and read-back flow without false defect classification. |
+| **External routing destination** | Only after neither preceding route applies, affirmative evidence supports exactly one external destination: user project, repository configuration, dependency, or host agent/tooling/environment. | Do not offer or publish an official issue; route away from Gentle AI instead. |
+| **Ambiguous or unproven ownership** | When there is insufficient evidence, equally supported external destinations, unresolved mixed causes, or it is unclear whether a Gentle AI change is independently actionable or behavior-worsening. | Fail closed and request the smallest missing evidence; do not offer, materialize, or publish. |
 | Fast path | The current session has the exact target and form, reviewed answers and title, current labels and policy, and a completed classifiable duplicate search | Reuse them and enter the common publication flow. |
 | Minimal discovery | Any required fact is missing, stale, ambiguous, or belongs to another target | Resolve the target first, then fetch only the missing facts and stop if any remain unknown. |
 | Conforming equivalent | A relevant candidate, read from the target host, covers the same behavior and its body satisfies the selected form's controls and required answers | Comment there instead of creating a duplicate. |
@@ -36,7 +41,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 
 ## Execution Steps
 
-1. Choose the fast path or minimal discovery. When discovery is needed, derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO` from an explicit target or one unambiguous authenticated remote before target reads. Authenticate to `HOST`; discover only missing repository policy, default-branch Issue Forms/config, issue availability, Discussions routing, and labels. Enumerate existing labels with one read-only call:
+1. Choose the fast path or minimal discovery. When discovery is needed, derive and verify `HOST`, `REPO=OWNER/REPO`, and `TARGET=$HOST/$REPO` from an explicit target or one unambiguous authenticated remote before target reads. Apply the ownership gate only when the selected mutation is **new issue creation** and the proposed target is exactly `github.com/Gentleman-Programming/gentle-ai`; apply it before offering the official Gentle AI target, before materializing any new-issue answers, and before publication. For every other mutation or target, skip this gate and continue the existing workflow unchanged. Route away from Gentle AI when the gate identifies exactly one external destination; if ownership is ambiguous, fail closed and request the smallest missing evidence. Authenticate to `HOST`; discover only missing repository policy, default-branch Issue Forms/config, issue availability, Discussions routing, and labels. Enumerate existing labels with one read-only call:
 
    ```bash
    gh api --hostname "$HOST" --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name'
