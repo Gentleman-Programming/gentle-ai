@@ -31,6 +31,8 @@ type StatusV2Projection struct {
 	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
 	NextRecommended   string                       `json:"nextRecommended"`
 	BlockedReasons    []string                     `json:"blockedReasons"`
+
+	FinalVerificationReason string `json:"finalVerificationReason,omitempty"`
 }
 
 type planningHomeV2 struct {
@@ -139,6 +141,7 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 		NextRecommended: status.NextRecommended,
 		BlockedReasons:  status.BlockedReasons,
 	}
+	projected.FinalVerificationReason = finalVerificationReason(status)
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV2{
 			Apply: status.PhaseInstructions.Apply, Verify: status.PhaseInstructions.Verify,
@@ -146,6 +149,16 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 		}
 	}
 	return projected, nil
+}
+
+func finalVerificationReason(status Status) string {
+	if status.ArtifactStore == ArtifactStoreOpenSpec &&
+		status.Dependencies.Verify == DependencyReady &&
+		status.NextRecommended == string(PhaseVerify) &&
+		status.Artifacts["verifyReport"] == ArtifactMissing {
+		return "verify_report_missing"
+	}
+	return ""
 }
 
 func marshalStatusV2Indent(status Status) ([]byte, error) {

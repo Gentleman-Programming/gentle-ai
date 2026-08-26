@@ -90,6 +90,7 @@ remediationState:
   complete: false
   failedEvidenceRevision: ""
   reason: ""
+finalVerificationReason: verify_report_missing # optional
 reviewOffer:
   available: true
   invocation: <fresh review start command>
@@ -106,6 +107,8 @@ blockedReasons: []
 `reviewOffer` is optional and appears only after strict independent verification passes while review mode is enabled. It is a fresh mode-only offer with exactly `available` and `invocation`; it carries no lineage, receipt, binding, successor, gate, transaction, or previous review result. Disabled review mode is structural absence. Repeated status reads may present the same fresh offer and no offered, declined, burned, or historical authority changes archive readiness.
 
 `phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `consent` is structurally absent everywhere except an OpenSpec-backed native status that reports `blocked(edit_authority_missing)`; manual fallback MUST NOT reconstruct it. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
+
+`finalVerificationReason` is optional and advisory. Its only value is `verify_report_missing`, emitted only for OpenSpec status when `dependencies.verify` is `ready`, `nextRecommended` is `verify`, and `artifacts.verifyReport` is `missing`. Consumers MUST continue routing exclusively from `nextRecommended` and dependency state; this diagnostic neither skips `sdd-verify` nor authorizes archive.
 
 ## Apply State
 
