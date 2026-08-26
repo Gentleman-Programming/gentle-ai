@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -1116,6 +1117,21 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 
 	assertNoDuplicatePaths(t, "backupTargets", targets)
+}
+
+func TestBackupTargetsIncludeOpenCodeNativeFallbackOwnership(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentSDD}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := sdd.NativeFallbackOwnershipPath(openCodeSettingsPath(home))
+	if !containsPath(targets, want) {
+		t.Fatalf("backupTargets missing native fallback ownership sidecar %q; targets=%v", want, targets)
+	}
 }
 
 func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {

@@ -33,7 +33,7 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 
 func TestModelPickerRows_Count(t *testing.T) {
 	rows := ModelPickerRows()
-	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.ReviewPhases())
+	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.ReviewPhases()) + 1 + len(opencode.NativeFallbackPhases())
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRows() len = %d, want %d; rows = %v", len(rows), want, rows)
 	}
@@ -42,11 +42,61 @@ func TestModelPickerRows_Count(t *testing.T) {
 func TestModelPickerRows_ReviewAgentsFollowJudgmentDay(t *testing.T) {
 	rows := ModelPickerRows()
 	wantSuffix := append([]string{"--- Review agents ---"}, opencode.ReviewPhases()...)
+	wantSuffix = append(wantSuffix, "--- Native fallback agents ---")
+	wantSuffix = append(wantSuffix, opencode.NativeFallbackPhases()...)
 	got := rows[len(rows)-len(wantSuffix):]
 	for i := range wantSuffix {
 		if got[i] != wantSuffix[i] {
 			t.Fatalf("review row %d = %q, want %q; rows = %v", i, got[i], wantSuffix[i], rows)
 		}
+	}
+}
+
+func TestHandleModelPickerNav_PersistsNativeFallbackModelAndVariant(t *testing.T) {
+	assignments := make(map[string]model.ModelAssignment)
+	for _, tt := range []struct {
+		role   string
+		effort int
+		want   model.ModelAssignment
+	}{
+		{"general", 2, model.ModelAssignment{ProviderID: "fixture", ModelID: "explicit-general", Effort: "high"}},
+		{"explore", 1, model.ModelAssignment{ProviderID: "fixture", ModelID: "explicit-explore", Effort: "low"}},
+	} {
+		t.Run(tt.role, func(t *testing.T) {
+			row := -1
+			for i, candidate := range ModelPickerRowsForState(ModelPickerState{}) {
+				if candidate == tt.role {
+					row = i
+					break
+				}
+			}
+			if row < 0 {
+				t.Fatalf("picker row for %q not found", tt.role)
+			}
+
+			state := ModelPickerState{
+				Mode:             ModeModelSelect,
+				SelectedPhaseIdx: row,
+				SelectedProvider: tt.want.ProviderID,
+				SDDModels: map[string][]opencode.Model{
+					tt.want.ProviderID: {{ID: tt.want.ModelID, Name: tt.want.ModelID, ToolCall: true, Reasoning: true, Variants: []string{"low", "high"}}},
+				},
+			}
+			if handled, updated := HandleModelPickerNav("enter", &state, assignments); !handled {
+				t.Fatal("model selection was not handled")
+			} else {
+				assignments = updated
+			}
+			state.EffortCursor = tt.effort
+			if handled, updated := HandleModelPickerNav("enter", &state, assignments); !handled {
+				t.Fatal("variant selection was not handled")
+			} else {
+				assignments = updated
+			}
+			if got := assignments[tt.role]; got != tt.want {
+				t.Fatalf("persisted assignment = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -3,9 +3,11 @@ package sdd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
@@ -4558,6 +4561,11 @@ func TestInjectOpenCodePluginIdempotent(t *testing.T) {
 	}
 }
 
+func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool) ([]byte, error) {
+	result, _, err := injectModelAssignmentsWithOwnership(overlayBytes, assignments, rootModelID, existingAgentKeys, nil, nil)
+	return result, err
+}
+
 func TestInjectModelAssignmentsFunction(t *testing.T) {
 	overlayJSON := []byte(`{
   "agent": {
@@ -7340,4 +7348,500 @@ func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
 	if !strings.Contains(string(workflowContent), "### Archive Final-State Handoff (MANDATORY)") {
 		t.Fatal("installed lazy SDD workflow missing archive final-state handoff section")
 	}
+}
+
+func TestInjectOpenCodeNativeFallbackAgentsDeriveFromAssignments(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"openai/gpt-5"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	opts := InjectOptions{
+		OpenCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-mid":     {ProviderID: "openai", ModelID: "gpt-5-codex", Effort: "high"},
+			"sdd-explore": {ProviderID: "anthropic", ModelID: "claude-3-5-haiku", Effort: "medium"},
+		},
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi", opts); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	for fallbackAgent, want := range map[string]nativeFallbackAssignment{
+		"general": {Model: "openai/gpt-5-codex", Variant: "high"},
+		"explore": {Model: "anthropic/claude-3-5-haiku", Variant: "medium"},
+	} {
+		agentDef, ok := agentMap[fallbackAgent].(map[string]any)
+		if !ok {
+			t.Fatalf("fallback agent %q not found in opencode.json", fallbackAgent)
+		}
+		m, hasModel := agentDef["model"]
+		if !hasModel || m != want.Model {
+			t.Fatalf("%s model = %v, want %s", fallbackAgent, m, want.Model)
+		}
+		v, hasVariant := agentDef["variant"]
+		if !hasVariant || v != want.Variant {
+			t.Fatalf("%s variant = %v, want %s", fallbackAgent, v, want.Variant)
+		}
+	}
+}
+
+func TestInjectOpenCodeNativeFallbackAgentsPreserveExistingUserModel(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existingJSON := `{
+  "model": "openai/gpt-5",
+  "agent": {
+    "general": {
+      "model": "user-provider/custom-user-model",
+      "variant": "high"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existingJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	opts := InjectOptions{
+		OpenCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-explore": {ProviderID: "anthropic", ModelID: "claude-3-5-haiku", Effort: "medium"},
+		},
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi", opts); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+
+	genDef, ok := agentMap["general"].(map[string]any)
+	if !ok {
+		t.Fatal("general agent missing")
+	}
+	if genDef["model"] != "user-provider/custom-user-model" {
+		t.Fatalf("general model = %v, want preserved user-provider/custom-user-model", genDef["model"])
+	}
+	if genDef["variant"] != "high" {
+		t.Fatalf("general variant = %v, want preserved high", genDef["variant"])
+	}
+}
+
+func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        model.SDDModeID
+		settings    string
+		assignments map[string]model.ModelAssignment
+		second      map[string]model.ModelAssignment
+		want        map[string]nativeFallbackAssignment
+		owned       bool
+		wantOwned   map[string]nativeFallbackAssignment
+	}{
+		{
+			name:     "single mode derives both roles from root with medium variant",
+			mode:     model.SDDModeSingle,
+			settings: `{"model":"openai/gpt-5"}`,
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "openai/gpt-5", Variant: "medium"},
+				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+			},
+			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "openai/gpt-5", Variant: "medium"},
+				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+			},
+		},
+		{
+			name: "explicit native assignments win",
+			mode: model.SDDModeMulti,
+			assignments: map[string]model.ModelAssignment{
+				"general":     {ProviderID: "user", ModelID: "general", Effort: "high"},
+				"explore":     {ProviderID: "user", ModelID: "explore", Effort: "low"},
+				"sdd-mid":     {ProviderID: "mid", ModelID: "code"},
+				"sdd-explore": {ProviderID: "explore", ModelID: "web"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "user/general", Variant: "high"},
+				"explore": {Model: "user/explore", Variant: "low"},
+			},
+		},
+		{
+			name: "sdd mid defaults both roles with its effort",
+			mode: model.SDDModeMulti,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "mid", ModelID: "code", Effort: "medium"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "mid/code", Variant: "medium"},
+			},
+			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "mid/code", Variant: "medium"},
+			},
+		},
+		{
+			name: "sdd explore specializes explore only",
+			mode: model.SDDModeMulti,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid":     {ProviderID: "mid", ModelID: "code", Effort: "medium"},
+				"sdd-explore": {ProviderID: "explore", ModelID: "web", Effort: "low"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "explore/web", Variant: "low"},
+			},
+			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "explore/web", Variant: "low"},
+			},
+		},
+		{
+			name:     "model-less user role is preserved",
+			mode:     model.SDDModeMulti,
+			settings: `{"model":"openai/gpt-5","agent":{"general":{"mode":"subagent"}}}`,
+			want: map[string]nativeFallbackAssignment{
+				"general": {},
+				"explore": {},
+			},
+		},
+		{
+			name:     "selection-less or malformed assignments invent no multi mode fallback",
+			mode:     model.SDDModeMulti,
+			settings: `{"model":"openai/gpt-5"}`,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid":     {ProviderID: "mid"},
+				"sdd-explore": {ModelID: "web", Effort: "low"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {}, "explore": {},
+			},
+		},
+		{
+			name:     "repeat sync refreshes only managed defaults",
+			mode:     model.SDDModeMulti,
+			settings: `{"model":"openai/gpt-5","agent":{"explore":{"model":"user/explore","variant":"high"}}}`,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "first", ModelID: "code", Effort: "low"},
+			},
+			second: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "second", ModelID: "code", Effort: "high"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "second/code", Variant: "high"},
+				"explore": {Model: "user/explore", Variant: "high"},
+			},
+			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "second/code", Variant: "high"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.settings != "" {
+				if err := os.WriteFile(settingsPath, []byte(tt.settings), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Inject(home, opencodeAdapter(), tt.mode, InjectOptions{OpenCodeModelAssignments: tt.assignments}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.second != nil {
+				if _, err := Inject(home, opencodeAdapter(), tt.mode, InjectOptions{OpenCodeModelAssignments: tt.second}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := readNativeFallbackAssignments(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, role := range []string{"general", "explore"} {
+				if got[role] != tt.want[role] {
+					t.Errorf("%s = %#v, want %#v", role, got[role], tt.want[role])
+				}
+			}
+			_, err = os.Stat(nativeFallbackOwnershipPath(settingsPath))
+			if (err == nil) != tt.owned {
+				t.Errorf("ownership metadata present = %t, want %t (err=%v)", err == nil, tt.owned, err)
+			}
+			if !tt.owned {
+				return
+			}
+			raw, err := os.ReadFile(nativeFallbackOwnershipPath(settingsPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ownership nativeFallbackOwnership
+			if err := json.Unmarshal(raw, &ownership); err != nil {
+				t.Fatal(err)
+			}
+			if ownership.Schema != nativeFallbackOwnershipSchema || ownership.Version != 1 {
+				t.Errorf("ownership contract = %#v, want schema %q version 1", ownership, nativeFallbackOwnershipSchema)
+			}
+			if !equalNativeFallbackAssignments(ownership.Agents, tt.wantOwned) {
+				t.Errorf("ownership agents = %#v, want %#v", ownership.Agents, tt.wantOwned)
+			}
+		})
+	}
+}
+
+func TestNativeFallbackRolesRemainAligned(t *testing.T) {
+	roles := opencodemodel.NativeFallbackPhases()
+	if !slices.Equal(roles, []string{"general", "explore"}) {
+		t.Fatalf("NativeFallbackPhases() = %v, want [general explore]", roles)
+	}
+
+	defaults := nativeFallbackDefaults(model.SDDModeSingle, nil, "fixture/root")
+	ownership := nativeFallbackOwnership{Agents: make(map[string]nativeFallbackAssignment, len(roles))}
+	assignments := make(map[string]model.ModelAssignment, len(roles))
+	for _, role := range roles {
+		if !isNativeFallbackAgent(role) {
+			t.Errorf("isNativeFallbackAgent(%q) = false", role)
+		}
+		if got := defaults[role]; got != (nativeFallbackAssignment{Model: "fixture/root", Variant: "medium"}) {
+			t.Errorf("nativeFallbackDefaults()[%q] = %#v", role, got)
+		}
+		ownership.Agents[role] = nativeFallbackAssignment{Model: "managed/" + role}
+		assignments[role] = model.ModelAssignment{ProviderID: "picker", ModelID: role}
+	}
+	ownership.reconcile(assignments, nil, nil)
+	if len(ownership.Agents) != 0 {
+		t.Errorf("reconcile() retained picker-owned roles: %#v", ownership.Agents)
+	}
+}
+
+func TestInjectOpenCodeNativeFallbackOwnershipRetainsValuesWhenSourcesDisappear(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	firstAssignments := map[string]model.ModelAssignment{
+		"sdd-mid":     {ProviderID: "first", ModelID: "mid", Effort: "low"},
+		"sdd-explore": {ProviderID: "first", ModelID: "explore", Effort: "medium"},
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: firstAssignments}); err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+
+	want := map[string]nativeFallbackAssignment{
+		"general": {Model: "first/mid", Variant: "low"},
+		"explore": {Model: "first/explore", Variant: "medium"},
+	}
+	assertState := func(label string) {
+		t.Helper()
+		got, err := readNativeFallbackAssignments(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for role, expected := range want {
+			if got[role] != expected {
+				t.Fatalf("%s fallback[%s] = %#v, want %#v", label, role, got[role], expected)
+			}
+		}
+
+		raw, err := os.ReadFile(nativeFallbackOwnershipPath(settingsPath))
+		if err != nil {
+			t.Fatalf("%s ownership read error = %v", label, err)
+		}
+		var ownership nativeFallbackOwnership
+		if err := json.Unmarshal(raw, &ownership); err != nil {
+			t.Fatalf("%s ownership decode error = %v", label, err)
+		}
+		if ownership.Schema != nativeFallbackOwnershipSchema || ownership.Version != 1 {
+			t.Fatalf("%s ownership header = %q/%d, want %q/1", label, ownership.Schema, ownership.Version, nativeFallbackOwnershipSchema)
+		}
+		if !equalNativeFallbackAssignments(ownership.Agents, want) {
+			t.Fatalf("%s ownership agents = %#v, want %#v", label, ownership.Agents, want)
+		}
+	}
+	assertState("first sync")
+
+	// In multi mode, sdd-mid and sdd-explore are the managed derivation sources.
+	// When both disappear, retain the last managed values and ownership metadata;
+	// source absence is not authorization to delete existing OpenCode settings.
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: map[string]model.ModelAssignment{}}); err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	assertState("source-removal sync")
+}
+
+func TestReadNativeFallbackAssignmentsReturnsEmptyMapWithoutAgent(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"openai/gpt-5"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assignments, err := readNativeFallbackAssignments(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignments == nil || len(assignments) != 0 {
+		t.Fatalf("assignments = %#v, want non-nil empty map", assignments)
+	}
+}
+
+func TestReadNativeFallbackOwnershipRecoversInvalidSidecars(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"agent":{"general":{"model":"openai/gpt-5","variant":"medium"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"schema":"gentle-ai.opencode-native-fallbacks","version":1,"agents":{"general":{"model":"openai/gpt-5","variant":"medium"}}}`
+	tests := []struct {
+		name      string
+		contents  string
+		directory bool
+		wantErr   bool
+		want      map[string]nativeFallbackAssignment
+	}{
+		{name: "missing file", want: map[string]nativeFallbackAssignment{}},
+		{name: "malformed JSON", contents: `{`, want: map[string]nativeFallbackAssignment{}},
+		{name: "missing schema", contents: `{"version":1}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "missing version", contents: `{"schema":"gentle-ai.opencode-native-fallbacks"}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "wrong schema", contents: `{"schema":"wrong","version":1}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "wrong version", contents: `{"schema":"gentle-ai.opencode-native-fallbacks","version":2}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "omitted agents", contents: `{"schema":"gentle-ai.opencode-native-fallbacks","version":1}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "valid sidecar", contents: valid, want: map[string]nativeFallbackAssignment{"general": {Model: "openai/gpt-5", Variant: "medium"}}},
+		{name: "hard read failure", directory: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ownershipPath := nativeFallbackOwnershipPath(settingsPath)
+			_ = os.RemoveAll(ownershipPath)
+			if tt.directory {
+				if err := os.Mkdir(ownershipPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if tt.contents != "" {
+				if err := os.WriteFile(ownershipPath, []byte(tt.contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := readNativeFallbackOwnership(settingsPath, map[string]bool{"general": true})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readNativeFallbackOwnership() error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if err == nil && (got.Schema != nativeFallbackOwnershipSchema || got.Version != 1 || !equalNativeFallbackAssignments(got.Agents, tt.want)) {
+				t.Errorf("ownership = %#v, want schema %q version 1 agents %#v", got, nativeFallbackOwnershipSchema, tt.want)
+			}
+		})
+	}
+}
+
+func TestInjectRollsBackSettingsWhenNativeFallbackOwnershipWriteFails(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		initial []byte
+		mode    os.FileMode
+	}{
+		{name: "existing settings preserve bytes and mode", initial: []byte(`{"model":"openai/gpt-5","agent":{"user":{"model":"user/model"}}}`), mode: 0o600},
+		{name: "absent settings are removed", mode: 0o644},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			if tt.initial != nil {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, tt.initial, tt.mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			originalWriter := writeNativeFallbackOwnershipFile
+			writeNativeFallbackOwnershipFile = func(string, []byte, os.FileMode) (filemerge.WriteResult, error) {
+				return filemerge.WriteResult{}, errors.New("sidecar write failed")
+			}
+			t.Cleanup(func() { writeNativeFallbackOwnershipFile = originalWriter })
+			_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "fixture", ModelID: "general", Effort: "medium"},
+			}})
+			if err == nil || !strings.Contains(err.Error(), "sidecar write failed") {
+				t.Fatalf("Inject() error = %v, want sidecar write failure", err)
+			}
+			got, readErr := os.ReadFile(settingsPath)
+			if tt.initial == nil {
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("settings exists after rollback: read error = %v, contents = %q", readErr, got)
+				}
+				return
+			}
+			if readErr != nil || !bytes.Equal(got, tt.initial) {
+				t.Fatalf("settings after rollback = %q, %v; want %q", got, readErr, tt.initial)
+			}
+			info, err := os.Stat(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != tt.mode {
+				t.Errorf("settings mode = %o, want %o", info.Mode().Perm(), tt.mode)
+			}
+		})
+	}
+}
+
+func equalNativeFallbackAssignments(got, want map[string]nativeFallbackAssignment) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for role, assignment := range want {
+		if got[role] != assignment {
+			return false
+		}
+	}
+	return true
 }
