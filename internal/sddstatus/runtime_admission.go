@@ -17,6 +17,35 @@ type runtimeBeginAdmissionResult struct {
 	Snapshot   reviewtransaction.Snapshot
 }
 
+// runtimeRescopeSuccessorIntendedUntracked recovers only the exact selection
+// whose zero-drift candidate opened a fresh rescope successor. The successor
+// has no attempt of its own yet, so its predecessor's recorded selection is
+// the sole inventory-validated scope that can reproduce InitialCandidate*.
+func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, bool) {
+	if status.Objective == nil || status.ActiveAttempt != nil || status.LastRescope == nil ||
+		status.LastRescope.ObjectiveID != status.Objective.ID || runtimeObjectiveHasRecordedAttempt(status) ||
+		len(status.Attempts) == 0 {
+		return nil, false
+	}
+	predecessor := status.Attempts[len(status.Attempts)-1]
+	if predecessor.ObjectiveID != status.LastRescope.PreviousObjectiveID ||
+		predecessor.ObjectiveGeneration != status.LastRescope.PreviousGeneration ||
+		predecessor.Outcome == AttemptRunning {
+		return nil, false
+	}
+	return slices.Clone(predecessor.IntendedUntracked), true
+}
+
+func runtimeRescopeSuccessorRequest(status RuntimeStatus, request BeginAttemptRequest, inherit bool) BeginAttemptRequest {
+	if !inherit {
+		return request
+	}
+	if intended, ok := runtimeRescopeSuccessorIntendedUntracked(status); ok {
+		request.IntendedUntracked = intended
+	}
+	return request
+}
+
 // runtimeBeginAdmission is the ONE evaluator of every precondition Begin must
 // satisfy before it can record an attempt, ledger-side and repository-side
 // alike. It mutates nothing: it reads the replayed status the caller hands it
@@ -146,12 +175,14 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	// exactly when the operator is looking hardest.
 	status.SettleObligation = runtimeSettleObligation(status)
 
+	inheritIntendedUntracked := request.IntendedUntracked == nil
 	normalized, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
 		status.BlockedReason = CompactBlockInvalidContinuation
 		status.BlockedExit = err.Error()
 		return status, nil
 	}
+	normalized = runtimeRescopeSuccessorRequest(status, normalized, inheritIntendedUntracked)
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
 	}); terminal && result.State == CompactStateBlocked {

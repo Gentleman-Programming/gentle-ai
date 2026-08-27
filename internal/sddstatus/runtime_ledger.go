@@ -698,6 +698,17 @@ func (store RuntimeStore) Status() (RuntimeStatus, error) {
 	return replay.Status, err
 }
 
+// FreshRescopeSuccessorInheritsIntendedUntracked reports whether the current
+// fresh rescope successor can reuse its predecessor's recorded selection.
+func (store RuntimeStore) FreshRescopeSuccessorInheritsIntendedUntracked() (bool, error) {
+	replay, err := store.load()
+	if err != nil {
+		return false, err
+	}
+	_, inherited := runtimeRescopeSuccessorIntendedUntracked(replay.Status)
+	return inherited, nil
+}
+
 // runtimeObjectiveHasRecordedAttempt reports whether ANY attempt in the
 // replayed history was recorded under status.Objective's exact ID. Before
 // Rescope existed, status.Objective != nil always implied at least one
@@ -723,10 +734,18 @@ func runtimeObjectiveHasRecordedAttempt(status RuntimeStatus) bool {
 }
 
 func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest) (RuntimeStatus, error) {
-	legacyRequest := request.IntendedUntracked == nil
+	inheritIntendedUntracked := request.IntendedUntracked == nil
+	legacyRequest := inheritIntendedUntracked
 	request, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
 		return RuntimeStatus{}, err
+	}
+	if inheritIntendedUntracked {
+		replay, loadErr := store.load()
+		if loadErr != nil {
+			return RuntimeStatus{}, loadErr
+		}
+		request = runtimeRescopeSuccessorRequest(replay.Status, request, true)
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
 	legacyDigest := ""

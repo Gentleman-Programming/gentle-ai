@@ -97,15 +97,32 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	var intended []string
 	declaredUntracked := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
-	if operation == "begin" || (operation == "acquire" && (*token == "" || declaredUntracked)) {
-		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
-		if scopeErr != nil {
-			return scopeErr
+	skipAcquireUntrackedPreflight := false
+	if operation == "acquire" && !declaredUntracked && *token == "" {
+		status, statusErr := store.Status()
+		skipAcquireUntrackedPreflight = statusErr == nil && status.ActiveAttempt != nil
+	}
+	if operation == "begin" || (operation == "acquire" && (*token == "" || declaredUntracked) && !skipAcquireUntrackedPreflight) {
+		inheritsRescopeSelection := false
+		if !declaredUntracked {
+			inheritsRescopeSelection, err = store.FreshRescopeSuccessorInheritsIntendedUntracked()
+			if err != nil && operation == "begin" {
+				return fmt.Errorf("read rescope successor untracked scope: %w", err)
+			}
+			if err != nil {
+				inheritsRescopeSelection = false
+			}
 		}
-		if scope.NeedsSelection {
-			return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+		if !inheritsRescopeSelection {
+			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			if scopeErr != nil {
+				return scopeErr
+			}
+			if scope.NeedsSelection {
+				return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			}
+			intended = scope.Intended
 		}
-		intended = scope.Intended
 	}
 	var result any
 	switch operation {
