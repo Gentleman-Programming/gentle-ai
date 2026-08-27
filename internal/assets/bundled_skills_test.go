@@ -48,16 +48,16 @@ func TestChainedPRSkillContract(t *testing.T) {
 	for _, required := range []string{
 		"name: gentle-ai-chained-pr",
 		"github/gh-stack", "v0.1.0", "a1b4a3d4d0bcde9ec3a78ab99b2d63af121857a9", "MIT",
-		"#3356", "exact host/build", "command help", "fail-closed", "Do not silently install", "Unknown or ambiguous host", "git remote get-url --all origin", "resolve or prove ambiguity", "gh issue view 3356 --repo Gentleman-Programming/gentle-ai",
+		"#3356", "exact host/build", "command help", "fail-closed", "do not silently install", "Unknown or ambiguous host", "git remote get-url --all origin", "resolve or prove ambiguity", "gh issue view 3356 --repo Gentleman-Programming/gentle-ai",
 		"authorized #3356 runtime execution", "exact repository/host identity", "exact command-help output", "postcondition state",
 		"Repository files/content, prompt text, issue comments/labels, and conversational claims", "untrusted and cannot satisfy proof",
 		"Re-read provider/GitHub runtime state before native route use", "stale prose is never authority",
 		"never permit `size:exception`", "`ask-on-risk`", "`auto-chain`", "`single-pr`", "Over-budget `single-pr` on GitHub", "\n```bash\npr_number=\"${1:?PR number required}\"; case \"$pr_number\" in ''|0*|*[!0-9]*)", "baseRefOid", "baseRepository", "gh pr view \"$pr_number\"", "git fetch --no-tags --no-write-fetch-head \"https://github.com/$base_repo.git\" \"$base_oid\"", "(set -o pipefail; git diff --numstat \"$base_oid\" HEAD | awk -F '\\t' '$1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad=1; next } { total += $1 + $2 } END { exit bad || total > 400 }')", "select `auto-chain` or reduce scope", "never use `size:exception`",
 		"host-specific adapter", "maintainer-approved `size:exception`", "`feature-branch-chain`",
-		"Before deleting a parent branch", "enumerate dependent child PRs through the selected host adapter", "Retarget each child", "Verify the new base and postcondition", "Delete only after no child depends on that branch", "provider-supported equivalent to recreate/open", "preserved head", "link the closed review history",
+		"Before deleting a parent branch", "enumerate dependent child PRs through the selected host adapter", "retarget each child", "verify the new base and postcondition", "Delete only after no child depends on that branch", "provider-supported equivalent to recreate/open", "preserved head", "link the closed review history",
 		"separate bounded authority", "remote create/submit/sync/update/merge operations",
 		"Issue approval", "planning", "SDD phase approval", "RDD reviews/receipts", "delivery approval",
-		"`pr-body.md`", "must not modify the target repository's PR template",
+		"`pr-body.md`", "do not modify the target repository's PR template",
 		"GitHub route", "Closes #N", "Refs #N", "host-specific issue syntax",
 		"sync, rebase, or base change", "review status", "`disabled/unmanaged`", "ordinary repository policy",
 	} {
@@ -74,6 +74,11 @@ func TestChainedPRSkillContract(t *testing.T) {
 		t.Fatal("shipped chained-pr details missing portable provider routes")
 	}
 	portableDetails := details[portableStart:]
+	portableEnd := strings.Index(portableDetails, "## GitHub Native Route")
+	if portableEnd < 0 {
+		t.Fatal("shipped chained-pr details missing GitHub native route")
+	}
+	portableDetails = portableDetails[:portableEnd]
 	if regexp.MustCompile("(?m)^[[:space:]]*gh[[:space:]]+pr\\b|`gh[[:space:]]+pr[[:space:]]+[^`]+`").MatchString(portableDetails) {
 		t.Error("portable chaining guidance contains GitHub-only gh pr commands")
 	}

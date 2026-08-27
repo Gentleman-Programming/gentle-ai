@@ -13,13 +13,11 @@ Load when a planned PR may exceed **400 changed lines**, SDD forecasts chain ris
 
 ## Hard Rules
 
-- Detect the Git host read-only. Stop when it is unknown or ambiguous.
-- Use the GitHub native route only when #3356 proves the exact host/build capability. Do not silently install it or fall back to manual GitHub choreography.
-- Keep every PR at **≤400 additions + deletions**. The native GitHub route must never permit `size:exception`.
-- Positively identified non-GitHub hosts use a host-specific adapter and portable chaining; a maintainer-approved `size:exception` is available only there.
-- Close a portable parent branch only under the fail-closed dependency safety invariant in the reference; no dependent child may remain.
-- Issue approval, planning, SDD phase approval, `auto-chain`, RDD reviews/receipts, and delivery approval do not authorize remote create/submit/sync/update/merge operations. Those consume separate bounded authority.
-- Compose Chain Context into generated `pr-body.md`; agents must not modify the target repository's PR template.
+- Detect the Git host read-only; stop when it is unknown or ambiguous.
+- Use the GitHub native route only when #3356 proves the exact host/build capability; do not silently install it or fall back to manual GitHub choreography, and never permit `size:exception` there.
+- A positively identified non-GitHub host uses its host-specific adapter and portable chaining; a maintainer-approved `size:exception` is available only there, and parent closure requires the reference's fail-closed invariant: no dependent child may remain.
+- Issue approval, planning, SDD phase approval, `auto-chain`, RDD reviews/receipts, and delivery approval do not authorize remote create/submit/sync/update/merge operations; each consumes separate bounded authority.
+- Compose Chain Context into generated `pr-body.md`; never modify the target repository's PR template.
 
 ## Decision Gates
 
@@ -43,9 +41,8 @@ test -n "$base_oid" && test -n "$base_repo" && { git cat-file -e "$base_oid^{com
 
 1. Detect the host and select GitHub native or portable routing.
 2. Apply `ask-on-risk`, `auto-chain`, or `single-pr`; retain `feature-branch-chain` for portable routing.
-3. Partition autonomous work units under the budget and compose `pr-body.md` with Chain Context.
-4. Before every remote operation, require its separate bounded authority and use only the selected provider adapter.
-5. After a sync, rebase, or base change, re-enter through review status. When RDD is disabled, follow ordinary repository policy and report `disabled/unmanaged`.
+3. Partition autonomous work units under budget, compose `pr-body.md` with Chain Context, and require separate bounded authority before every remote operation.
+4. After a sync, rebase, or base change, re-enter through review status; with RDD disabled, follow ordinary repository policy and report `disabled/unmanaged`.
 
 ## Output Contract
 
@@ -53,4 +50,4 @@ Return provider, route, capability evidence, strategy, PR order, current boundar
 
 ## References
 
-- [references/chaining-details.md](references/chaining-details.md) — approved dependency, capability evidence, portable routes, Chain Context, and authority boundaries.
+- [references/chaining-details.md](references/chaining-details.md) — portable closure, approved GitHub capability, Chain Context, and authority boundaries.
