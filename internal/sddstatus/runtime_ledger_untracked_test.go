@@ -256,7 +256,7 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 	}, Token: revision}
 	result, err := store.Acquire(context.Background(), retry)
 	status, statusErr := store.Status()
-	if err != nil || statusErr != nil || !synced || result.State != CompactStateProceed || result.Token != revision || status.Revision != revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != beforeRecords {
+	if err != nil || statusErr != nil || synced || result.State != CompactStateProceed || result.Token != revision || status.Revision != revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != beforeRecords {
 		t.Fatalf("legacy tokenized replay = %#v, status=%#v err=%v/%v records=%d", result, status, err, statusErr, countRuntimeRecords(t, store.Dir))
 	}
 	foreign := retry

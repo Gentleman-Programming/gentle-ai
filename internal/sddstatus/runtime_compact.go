@@ -207,10 +207,13 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		begin.ExpectedRevision = record.PreviousRevision
-		if inheritIntendedUntracked && record.Begin != nil && record.Begin.IntendedUntracked != nil {
-			begin.IntendedUntracked = slices.Clone(*record.Begin.IntendedUntracked)
+		if inheritIntendedUntracked && record.Begin != nil {
+			begin.IntendedUntracked = nil
+			if record.Begin.IntendedUntracked != nil {
+				begin.IntendedUntracked = slices.Clone(*record.Begin.IntendedUntracked)
+			}
 		}
-		if !compactAcquireMatches(record, begin) {
+		if !compactAcquireMatches(record, begin, inheritIntendedUntracked) {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
 		if request.Token != "" && request.Token != receipt.Revision {
@@ -353,11 +356,14 @@ func normalizeCompactSettleRequest(request CompactSettleRequest) error {
 	return nil
 }
 
-func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bool {
+func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest, inheritsIntendedUntracked bool) bool {
 	if (record.Operation != runtimeOperationBegin && record.Operation != runtimeOperationAdvance) || record.Begin == nil {
 		return false
 	}
 	event := record.Begin
+	if !inheritsIntendedUntracked && event.IntendedUntracked == nil {
+		return false
+	}
 	var intendedUntracked []string
 	if event.IntendedUntracked != nil {
 		intendedUntracked = *event.IntendedUntracked
