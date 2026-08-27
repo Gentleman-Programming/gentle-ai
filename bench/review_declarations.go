@@ -53,6 +53,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j31-nonsense-mode-value":                                                   reviewUntouched,
 	"j32-recovery-of-a-recovery":                                                reviewOptedIn,
 	"j33-escalate-then-recover":                                                 reviewOptedIn,
+	"j3336-opencode-sdd-fresh-default-preflight":                                reviewUntouched,
 	"j34-abandon-then-start-again":                                              reviewOptedIn,
 	"j35-correction-budget-exactly-zero":                                        reviewOptedIn,
 	"j36-contract-right-name-wrong-version":                                     reviewOptedIn,

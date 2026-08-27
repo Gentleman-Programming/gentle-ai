@@ -113,7 +113,6 @@ func TestCanonicalCompositionFeedsBaseAndNamedProfile(t *testing.T) {
 	for _, marker := range []string{
 		"### Lossless Blocking Prompts (MANDATORY)",
 		"### Native SDD Dispatcher Guard",
-		"### SDD Session Preflight (HARD GATE)",
 		"#### Review Execution Contract",
 	} {
 		if strings.Count(profile, marker) != 1 {
@@ -164,7 +163,7 @@ func TestOpenCodeBackgroundPolicyPreservesPromptBranches(t *testing.T) {
 	}{
 		{
 			name:       "gentle-orchestrator",
-			seed:       `{"agent":{"gentle-orchestrator":{"prompt":"CUSTOM_GENTLE"}}}`,
+			seed:       `{"agent":{"gentle-orchestrator":{"prompt":"CUSTOM_GENTLE\n### SDD Entry Routing (MANDATORY)\n4. **Review**\n### SDD Init Guard (MANDATORY)"}}}`,
 			wantCustom: "CUSTOM_GENTLE",
 		},
 		{
@@ -209,6 +208,9 @@ func TestOpenCodeBackgroundPolicyPreservesPromptBranches(t *testing.T) {
 			}
 			if tt.wantCustom != "" && !strings.Contains(prompt, tt.wantCustom) {
 				t.Fatalf("preserved prompt lost custom content %q", tt.wantCustom)
+			}
+			if tt.name == "gentle-orchestrator" && (strings.Count(prompt, sddSessionPreflightMarker) != 1 || strings.Contains(prompt, "<!-- gentle-ai:sdd-session-preflight-migration -->") || strings.Contains(prompt, "Both -> `both`") || strings.Contains(prompt, "4. Review: 400 lines, 800 lines, Other.")) {
+				t.Fatalf("preserved prompt did not contain exactly one canonical session preflight: %q", prompt)
 			}
 			if tt.wantFallback && strings.Contains(prompt, "CUSTOM_") {
 				t.Fatalf("fallback retained unrecognized custom prompt: %q", prompt)

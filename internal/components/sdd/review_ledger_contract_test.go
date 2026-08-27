@@ -462,7 +462,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// settings hash is recomputed from the combined source.
 	// #3564 replaces the shared SDD status contract with v2, so the embedded
 	// pre-proposal contract now names the sole public status version.
-	const want = "421237bd384a32355c89991675d9251dd0696afe5209e0b57c0e5030661391b1"
+	// #3499 projects the canonical three-choice session preflight into the
+	// OpenCode-derived Kilocode prompt, so the rendered settings hash is rederived.
+	const want = "dab65e96e67ffbc873076976ce0e4bdf07d450f209fa8d4d7ac6f47052b53da0"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

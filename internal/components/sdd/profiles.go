@@ -560,7 +560,10 @@ func jdProfileAgentEntry(jd string) map[string]any {
 //  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile, options ...OrchestratorRenderOptions) (string, error) {
-	base := composeOrchestratorPrompt(model.AgentOpenCode, options...)
+	base, err := composeOpenCodeOrchestratorPrompt(model.AgentOpenCode, options...)
+	if err != nil {
+		return "", err
+	}
 	// Named profiles have their own orchestrator surface and must not inherit
 	// the default OpenCode Desktop progress narration.
 	base = filemerge.InjectMarkdownSection(base, openCodeDelegationVisibilitySectionID, "")

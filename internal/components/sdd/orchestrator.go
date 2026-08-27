@@ -38,6 +38,13 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent, path, content), agent)
 }
 
+func composeOpenCodeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRenderOptions) (string, error) {
+	if agent != model.AgentOpenCode && agent != model.AgentKilocode {
+		return composeOrchestratorPrompt(agent, options...), nil
+	}
+	return projectSDDSessionPreflight(composeOrchestratorPrompt(agent, options...), "### SDD Entry Routing (MANDATORY)")
+}
+
 func renderOpenCodeBackgroundPolicy(agent model.AgentID, options ...OrchestratorRenderOptions) string {
 	var renderOptions OrchestratorRenderOptions
 	if len(options) > 0 {
