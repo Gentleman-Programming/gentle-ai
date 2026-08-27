@@ -19,7 +19,7 @@ func TestOpenCodeSensitivePathPermissions(t *testing.T) {
 	if os.Getenv(realAgentE2EEnvironment) != "1" {
 		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned OpenCode sensitive-path journey")
 	}
-	requireOrganicExecutableVersion(t, "opencode", "1.18.21")
+	requireOrganicExecutableVersion(t, "opencode", "1.18.10")
 	workspace := t.TempDir()
 	const secret, safe = "SECRET_CANARY_787", "SAFE_CANARY_787"
 	if err := os.Mkdir(filepath.Join(workspace, "config"), 0o700); err != nil {
