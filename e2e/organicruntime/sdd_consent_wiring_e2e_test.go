@@ -10,11 +10,12 @@ import (
 	"testing"
 )
 
-// Issue #2563 (S4b of #2540): the built-binary consent loop. A blocked
-// multi-repository change's status carries the typed consent envelope; the
-// agent executes the envelope's EXACT grant invocation verbatim; the next
-// status projects the granted roots into allowedEditRoots and apply becomes
-// ready. Declining runs the envelope's decline invocation and the change
+// Issue #2849: the built-binary consent loop. A blocked multi-repository
+// change's status carries the typed consent envelope; the agent executes the
+// envelope's EXACT grant invocation verbatim; the next status projects the
+// granted roots into allowedEditRoots but blocks before any runtime actor can
+// acquire an attempt because independent repositories do not share candidate
+// accounting. Declining runs the envelope's decline invocation and the change
 // stays blocked under the same instance identity. A single-repository change
 // stays byte-identical with zero consent footprint.
 
@@ -209,14 +210,17 @@ func TestSDDEditAuthorityConsentGrantLoop(t *testing.T) {
 	// binary, verbatim.
 	runConsentInvocation(t, environment, planning, grantInvocation)
 
-	// Post-grant status: the covering grant clears detection, apply is ready,
-	// and allowedEditRoots = planning + granted roots.
+	// Post-grant status: the grant clears edit authority and projects its roots,
+	// but must block before any apply actor can acquire against a foreign Git
+	// common directory. A grant authorizes edits; it does not supply candidate
+	// accounting for an independent repository.
 	granted, grantedPayload := consentStatus(t, environment, planning, change)
-	if granted.ApplyState != "ready" || granted.NextRecommended != "apply" {
-		t.Fatalf("post-grant status is not ready/apply: %s", grantedPayload)
+	if granted.ApplyState != "blocked" || granted.NextRecommended != "resolve-blockers" {
+		t.Fatalf("post-grant status did not block runtime actor launch: %s", grantedPayload)
 	}
-	if strings.Contains(strings.Join(granted.BlockedReasons, "\n"), "edit_authority_missing") {
-		t.Fatalf("post-grant status still blocked on edit authority: %s", grantedPayload)
+	reasons := strings.Join(granted.BlockedReasons, "\n")
+	if strings.Contains(reasons, "edit_authority_missing") || !strings.Contains(reasons, "blocked(cross_common_dir_runtime_target)") {
+		t.Fatalf("post-grant status did not replace edit authority with the topology blocker: %s", grantedPayload)
 	}
 	wantRoots := []string{planning, wantA, wantB}
 	if len(granted.ActionContext.AllowedEditRoots) != len(wantRoots) {

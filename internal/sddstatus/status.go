@@ -496,6 +496,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
 	}
+	if len(unauthorizedRoots) == 0 && runtimeStatus != nil && runtimeStatusErr == nil {
+		applyRuntimeTopologyBlock(context.Background(), &applyState, &dependencies, &nextRecommended, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, changeName)
+	}
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
@@ -729,7 +732,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
 		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
 	}
-	applyState, _ = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
+	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
 	// Stale or incomplete evidence always re-enters independent SDD verification.
 	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale && !verifyResult.Incomplete
@@ -749,6 +752,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
+	}
+	if len(unauthorizedRoots) == 0 && runtimeStatus != nil && runtimeStatusErr == nil {
+		applyRuntimeTopologyBlock(context.Background(), &applyState, &dependencies, &nextRecommended, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, changeName)
 	}
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
