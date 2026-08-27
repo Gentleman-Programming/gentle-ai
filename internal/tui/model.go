@@ -1431,8 +1431,8 @@ func (m Model) View() string {
 	case ScreenComplete:
 		return screens.RenderComplete(screens.CompletePayload{
 			ConfiguredAgents:    len(m.Selection.Agents),
-			InstalledComponents: len(m.Selection.Components),
-			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA),
+			InstalledComponents: installedComponentCount(m.Selection.Components, m.Execution.DeferredComponents),
+			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA) && !hasDeferredComponent(m.Execution.DeferredComponents, model.ComponentGGA),
 			FailedSteps:         extractFailedSteps(m.Execution),
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
 			RollbackComplete:    m.Execution.Rollback.Success,
@@ -4870,6 +4870,25 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 		}
 	}
 	return false
+}
+
+func hasDeferredComponent(components []string, target model.ComponentID) bool {
+	for _, component := range components {
+		if component == string(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func installedComponentCount(components []model.ComponentID, deferredComponents []string) int {
+	count := 0
+	for _, component := range components {
+		if !hasDeferredComponent(deferredComponents, component) {
+			count++
+		}
+	}
+	return count
 }
 
 func hasSelectedAgent(agents []model.AgentID, target model.AgentID) bool {

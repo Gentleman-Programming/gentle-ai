@@ -1393,6 +1393,100 @@ func TestRunInstallGGASkipsInstallWhenAlreadyOnPath(t *testing.T) {
 	}
 }
 
+func TestRunInstallMacOSDefersGGAWhenHomebrewIsUnavailable(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreGGAAvailableCheck := ggaAvailableCheck
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		ggaAvailableCheck = restoreGGAAvailableCheck
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		switch name {
+		case "brew", "gga":
+			return "", exec.ErrNotFound
+		default:
+			return "/usr/local/bin/" + name, nil
+		}
+	}
+	ggaAvailableCheck = func(system.PlatformProfile) bool { return false }
+	runCommand = func(name string, args ...string) error {
+		if name == "brew" {
+			t.Fatalf("unexpected Homebrew command: %s %s", name, strings.Join(args, " "))
+		}
+		return nil
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "opencode", "--component", "gga"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v, want a deferred GGA install", err)
+	}
+	if !stringSliceContains(result.Execution.DeferredComponents, string(model.ComponentGGA)) {
+		t.Fatalf("DeferredComponents = %v, want %q", result.Execution.DeferredComponents, model.ComponentGGA)
+	}
+	if got := strings.Join(result.Execution.ManualActions, "\n"); !strings.Contains(got, "brew install gga") || !strings.Contains(got, "gentle-ai install --component gga") {
+		t.Fatalf("manual actions = %q, want Homebrew install and retry commands", got)
+	}
+	if strings.Contains(result.Verify.FinalNote, "GGA is now installed globally") {
+		t.Fatalf("verification note falsely reports GGA as installed: %q", result.Verify.FinalNote)
+	}
+
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read() error = %v", err)
+	}
+	if !hasComponent(persisted.Components, model.ComponentGGA) {
+		t.Fatalf("persisted components = %v, want GGA selection preserved", persisted.Components)
+	}
+	assertFileContains(t, filepath.Join(home, ".config", "gga", "config"), `PROVIDER="opencode"`)
+}
+
+func TestRunInstallMacOSReturnsGGAInstallErrorsWhenHomebrewExists(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreGGAAvailableCheck := ggaAvailableCheck
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		ggaAvailableCheck = restoreGGAAvailableCheck
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		if name == "gga" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/local/bin/" + name, nil
+	}
+	ggaAvailableCheck = func(system.PlatformProfile) bool { return false }
+	runCommand = func(name string, args ...string) error {
+		if name == "brew" {
+			return errors.New("tap failed")
+		}
+		return nil
+	}
+
+	_, err := RunInstall(
+		[]string{"--agent", "opencode", "--component", "gga"},
+		macOSDetectionResult(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "tap failed") {
+		t.Fatalf("RunInstall() error = %v, want Homebrew tap failure", err)
+	}
+}
+
 func TestRunInstallGGALinuxIncludesTempCleanupBeforeClone(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir

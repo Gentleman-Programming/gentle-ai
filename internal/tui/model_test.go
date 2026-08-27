@@ -2484,6 +2484,32 @@ func TestCompleteViewShowsPipelineManualActions(t *testing.T) {
 	}
 }
 
+func TestCompleteViewDoesNotClaimDeferredGGAWasInstalled(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Selection.Components = []model.ComponentID{model.ComponentGGA}
+	m.Execution.DeferredComponents = []string{string(model.ComponentGGA)}
+	m.Execution.ManualActions = []string{"GGA installation deferred because Homebrew is unavailable."}
+
+	out := m.View()
+	if strings.Contains(out, "Installed components  1") {
+		t.Fatalf("completion output counts deferred GGA as installed: %q", out)
+	}
+	if strings.Contains(out, "GGA was installed globally") {
+		t.Fatalf("completion output falsely reports GGA as installed: %q", out)
+	}
+	if !strings.Contains(out, "GGA installation deferred") {
+		t.Fatalf("completion output missing deferred GGA action: %q", out)
+	}
+}
+
+func TestInstalledComponentCountSkipsDeferredComponents(t *testing.T) {
+	components := []model.ComponentID{model.ComponentGGA, model.ComponentSDD}
+	if got := installedComponentCount(components, []string{string(model.ComponentGGA)}); got != 1 {
+		t.Fatalf("installedComponentCount() = %d, want 1", got)
+	}
+}
+
 func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallConfirm
