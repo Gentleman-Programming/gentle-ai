@@ -49,7 +49,6 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 When native SDD status reports `blocked(edit_authority_missing)`, its structured output may carry the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block. Treat that envelope as a Lossless Blocking Prompt under this contract, with the same discipline as the review consent relay. Present the complete envelope once in the active conversation language: faithfully translate the headline, reason, `value`, the missing-root evidence, choice labels, every choice `effect`, and the off-path note, while preserving the original choices, order, selection mode, exact allowed-answer domain, and answer tokens. Never translate or alter the machine answer tokens (`granted`, `declined`), commands, paths, or invocations. Never summarize, reshape, reorder, merge, or omit any part. The human decides: never answer on the human's behalf and never run the grant unprompted. Only after the human's explicit `granted` answer, execute the envelope's exact grant invocation verbatim, exactly once, then re-enter through native status; the granted roots project into `allowedEditRoots`, and the grant is per-change, audited, and dies with archive. On `declined`, run the envelope's decline invocation: nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the blocked reason names both exits (edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority). A blocked status without a `consent` block names the same two exits; relay them and stop.
 
-
 ### Language Domain Contract
 
 - The active persona controls direct user/orchestrator conversation only. Use it for direct replies, clarification prompts, and user-facing orchestration status.
@@ -112,7 +111,6 @@ The canonical native bounded-review contract is injected from the shared provide
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
-
 ## SDD Workflow (Spec-Driven Development)
 
 SDD is the structured planning layer for substantial changes.
@@ -127,6 +125,7 @@ SDD is the structured planning layer for substantial changes.
 ### Commands
 
 Skills (Kimi-native entrypoints):
+
 - `/skill:sdd-init`
 - `/skill:sdd-explore`
 - `/skill:sdd-propose`
@@ -139,6 +138,7 @@ Skills (Kimi-native entrypoints):
 - `/skill:sdd-onboard`
 
 Meta-commands (handled by YOU, not by Kimi command files):
+
 - `/sdd-new <change>`
 - `/sdd-continue [change]`
 - `/sdd-status [change]`
@@ -178,6 +178,7 @@ Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" 
 In **Automatic** mode the orchestrator is the gatekeeper between phases. The gatekeeper runs after every phase: when a Kimi custom-agent returns and BEFORE invoking the next custom-agent, the orchestrator MUST validate that the phase reached its objective with everything in order. Autonomous — does NOT ask the user (that is Interactive mode); surfaces to the user only when it catches a problem.
 
 **What the gatekeeper checks (every phase, against the Result Contract):**
+
 - **Contract conformance:** the phase returned `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, and `skill_resolution`, and `status` indicates success (not partial, failed, or blocked).
 - **Artifact existence:** the declared artifact actually exists and is readable in the active backend — read it back (engram: `mem_search` + `mem_get_observation` on the topic key; openspec: read the file path). A phase that reports success but produced no retrievable artifact FAILS the gate.
 - **No hallucination:** every file path, symbol, command, or artifact the phase claims it created or referenced must actually exist; spot-check the concrete claims. A referenced path that does not resolve FAILS the gate.
@@ -185,6 +186,7 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 - **Routing coherence:** `next_recommended` follows the Dependency Graph and `risks` are within tolerance (no unaddressed CRITICAL).
 
 **Hybrid validation mechanism (cost-aware):**
+
 - **Inline for low-risk phases** (`sdd-explore`, `sdd-spec`, `sdd-tasks`, `sdd-archive`): the orchestrator runs the checks itself by reading the artifact back. No extra custom-agent.
 - **Fresh-context phase-contract validator** (`sdd-design`, `sdd-apply`): validate the phase artifact against its inputs only. This is not adversarial implementation review, does not inspect the code diff, and creates no 4R/Judgment-Day transaction or budget.
 - **Escalation on smell:** if an inline check on a low-risk phase finds any smell (status mismatch, unresolved path, suspected drift, missing artifact), escalate that phase to a fresh-context delegated review before deciding.
@@ -202,7 +204,8 @@ Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `
 1. Before an actor or harness launch, call `gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
 2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
 3. After the external run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> ...` with a request ID distinct from the acquire operation's request ID, outcome, and bounded evidence. Reuse each operation's own ID only for its idempotent replay. Settle derives native binding/remediation inputs; pass `--successor-lineage` only for a distinct approved successor, otherwise the bound lineage remains its own successor.
-4. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
+4. On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure.
+5. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 
@@ -232,6 +235,7 @@ Cache the chain strategy for the session. Pass it as `chain_strategy` to `sdd-ta
 When delivery planning yields chained PRs, treat `chained-pr` (registry skill `gentle-ai-chained-pr`) as a required skill match: resolve it by registry name through this template's existing skill-resolution mechanism (the same one it already uses to pass skills to phases) and ensure the `sdd-tasks` and `sdd-apply` phases load and follow it BEFORE planning or creating any PR. Do not hardcode the skill path; defer resolution to that mechanism.
 
 ### Dependency Graph
+
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
              ^
@@ -240,6 +244,7 @@ proposal -> specs --> tasks -> apply -> verify -> archive
 ```
 
 ### Result Contract
+
 Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
 
 ### Review Workload Guard (MANDATORY)
@@ -290,6 +295,7 @@ ALL Kimi sub-agent launches that involve reading, writing, or reviewing code MUS
 The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent prompt.
 
 For each sub-agent launch:
+
 1. Match relevant skills by **code context** and **task context**
 2. Copy matching `SKILL.md` paths into the sub-agent prompt as `## Skills to load before work`
 3. Instruct the sub-agent to read those exact files BEFORE phase-specific work
@@ -297,6 +303,7 @@ For each sub-agent launch:
 ### Skill Resolution Feedback
 
 After every delegation that returns a result, check the `skill_resolution` field:
+
 - `paths-injected` → all good, exact skill paths were passed and loaded
 - `fallback-registry`, `fallback-path`, or `none` → skill cache was lost. Re-read the registry immediately and pass skill paths in all subsequent delegations.
 

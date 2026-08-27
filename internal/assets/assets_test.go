@@ -2227,6 +2227,8 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 }
 
 func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
+	const causalFailureDisclosure = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure."
+
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
@@ -2252,6 +2254,7 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
 		"status|begin|finish|reset",
 		"never automatic",
+		causalFailureDisclosure,
 	}
 	for _, path := range paths {
 		content := MustRead(path)
@@ -2263,6 +2266,19 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			if !strings.Contains(section, want) {
 				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
 			}
+		}
+		last := -1
+		for _, label := range []string{
+			"**Primary failure:**",
+			"**Verification consequence:**",
+			"**Attempt settlement:**",
+			"**Secondary governance block:**",
+		} {
+			index := strings.Index(section, label)
+			if index < 0 || index <= last {
+				t.Fatalf("%s must order causal failure disclosure label %q after the preceding label", path, label)
+			}
+			last = index
 		}
 		for _, forbidden := range []string{
 			"gentle-ai.sdd-attempt-ledger/v1",

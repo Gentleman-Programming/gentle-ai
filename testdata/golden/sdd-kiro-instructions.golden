@@ -114,10 +114,10 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
-
 ## Kiro-Native SDD Integration
 
 Kiro IDE generates specs natively at `.kiro/specs/<feature>/`:
+
 - `requirements.md` — user stories and acceptance criteria
 - `design.md` — technical approach and architecture decisions
 - `tasks.md` — implementation checklist
@@ -140,6 +140,7 @@ Use this decision tree BEFORE any SDD phase to determine scope:
 ### Kiro Native Spec Workflow (Medium Changes)
 
 For Medium changes, use Kiro's built-in spec generation before writing code:
+
 1. Describe the feature to Kiro's spec agent — it will generate `.kiro/specs/<feature>/requirements.md`
 2. Review and approve the requirements
 3. Kiro generates `design.md` — review the approach
@@ -152,6 +153,7 @@ For Medium changes, use Kiro's built-in spec generation before writing code:
 **After ANY planning phase (Medium or Large changes), you MUST pause and request user approval before writing implementation code. NEVER skip the approval gate. NEVER assume approval.**
 
 **Medium Changes — present before executing**:
+
 ```markdown
 ## Plan Summary
 
@@ -168,6 +170,7 @@ Approve to proceed with implementation?
 ```
 
 **Large Changes — present after SDD artifacts are created**:
+
 ```markdown
 ## SDD Artifacts Created
 
@@ -180,6 +183,7 @@ Approve to proceed with implementation?
 ```
 
 **User Response**:
+
 - ✅ **"Approve" / "Go ahead" / "Dale"** → Proceed to execution
 - ❌ **"No" / "Wait" / "Change X"** → Revise plan, present again
 - ⏸️ **No response** → DO NOT proceed. Wait.
@@ -198,6 +202,7 @@ SDD is the structured planning layer for substantial changes.
 ### Commands
 
 Skills (appear in autocomplete):
+
 - `/sdd-init` → initialize SDD context; detects stack, conventions, testing capabilities, and bootstraps persistence
 - `/sdd-onboard` → guided end-to-end walkthrough of SDD using your real codebase
 - `/sdd-explore <topic>` → investigate an idea; reads codebase, compares approaches; no files created
@@ -207,6 +212,7 @@ Skills (appear in autocomplete):
 - `/sdd-archive [change]` → close a change and persist final state in the active artifact store
 
 Meta-commands (type directly — orchestrator handles them, will not appear in autocomplete):
+
 - `/sdd-new <change>` → start a new change by delegating explore + propose to their subagents
 - `/sdd-continue [change]` → run the next dependency-ready phase via its subagent
 - `/sdd-ff <name>` → fast-forward planning: proposal → specs → design → tasks (delegated sequentially)
@@ -226,6 +232,7 @@ Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-
 3. If NOT found → run `sdd-init` FIRST (load the sdd-init skill and execute it), THEN proceed with the requested command
 
 This ensures:
+
 - Testing capabilities are always detected and cached
 - Strict TDD Mode is activated when the project supports it
 - The project context (stack, conventions) is available for all phases
@@ -252,6 +259,7 @@ Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" 
 In **Automatic** mode the orchestrator is the gatekeeper between phases. The gatekeeper runs after every phase: when a Kiro phase agent returns and BEFORE launching the next Kiro phase context, the orchestrator MUST validate that the phase reached its objective with everything in order. This is autonomous validation — it does NOT ask the user (that is Interactive mode); it only surfaces to the user when it catches a problem.
 
 **What the gatekeeper checks (every phase, against the Result Contract):**
+
 - **Contract conformance:** the phase returned `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, and `skill_resolution`, and `status` indicates success (not partial, failed, or blocked).
 - **Artifact existence:** the declared artifact actually exists and is readable in the active backend — read it back (engram: `mem_search` + `mem_get_observation` on the topic key; openspec: read the file path). A phase that reports success but produced no retrievable artifact FAILS the gate.
 - **No hallucination:** every file path, symbol, command, or artifact the phase claims it created or referenced must actually exist; spot-check the concrete claims. A referenced path that does not resolve FAILS the gate.
@@ -259,6 +267,7 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 - **Routing coherence:** `next_recommended` follows the Dependency Graph and `risks` are within tolerance (no unaddressed CRITICAL).
 
 **Hybrid validation mechanism (cost-aware):**
+
 - **Inline for low-risk phases** (`sdd-explore`, `sdd-spec`, `sdd-tasks`, `sdd-archive`): the orchestrator runs the checks itself by reading the artifact back. No extra phase agent.
 - **Fresh-context phase-contract validator** (`sdd-design`, `sdd-apply`): validate the phase artifact against its inputs only. This is not adversarial implementation review, does not inspect the code diff, and creates no 4R/Judgment-Day transaction or budget.
 - **Escalation on smell:** if an inline check on a low-risk phase finds any smell (status mismatch, unresolved path, suspected drift, missing artifact), escalate that phase to a fresh-context delegated review before deciding.
@@ -276,7 +285,8 @@ Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `
 1. Before an actor or harness launch, call `gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
 2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
 3. After the external run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> ...` with a request ID distinct from the acquire operation's request ID, outcome, and bounded evidence. Reuse each operation's own ID only for its idempotent replay. Settle derives native binding/remediation inputs; pass `--successor-lineage` only for a distinct approved successor, otherwise the bound lineage remains its own successor.
-4. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
+4. On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure.
+5. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 
@@ -336,6 +346,7 @@ Before starting each delegated `sdd-apply` or `sdd-verify` phase:
 The Kiro phase result must prove that persistence contract. Refresh prior progress before every apply/verify launch; do not rely on a cached search preview or conversation history.
 
 ### Dependency Graph
+
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
              ^
@@ -344,6 +355,7 @@ proposal -> specs --> tasks -> apply -> verify -> archive
 ```
 
 ### Result Contract
+
 Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
 
 <!-- gentle-ai:sdd-model-assignments -->
@@ -368,6 +380,7 @@ Read this table at session start. Kiro IDE is powered by Claude — use the tabl
 ## Kiro Steering Files
 
 Kiro's `.kiro/steering/*.md` files provide persistent workspace context that applies to every conversation in the project. Use them to:
+
 - Store team conventions and architecture decisions
 - Reference tech stack and project structure
 - Keep custom instructions that apply across all sessions
@@ -395,6 +408,7 @@ Skill resolution runs inline before each phase. Do this ONCE per session (or aft
 4. If no registry exists, warn user and proceed without project-specific standards
 
 Before each phase execution:
+
 1. Match relevant skills by **code context** (file extensions/paths you will touch) AND **task context** (what actions you will perform — review, PR creation, testing, etc.)
 2. Load matching exact `SKILL.md` paths from the registry
 3. Read those skill files before phase work — they inform how you write code, structure artifacts, and validate output
@@ -404,6 +418,7 @@ Before each phase execution:
 ### Skill Resolution Feedback
 
 After completing each phase, check the `skill_resolution` field in your own result:
+
 - `paths-injected` → all good, exact skill paths were loaded
 - `fallback-registry`, `fallback-path`, or `none` → skill cache was lost (likely compaction). Re-read the registry immediately and load skill paths for all subsequent phases.
 
@@ -435,6 +450,7 @@ When launching `sdd-archive`, forward explicit final-state facts for any work co
 ### Non-SDD Tasks
 
 When executing general (non-SDD) work:
+
 1. Search engram (`mem_search`) for relevant prior context before starting
 2. If you make important discoveries, decisions, or fix bugs, save them to engram via `mem_save`
 3. Do NOT rely solely on conversation history — persist important findings to engram for cross-session durability
@@ -455,6 +471,7 @@ When executing general (non-SDD) work:
 | DAG state | `sdd/{change-name}/state` |
 
 Retrieve full content via two steps:
+
 1. `mem_search(query: "{topic_key}", project: "{project}")` → get observation ID
 2. `mem_get_observation(id: {id})` → full content (REQUIRED — search results are truncated)
 

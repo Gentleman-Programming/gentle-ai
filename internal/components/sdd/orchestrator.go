@@ -35,7 +35,23 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 	if policy := renderOpenCodeBackgroundPolicy(agent, renderOptions); policy != "" {
 		content = appendOpenCodeBackgroundPolicy(content, policy)
 	}
-	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent, path, content), agent)
+	content = replacePiClosedSingleSelectRoute(content, agent)
+	content = renderBoundedReviewAssetBodyFromContent(agent, path, content)
+	return bindRuntimeAgentIdentity(content, agent)
+}
+
+const genericFallbackOnlyNativeRoute = "- Native route: This variant has no classified native question UI for this contract; always use the plain chat or terminal fallback below. When the closed domain of a single-select envelope is unrepresentable here, fall through to the Fallback clause below."
+
+const piClosedSingleSelectNativeRoute = "- Native route: For every strictly closed single-select envelope, use ask_user_choice only when the interactive Pi TUI can represent its complete one-question 2-4 ordered-option domain. Pass each user-facing label and description with the envelope-owned canonical option token as value. The selector returns exactly one value; map it to the exact envelope-owned choice once, then select any envelope-owned continuation or invocation once where present. It has no custom/free-text or multi-select path. If the native TUI is unavailable or the envelope is not exactly representable, use the complete chat fallback. ask_user_question is the external open/free-text questionnaire and must not be used for a closed domain; open/free-text questionnaires may use ask_user_question when exactly representable. For gentle-ai.review-integration.consent/v3, the chosen continuation is still the exact captured provider-owned choice invocation, used once without synthesis."
+
+func replacePiClosedSingleSelectRoute(content string, agent model.AgentID) string {
+	if agent != model.AgentPi {
+		return content
+	}
+	if count := strings.Count(content, genericFallbackOnlyNativeRoute); count != 1 {
+		panic(fmt.Sprintf("sdd: Pi native route source clause count = %d, want 1", count))
+	}
+	return strings.Replace(content, genericFallbackOnlyNativeRoute, piClosedSingleSelectNativeRoute, 1)
 }
 
 func renderOpenCodeBackgroundPolicy(agent model.AgentID, options ...OrchestratorRenderOptions) string {
