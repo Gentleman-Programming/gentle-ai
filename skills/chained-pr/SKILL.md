@@ -19,6 +19,7 @@ Load this skill when a planned PR may exceed **400 changed lines**, SDD forecast
 - State start, end, prior dependencies, follow-up work, and out-of-scope items in every chained PR.
 - Every child PR must include a dependency diagram marking the current PR with `📍`.
 - In Feature Branch Chain, create a draft/no-merge tracker PR; child PR #1 targets the tracker branch, later children target the immediate parent branch.
+- Use `Refs #<parent>` on intermediate stack PRs; only the terminal PR closes the parent issue. Partial or abandoned stacks leave the parent issue open, and reducing the agreed scope requires an explicit maintainer decision before closure.
 - Treat polluted diffs as base bugs: retarget or rebase until only the current work unit appears.
 - Do not mix chain strategies after the user chooses one.
 

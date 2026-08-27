@@ -51,7 +51,7 @@ These files evolve. Re-read them at the start of every contribution.
 ## Hard rules (do not negotiate)
 
 1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` from a maintainer. Enforced by `pr-check.yml` and CONTRIBUTING.md.
-2. **Use `Closes/Fixes/Resolves #N`** in the PR body. `Refs #N` does NOT satisfy `Check Issue Reference`. Verified empirically on this repo.
+2. **Use `Closes/Fixes/Resolves #N` for standalone/terminal PRs, or `Refs #N` for intermediate chained PRs.** Both satisfy `Check Issue Reference` and require `status:approved` on the referenced issue in the base repo.
 3. **Exactly one `type:*` label per PR.** Two `type:*` labels fail the check. No `type:*` label fails the check.
 4. **400-line budget per PR** (`additions + deletions`). Above that, request `size:exception` from a maintainer with rationale documented in the PR body.
 5. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
@@ -113,7 +113,7 @@ End-to-end steps once the issue (or chain of sub-issues) is approved.
    - `go test ./internal/...` with pre-existing failures acknowledged via `git stash` baseline. The repo has known pre-existing failures in `internal/components/communitytool/pi_codegraph`, `internal/tui/sync`, and similar — confirm they exist with `git stash` AND `git stash pop`, then name them in the PR body's Test Plan.
 
 4. **Open the PR with `gh pr create`.** Body matches `.github/PULL_REQUEST_TEMPLATE.md`:
-   - `## 🔗 Linked Issue` → `Closes #N` (or `Fixes`/`Resolves`). Never `Refs`.
+   - `## 🔗 Linked Issue` → `Closes #N` (or `Fixes`/`Resolves`), or `Refs #N` for intermediate chained PRs that must not close the parent issue prematurely.
    - `## 🏷️ PR Type` → exactly one `[x] type:*` matching the actual type
    - `## 📝 Summary` → one paragraph: what + why
    - `## 📂 Changes` → file table with line counts from `gh pr view --json additions,deletions,changedFiles`
@@ -216,10 +216,12 @@ Before recommending any action that touches permissions, label state, or commit 
    gh issue view <N> --json number,title,state,labels,comments
    ```
 
-4. **After applying a body rewrite**, round-trip the body and confirm `closingIssuesReferences` is populated for the linked issue:
+4. **After applying a body rewrite**, round-trip the body and confirm `Check Issue Reference` passes. For `Closes`/`Fixes`/`Resolves`, also confirm `closingIssuesReferences` is populated; `Refs #N` is verified by the body and check result alone:
+
    ```bash
    gh pr view <N> --json body --jq '.body'             # round-trip
-   gh pr view <N> --json closingIssuesReferences        # confirm linkage parsed
+   gh pr checks <N> --json name,state                   # confirm Check Issue Reference passes
+   gh pr view <N> --json closingIssuesReferences        # closing references only
    ```
 
 5. **Trust the contributor's lived permissions over inferred defaults.** If they say "I can only do X", route everything else to the maintainer — don't waste their PR review budget on GraphQL 403s.
@@ -232,9 +234,9 @@ Before recommending any action that touches permissions, label state, or commit 
 
 Run this in your head (or print and tick) before requesting review:
 
-- [ ] Linked issue has `status:approved` (and the linked PR uses `Closes/Fixes/Resolves`)
+- [ ] Every visible linked issue has `status:approved` in the base repository and uses a well-formed `Closes/Fixes/Resolves #N` or non-closing `Refs #N`
 - [ ] PR title follows `^(type)(\(single-scope\))?!?: <description>` — no comma in scope
-- [ ] Body uses `Closes/Fixes/Resolves #N`, not `Refs`
+- [ ] Body uses one visible, well-formed base-repository reference; `Refs #N` is non-closing and may not be mixed with a closing reference for the same issue
 - [ ] Line counts in `## 📂 Changes` match `gh pr view --json additions,deletions,changedFiles`
 - [ ] No `[x]` claims contradict what the API shows; moves maintainer-applied actions to `## Pending maintainer actions`
 - [ ] Pre-existing failures named with verification method
@@ -255,7 +257,7 @@ Run this in your head (or print and tick) before requesting review:
 | Anti-pattern | Symptom | Fix |
 |---|---|---|
 | "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Move to `## Pending maintainer actions` with `pending Alan` |
-| `Refs #N` instead of `Closes #N` | `Check Issue Reference` fails; PR auto-rejected | Use `Closes`/`Fixes`/`Resolves` keyword |
+| Unapproved, malformed, cross-repository, or mixed closing/non-closing issue reference | `Check Issue Reference` or `Check Issue Approved` fails; PR blocked | Use one visible, well-formed base-repository reference to an approved issue |
 | `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document `size:exception` rationale in Pending maintainer section |
 | `feat(tui,cli): wire...` title | Title fails the single-scope regex | Use one of `feat(tui): ...`, `feat(cli): ...`, `feat(tui-cli): ...` (dash, not comma) |
 | Slice branches all base on `main` with stale carry-over commits | Reviewers can't isolate slice-specific changes; `size:exception` needed | Accept Stacked to main (request exception) OR ask maintainer to push slice branches upstream and use Feature Branch Chain |
