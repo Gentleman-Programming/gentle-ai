@@ -64,6 +64,7 @@ expected_contract = [
     contract_root / "schemas/status-v2.schema.json",
     contract_root / "schemas/status.schema.json",
     contract_root / "schemas/targeted-validation-request.schema.json",
+    contract_root / "schemas/transition-execution.schema.json",
 	current_contract_root / "fixtures/capabilities-v2.1.fixture.json",
 	current_contract_root / "fixtures/capabilities-v2.2.fixture.json",
 	current_contract_root / "fixtures/capabilities.fixture.json",
