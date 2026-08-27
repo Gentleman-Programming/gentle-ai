@@ -34,6 +34,11 @@ var verifyReportLegacyFields = []string{"missing_review_authority"}
 
 var verifyReportVerdicts = []string{"pass", "pass_with_warnings", "fail"}
 
+// verifyReportAdmissibleVerdicts adds the v2-only state. verifyReportVerdicts
+// stays the published v1 vocabulary so VerifyReportValidationContract keeps
+// describing what a v1 author may write.
+var verifyReportAdmissibleVerdicts = append(append([]string{}, verifyReportVerdicts...), VerifyVerdictNotApplicable)
+
 func VerifyReportValidationContract() VerifyReportContract {
 	return VerifyReportContract{
 		Schema:         VerifyResultSchema,
@@ -71,6 +76,10 @@ type VerifyReportAdmission struct {
 	Reason           string `json:"reason,omitempty"`
 	Verdict          string `json:"verdict,omitempty"`
 	EvidenceRevision string `json:"evidence_revision,omitempty"`
+	// CandidateDigest is set only for a not-applicable report: the identity of
+	// the classified content, excluding the report itself, so a caller can
+	// require the report to describe the candidate it is settling.
+	CandidateDigest string `json:"candidate_digest,omitempty"`
 }
 
 type verifyReport struct {
@@ -79,6 +88,9 @@ type verifyReport struct {
 	Blockers, Critical, TestExit, BuildExit int
 	Requirements, Scenarios                 verifyCompletion
 	LegacyMissingReview                     bool
+	// NotApplicable marks a report that recorded an absent runtime obligation
+	// rather than the result of discharging one.
+	NotApplicable bool
 }
 
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -114,15 +126,24 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 		evaluation.Reason = "failed verification evidence is incomplete; rerun SDD verification"
 		return evaluation
 	}
-	if report.TestExit != 0 {
-		evaluation.Reason = "test_exit_code must be zero for archive readiness"
-		return evaluation
+	// A not-applicable report carries no exit codes by contract. Every other
+	// check below still applies: having no obligation to execute never
+	// licenses shipping findings or incomplete coverage.
+	if !report.NotApplicable {
+		if report.TestExit != 0 {
+			evaluation.Reason = "test_exit_code must be zero for archive readiness"
+			return evaluation
+		}
+		if report.BuildExit != 0 {
+			evaluation.Reason = "build_exit_code must be zero for archive readiness"
+			return evaluation
+		}
 	}
-	if report.BuildExit != 0 {
-		evaluation.Reason = "build_exit_code must be zero for archive readiness"
-		return evaluation
-	}
-	internallyComplete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
+	// A not-applicable report assesses no requirement or scenario by contract,
+	// so completeness is established by applicability rather than by coverage.
+	// Task completion is still required, and status enforces that separately.
+	internallyComplete := report.NotApplicable ||
+		(report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total)
 	totalsMatch := report.Requirements.Total == expected.Requirements && report.Scenarios.Total == expected.Scenarios
 	if !totalsMatch {
 		evaluation.Stale = report.Verdict != "fail" && report.Blockers == 0 && report.Critical == 0 && internallyComplete
@@ -143,13 +164,15 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 		evaluation.Reason = "critical_findings must be zero for archive readiness"
 		return evaluation
 	}
-	if report.Requirements.Completed != report.Requirements.Total {
-		evaluation.Reason = "requirements are incomplete"
-		return evaluation
-	}
-	if report.Scenarios.Completed != report.Scenarios.Total {
-		evaluation.Reason = "scenarios are incomplete"
-		return evaluation
+	if !report.NotApplicable {
+		if report.Requirements.Completed != report.Requirements.Total {
+			evaluation.Reason = "requirements are incomplete"
+			return evaluation
+		}
+		if report.Scenarios.Completed != report.Scenarios.Total {
+			evaluation.Reason = "scenarios are incomplete"
+			return evaluation
+		}
 	}
 	if report.Verdict == "fail" {
 		evaluation.Reason = "verdict requires remediation"
@@ -167,6 +190,9 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 		return result
 	}
 	result.Verdict, result.EvidenceRevision = report.Verdict, report.EvidenceRevision
+	if report.NotApplicable {
+		result.CandidateDigest = report.Fields["candidate_digest"]
+	}
 	if expected.Requirements < 0 || expected.Scenarios < 0 {
 		result.Reason = "expected requirement and scenario counts must be nonnegative"
 		return result
@@ -181,6 +207,15 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 	}
 	complete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
 	switch {
+	case report.NotApplicable:
+		// Execution evidence is forbidden and coverage is none-assessed by
+		// contract, so findings are the only thing that can contradict the
+		// claim. Recording one means something did evaluate the candidate,
+		// which is not this state.
+		if report.Blockers != 0 || report.Critical != 0 {
+			result.Reason = "not_applicable contradicts recorded findings"
+			return result
+		}
 	case report.Verdict != "fail":
 		if report.TestExit != 0 || report.BuildExit != 0 || report.Blockers != 0 || report.Critical != 0 || !complete {
 			result.Reason = "passing verdict contradicts failing or incomplete evidence"
@@ -219,12 +254,17 @@ func parseVerifyReport(text string) (verifyReport, string) {
 			return report, fmt.Sprintf("missing %s in verify result envelope", required)
 		}
 	}
-	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
+	report.NotApplicable = verifyReportIsNotApplicable(fields)
+	hashed := []string{"evidence_revision"}
+	if !report.NotApplicable {
+		hashed = append(hashed, "test_output_hash", "build_output_hash")
+	}
+	for _, field := range hashed {
 		if !sha256IdentityPattern.MatchString(fields[field]) {
 			return report, fmt.Sprintf("invalid %s in verify result envelope", field)
 		}
 	}
-	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {
+	if !report.NotApplicable && (!isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"])) {
 		return report, "test_command and build_command require concrete current execution evidence"
 	}
 	report.Verdict = fields["verdict"]
@@ -238,9 +278,9 @@ func parseVerifyReport(text string) (verifyReport, string) {
 		name  string
 		value *int
 	}
-	counters := []counter{
-		{"blockers", &report.Blockers}, {"critical_findings", &report.Critical},
-		{"test_exit_code", &report.TestExit}, {"build_exit_code", &report.BuildExit},
+	counters := []counter{{"blockers", &report.Blockers}, {"critical_findings", &report.Critical}}
+	if !report.NotApplicable {
+		counters = append(counters, counter{"test_exit_code", &report.TestExit}, counter{"build_exit_code", &report.BuildExit})
 	}
 	for _, target := range counters {
 		value, ok := parseNonnegativeInt(fields[target.name])
@@ -263,7 +303,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 }
 
 func validVerifyReportVerdict(verdict string) bool {
-	for _, valid := range verifyReportVerdicts {
+	for _, valid := range verifyReportAdmissibleVerdicts {
 		if verdict == valid {
 			return true
 		}
