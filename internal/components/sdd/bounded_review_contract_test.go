@@ -168,6 +168,25 @@ func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
 	}
 }
 
+func TestPiRenderedReviewContractUsesOnlyTheClosedChoiceRoute(t *testing.T) {
+	content := renderSDDOrchestratorAsset(model.AgentPi)
+	for _, clause := range []string{
+		"ask_user_choice",
+		"2-4 ordered-option domain",
+		"envelope-owned canonical option token as value",
+		"returns exactly one value; map it to the exact envelope-owned choice once",
+		"ask_user_question is the external open/free-text questionnaire and must not be used for a closed domain",
+		"open/free-text questionnaires may use ask_user_question",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("Pi closed-choice route missing %q", clause)
+		}
+	}
+	if strings.Contains(renderSDDOrchestratorAsset(model.AgentKilocode), "ask_user_choice") {
+		t.Fatal("generic fallback-only runtime received the Pi-only closed choice route")
+	}
+}
+
 func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
