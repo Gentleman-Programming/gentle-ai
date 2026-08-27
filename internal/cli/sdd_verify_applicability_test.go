@@ -192,6 +192,67 @@ func TestSDDVerifyApplicabilityRejectsUnsupportedProjection(t *testing.T) {
 	}
 }
 
+// TestSDDVerifyApplicabilityEmitsOnlyWhenVerificationIsNotRequired keeps the
+// canonical report unreachable for a candidate that owes execution.
+func TestSDDVerifyApplicabilityEmitsOnlyWhenVerificationIsNotRequired(t *testing.T) {
+	seedChange := func(t *testing.T, repo string) {
+		t.Helper()
+		writeApplicabilityFile(t, repo, "openspec/changes/passive-docs/proposal.md", "# Proposal\n")
+		writeApplicabilityFile(t, repo, "openspec/changes/passive-docs/specs/auth/spec.md",
+			"### Requirement: Auth\n#### Scenario: Expected behavior\n")
+		writeApplicabilityFile(t, repo, "openspec/changes/passive-docs/tasks.md", "- [x] 1.1 Work\n")
+	}
+	const revision = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+	reportPath := "openspec/changes/passive-docs/verify-report.md"
+
+	t.Run("a passive candidate gets a canonical report", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		seedChange(t, repo)
+		writeApplicabilityFile(t, repo, "docs/guide.md", "# Guide\n\nPlain prose.\n")
+		result := runApplicability(t, "--cwd", repo, "--intended-untracked", "docs/guide.md",
+			"--emit", "--change", "passive-docs", "--evidence-revision", revision)
+		if result.Decision != SDDVerifyNotRequired || result.EmittedReport == "" {
+			t.Fatalf("no report emitted for a passive candidate: %#v", result)
+		}
+		payload, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(reportPath)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(payload), "verdict: not_applicable") {
+			t.Fatalf("emitted report does not record the state: %q", string(payload))
+		}
+	})
+
+	t.Run("an active candidate gets none", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		seedChange(t, repo)
+		writeApplicabilityFile(t, repo, "internal/run.go", "package internal\n\nfunc Run() {}\n")
+		result := runApplicability(t, "--cwd", repo, "--intended-untracked", "internal/run.go",
+			"--emit", "--change", "passive-docs", "--evidence-revision", revision)
+		if result.Decision != SDDVerifyRequired || result.EmittedReport != "" {
+			t.Fatalf("an active candidate produced a report: %#v", result)
+		}
+		if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(reportPath))); err == nil {
+			t.Fatal("a required decision still wrote the canonical report")
+		}
+	})
+
+	t.Run("emission needs the change and the settling revision", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		seedChange(t, repo)
+		writeApplicabilityFile(t, repo, "docs/guide.md", "# Guide\n\nPlain prose.\n")
+		var stdout bytes.Buffer
+		err := runSDDVerifyApplicability(context.Background(),
+			[]string{"--cwd", repo, "--intended-untracked", "docs/guide.md", "--emit"}, &stdout)
+		if err == nil {
+			t.Fatal("emission proceeded without an attempt identity")
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("rejected emission still produced output: %q", stdout.String())
+		}
+	})
+}
+
 // TestSDDVerifyApplicabilityClassifiesCommittedWork is the regression test for
 // the case the feature exists to serve. SDD commits each work unit, so by the
 // time verification is considered the working tree is clean. Without a base the

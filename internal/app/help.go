@@ -27,6 +27,7 @@ COMMANDS
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
   sdd-verify-applicability [--cwd <repo>] [--base-ref <ref>] [--projection workspace|staged]
+                           [--emit --change <change> --evidence-revision <sha256:...>]
                Assess whether an independent final verification is still required
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>

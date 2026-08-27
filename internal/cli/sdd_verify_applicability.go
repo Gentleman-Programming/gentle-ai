@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 // SDDVerifyApplicabilitySchema versions the assessment payload. SDD owns this
@@ -45,6 +46,9 @@ type SDDVerifyApplicability struct {
 	DecidingPaths []string `json:"deciding_paths"`
 	EvidenceGoal  string   `json:"evidence_goal,omitempty"`
 	CoveredPaths  []string `json:"covered_paths,omitempty"`
+	// EmittedReport is the canonical report path, set only when --emit was
+	// given and the decision was not_required.
+	EmittedReport string `json:"emitted_report,omitempty"`
 }
 
 // decideSDDVerifyApplicability is the SDD-owned policy. It reads shared
@@ -116,6 +120,9 @@ func runSDDVerifyApplicability(ctx context.Context, args []string, stdout io.Wri
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", "", "Repository directory; defaults to the process working directory")
 	baseRef := flags.String("base-ref", "", "Compare against this committed base instead of the working tree")
+	emit := flags.Bool("emit", false, "Write the canonical verify report when verification is not required")
+	change := flags.String("change", "", "Active change name; required with --emit")
+	evidenceRevision := flags.String("evidence-revision", "", "Settling attempt evidence revision; required with --emit")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "Candidate projection: workspace or staged")
 	var intended, operational repeatedPathFlag
 	flags.Var(&intended, "intended-untracked", "Untracked path that belongs to the candidate; repeatable")
@@ -178,6 +185,25 @@ func runSDDVerifyApplicability(ctx context.Context, args []string, stdout io.Wri
 	} else {
 		result.CoveredPaths = deciding
 		result.DecidingPaths = nil
+	}
+	if *emit {
+		if strings.TrimSpace(*change) == "" || strings.TrimSpace(*evidenceRevision) == "" {
+			return errors.New("--emit requires --change and --evidence-revision; run `gentle-ai sdd-verify-applicability --emit --change <change> --evidence-revision <sha256:...>`")
+		}
+		// Emission is deliberately confined to the decision this command
+		// already made. A required decision writes nothing, so the report can
+		// never appear for a candidate that owes execution.
+		if decision == SDDVerifyNotRequired {
+			written, emitErr := sddstatus.EmitNotApplicableVerifyReport(ctx, sddstatus.NotApplicableVerifyReportRequest{
+				Repo: root, Workspace: directory, Change: strings.TrimSpace(*change),
+				EvidenceRevision: strings.TrimSpace(*evidenceRevision),
+				CandidateTree:    snapshot.CandidateTree, CoveredPaths: result.CoveredPaths,
+			})
+			if emitErr != nil {
+				return emitErr
+			}
+			result.EmittedReport = written
+		}
 	}
 	payload, err := json.Marshal(result)
 	if err != nil {
