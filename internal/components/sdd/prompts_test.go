@@ -627,6 +627,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 			}
 
 			foundRefuter := false
+			foundEmptyTools := false
 			for _, fileName := range nativeMarkdownSubAgentFilesForCodeGraphTest(t, adapter) {
 				foundRefuter = foundRefuter || fileName == "review-refuter.md"
 				path := filepath.Join(adapter.SubAgentsDir(home), fileName)
@@ -640,11 +641,20 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 				}
 
 				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
+				emptyToolsContract := false
 				if tc.toolGrant != "" {
 					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
+					emptyToolsContract = strings.TrimSpace(strings.TrimPrefix(sourceTools, "tools:")) == "[]"
+					foundEmptyTools = foundEmptyTools || emptyToolsContract
 					wantTools := sourceTools + ", " + tc.toolGrant
 					if tc.agentID == model.AgentKiroIDE {
 						wantTools = strings.TrimSuffix(sourceTools, "]") + `, "` + tc.toolGrant + `"]`
+					}
+					if emptyToolsContract {
+						// Tool-free reviewers keep their empty tools contract:
+						// appending the grant would corrupt the frontmatter and
+						// refuse every lens spawn (issues #3168, #3648).
+						wantTools = sourceTools
 					}
 					if got := nativeToolsLineForCodeGraphTest(t, text); got != wantTools {
 						t.Fatalf("%s tools = %q, want %q", fileName, got, wantTools)
@@ -652,7 +662,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 				}
 				for _, grant := range []string{claudeCodeGraphToolGrant, kiroCodeGraphToolGrant} {
 					wantCount := 0
-					if grant == tc.toolGrant {
+					if grant == tc.toolGrant && !emptyToolsContract {
 						wantCount = 1
 					}
 					if count := strings.Count(text, grant); count != wantCount {
@@ -666,6 +676,9 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 			if !foundRefuter {
 				t.Fatal("dynamic native asset coverage missing review-refuter.md")
 			}
+			if tc.agentID == model.AgentClaudeCode && !foundEmptyTools {
+				t.Fatal("dynamic native asset coverage missing an empty-tools review lens")
+			}
 
 			second, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{CodeGraphGuidanceMarkdown: guidance})
 			if err != nil {
@@ -673,6 +686,25 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 			}
 			if second.Changed {
 				t.Fatalf("Inject(%s) second changed = true, want idempotent output", tc.name)
+			}
+		})
+	}
+}
+
+func TestInjectCodeGraphToolGrantPreservesEmptyToolsContract(t *testing.T) {
+	guidance := communitytool.CodeGraphGuidanceMarkdown()
+	for _, tc := range []struct {
+		name    string
+		agentID model.AgentID
+		prompt  string
+	}{
+		{name: "claude empty flow sequence", agentID: model.AgentClaudeCode, prompt: "---\ntools: []\n---\nBody\n"},
+		{name: "claude empty value", agentID: model.AgentClaudeCode, prompt: "---\ntools:\n---\nBody\n"},
+		{name: "kiro empty flow sequence", agentID: model.AgentKiroIDE, prompt: "---\ntools: []\n---\nBody\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := injectCodeGraphToolGrantIntoPrompt(tc.prompt, tc.agentID, guidance); got != tc.prompt {
+				t.Fatalf("empty tools contract changed: got %q, want %q", got, tc.prompt)
 			}
 		})
 	}

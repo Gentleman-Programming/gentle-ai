@@ -166,6 +166,12 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 		if strings.Contains(line, grant) {
 			return prompt
 		}
+		// A deliberately empty tools contract (tool-free reviewers, issue
+		// #3168/#3648) must stay empty: appending the grant would produce
+		// unparseable frontmatter and contradict the agent's own contract.
+		if value := strings.TrimSpace(strings.TrimPrefix(line, "tools:")); value == "" || value == "[]" {
+			return prompt
+		}
 		if agentID == model.AgentClaudeCode {
 			lines[i] = line + ", " + grant
 		} else if strings.HasSuffix(line, "]") {
