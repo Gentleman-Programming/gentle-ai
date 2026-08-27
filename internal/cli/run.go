@@ -301,6 +301,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		}
 		return result, persistErr
 	}
+	if input.ReviewModeOperation != "" {
+		if err := writeGlobalRDDMode(input.ReviewModeOperation); err != nil {
+			return result, fmt.Errorf("persist global review mode: %w", err)
+		}
+	}
 
 	return result, nil
 }
