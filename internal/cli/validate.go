@@ -182,7 +182,7 @@ func normalizeInstallReviewMode(value string, set bool) (string, error) {
 	case "off":
 		return "disable", nil
 	default:
-		return "", fmt.Errorf("unsupported review-mode %q (valid: on, off)", value)
+		return "", fmt.Errorf("unsupported review-mode %q (valid: on, off); rerun `gentle-ai install --review-mode on` or `gentle-ai install --review-mode off`", value)
 	}
 }
 
