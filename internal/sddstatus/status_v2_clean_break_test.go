@@ -265,24 +265,12 @@ func TestResolveRuntimeAuthorityFailureBlocksFinalRoutingBeforeOfferingReview(t 
 
 func TestResolveBoundedRemediationCompletesAuthorityFreeEvidence(t *testing.T) {
 	failedEvidenceRevision := "sha256:" + strings.Repeat("d", 64)
-	historicalBinding := RemediationBinding{LineageID: "historical-lineage", Generation: 2, FixBatch: 1}
-
-	for _, test := range []struct {
-		name          string
-		applyProgress string
-	}{
-		{name: "ordinary unbound evidence", applyProgress: remediationResultEvidence(failedEvidenceRevision)},
-		{name: "historical bound evidence", applyProgress: remediationResultEvidenceWithBinding(failedEvidenceRevision, historicalBinding)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
-				EvidenceRevision: failedEvidenceRevision,
-				Reason:           "verification failed",
-			}, test.applyProgress)
-			if !remediation.Complete || remediation.Required || remediation.Reason != "" {
-				t.Fatalf("authority-free remediation = %#v, want completed evidence", remediation)
-			}
-		})
+	remediation := resolveBoundedRemediation(true, verifyResultEvaluation{
+		EvidenceRevision: failedEvidenceRevision,
+		Reason:           "verification failed",
+	}, remediationResultEvidence(failedEvidenceRevision))
+	if !remediation.Complete || remediation.Required || remediation.Reason != "" {
+		t.Fatalf("authority-free remediation = %#v, want completed evidence", remediation)
 	}
 }
 

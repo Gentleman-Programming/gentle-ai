@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -71,8 +72,11 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 			return runtimeBeginAdmissionResult{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 		}
-		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+		}
+		if err == nil && !slices.Equal(request.IntendedUntracked, last.IntendedUntracked) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
 	case status.Objective != nil && !advancing:
@@ -90,12 +94,12 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if runtimeObjectiveScopeChanged(status, request) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
-		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 		if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
 	default:
-		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 	}
 	if err != nil {
 		return runtimeBeginAdmissionResult{}, wrapRuntimeCandidateUnavailable("before launch", err)

@@ -212,6 +212,32 @@ func TestIntendedUntrackedInvalidIntentNeverCreatesAuthority(t *testing.T) {
 	}
 }
 
+func TestIntendedUntrackedSelectWithoutPathsNamesSelectedPathContinuation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+	digest, _ := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+	err := RunReviewFacadeStart([]string{
+		"--cwd", repo, "--lineage", "select-without-path", "--untracked-scope=select", "--expected-untracked-inventory=" + digest,
+	}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("selection without paths started review")
+	}
+	for _, want := range []string{
+		"--untracked-scope=select",
+		"--intended-untracked=<repo-relative-path>",
+		"--expected-untracked-inventory=" + digest,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("select-without-path guidance = %q, missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "--untracked-scope=exclude") {
+		t.Fatalf("select-without-path guidance changed the selected mode: %q", err)
+	}
+	assertNoUntrackedSelectionAuthority(t, repo)
+}
+
 func TestIntendedUntrackedConsentFollowUpPreservesSelectedScope(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)

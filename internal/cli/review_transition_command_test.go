@@ -137,27 +137,81 @@ func TestReviewNextTransitionExecuteCommandUsesCanonicalToolName(t *testing.T) {
 	}
 }
 
-// reviewTransitionExecutionOperationEnum reads the published operation enum
-// straight out of one shipped status schema, so this enumeration can never
-// degrade into a hardcoded list of today's operations.
-func reviewTransitionExecutionOperationEnum(t *testing.T, schemaFile string) []string {
-	t.Helper()
-	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", schemaFile))
+func TestStatusV2RetainsHistoricalTransitionFragments(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status-v2.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var schema map[string]any
-	if err := json.Unmarshal(payload, &schema); err != nil {
+	var status struct {
+		Defs map[string]map[string]any `json:"$defs"`
+	}
+	if err := json.Unmarshal(payload, &status); err != nil {
 		t.Fatal(err)
 	}
-	defs, ok := schema["$defs"].(map[string]any)
+	_, canonicalDefs := reviewTransitionExecutionSchema(t, "status-v2.schema.json")
+	for _, name := range []string{"transition_argument", "executable_transition_argument", "transition_binding", "transition_execution", "transition_artifact"} {
+		want := "transition-execution.schema.json#/$defs/" + name
+		if name == "transition_execution" {
+			want = "transition-execution.schema.json"
+		}
+		if got := status.Defs[name]["$ref"]; got != want {
+			t.Errorf("$defs/%s = %#v, want %q", name, got, want)
+		}
+		if name != "transition_execution" && canonicalDefs[name] == nil {
+			t.Errorf("canonical transition execution has no $defs/%s", name)
+		}
+	}
+}
+
+// reviewTransitionExecutionOperationEnum reads the published operation enum
+// straight out of one shipped status schema, so this enumeration can never
+// degrade into a hardcoded list of today's operations.
+func reviewTransitionExecutionSchema(t *testing.T, schemaFile string) (map[string]any, map[string]any) {
+	t.Helper()
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas")
+	payload, err := os.ReadFile(filepath.Join(root, schemaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatal(err)
+	}
+	defs, ok := status["$defs"].(map[string]any)
 	if !ok {
 		t.Fatalf("%s has no $defs", schemaFile)
 	}
-	execution, ok := defs["transition_execution"].(map[string]any)
-	if !ok {
-		t.Fatalf("%s has no $defs/transition_execution", schemaFile)
+	if execution, ok := defs["transition_execution"].(map[string]any); ok {
+		if _, aliased := execution["$ref"]; !aliased {
+			return execution, defs
+		}
 	}
+	next, ok := defs["next_transition"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no $defs/next_transition", schemaFile)
+	}
+	execute, ok := next["properties"].(map[string]any)["execute"].(map[string]any)
+	if !ok || execute["$ref"] != "transition-execution.schema.json" {
+		t.Fatalf("%s execute schema = %#v, want the canonical transition-execution reference", schemaFile, execute)
+	}
+	payload, err = os.ReadFile(filepath.Join(root, "transition-execution.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var canonical map[string]any
+	if err := json.Unmarshal(payload, &canonical); err != nil {
+		t.Fatal(err)
+	}
+	canonicalDefs, ok := canonical["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("transition-execution.schema.json has no $defs")
+	}
+	return canonical, canonicalDefs
+}
+
+func reviewTransitionExecutionOperationEnum(t *testing.T, schemaFile string) []string {
+	t.Helper()
+	execution, _ := reviewTransitionExecutionSchema(t, schemaFile)
 	properties, ok := execution["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("%s transition_execution has no properties", schemaFile)
@@ -420,18 +474,10 @@ func TestReviewNextTransitionQuotedCommandValidatesAgainstPublishedSchemas(t *te
 // payloads.
 func TestPublishedStatusSchemasRequireTokenOnExecutableArguments(t *testing.T) {
 	for _, schemaFile := range []string{"status.schema.json", "status-v2.schema.json"} {
-		payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", schemaFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var schema map[string]any
-		if err := json.Unmarshal(payload, &schema); err != nil {
-			t.Fatal(err)
-		}
-		defs := schema["$defs"].(map[string]any)
+		execution, defs := reviewTransitionExecutionSchema(t, schemaFile)
 		shared, ok := defs["transition_argument"].(map[string]any)
 		if !ok {
-			t.Fatalf("%s has no $defs/transition_argument", schemaFile)
+			t.Fatalf("%s execution schema has no $defs/transition_argument", schemaFile)
 		}
 		for _, field := range schemaStringArray(t, shared["required"]) {
 			if field == "token" {
@@ -440,7 +486,7 @@ func TestPublishedStatusSchemasRequireTokenOnExecutableArguments(t *testing.T) {
 		}
 		executable, ok := defs["executable_transition_argument"].(map[string]any)
 		if !ok {
-			t.Errorf("%s has no $defs/executable_transition_argument, so an execute argument may still omit its runnable token", schemaFile)
+			t.Errorf("%s execution schema has no $defs/executable_transition_argument, so an execute argument may still omit its runnable token", schemaFile)
 			continue
 		}
 		required := schemaStringArray(t, executable["required"])
@@ -449,7 +495,6 @@ func TestPublishedStatusSchemasRequireTokenOnExecutableArguments(t *testing.T) {
 				t.Errorf("%s executable_transition_argument omits required %q: %v", schemaFile, field, required)
 			}
 		}
-		execution := defs["transition_execution"].(map[string]any)
 		properties := execution["properties"].(map[string]any)
 		arguments := properties["arguments"].(map[string]any)
 		items, ok := arguments["items"].(map[string]any)

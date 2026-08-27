@@ -107,9 +107,9 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Managed launchers live under `~/.gentle-ai/bin/` and preserve an explicit `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false`; restart OpenCode after enabling them
 - `serve`, `attach`, Desktop, and sessions not launched through the managed launcher use the safe foreground fallback
 - Background jobs are process-local and non-durable, have no filesystem isolation, and must not be used for dependent phases or parallel writers in one worktree
-- The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
-- Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
-- Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
+- The TUI model picker asynchronously discovers the active project's effective providers and models through `opencode models --verbose`, including custom, authenticated, plugin, and dynamic providers
+- Only models OpenCode reports with tool-call capability appear as selectable SDD-capable options
+- Multi-mode prerequisite: connect your AI providers, then return to the picker; Gentle AI does not refresh OpenCode's catalog
 - Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
 - Review launch runs from an ordinary already-running OpenCode session: no restart, child process, special user-visible session, or `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_DISABLE_EXTERNAL_SKILLS` variable is required (rdd-advisory-transport SKILL.md).

@@ -1,11 +1,8 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -585,8 +582,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready only when verify report exists and tasks are complete",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass"))
-				writeApprovedReviewArtifacts(t, changeRoot)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -598,7 +594,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical passing verify report",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n"+strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"### Build & Tests Execution",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 0 skipped",
@@ -610,7 +606,6 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"Verdict: PASS",
 					"",
 				}, "\n"))
-				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -622,7 +617,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical pass with warnings verdict",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass_with_warnings")+"\n"+strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass_with_warnings", 0, 0, "1/1", "1/1", 0, 0)+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 1 skipped",
 					"**CRITICAL**: None",
@@ -631,7 +626,6 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"PASS WITH WARNINGS",
 					"",
 				}, "\n"))
-				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -778,8 +772,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready when verify report has status pass",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n# Verify\nStatus: PASS\n")
-				writeApprovedReviewArtifacts(t, changeRoot)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)+"\n# Verify\nStatus: PASS\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -825,6 +818,121 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			}
 			if tt.wantBlockedAbsent != "" && strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlockedAbsent) {
 				t.Fatalf("BlockedReasons = %v, want not containing %q", status.BlockedReasons, tt.wantBlockedAbsent)
+			}
+		})
+	}
+}
+
+func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T) {
+	const completeSpec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
+	const staleSpec = completeSpec + "#### Scenario: Added after verification\n"
+	invalidOutputHash := "sha256:" + strings.Repeat("b", 64)
+	tests := []struct {
+		name   string
+		spec   string
+		report string
+	}{
+		{
+			name:   "stale complete pass after a spec scenario is added",
+			spec:   staleSpec,
+			report: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0),
+		},
+		{
+			name:   "current-format incomplete failed evidence",
+			spec:   completeSpec,
+			report: testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+		},
+		{
+			name: "malformed failed evidence with an invalid output hash",
+			spec: completeSpec,
+			report: strings.Replace(
+				testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 1),
+				"test_output_hash: "+invalidOutputHash,
+				"test_output_hash: sha256:invalid",
+				1,
+			),
+		},
+	}
+
+	for _, backend := range []string{"openspec", "engram"} {
+		for _, tt := range tests {
+			t.Run(backend+"/"+tt.name, func(t *testing.T) {
+				root := t.TempDir()
+				var status Status
+				var err error
+				switch backend {
+				case "openspec":
+					changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+					write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), completeSpec)
+					write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), tt.spec)
+					write(t, filepath.Join(changeRoot, "verify-report.md"), tt.report)
+					status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				case "engram":
+					mkdir(t, filepath.Join(root, ".engram"))
+					project := strings.ToLower(filepath.Base(root))
+					restore := stubEngramExport(t, []engramObservation{
+						{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/spec", Content: tt.spec, Project: project, Scope: "project"},
+						{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/verify-report", Content: tt.report, Project: project, Scope: "project"},
+					})
+					defer restore()
+					status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				}
+				if err != nil {
+					t.Fatalf("Resolve() error = %v", err)
+				}
+				if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+					t.Fatalf("status = verify %q archive %q next %q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+				}
+				if status.RemediationState != (RemediationState{}) {
+					t.Fatalf("RemediationState = %#v, want empty", status.RemediationState)
+				}
+				if strings.Contains(strings.Join(status.BlockedReasons, "\n"), "missing_review_authority") {
+					t.Fatalf("BlockedReasons = %v, want no legacy missing_review_authority routing", status.BlockedReasons)
+				}
+			})
+		}
+	}
+}
+
+func TestResolveCompleteFailedVerificationStillRequiresRemediation(t *testing.T) {
+	const completeSpec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
+	completeReport := testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 1)
+
+	for _, backend := range []string{"openspec", "engram"} {
+		t.Run(backend, func(t *testing.T) {
+			root := t.TempDir()
+			var status Status
+			var err error
+			switch backend {
+			case "openspec":
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+				write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), completeSpec)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), completeReport)
+				status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			case "engram":
+				mkdir(t, filepath.Join(root, ".engram"))
+				project := strings.ToLower(filepath.Base(root))
+				restore := stubEngramExport(t, []engramObservation{
+					{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/spec", Content: completeSpec, Project: project, Scope: "project"},
+					{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/verify-report", Content: completeReport, Project: project, Scope: "project"},
+				})
+				defer restore()
+				status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			}
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "remediate" {
+				t.Fatalf("status = verify %q archive %q next %q, want blocked/blocked/remediate", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+			}
+			if !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision == "" {
+				t.Fatalf("RemediationState = %#v, want required with failed evidence revision", status.RemediationState)
 			}
 		})
 	}
@@ -1116,7 +1224,7 @@ func TestParseCommandArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCommandArgs() error = %v", err)
 	}
-	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true}
+	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true, Contract: "gentle-ai.sdd-status/v2"}
 	if got != want {
 		t.Fatalf("ParseCommandArgs() = %#v, want %#v", got, want)
 	}
@@ -1143,16 +1251,6 @@ func TestParseCommandArgsRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func seedReadyChange(t *testing.T, root string, name string, tasks string) string {
-	t.Helper()
-	changeRoot := filepath.Join(root, "openspec", "changes", name)
-	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
-	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Expected behavior\n")
-	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
-	write(t, filepath.Join(changeRoot, "tasks.md"), tasks)
-	return changeRoot
-}
-
 func seedPlanningRoute(t *testing.T, root string, name string, route string) {
 	t.Helper()
 	changeRoot := filepath.Join(root, "openspec", "changes", name)
@@ -1167,49 +1265,6 @@ func seedPlanningRoute(t *testing.T, root string, name string, route string) {
 	}
 	if route == "propose" {
 		write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
-	}
-}
-
-func engramPlanningRoute(name string, route string) []engramObservation {
-	observations := []engramObservation{}
-	if route != "propose" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "design" || route == "tasks" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/spec", Content: "# Spec\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "tasks" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "propose" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/tasks", Content: "- [ ] 1.1 Work\n", Project: "gentle-ai", Scope: "project"})
-	}
-	return observations
-}
-
-func write(t *testing.T, path string, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-}
-
-func stubEngramExport(t *testing.T, observations []engramObservation) func() {
-	t.Helper()
-	original := engramExport
-	engramExport = func(_ string) ([]engramObservation, error) {
-		return observations, nil
-	}
-	return func() { engramExport = original }
-}
-
-func mkdir(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
 	}
 }
 
@@ -1229,11 +1284,4 @@ func equalStringPtr(left *string, right *string) bool {
 		return left == right
 	}
 	return *left == *right
-}
-
-func ptrValue(value *string) string {
-	if value == nil {
-		return "<nil>"
-	}
-	return *value
 }

@@ -653,6 +653,7 @@ type installRuntime struct {
 	backgroundActivation *opencodeactivation.ActivationPlan
 
 	piBackgroundProjection *piBackgroundProjectionPlan
+	progress               pipeline.ProgressFunc
 }
 
 type runtimeState struct {
@@ -764,8 +765,13 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, agent := range r.resolved.Agents {
-
-		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
+		apply = append(apply, agentInstallStep{
+			id:       "agent:" + string(agent),
+			agent:    agent,
+			homeDir:  r.homeDir,
+			profile:  r.profile,
+			progress: r.progress,
+		})
 	}
 
 	for _, tool := range r.selection.CommunityTools {
@@ -1214,10 +1220,11 @@ func rollbackRoots(homeDir, workspaceDir string) []string {
 }
 
 type agentInstallStep struct {
-	id      string
-	agent   model.AgentID
-	homeDir string
-	profile system.PlatformProfile
+	id       string
+	agent    model.AgentID
+	homeDir  string
+	profile  system.PlatformProfile
+	progress pipeline.ProgressFunc
 }
 
 type openCodePluginInstallStep struct {
@@ -1270,7 +1277,7 @@ func (s agentInstallStep) Run() error {
 		return fmt.Errorf("install command for %q resolved to an empty sequence (unsupported platform or resolver misconfiguration)", s.agent)
 	}
 
-	return runCommandSequence(commands)
+	return runCommandSequenceWithProgress(commands, s.progress, s.id)
 }
 
 type kimiSystemPromptHubStep struct {
@@ -1719,8 +1726,8 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentClaudeTheme:
 		for _, adapter := range adapters {
-			if _, err := theme.InjectClaudeTheme(s.homeDir, adapter); err != nil {
-				return fmt.Errorf("inject Claude theme for %q: %w", adapter.Agent(), err)
+			if _, err := theme.InjectVisualThemes(s.homeDir, adapter); err != nil {
+				return fmt.Errorf("inject visual themes for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
@@ -1798,6 +1805,7 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil
 	}
 	runtime.background = backgroundResolution
+	runtime.progress = onProgress
 	runtime.backgroundActivation = backgroundActivation
 	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
 	piBackgroundResolution := PiBackgroundResolution{
@@ -1881,6 +1889,15 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 
 // runCommandSequence runs each command in the sequence one at a time, stopping on first error.
 func runCommandSequence(commands [][]string) error {
+	return runCommandSequenceWithProgress(commands, nil, "")
+}
+
+// runCommandSequenceWithProgress is the common command runner used by agent
+// installation steps. The optional callback reports each command as a generic
+// pipeline progress event; the command producer remains responsible for the
+// command content, so the pipeline does not need to know any agent-specific
+// package names.
+func runCommandSequenceWithProgress(commands [][]string, progress pipeline.ProgressFunc, stepPrefix string) error {
 	if len(commands) == 0 {
 		return fmt.Errorf("empty command sequence")
 	}
@@ -1890,8 +1907,23 @@ func runCommandSequence(commands [][]string) error {
 			return fmt.Errorf("empty command in sequence")
 		}
 
-		if err := runCommand(command[0], command[1:]...); err != nil {
+		stepID := ""
+		if stepPrefix != "" {
+			stepID = stepPrefix + ":" + strings.Join(command, " ")
+		}
+		if progress != nil {
+			progress(pipeline.ProgressEvent{StepID: stepID, Status: pipeline.StepStatusRunning})
+		}
+
+		err := runCommand(command[0], command[1:]...)
+		if err != nil {
+			if progress != nil {
+				progress(pipeline.ProgressEvent{StepID: stepID, Status: pipeline.StepStatusFailed, Err: err})
+			}
 			return fmt.Errorf("run command %q: %w", strings.Join(command, " "), err)
+		}
+		if progress != nil {
+			progress(pipeline.ProgressEvent{StepID: stepID, Status: pipeline.StepStatusSucceeded})
 		}
 	}
 
@@ -2214,6 +2246,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 			}
 			paths = append(paths, sddSubAgentPaths(targetDir, adapter)...)
+			if adapter.Agent() == model.AgentCodex {
+				// SDD installs the Codex skill-registry hook outside the skills
+				// directory, so it must share the component's backup contract.
+				paths = append(paths, filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json"))
+			}
 		case model.ComponentSkills:
 			for _, skillID := range selectedSkillIDs(selection) {
 				if skills.IsSDDSkill(skillID) {
@@ -2291,9 +2328,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, p)
 			}
 		case model.ComponentClaudeTheme:
-			if adapter.Agent() == model.AgentClaudeCode {
-				paths = append(paths, filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
-			}
+			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
 		case model.ComponentOpenCodeGentleLogo:
 			paths = append(paths,
 				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),

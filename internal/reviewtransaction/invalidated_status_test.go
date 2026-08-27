@@ -1,5 +1,3 @@
-//go:build legacy_compact_receipt
-
 package reviewtransaction
 
 import (
@@ -73,44 +71,5 @@ func TestInventoryAuthorityKeepsValidInvalidatedAuthoritiesCompleteAndAuthoritat
 		if entry.Status != AuthorityStatusInvalidated || entry.State != StateInvalidated || len(entry.Problems) != 0 {
 			t.Fatalf("invalidated entry = %#v", entry)
 		}
-	}
-}
-
-func TestInventoryAuthorityKeepsMalformedInvalidatedAuthorityFailClosed(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
-	state := newCompactTestState(t, repo, "invalidated-with-receipt")
-	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision, err := store.Replace("", "review/start", state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := state.Invalidate("candidate no longer applies"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(revision, "review/invalidate", state); err != nil {
-		t.Fatal(err)
-	}
-	terminal := newCompactTestState(t, repo, "invalidated-with-receipt-terminal")
-	terminal.State = StateEscalated
-	receipt, err := terminal.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err := InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Scoped: the malformed invalidated lineage is reported invalid on its
-	// own entry, and carries no verdict about the rest of the inventory.
-	if !hasAuthorityInventoryStatus(report.Entries, state.LineageID, AuthorityStatusInvalid) {
-		t.Fatalf("malformed invalidated report = %#v", report)
 	}
 }

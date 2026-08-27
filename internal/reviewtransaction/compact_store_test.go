@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestCompactHistoricalFailedValidatorRequiresLocalAttempt(t *testing.T) {
+	state := CompactState{
+		State: StateCorrectionRequired,
+		Recovery: &CompactRecoveryProvenance{
+			ConsumedCorrectionAttempts: MaxCompactCorrectionAttempts,
+		},
+	}
+	if compactHistoricalFailedValidator(state) {
+		t.Fatal("recovery accounting without a local correction attempt must not be treated as a historical failed validator")
+	}
+}
+
 func newCompactTestState(t *testing.T, repo, lineage string) CompactState {
 	return newCompactTestStateWithIntended(t, repo, lineage, []string{})
 }

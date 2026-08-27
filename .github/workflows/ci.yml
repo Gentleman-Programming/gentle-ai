@@ -82,7 +82,8 @@ jobs:
             completed_once("j110-untracked-terminal-burn-and-unmanaged-staged-validation") and
             completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged") and
             completed_once("j113-correction-removes-candidate-only-path") and
-            completed_once("j114-last-reviewer-capture-closes-and-burns")
+            completed_once("j114-last-reviewer-capture-closes-and-burns") and
+            completed_once("j116-codex-committed-correction-runs-returned-status-continuation")
           ' "$RUNNER_TEMP/bench-portable.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
           jq -e '

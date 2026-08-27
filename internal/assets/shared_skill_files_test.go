@@ -3,6 +3,7 @@ package assets
 import (
 	"io/fs"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,34 @@ func TestSharedSkillFileNamesMatchesEmbeddedListing(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("SharedSkillFileNames()[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestSharedSupportDirectoryIsDocumentedButNotInvokable(t *testing.T) {
+	names, err := SharedSkillFileNames()
+	if err != nil {
+		t.Fatalf("SharedSkillFileNames() error = %v", err)
+	}
+
+	foundReadme := false
+	for _, name := range names {
+		if name == "SKILL.md" {
+			t.Fatal("shared support directory must not embed an invokable SKILL.md")
+		}
+		if name == "README.md" {
+			foundReadme = true
+		}
+	}
+	if !foundReadme {
+		t.Fatal("shared support directory must embed README.md")
+	}
+
+	readme := MustRead(SharedSkillDir + "/README.md")
+	if strings.HasPrefix(readme, "---") {
+		t.Fatal("shared README.md must not contain skill frontmatter")
+	}
+	if !strings.Contains(readme, "not an invokable skill") {
+		t.Fatal("shared README.md must explain that the directory is support-only")
 	}
 }
 

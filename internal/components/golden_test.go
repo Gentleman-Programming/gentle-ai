@@ -453,8 +453,8 @@ func TestGoldenSDD_Kiro(t *testing.T) {
 			t.Errorf("expected SDD skill file %q not found: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(skillsDir, "_shared", "SKILL.md")); err != nil {
-		t.Errorf("expected SDD shared marker %q not found: %v", filepath.Join("_shared", "SKILL.md"), err)
+	if _, err := os.Stat(filepath.Join(skillsDir, "_shared", "README.md")); err != nil {
+		t.Errorf("expected SDD shared documentation %q not found: %v", filepath.Join("_shared", "README.md"), err)
 	}
 
 	// Verify all Kiro native SDD phase agent files with golden snapshots.

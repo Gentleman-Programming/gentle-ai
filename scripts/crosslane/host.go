@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 )
 
 // hostCommandTimeout bounds every command a --with-host lane runs: real
@@ -105,13 +107,14 @@ func (b *battery) statusEnv(repo, agent string, env []string) (map[string]any, s
 	return doc, stderr, code
 }
 
-// runCommandLineEnv mirrors runCommandLine over runEnv.
+// runCommandLineEnv mirrors runCommandLine over runEnv with the product's
+// quoting-aware splitter. Structured closures use runTransitionExecution instead.
 func (b *battery) runCommandLineEnv(source, dir string, env []string, command string) (map[string]any, string, int) {
-	fields := strings.Fields(command)
-	if len(fields) < 2 || fields[0] != "gentle-ai" {
+	words, err := cli.SplitPrintedCommandWords(command)
+	if err != nil || len(words) < 2 || words[0] != "gentle-ai" {
 		return nil, fmt.Sprintf("unexpected provider command %q", command), 1
 	}
-	return b.runJSONEnv(source, dir, env, fields[1:]...)
+	return b.runJSONEnv(source, dir, env, words[1:]...)
 }
 
 // argumentTokens returns a collect input's provider-rendered argument tokens
@@ -225,15 +228,25 @@ func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[str
 		b.burnApproved(lane, "lifecycle burned", repo, "", env, capture)
 		return false
 	case "correction_required":
-		b.pass(lane, "lifecycle burned", "real reviewer reported candidate-causal findings (correction_required); transport and admission proven")
+		b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, capture)
 		return false
 	}
 	return true
 }
 
+// hostCorrectionReentry follows the provider-owned status continuation from a
+// final correction_required capture. Hosts must never rebuild its selectors.
+func (b *battery) hostCorrectionReentry(lane, check, repo string, env []string, closure map[string]any) bool {
+	status, stderr, code := b.statusFromClosureEnv(repo, env, closure)
+	if code != 0 || getString(status, "next_transition", "reason_code") != "correction_plan_required" {
+		b.fail(lane, check, fmt.Sprintf("closure continuation exit=%d reason=%q %s", code, getString(status, "next_transition", "reason_code"), firstLine(stderr)))
+		return false
+	}
+	b.pass(lane, check, "provider closure status_continuation re-entered correction planning without host selector reconstruction")
+	return true
+}
+
 // hostFollowToReceipt follows negotiated transitions to the terminal burn.
-// A correction_required terminal is a legitimate real-model outcome and is
-// reported as such, mirroring the claude --with-model lane.
 func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 	const check = "lifecycle burned"
 	for step := 0; step < hostStepBudget; step++ {
@@ -252,10 +265,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 				b.burnApproved(lane, check, repo, agent, env, doc)
 				return
 			case "correction_required":
-				// A real model finding against scratch code is a legitimate
-				// outcome; transport, admission, and lifecycle are proven, and
-				// the bounded correction flow is not automated in this tier.
-				b.pass(lane, check, "real reviewer reported candidate-causal findings (correction_required); transport and admission proven")
+				b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, doc)
 				return
 			}
 		case "collect":
@@ -281,7 +291,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 					b.burnApproved(lane, check, repo, agent, env, roleDoc)
 					return
 				case "correction_required":
-					b.pass(lane, check, "provider role reported candidate-causal findings (correction_required)")
+					b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, roleDoc)
 					return
 				}
 			default:

@@ -514,6 +514,21 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+func TestComponentPathsSDDCodexIncludesHooksJSONOnlyForCodex(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex, model.AgentClaudeCode})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	codexHooks := filepath.Join(home, ".codex", "hooks.json")
+	if !containsPath(paths, codexHooks) {
+		t.Fatalf("componentPaths(sdd,codex) missing skill-registry hook %q\npaths=%v", codexHooks, paths)
+	}
+	claudeHooks := filepath.Join(home, ".claude", "hooks.json")
+	if containsPath(paths, claudeHooks) {
+		t.Fatalf("componentPaths(sdd,claude) declared unsupported hooks path %q\npaths=%v", claudeHooks, paths)
+	}
+}
+
 // TestComponentPathsPermissionsCodexContributesNoPaths pins that the
 // Permission component claims nothing under ~/.codex. gentle-ai does not write
 // Codex's permissions config — not a profile, and not the legacy cleanup that
@@ -1061,6 +1076,27 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
 			}
 		})
+	}
+}
+
+func TestComponentPathsVisualThemesMatchSelectedAdapter(t *testing.T) {
+	home := t.TempDir()
+	for _, tt := range []struct {
+		agent model.AgentID
+		want  []string
+	}{
+		{model.AgentClaudeCode, []string{filepath.Join(home, ".claude", "themes", "gentleman.json"), filepath.Join(home, ".claude", "themes", "gentleman-cute.json")}},
+		{model.AgentOpenCode, []string{filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"), filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json")}},
+	} {
+		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
+		if len(paths) != len(tt.want) {
+			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+		}
+		for i := range tt.want {
+			if paths[i] != tt.want[i] {
+				t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+			}
+		}
 	}
 }
 

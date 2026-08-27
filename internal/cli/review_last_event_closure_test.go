@@ -100,17 +100,18 @@ func TestLastReviewerCaptureApprovesAndBurnsWithoutFinalize(t *testing.T) {
 	captureCleanCLIReviewerResult(t, repo, started, len(started.SelectedLenses)-1, &terminalOutput)
 
 	var terminal struct {
-		Schema    string                  `json:"schema"`
-		Operation string                  `json:"operation"`
-		LineageID string                  `json:"lineage_id"`
-		State     reviewtransaction.State `json:"state"`
-		Action    string                  `json:"action"`
+		Schema             string                     `json:"schema"`
+		Operation          string                     `json:"operation"`
+		LineageID          string                     `json:"lineage_id"`
+		State              reviewtransaction.State    `json:"state"`
+		Action             string                     `json:"action"`
+		StatusContinuation *ReviewTransitionExecution `json:"status_continuation"`
 	}
 	if err := json.Unmarshal(terminalOutput.Bytes(), &terminal); err != nil {
 		t.Fatalf("decode terminal capture result: %v\n%s", err, terminalOutput.String())
 	}
 	if terminal.Operation != "review/capture-result" || terminal.LineageID != started.LineageID ||
-		terminal.State != reviewtransaction.StateApproved || !strings.Contains(terminal.Action, "burned") {
+		terminal.State != reviewtransaction.StateApproved || !strings.Contains(terminal.Action, "burned") || terminal.StatusContinuation != nil {
 		t.Fatalf("last capture terminal result = %#v, want approved burned capture completion", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
@@ -703,8 +704,12 @@ func TestCompiledRefuterClosesOnTheFinalLensCapture(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &terminal); err != nil {
 		t.Fatal(err)
 	}
-	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateCorrectionRequired {
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateCorrectionRequired || terminal.StatusContinuation == nil {
 		t.Fatalf("compiled refuter terminal closure = %#v", terminal)
+	}
+	arguments, err := reviewTransitionArgumentMap(terminal.StatusContinuation.Arguments)
+	if err != nil || arguments["agent"] != string(model.AgentClaudeCode) {
+		t.Fatalf("compiled refuter continuation = %#v, arguments=%#v, err=%v", terminal.StatusContinuation, arguments, err)
 	}
 }
 

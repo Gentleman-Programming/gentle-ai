@@ -34,9 +34,10 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
-		"schemas/start-v2.schema.json":  "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":    "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
-		"schemas/status-v2.schema.json": "83e9d178cedde84d975e12c0fd157ac6f0e0a1c10173e6e6b7cb65c276109f91",
+		"schemas/start-v2.schema.json":             "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
+		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
+		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
+		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -58,7 +59,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 		"fixtures/status.fixture.json":       "846377e06df2cae3587c4258ea75fe1ec1b51f08d01f1d498378c3bf13e93921",
 		"schemas/capabilities.schema.json":   "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "ce997e14c26d3ad25420622a5c2a93feb40732f68025cbe781bedcfec2112327",
+		"schemas/status.schema.json":         "8f4de69091323f22ce6e7c003c344adada92c76ceb4e938347b4d2027bd70f3a",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -91,7 +92,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// the emitter legitimately publishes once the relay handshake is
 		// declared. Deliberate, not drift.
 		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
-		"schemas/status.schema.json":     "ce997e14c26d3ad25420622a5c2a93feb40732f68025cbe781bedcfec2112327",
+		"schemas/status.schema.json":     "8f4de69091323f22ce6e7c003c344adada92c76ceb4e938347b4d2027bd70f3a",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -122,7 +123,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
-		"schemas/status-v5.schema.json": "28ef37a2af0b78be9435c2adecd3a3c3446e3db8a6df7b8fcc35bf3b01c0ecda",
+		"schemas/status-v5.schema.json": "dd543b0231e412d384f0c955f2d036f9ad17e754ca3c48a2578c9cbb86ce298a",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -145,6 +146,7 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json":            "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
+		"schemas/last-event-closure.schema.json":     "612531204afa5941e4927c38e868c720a4519fe4b9a5a4ffd29f021dc053001d",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
@@ -171,6 +173,7 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "result-artifact-v2.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v1/schemas/result-artifact-v2.schema.json"},
 		{name: "start-v2.schema.json", id: ReviewIntegrationStartSchemaIDV2},
 		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaIDV2},
+		{name: "transition-execution.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v1/schemas/transition-execution.schema.json"},
 		{name: "authority-repair-assessment.schema.json", id: reviewtransaction.AuthorityRepairAssessmentSchemaID},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaID},
 	}
@@ -220,7 +223,8 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	}
 
 	status := documents["status-v2.schema.json"]
-	transitionArtifact := status["$defs"].(map[string]any)["transition_artifact"].(map[string]any)
+	transitionExecution := documents["transition-execution.schema.json"]
+	transitionArtifact := transitionExecution["$defs"].(map[string]any)["transition_artifact"].(map[string]any)
 	transitionRequired := schemaStringArray(t, transitionArtifact["required"])
 	for _, field := range []string{"subject_hash", "admission_decision"} {
 		if !slices.Contains(transitionRequired, field) {
@@ -268,6 +272,7 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "operation.schema.json", id: ReviewIntegrationOperationSchemaIDV2},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaIDV2},
 		{name: "gate-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/gate-result.schema.json"},
+		{name: "last-event-closure.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/last-event-closure.schema.json"},
 		{name: "opencode-provider-role.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/opencode-provider-role.schema.json"},
 	}
 	v2Documents := make(map[string]map[string]any, len(v2Schemas))

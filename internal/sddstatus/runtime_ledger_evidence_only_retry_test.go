@@ -72,7 +72,7 @@ func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedResetAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorized evidence-only retry was refused: %v", err)
 	}
-	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil {
+	if !completed.Complete || completed.ActiveAttempt != nil {
 		t.Fatalf("authorized evidence-only retry = %#v", completed)
 	}
 	// The failed evidence stays preserved and linked; no approval is invented.
@@ -200,7 +200,7 @@ func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedRescopeAuthority(t *testing.T) 
 	if err != nil {
 		t.Fatalf("rescope-authorized evidence-only retry was refused: %v", err)
 	}
-	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil {
+	if !completed.Complete || completed.ActiveAttempt != nil {
 		t.Fatalf("rescope-authorized evidence-only retry = %#v", completed)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]

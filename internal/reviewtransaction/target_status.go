@@ -581,7 +581,8 @@ func projectTargetStatusDecision(result TargetStatusResult) TargetStatusResult {
 	stagedScopeRecovery := result.ActionDisposition == RecoveryScopeChanged &&
 		(result.State == StateApproved || result.State == StateCorrectionRequired) &&
 		authorityKind == TargetBaseDiff && selector.Kind == TargetBaseWorkspaceOverlay &&
-		selector.Projection == ProjectionStaged
+		selector.Projection == ProjectionStaged || result.ActionDisposition == RecoveryEscalated && authorityKind == TargetBaseDiff &&
+		selector.Kind == TargetBaseWorkspaceOverlay && selector.Projection == ProjectionStaged
 	approvedRebasedRecovery := result.ActionDisposition == RecoveryScopeChanged && result.State == StateApproved && selector.Kind == TargetBaseDiff
 	representable = representable || stagedScopeRecovery || approvedRebasedRecovery
 	if !representable {

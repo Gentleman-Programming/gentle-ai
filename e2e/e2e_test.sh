@@ -641,8 +641,8 @@ test_cc_skills_minimal() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Minimal preset = 13 files: 11 SDD phases + judgment-day + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 13 "Minimal preset: 13 skill files"
+        # Minimal preset = 12 files: 11 SDD phases + judgment-day. _shared is support-only.
+        assert_file_count "$skills_dir" "SKILL.md" 12 "Minimal preset: 12 skill files"
 
         # Verify specific SDD skills exist
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
@@ -672,8 +672,8 @@ test_cc_skills_full() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Full preset = 26 files: 11 SDD phases + judgment-day + 13 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 26 "Full preset: 26 skill files"
+        # Full preset = 25 files: 11 SDD phases + judgment-day + 13 foundation. _shared is support-only.
+        assert_file_count "$skills_dir" "SKILL.md" 25 "Full preset: 25 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
@@ -701,8 +701,8 @@ test_cc_skills_ecosystem() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # ecosystem-only = 26 files: 11 SDD phases + judgment-day + 13 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 26 "Ecosystem preset: 26 skill files"
+        # ecosystem-only = 25 files: 11 SDD phases + judgment-day + 13 foundation. _shared is support-only.
+        assert_file_count "$skills_dir" "SKILL.md" 25 "Ecosystem preset: 25 skill files"
 
         # SDD skills present
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "SDD skills present"
@@ -734,9 +734,9 @@ test_cc_custom_skills_with_flag() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
 
-        # Note: --component skills auto-resolves sdd (graph dep), which installs 12 SDD/orchestration skills + _shared/SKILL.md.
-        # Total = 12 SDD/orchestration skills + 2 explicit skills + 1 _shared/SKILL.md = 15 SKILL.md files.
-        assert_file_count "$skills_dir" "SKILL.md" 15 "Custom + explicit skills: 12 SDD/orchestration + 2 explicit + 1 _shared = 15 files"
+        # Note: --component skills auto-resolves sdd (graph dep), which installs 12 SDD/orchestration skills.
+        # Total = 12 SDD/orchestration skills + 2 explicit skills = 14 SKILL.md files.
+        assert_file_count "$skills_dir" "SKILL.md" 14 "Custom + explicit skills: 12 SDD/orchestration + 2 explicit = 14 files"
 
         # SDD skills ARE present (from the sdd dependency)
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md (from sdd dep)"
@@ -754,9 +754,9 @@ test_cc_custom_no_skills_flag_installs_nothing() {
         # --component skills auto-resolves sdd as a hard dependency (graph: skills → sdd → engram).
         # The SDD component always installs its 12 SDD/orchestration skills.
         # The skills component itself is a no-op (SkillsForPreset(custom) returns nil, no --skills flag).
-        # Result: exactly 13 SKILL.md files from the sdd dependency (12 SDD/orchestration + _shared/SKILL.md).
+        # Result: exactly 12 SKILL.md files from the SDD dependency. _shared is support-only.
         assert_dir_exists "$skills_dir" "Skills directory created by sdd dependency"
-        assert_file_count "$skills_dir" "SKILL.md" 13 "13 skill files from sdd dependency (12 SDD/orchestration + _shared/SKILL.md)"
+        assert_file_count "$skills_dir" "SKILL.md" 12 "12 skill files from the SDD dependency"
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init installed by sdd dependency"
     else
         log_fail "custom + skills component (no flag) install command failed"
@@ -778,8 +778,8 @@ test_cc_custom_sdd_plus_skills() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md (from --skills flag)"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md (from --skills flag)"
 
-        # Total: 12 SDD/orchestration skills + 2 explicit skills + _shared/SKILL.md = 15
-        assert_file_count "$skills_dir" "SKILL.md" 15 "SDD + explicit skills: 15 skill files total"
+        # Total: 12 SDD/orchestration skills + 2 explicit skills = 14.
+        assert_file_count "$skills_dir" "SKILL.md" 14 "SDD + explicit skills: 14 skill files total"
     else
         log_fail "custom + SDD + skills install command failed"
     fi
@@ -876,9 +876,9 @@ test_oc_sdd_injection() {
         assert_file_exists "$commands_dir/sdd-init.md" "sdd-init command file"
         assert_file_contains "$commands_dir/sdd-init.md" "sdd" "sdd-init command has SDD content"
 
-        # SDD phases, judgment-day, and the shared contract (13 files)
+        # SDD phases and judgment-day (12 files). _shared is support-only.
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 13 "All 13 SDD and orchestration skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 12 "All 12 SDD and orchestration skill files"
 
         # Validate skill file content
         assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
@@ -923,7 +923,7 @@ test_oc_skills_minimal() {
     if $BINARY install --agent opencode --component skills --preset minimal --persona custom 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 13 "Minimal preset: 13 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 12 "Minimal preset: 12 skill files"
         assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
         assert_file_size_min "$skill_dir/sdd-init/SKILL.md" 100 "sdd-init skill has real content"
     else
@@ -938,7 +938,7 @@ test_oc_skills_full() {
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 26 "Full preset: 26 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 25 "Full preset: 25 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"

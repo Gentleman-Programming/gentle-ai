@@ -1,5 +1,3 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
@@ -9,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestResolveEmbedsAndRoutesNativeRuntimeAuthority(t *testing.T) {
@@ -147,37 +143,13 @@ func TestResolveEngramUsesTheSameNativeRuntimeAuthority(t *testing.T) {
 	}
 }
 
-func TestResolveRoutesAtomicRuntimeRemediationSuccessorToFreshVerify(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-remediation-for-status"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(fixture.changeRoot, "verify-report.md"), boundedVerifyEnvelope(fixture.failedEvidence, "fail"))
-
-	status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: "runtime-remediation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertRuntimeStatusRevision(t, status, completed.Revision)
-	if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
-		t.Fatalf("review gate = %#v, want unchanged historical review routing", status.ReviewGate)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-		t.Fatalf("atomic remediation routing: verify=%q archive=%q next=%q reasons=%v", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-	}
-	if status.RemediationState != (RemediationState{}) {
-		t.Fatalf("remediation state = %#v, want completed native successor", status.RemediationState)
-	}
-}
-
 func TestResolveExplainsFreshVerificationAfterEvidenceOnlyRuntimeRemediation(t *testing.T) {
 	for _, storeKind := range []string{"openspec", "engram"} {
 		t.Run(storeKind, func(t *testing.T) {
 			fixture := newEvidenceOnlyRuntimeRemediationFixture(t, "post-remediation-"+storeKind)
 			if storeKind == "openspec" {
 				changeRoot := seedReadyChange(t, fixture.repo, fixture.change, "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(fixture.failedEvidence, "pass"))
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 			} else {
 				if err := os.MkdirAll(filepath.Join(fixture.repo, ".engram"), 0o755); err != nil {
 					t.Fatal(err)
@@ -188,7 +160,7 @@ func TestResolveExplainsFreshVerificationAfterEvidenceOnlyRuntimeRemediation(t *
 					{Title: "sdd/" + fixture.change + "/spec", Content: "### Requirement: Runtime\n#### Scenario: Fresh evidence\n", Project: "gentle-ai", Scope: "project"},
 					{Title: "sdd/" + fixture.change + "/design", Content: "## Design\n", Project: "gentle-ai", Scope: "project"},
 					{Title: "sdd/" + fixture.change + "/tasks", Content: "- [x] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
-					{Title: "sdd/" + fixture.change + "/verify-report", Content: boundedVerifyEnvelope(fixture.failedEvidence, "pass"), Project: "gentle-ai", Scope: "project"},
+					{Title: "sdd/" + fixture.change + "/verify-report", Content: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0), Project: "gentle-ai", Scope: "project"},
 				})
 				t.Cleanup(restore)
 			}
@@ -242,7 +214,7 @@ func TestResolveVerifyInstructionsDoNotMislabelOtherRoutes(t *testing.T) {
 	t.Run("fresh all done pass with warnings", func(t *testing.T) {
 		repo := t.TempDir()
 		changeRoot := seedReadyChange(t, repo, "fresh-verify", "- [x] 1.1 Work\n")
-		write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("f"), "pass_with_warnings"))
+		write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass_with_warnings", 0, 0, "1/1", "1/1", 0, 0))
 
 		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "fresh-verify", ReviewDisabled: true, IncludeInstructions: true})
 		if err != nil {
@@ -255,90 +227,15 @@ func TestResolveVerifyInstructionsDoNotMislabelOtherRoutes(t *testing.T) {
 			t.Fatalf("fresh passing report claimed remediation: %v", status.PhaseInstructions.Verify)
 		}
 	})
-
-	t.Run("targeted correction reverify reason", func(t *testing.T) {
-		block, emitted := classifyTargetedReVerify(
-			correctionEvidence{applied: true, derivable: true, paths: []string{"unrelated.go"}},
-			[]string{"spec-scoped.go"},
-		)
-		const want = "the correction's changed paths do not intersect the verify evidence scope; re-running the objective's evidence goal against the unaffected scope"
-		if !emitted || block.Reason != want {
-			t.Fatalf("targeted ReVerify = %#v, emitted=%v, want reason %q", block, emitted, want)
-		}
-	})
 }
 
-func TestResolveRoutesPureEngramRuntimeRemediationSuccessorToFreshVerify(t *testing.T) {
-	fixture := newRuntimeEngramRemediationFixture(t)
-	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-engram-remediation-for-status"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(fixture.repo, ".engram"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runRuntimeLedgerGit(t, fixture.repo, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
-	restore := stubEngramExport(t, []engramObservation{
-		{Title: "sdd/engram-runtime/proposal", Content: "## Proposal\nNative runtime", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/spec", Content: "### Requirement: Runtime\n#### Scenario: Native authority\n", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/design", Content: "## Design\nUse the native ledger", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/tasks", Content: "- [x] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
-		{Title: "sdd/engram-runtime/verify-report", Content: boundedVerifyEnvelope(fixture.failedEvidence, "fail"), Project: "gentle-ai", Scope: "project"},
-	})
-	defer restore()
-
-	status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: "engram-runtime"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.ArtifactStore != ArtifactStoreEngram {
-		t.Fatalf("artifact store = %q, want Engram", status.ArtifactStore)
-	}
-	assertRuntimeStatusRevision(t, status, completed.Revision)
-	if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
-		t.Fatalf("Engram review gate = %#v, want unchanged historical review routing", status.ReviewGate)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-		t.Fatalf("Engram remediation routing: verify=%q archive=%q next=%q reasons=%v", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-	}
-	if status.RemediationState != (RemediationState{}) {
-		t.Fatalf("Engram remediation state = %#v, want completed native successor", status.RemediationState)
-	}
-	if _, err := os.Stat(filepath.Join(fixture.repo, "openspec")); !os.IsNotExist(err) {
-		t.Fatalf("pure Engram routing depended on an OpenSpec root: %v", err)
-	}
-}
-
-func TestResolveDoesNotBypassMalformedFailedEvidenceWithACompletedRuntime(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	if _, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-remediation-malformed-evidence")); err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(fixture.changeRoot, "verify-report.md"), strings.ReplaceAll(
-		boundedVerifyEnvelope(fixture.failedEvidence, "fail"),
-		"evidence_revision: "+fixture.failedEvidence+"\n", "",
-	))
-
-	status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: "runtime-remediation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.NextRecommended != "verify" || status.Dependencies.Verify != DependencyReady {
-		t.Fatalf("malformed failed evidence = %#v, want independent verification retry", status)
-	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "evidence_revision") {
-		t.Fatalf("blocked reasons = %v, want preserved evidence_revision diagnostic", status.BlockedReasons)
-	}
-}
-
-func TestMissingEvidenceRevisionPreservesStrictParserReasonBeforeLegacyTransactionComparison(t *testing.T) {
+func TestMissingEvidenceRevisionPreservesStrictParserReasonWithoutAuthorityComparison(t *testing.T) {
 	report := strings.ReplaceAll(
 		testVerifyEnvelope("fail", 1, 1, "1/1", "1/1", 0, 0),
 		"evidence_revision: sha256:"+strings.Repeat("a", 64)+"\n", "",
 	)
 	verify := parseVerifyResult(report, SpecCounts{Requirements: 1, Scenarios: 1})
-	transaction := &reviewtransaction.Transaction{FailedEvidenceRevision: runtimeTestHash('e')}
-	remediation := resolveBoundedRemediation(true, false, verify, transaction, nil, "", "")
+	remediation := resolveBoundedRemediation(true, verify, "")
 	const want = "verify evidence cannot enter remediation: verification evidence is incomplete: missing evidence_revision in verify result envelope"
 	if remediation.Reason != want {
 		t.Fatalf("missing evidence remediation reason = %q, want %q", remediation.Reason, want)

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -437,7 +438,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	}); err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_emission_unavailable")
 	}
-	closure, err := closeReviewOnLastCapturedLens(ctx, session.root, store, record)
+	closure, err := closeReviewOnLastCapturedLens(ctx, session.root, store, record, model.AgentOpenCode)
 	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, record) {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
 	}
@@ -579,7 +580,7 @@ func openCodeTransportCaptureRole(ctx context.Context, root string, store review
 		if _, err := reviewProviderCaptureRefuterRaw(ctx, root, store, record.State, record.Revision, raw); err != nil {
 			return nil, err
 		}
-		return closeReviewOnLastCapturedLens(ctx, root, store, record)
+		return closeReviewOnLastCapturedLens(ctx, root, store, record, model.AgentOpenCode)
 	case reviewerprovider.RoleTargetedValidator:
 		_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, root, store, record.State, record.Revision, raw)
 		return closure, err

@@ -119,7 +119,7 @@ A `stop` carries one reason code and no executable transition. The table below i
 
 ## Published v1 compatibility reference
 
-The published v1 directory contains 22 strict JSON Schemas and 24 deterministic conformance fixtures. These are read-only compatibility inventory, not durable v2 receipt, gate-allow, or mirror state.
+The published v1 directory contains 23 strict JSON Schemas and 24 deterministic conformance fixtures. These are read-only compatibility inventory, not durable v2 receipt, gate-allow, or mirror state.
 
 - `legacy_v1_read_only` failures retain `mutation_outcome` values `not_started`, `unknown`, and `committed`; Legacy-v1 never reports `publication_pending`, with retry and replay disabled where its historical operation requires a new compact lineage.
 - Historical `ordinary_4r` legacy status omits `frozen`. START, BIND-SDD, invalidation, and direct append are compatibility names only and never re-enter the atomic lifecycle.

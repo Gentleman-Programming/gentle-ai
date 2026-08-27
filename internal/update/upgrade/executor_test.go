@@ -720,12 +720,16 @@ func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 	homeDir := t.TempDir()
 
 	managedFiles := map[string]string{
-		".claude.json":                   `{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"engram":{"command":"engram"}}}`,
-		".claude/CLAUDE.md":              "# Claude",
-		".config/opencode/AGENTS.md":     "# OpenCode",
-		".config/opencode/opencode.json": `{"model":"claude"}`,
-		".gemini/GEMINI.md":              "# Gemini",
-		".cursor/rules/gentle-ai.mdc":    "# Cursor rules",
+		".claude.json":                                `{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"engram":{"command":"engram"}}}`,
+		".claude/CLAUDE.md":                           "# Claude",
+		".claude/themes/gentleman.json":               `{"name":"gentleman"}`,
+		".claude/themes/gentleman-cute.json":          `{"name":"Gentleman Cute"}`,
+		".config/opencode/AGENTS.md":                  "# OpenCode",
+		".config/opencode/themes/gentleman.json":      `{"theme":{}}`,
+		".config/opencode/themes/gentleman-cute.json": `{"theme":{}}`,
+		".config/opencode/opencode.json":              `{"model":"claude"}`,
+		".gemini/GEMINI.md":                           "# Gemini",
+		".cursor/rules/gentle-ai.mdc":                 "# Cursor rules",
 	}
 	unmanagedFile := filepath.Join(homeDir, ".claude", "conversation-transcript.md")
 

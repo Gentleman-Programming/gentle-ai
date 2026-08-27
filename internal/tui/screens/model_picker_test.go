@@ -3,8 +3,6 @@ package screens
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -531,14 +529,12 @@ func TestHandleModelNav_NonReasoningModelSkipsEffortPicker(t *testing.T) {
 }
 
 // TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker covers the
-// realistic scenario where the model-variants plugin has not run yet (or failed
-// silently): a reasoning-capable model is loaded from the cache but its
-// Variants field is nil because EnrichWithVariants found no JSON. The picker
-// must skip ModeEffortSelect instead of presenting an empty list.
+// runtime scenario where a reasoning-capable model has no reported variants.
+// The picker must skip ModeEffortSelect instead of presenting an empty list.
 func TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker(t *testing.T) {
 	const providerID = "test-provider"
 	testModels := []opencode.Model{
-		// Reasoning: true but Variants: nil — plugin cache absent.
+		// Reasoning: true but no variants are reported.
 		{ID: "model-reason", Name: "Reasoning Model", Reasoning: true, ToolCall: true},
 	}
 	state := &ModelPickerState{
@@ -977,411 +973,6 @@ func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
 	}
 }
 
-// ─── NewModelPickerState: custom provider merging ─────────────────────────────
-
-// catalogJSON is a minimal OpenCode models cache with one built-in provider.
-const catalogJSON = `{
-  "built-in": {
-    "id": "built-in",
-    "name": "Built-In Provider",
-    "env": ["BUILTIN_API_KEY"],
-    "models": {
-      "builtin-model": {
-        "id": "builtin-model",
-        "name": "Built-In Model",
-        "tool_call": true
-      }
-    }
-  }
-}`
-
-// writeTempFile writes content to a file in a temp dir and returns the path.
-func writeTempFile(t *testing.T, name, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write temp file %q: %v", path, err)
-	}
-	return path
-}
-
-func TestNewModelPickerState(t *testing.T) {
-	tests := []struct {
-		name              string
-		cacheContent      string   // non-empty means write a cache file; empty means skip
-		settingsContent   string   // non-empty means write settings file; empty means use missing path
-		wantProviderIDs   []string // provider IDs that must appear in Providers map
-		wantAvailable     int      // minimum number of AvailableIDs; custom providers count only with tool_call models
-		wantUnavailable   []string // provider IDs that must not appear in AvailableIDs
-		wantConfigWarning bool     // whether ConfigWarning must be non-empty
-		wantWarningText   string   // substring expected in ConfigWarning and rendered output
-	}{
-		{
-			name:              "missing opencode.json falls back to catalog only",
-			cacheContent:      catalogJSON,
-			settingsContent:   "", // no file written → path points to nonexistent file
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     0, // no env var set → built-in not available; just checking providers map
-			wantConfigWarning: false,
-		},
-		{
-			name:              "opencode.json with no provider key gives catalog only",
-			cacheContent:      catalogJSON,
-			settingsContent:   `{"agent": {}}`,
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     0,
-			wantConfigWarning: false,
-		},
-		{
-			name:         "opencode.json with 2 custom providers adds both to picker",
-			cacheContent: catalogJSON,
-			settingsContent: `{
-				"provider": {
-					"custom-a": {
-						"name": "Custom A",
-						"models": {"model-a1": {"name": "Model A1", "tool_call": true}}
-					},
-					"custom-b": {
-						"name": "Custom B",
-						"models": {"model-b1": {"name": "Model B1", "tool_call": true}}
-					}
-				}
-			}`,
-			wantProviderIDs:   []string{"built-in", "custom-a", "custom-b"},
-			wantAvailable:     2, // custom-a and custom-b are always available as custom providers
-			wantConfigWarning: false,
-		},
-		{
-			name:         "custom provider without tool_call warns without becoming available",
-			cacheContent: catalogJSON,
-			settingsContent: `{
-				"provider": {
-					"custom-no-tools": {
-						"name": "Custom No Tools",
-						"models": {"model-a": {"name": "Model A"}}
-					}
-				}
-			}`,
-			wantProviderIDs:   []string{"built-in", "custom-no-tools"},
-			wantAvailable:     0,
-			wantUnavailable:   []string{"custom-no-tools"},
-			wantConfigWarning: true,
-			wantWarningText:   `provider["custom-no-tools"].models`,
-		},
-		{
-			name:         "name collision: custom provider wins over catalog",
-			cacheContent: catalogJSON,
-			settingsContent: `{
-				"provider": {
-					"built-in": {
-						"name": "My Override",
-						"models": {
-							"builtin-model": {"name": "Custom Override Name", "tool_call": true}
-						}
-					}
-				}
-			}`,
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     1, // "built-in" now treated as custom → always available
-			wantConfigWarning: false,
-		},
-		{
-			name:              "malformed opencode.json produces config warning",
-			cacheContent:      catalogJSON,
-			settingsContent:   `{"provider":`, // truncated / invalid JSON
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     0,
-			wantConfigWarning: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Write the cache file.
-			cachePath := writeTempFile(t, "models.json", tt.cacheContent)
-
-			// Determine settings path — missing when settingsContent is empty.
-			var settingsPath string
-			if tt.settingsContent != "" {
-				settingsPath = writeTempFile(t, "opencode.json", tt.settingsContent)
-			} else {
-				settingsPath = filepath.Join(t.TempDir(), "nonexistent.json")
-			}
-
-			state := NewModelPickerState(cachePath, settingsPath)
-
-			// All expected provider IDs must appear in the Providers map.
-			for _, id := range tt.wantProviderIDs {
-				if _, ok := state.Providers[id]; !ok {
-					t.Errorf("Providers missing %q; got keys: %v", id, providerKeys(state.Providers))
-				}
-			}
-
-			// AvailableIDs count must meet the minimum.
-			if len(state.AvailableIDs) < tt.wantAvailable {
-				t.Errorf("AvailableIDs = %v (count %d), want at least %d",
-					state.AvailableIDs, len(state.AvailableIDs), tt.wantAvailable)
-			}
-			for _, unavailableID := range tt.wantUnavailable {
-				for _, availableID := range state.AvailableIDs {
-					if availableID == unavailableID {
-						t.Errorf("AvailableIDs = %v, must not include %q", state.AvailableIDs, unavailableID)
-					}
-				}
-			}
-
-			// ConfigWarning check.
-			if tt.wantConfigWarning && state.ConfigWarning == "" {
-				t.Error("expected ConfigWarning to be set, got empty string")
-			}
-			if !tt.wantConfigWarning && state.ConfigWarning != "" {
-				t.Errorf("expected no ConfigWarning, got %q", state.ConfigWarning)
-			}
-			if tt.wantWarningText != "" {
-				if !strings.Contains(state.ConfigWarning, tt.wantWarningText) {
-					t.Errorf("ConfigWarning = %q, want substring %q", state.ConfigWarning, tt.wantWarningText)
-				}
-				if rendered := RenderModelPicker(nil, state, 0); !strings.Contains(rendered, tt.wantWarningText) {
-					t.Errorf("rendered picker missing warning substring %q:\n%s", tt.wantWarningText, rendered)
-				}
-			}
-		})
-	}
-}
-
-func TestCustomProviderToolCallWarnings(t *testing.T) {
-	singleProvider := map[string]opencode.Provider{
-		"alpha": {
-			ID:   "alpha",
-			Name: "Alpha",
-			Models: map[string]opencode.Model{
-				"model": {ID: "model"},
-			},
-		},
-	}
-	singleConfigProvider := map[string]opencode.ConfigProvider{
-		"alpha": {
-			Models: map[string]opencode.ConfigModel{
-				"model": {},
-			},
-		},
-	}
-	customWarning := `Custom provider "Alpha" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider["alpha"].models.`
-
-	tests := []struct {
-		name            string
-		existingWarning string
-		providers       map[string]opencode.Provider
-		configProviders map[string]opencode.ConfigProvider
-		wantWarning     string
-	}{
-		{
-			name: "sorts multiple provider warnings by provider ID",
-			providers: map[string]opencode.Provider{
-				"zeta": {
-					ID:   "zeta",
-					Name: "Zeta",
-					Models: map[string]opencode.Model{
-						"model": {ID: "model"},
-					},
-				},
-				"alpha": singleProvider["alpha"],
-			},
-			configProviders: map[string]opencode.ConfigProvider{
-				"zeta": {
-					Models: map[string]opencode.ConfigModel{"model": {}},
-				},
-				"alpha": singleConfigProvider["alpha"],
-			},
-			wantWarning: `Custom provider "Alpha" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider["alpha"].models.` +
-				"\n" +
-				`Custom provider "Zeta" has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider["zeta"].models.`,
-		},
-		{
-			name:            "preserves cache warning and renders both warnings",
-			existingWarning: "Could not load model cache: parse models cache: invalid character",
-			providers:       singleProvider,
-			configProviders: singleConfigProvider,
-			wantWarning:     "Could not load model cache: parse models cache: invalid character\n" + customWarning,
-		},
-		{
-			name:            "preserves config warning and renders both warnings",
-			existingWarning: "Could not load custom providers from opencode.json: parse opencode settings",
-			providers:       singleProvider,
-			configProviders: singleConfigProvider,
-			wantWarning:     "Could not load custom providers from opencode.json: parse opencode settings\n" + customWarning,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := appendCustomProviderToolCallWarnings(tt.existingWarning, tt.providers, tt.configProviders)
-			if got != tt.wantWarning {
-				t.Fatalf("warning = %q, want %q", got, tt.wantWarning)
-			}
-			rendered := RenderModelPicker(nil, ModelPickerState{ConfigWarning: got}, 0)
-			for _, warning := range strings.Split(tt.wantWarning, "\n") {
-				if !strings.Contains(rendered, warning) {
-					t.Fatalf("rendered picker missing warning %q:\n%s", warning, rendered)
-				}
-			}
-		})
-	}
-}
-
-func TestLMStudioDiscoveryWarningIsNotDuplicated(t *testing.T) {
-	state := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"models":{"model":{}}}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{
-		BaseURL: state.lmStudioURL,
-		Models:  []opencode.ConfigModel{{Name: "model"}},
-	})
-
-	warning := `LM Studio models need "tool_call": true in provider.lmstudio.models for SDD.`
-	if got := strings.Count(state.ConfigWarning, warning); got != 1 {
-		t.Fatalf("LM Studio warning count = %d, want 1; warning = %q", got, state.ConfigWarning)
-	}
-}
-
-func TestLMStudioDiscoveryErrorWarnsOnceWhenConfiguredModelsLackToolCalls(t *testing.T) {
-	state := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"models":{"model":{"name":"Model"}}}}}`)
-	discovery := LMStudioDiscoveryMsg{
-		BaseURL: state.lmStudioURL,
-		Err:     errors.New("connection refused"),
-	}
-	state = state.Update(discovery)
-	state = state.Update(discovery)
-
-	if len(state.AvailableIDs) != 0 {
-		t.Fatalf("AvailableIDs = %v, want LM Studio excluded", state.AvailableIDs)
-	}
-
-	warning := lmStudioToolCallWarning
-	if got := strings.Count(state.ConfigWarning, warning); got != 1 {
-		t.Fatalf("LM Studio tool_call warning count = %d, want 1; warning = %q", got, state.ConfigWarning)
-	}
-	if !strings.Contains(state.ConfigWarning, "LM Studio discovery failed; using configured models.") {
-		t.Fatalf("discovery fallback warning missing: %q", state.ConfigWarning)
-	}
-	if got := strings.Count(RenderModelPicker(nil, state, 0), warning); got != 1 {
-		t.Fatalf("rendered LM Studio tool_call warning count = %d, want 1", got)
-	}
-}
-
-func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
-	state := NewModelPickerState(writeTempFile(t, "models.json", `{`), writeTempFile(t, "opencode.json", `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1","models":{"model":{"tool_call":true}}}}}`))
-	if state.Providers == nil || state.lmStudioURL != "http://gateway:1234/v1" || len(state.AvailableIDs) != 1 || !strings.Contains(state.ConfigWarning, "model cache") || state.DiscoverLMStudioCmd() == nil {
-		t.Fatalf("cache fallback state = %+v", state)
-	}
-}
-
-func TestNewModelPickerStateDiscoveryErrorAddsConfigWarning(t *testing.T) {
-	settingsPath := t.TempDir()
-	state := NewModelPickerState(writeTempFile(t, "models.json", catalogJSON), settingsPath)
-
-	if !strings.Contains(state.ConfigWarning, "Could not discover custom agents from opencode.json") {
-		t.Fatalf("ConfigWarning = %q, want custom-agent discovery error", state.ConfigWarning)
-	}
-	if len(state.CustomAgents) != 0 {
-		t.Fatalf("CustomAgents = %v, want empty after discovery error", state.CustomAgents)
-	}
-}
-
-// TestNewModelPickerStateCollisionCustomWins verifies that when a model ID exists
-// in both the catalog cache and opencode.json, the custom entry takes precedence.
-func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
-	cachePath := writeTempFile(t, "models.json", catalogJSON)
-	settingsPath := writeTempFile(t, "opencode.json", `{
-		"provider": {
-			"built-in": {
-				"name": "Built-In Provider",
-				"models": {
-					"builtin-model": {"name": "Custom Override Name", "tool_call": true}
-				}
-			}
-		}
-	}`)
-
-	state := NewModelPickerState(cachePath, settingsPath)
-
-	p, ok := state.Providers["built-in"]
-	if !ok {
-		t.Fatal("expected built-in provider in state")
-	}
-	m, ok := p.Models["builtin-model"]
-	if !ok {
-		t.Fatal("expected builtin-model in built-in provider")
-	}
-	if m.Name != "Custom Override Name" {
-		t.Errorf("model name = %q, want %q (custom should win on collision)", m.Name, "Custom Override Name")
-	}
-}
-
-func lmStudioState(t *testing.T, catalog, settings string) ModelPickerState {
-	t.Helper()
-	return NewModelPickerState(writeTempFile(t, "models.json", catalog), writeTempFile(t, "opencode.json", settings))
-}
-
-func TestLMStudioDiscovery(t *testing.T) {
-	for name, tt := range map[string]struct{ settings, url string }{
-		"default URL":    {`{}`, "http://127.0.0.1:1234/v1"},
-		"configured URL": {`{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			calls, gotURL, original := 0, "", fetchDynamicModels
-			fetchDynamicModels = func(ctx context.Context, url string) ([]opencode.ConfigModel, error) {
-				calls++
-				gotURL = url
-				return nil, nil
-			}
-			t.Cleanup(func() { fetchDynamicModels = original })
-			state := lmStudioState(t, catalogJSON, tt.settings)
-			if calls != 0 {
-				t.Fatalf("NewModelPickerState made %d discovery calls", calls)
-			}
-			msg := state.DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
-			if calls != 1 || gotURL != tt.url || msg.BaseURL != tt.url {
-				t.Fatalf("discovery = calls:%d URL:%q message:%q", calls, gotURL, msg.BaseURL)
-			}
-		})
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`)) }))
-	defer server.Close()
-	fetched := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"`+server.URL+`"}}}`).DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
-	if len(fetched.Models) != 1 || fetched.Models[0].Name != "model" || fetched.Models[0].ToolCall {
-		t.Fatalf("unexpected fetched models: %+v", fetched.Models)
-	}
-	state := lmStudioState(t, `{"lmstudio":{"models":{"unloaded":{"id":"unloaded","tool_call":true},"static":{"id":"static","name":"Static","tool_call":true},"configured":{"id":"configured"}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"name":"User","tool_call":true}}}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Models: []opencode.ConfigModel{{Name: "configured"}, {Name: "static"}, {Name: "unknown"}}})
-	lm := state.Providers["lmstudio"]
-	if _, ok := lm.Models["unloaded"]; ok || lm.Models["configured"].Name != "User" || !lm.Models["configured"].ToolCall || lm.Models["static"].Name != "Static" || lm.Models["unknown"].ToolCall || len(state.SDDModels["lmstudio"]) != 2 {
-		t.Fatalf("unexpected models: %+v", lm.Models)
-	}
-	state = lmStudioState(t, `{}`, `{}`).Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "unknown"}}})
-	if len(state.AvailableIDs) != 0 || !strings.Contains(state.ConfigWarning, `"tool_call": true`) {
-		t.Fatalf("unsafe unknown model state: %+v", state)
-	}
-	state = lmStudioState(t, `{"lmstudio":{"models":{"catalog":{"id":"catalog","tool_call":true}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"tool_call":true}}}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Err: errors.New("connection refused")})
-	if _, ok := state.Providers["lmstudio"].Models["catalog"]; !ok || !state.Providers["lmstudio"].Models["configured"].ToolCall || !strings.Contains(state.ConfigWarning, "discovery failed") {
-		t.Fatalf("fallback lost: %+v", state)
-	}
-	state = lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "stale"}}})
-	if _, ok := state.Providers["lmstudio"].Models["stale"]; ok || state.ConfigWarning != "" {
-		t.Fatalf("stale response changed state: %+v", state)
-	}
-}
-
-// providerKeys returns the keys of a Provider map for test error messages.
-func providerKeys(providers map[string]opencode.Provider) []string {
-	keys := make([]string, 0, len(providers))
-	for k := range providers {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // ─── Separator row (non-selectable) ────────────────────────────────────────
 
 func TestSeparatorRowIdx_Value(t *testing.T) {
@@ -1604,10 +1195,9 @@ func TestModelPickerRowsForState_ProfileExcludesCustomAgents(t *testing.T) {
 	}
 }
 
-func TestNewModelPickerState_DiscoversCustomAgents(t *testing.T) {
+func TestRuntimeModelPickerStateDiscoversCustomAgents(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "opencode.json")
-	cachePath := filepath.Join(dir, "models.json")
 
 	settings := `{
   "agent": {
@@ -1618,13 +1208,41 @@ func TestNewModelPickerState_DiscoversCustomAgents(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
-	if err := os.WriteFile(cachePath, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write cache: %v", err)
-	}
-
-	state := NewModelPickerState(cachePath, settingsPath)
+	state := NewRuntimeModelPickerStateWithDiscoverer(settingsPath, nil)
 	if len(state.CustomAgents) != 1 || state.CustomAgents[0] != "custom-coder-v1" {
-		t.Fatalf("NewModelPickerState CustomAgents = %v, want [custom-coder-v1]", state.CustomAgents)
+		t.Fatalf("NewRuntimeModelPickerStateWithDiscoverer CustomAgents = %v, want [custom-coder-v1]", state.CustomAgents)
+	}
+}
+
+func TestRuntimeCatalogDiscoveryUpdatesPickerWithoutPrivateFixtures(t *testing.T) {
+	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing-opencode.json"), nil)
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "Discovering models from OpenCode") {
+		t.Fatal("picker did not show loading state")
+	}
+	var cwd string
+	state.catalogDiscover = func(_ context.Context, dir string) (map[string]opencode.Provider, error) {
+		cwd = dir
+		return map[string]opencode.Provider{
+			"custom": {ID: "custom", Name: "Custom", Models: map[string]opencode.Model{
+				"qwen/qwen3": {ID: "qwen/qwen3", Name: "Qwen 3", ToolCall: true, Reasoning: true, Variants: []string{"high"}},
+			}},
+			"no-tools": {ID: "no-tools", Models: map[string]opencode.Model{"plain": {ID: "plain"}}},
+		}, nil
+	}
+	state = state.Update(state.StartRuntimeCatalogDiscovery(1, "active-project")().(RuntimeCatalogDiscoveryMsg))
+	if cwd != "active-project" || len(state.AvailableIDs) != 1 || state.AvailableIDs[0] != "custom" || state.SDDModels["custom"][0].ID != "qwen/qwen3" {
+		t.Fatalf("runtime picker cwd=%q models=%+v / %+v", cwd, state.AvailableIDs, state.SDDModels)
+	}
+	if strings.Contains(RenderModelPicker(nil, state, 0), "private cache") {
+		t.Fatal("runtime picker referenced private catalog data")
+	}
+	state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "active-project", Providers: map[string]opencode.Provider{}})
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "reported no tool-capable models") {
+		t.Fatal("picker did not distinguish an empty catalog")
+	}
+	state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "active-project", Err: errors.New("unavailable")})
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "Could not discover models from OpenCode") {
+		t.Fatal("picker did not show discovery fallback")
 	}
 }
 

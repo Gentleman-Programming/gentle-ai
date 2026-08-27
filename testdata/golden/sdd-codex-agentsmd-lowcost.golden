@@ -106,6 +106,8 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 
 # Native Compact Review Orchestration
 
+**When a final capture returns `status_continuation`, execute its operation and ordered argument tokens unchanged. Do not reconstruct lifecycle selectors from retained prose or transcript state.**
+
 The parent orchestrator coordinates one native transaction; reviewers, refuters, correction actors, and validators receive only their provider-issued role input. Prompt prose never creates authority or decides delivery.
 
 ## Atomic lifecycle
@@ -141,7 +143,7 @@ After an empty, malformed, schema-invalid, access/provider-failed, or incomplete
 
 Only candidate-caused severe findings block. Pre-existing/base-only findings are follow-ups; unknown causality escalates. A deterministic blocker needs no refuter; inferential blockers share one read-only refuter batch. A four-lens review is long work: before its first lens, give one forecast covering four reviewer runs, the frozen correction budget, and the at-most-one bounded correction.
 
-A correction is native-scoped. Before editing, give the provider-requested positive forecast. Native Go maps edits only to corroborated frozen findings, owns repository evidence and the targeted validator, and permits at most one bounded correction. A validator that cannot inspect the immutable trees produced no verdict: surface one blocked human decision and submit nothing. Do not route it to a refuter or another actor without read-only immutable-tree access. Independent requirements/runtime verification never starts another reviewer, refuter, correction, or validator.
+A correction is native-scoped. When the final reviewer or refuter capture opens `correction_required`, its `status_continuation` is the only re-entry: run its `review.status` operation and ordered tokens unchanged before acting again. Native Go maps edits only to corroborated frozen findings, owns repository evidence and the targeted validator, and permits at most one bounded correction. A validator that cannot inspect the immutable trees produced no verdict: surface one blocked human decision and submit nothing. Do not route it to a refuter or another actor without read-only immutable-tree access. Independent requirements/runtime verification never starts another reviewer, refuter, correction, or validator.
 
 ## Consent and immutable inspection
 

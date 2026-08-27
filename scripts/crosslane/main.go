@@ -5,13 +5,13 @@
 //
 //   - opencode lane: the REAL OpenCode transport plugin bytes
 //     (internal/assets/opencode/plugins/opencode-review-transport.ts) driven
-//     through an emulated Task hook surface with HOST-assembled binding
-//     frames, against a live scratch-repo lineage. Covers the lens frame and
-//     the validator role frame, in both host-shaped and Go-shaped variants.
+//     through a fresh Node Task-hook process with HOST-assembled binding frames,
+//     against an immutable base tree and committed candidate. Covers the lens
+//     frame, correction closure re-entry, and validator role frame.
 //   - claude lane: one low-risk lifecycle ending in authority burn and five
-//     ordinary-policy gates, plus one medium-candidate consent/v3 round-trip.
-//     With --with-model it additionally runs the real compiled claude-code
-//     reviewer runtime, which is why this battery lives outside CI.
+//     ordinary-policy gates, plus a committed medium candidate exercised by a
+//     local provider-shaped fixture through the real Claude process transport.
+//     This is deterministic process proof, not live model proof.
 //   - advisory lane: the middle path neither of the two lanes above reaches —
 //     a review that arrives at an approved receipt WHILE carrying findings
 //     that do not block. Fully deterministic (the reviewer result is supplied
@@ -41,7 +41,7 @@ func main() {
 // --keep-work banner) always executes before the process exits nonzero.
 func run() int {
 	binary := flag.String("binary", "", "path to the gentle-ai binary under test (required)")
-	withModel := flag.Bool("with-model", false, "include the real reviewer model run (uses the dev subscription)")
+	withModel := flag.Bool("with-model", false, "reserved; live Claude model proof remains intentionally disabled")
 	withHost := flag.Bool("with-host", false, "spawn REAL host applications (codex exec, pi print mode, an opencode session) end to end (uses the dev subscription)")
 	keepWork := flag.Bool("keep-work", false, "keep the scratch working directory for inspection")
 	flag.Parse()

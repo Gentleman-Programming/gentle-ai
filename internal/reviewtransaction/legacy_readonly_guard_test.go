@@ -31,17 +31,15 @@ import (
 
 // legacyRetainedReadSymbols is D5's closed retained-read list: file path
 // (relative to this package directory) -> identifier names that file must
-// still declare. sddstatus/legacy_binding_read.go, sddstatus/review_binding.go
-// and candidate_decline.go live outside this package's own directory, so
-// their paths are relative to this package's own directory.
+// still declare. candidate_decline.go lives outside this package's own
+// directory, so its path is relative to this package's own directory.
 // AuthoritativeStore/LoadChain/NewLegacyReadOnlyError are declared inside
 // THIS package (store.go, compact_store.go) — review_facade.go:1632-1635
 // (design.md) is only their call site, not their declaration.
 var legacyRetainedReadSymbols = map[string][]string{
-	"../sddstatus/review_binding.go": {"parseBinding", "bindingBytes", "bindingDigest", "bindingPath"},
-	"candidate_decline.go":           {"parseCandidateDeclineAuthorization"},
-	"store.go":                       {"AuthoritativeStore", "LoadChain"},
-	"compact_store.go":               {"NewLegacyReadOnlyError"},
+	"candidate_decline.go": {"parseCandidateDeclineAuthorization"},
+	"store.go":             {"AuthoritativeStore", "LoadChain"},
+	"compact_store.go":     {"NewLegacyReadOnlyError"},
 }
 
 // legacyRetiredMutationVerbs is the exact case-clause literal set this wave

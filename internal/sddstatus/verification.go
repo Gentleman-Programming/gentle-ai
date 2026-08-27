@@ -109,6 +109,11 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 		evaluation.Reason = "independent test and build execution evidence is incomplete; rerun SDD verification"
 		return evaluation
 	}
+	if report.Verdict == "fail" && (report.Requirements.Completed != report.Requirements.Total || report.Scenarios.Completed != report.Scenarios.Total) {
+		evaluation.Incomplete = true
+		evaluation.Reason = "failed verification evidence is incomplete; rerun SDD verification"
+		return evaluation
+	}
 	if report.TestExit != 0 {
 		evaluation.Reason = "test_exit_code must be zero for archive readiness"
 		return evaluation
@@ -335,25 +340,13 @@ type remediationResultEvaluation struct {
 type remediationEvidence struct {
 	Schema                 string                       `json:"schema"`
 	FailedEvidenceRevision string                       `json:"failed_evidence_revision"`
-	LineageID              string                       `json:"lineage_id,omitempty"`
-	Generation             int                          `json:"generation,omitempty"`
-	FixBatch               int                          `json:"fix_batch,omitempty"`
 	Commands               []remediationCommandEvidence `json:"commands"`
 	RuntimeHarness         remediationRuntimeEvidence   `json:"runtime_harness"`
 	Rollback               remediationRollbackEvidence  `json:"rollback"`
 }
 
-type RemediationBinding struct {
-	LineageID  string
-	Generation int
-	FixBatch   int
-}
-
 type remediationIdentity struct {
-	Revision   string
-	LineageID  string
-	Generation int
-	FixBatch   int
+	Revision string
 }
 
 type remediationFenceBlock struct {
@@ -380,7 +373,7 @@ type remediationRollbackEvidence struct {
 	Evidence string `json:"evidence"`
 }
 
-func parseRemediationResult(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {
+func parseRemediationResult(text, expectedRevision string) remediationResultEvaluation {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	blocks, invalid := scanRemediationFences(lines)
@@ -398,7 +391,7 @@ func parseRemediationResult(text, expectedRevision string, bindings ...Remediati
 			continue
 		}
 		if block.token == "json" {
-			if identity, ok := remediationJSONIdentity(lines[block.start+1 : block.end]); ok && remediationIdentityMatches(identity, expectedRevision, bindings) {
+			if identity, ok := remediationJSONIdentity(lines[block.start+1 : block.end]); ok && remediationIdentityMatches(identity, expectedRevision) {
 				claims++
 			}
 			continue
@@ -407,10 +400,10 @@ func parseRemediationResult(text, expectedRevision string, bindings ...Remediati
 			continue
 		}
 
-		if identity, ok := remediationYAMLIdentity(lines[block.start+1 : block.end]); ok && remediationIdentityMatches(identity, expectedRevision, bindings) {
+		if identity, ok := remediationYAMLIdentity(lines[block.start+1 : block.end]); ok && remediationIdentityMatches(identity, expectedRevision) {
 			claims++
 		}
-		envelope := parseRemediationResultEnvelope(strings.Join(lines[block.start:block.end+1], "\n"), expectedRevision, bindings...)
+		envelope := parseRemediationResultEnvelope(strings.Join(lines[block.start:block.end+1], "\n"), expectedRevision)
 		if fallback.EvidenceRevision == "" && envelope.EvidenceRevision != "" {
 			fallback = envelope
 		}
@@ -429,11 +422,11 @@ func parseRemediationResult(text, expectedRevision string, bindings ...Remediati
 		}
 
 		pair := strings.Join(lines[block.start:evidenceBlock.end+1], "\n")
-		evaluation := parseRemediationResultEnvelope(pair, expectedRevision, bindings...)
+		evaluation := parseRemediationResultEnvelope(pair, expectedRevision)
 		if fallback.EvidenceRevision == "" && evaluation.EvidenceRevision != "" {
 			fallback = evaluation
 		}
-		if evaluation.Complete && len(bindings) <= 1 {
+		if evaluation.Complete {
 			candidate = evaluation
 			candidateEnd = evidenceBlock.end
 		}
@@ -531,11 +524,8 @@ func remediationJSONIdentity(lines []string) (remediationIdentity, bool) {
 	}
 
 	identity := remediationIdentity{
-		Revision:  firstStringFieldAny(fields, "failed_evidence_revision", "failed_verify_revision", "failedEvidenceRevision", "failedVerifyRevision"),
-		LineageID: firstStringFieldAny(fields, "lineage_id", "lineageId", "lineageID"),
+		Revision: firstStringFieldAny(fields, "failed_evidence_revision", "failed_verify_revision", "failedEvidenceRevision", "failedVerifyRevision"),
 	}
-	identity.Generation, _ = firstIntField(fields, "generation")
-	identity.FixBatch, _ = firstIntField(fields, "fix_batch", "fixBatch")
 	return identity, identity.Revision != ""
 }
 
@@ -544,11 +534,8 @@ func remediationIdentityFromFields(fields map[string]string) (remediationIdentit
 		return remediationIdentity{}, false
 	}
 	identity := remediationIdentity{
-		Revision:  firstStringField(fields, "failed_evidence_revision", "failed_verify_revision", "failedEvidenceRevision", "failedVerifyRevision"),
-		LineageID: firstStringField(fields, "lineage_id", "lineageId", "lineageID"),
+		Revision: firstStringField(fields, "failed_evidence_revision", "failed_verify_revision", "failedEvidenceRevision", "failedVerifyRevision"),
 	}
-	identity.Generation, _ = parseFirstIntField(fields, "generation")
-	identity.FixBatch, _ = parseFirstIntField(fields, "fix_batch", "fixBatch")
 	return identity, identity.Revision != ""
 }
 
@@ -570,40 +557,8 @@ func firstStringFieldAny(fields map[string]any, keys ...string) string {
 	return ""
 }
 
-func firstIntField(fields map[string]any, keys ...string) (int, bool) {
-	for _, key := range keys {
-		switch value := fields[key].(type) {
-		case float64:
-			if value >= 0 && value == float64(int(value)) {
-				return int(value), true
-			}
-		case string:
-			if parsed, ok := parseNonnegativeInt(value); ok {
-				return parsed, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func parseFirstIntField(fields map[string]string, keys ...string) (int, bool) {
-	for _, key := range keys {
-		if parsed, ok := parseNonnegativeInt(fields[key]); ok {
-			return parsed, true
-		}
-	}
-	return 0, false
-}
-
-func remediationIdentityMatches(identity remediationIdentity, expectedRevision string, bindings []RemediationBinding) bool {
-	if identity.Revision != expectedRevision || len(bindings) > 1 {
-		return false
-	}
-	if len(bindings) == 0 {
-		return true
-	}
-	binding := bindings[0]
-	return identity.LineageID == binding.LineageID && identity.Generation == binding.Generation && identity.FixBatch == binding.FixBatch
+func remediationIdentityMatches(identity remediationIdentity, expectedRevision string) bool {
+	return identity.Revision == expectedRevision
 }
 
 func remediationTrailingContentValid(lines []string, start int, blocksByStart map[int]remediationFenceBlock) bool {
@@ -657,7 +612,7 @@ func remediationFenceContents(lines []string) []string {
 	return contents
 }
 
-func parseRemediationResultEnvelope(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {
+func parseRemediationResultEnvelope(text, expectedRevision string) remediationResultEvaluation {
 	lines, end, reason := parseLeadingEnvelope(text)
 	if reason != "" {
 		return remediationResultEvaluation{}
@@ -665,7 +620,6 @@ func parseRemediationResultEnvelope(text, expectedRevision string, bindings ...R
 	allowed := map[string]bool{
 		"schema": true, "status": true, "failed_evidence_revision": true,
 		"focused_tests": true, "runtime_harness": true, "rollback_boundary": true,
-		"lineage_id": true, "generation": true, "fix_batch": true,
 	}
 	fields, reason := parseScalarFields(lines[1:end], allowed, "remediation result")
 	if reason != "" {
@@ -676,17 +630,6 @@ func parseRemediationResultEnvelope(text, expectedRevision string, bindings ...R
 	if fields["schema"] != RemediationResultSchema || fields["status"] != "complete" || revision != expectedRevision {
 		return evaluation
 	}
-	if len(bindings) > 1 {
-		return evaluation
-	}
-	if len(bindings) == 1 {
-		binding := bindings[0]
-		generation, generationOK := parseNonnegativeInt(fields["generation"])
-		fixBatch, fixBatchOK := parseNonnegativeInt(fields["fix_batch"])
-		if fields["lineage_id"] != binding.LineageID || !generationOK || generation != binding.Generation || !fixBatchOK || fixBatch != binding.FixBatch {
-			return evaluation
-		}
-	}
 	if fields["focused_tests"] != "passed" || fields["rollback_boundary"] != "recorded" {
 		return evaluation
 	}
@@ -696,12 +639,6 @@ func parseRemediationResultEnvelope(text, expectedRevision string, bindings ...R
 	evidence, ok := parseRemediationEvidence(lines[end+1:])
 	if !ok || evidence.FailedEvidenceRevision != expectedRevision || len(evidence.Commands) == 0 {
 		return evaluation
-	}
-	if len(bindings) == 1 {
-		binding := bindings[0]
-		if evidence.LineageID != binding.LineageID || evidence.Generation != binding.Generation || evidence.FixBatch != binding.FixBatch {
-			return evaluation
-		}
 	}
 	for _, command := range evidence.Commands {
 		if command.ExitCode != 0 || !isConcreteEvidence(command.Command) || !isConcreteEvidence(command.Result) {

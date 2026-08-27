@@ -1,5 +1,3 @@
-//go:build legacy_compact_receipt
-
 package sddstatus
 
 import (
@@ -179,6 +177,30 @@ func TestCompactAcquireForeignTokenStaysBlockedWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestCompactAcquireReplayRejectsForeignToken(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "foreign-replay-token")
+	request := BeginAttemptRequest{
+		RequestID: "foreign-replay-begin", WorkUnit: "foreign replay unit",
+		EvidenceGoal: "refuse a foreign token for a replayed request", MaxAttempts: 2, MaxChangedLines: 20,
+	}
+	started, err := store.Begin(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: request, Token: runtimeTestHash('f'),
+	})
+	if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation {
+		t.Fatalf("foreign replay token = %#v, err=%v", result, err)
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil || status.Revision != started.Revision || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("foreign replay token mutated authority: status=%#v err=%v records=%d", status, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+}
+
 func TestCompactSettlePreservesFailedEvidenceAndReplay(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store := mustRuntimeStore(t, repo, "compact-remediation-settle")
@@ -310,63 +332,6 @@ func TestCompactSettleReplaysCanonicalLegacyInterruptedRequest(t *testing.T) {
 	}
 	if result.State != CompactStateProceed || status.Revision != revision || countRuntimeRecords(t, store.Dir) != beforeRecords {
 		t.Fatalf("legacy interrupted compact replay result=%#v status=%#v records=%d", result, status, countRuntimeRecords(t, store.Dir))
-	}
-}
-
-func TestCompactSettleReviewDisabledClosesOrdinaryWithoutAdvancingBinding(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	legacy := fixture.finishRequest("compact-review-disabled-settle")
-	store := fixture.store
-	store.ReviewDisabled = true
-	before := countRuntimeRecords(t, store.Dir)
-
-	result, err := store.Settle(context.Background(), CompactSettleRequest{
-		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,
-		EvidenceRevision: legacy.EvidenceRevision, Diagnosis: legacy.Diagnosis,
-		HarnessDisposition: legacy.HarnessDisposition, CleanupEvidence: legacy.CleanupEvidence,
-		ProcessEvidence: legacy.ProcessEvidence, RemediatesEvidenceRevision: legacy.RemediatesEvidenceRevision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, statusErr := store.Status()
-	if statusErr != nil {
-		t.Fatal(statusErr)
-	}
-	if result.State != CompactStateComplete || status.ActiveAttempt != nil || status.Binding == nil ||
-		status.Binding.Revision != fixture.predecessorBinding.Revision || countRuntimeRecords(t, store.Dir) != before+1 {
-		t.Fatalf("review-disabled compact settle result=%#v status=%#v records=%d", result, status, countRuntimeRecords(t, store.Dir))
-	}
-	record, loadErr := store.loadRecord(status.Revision)
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if record.Operation != runtimeOperationFinish || record.Binding != nil {
-		t.Fatalf("review-disabled compact settle record = %#v", record)
-	}
-}
-
-func TestCompactSettleTokenIgnoresBindingCAS(t *testing.T) {
-	fixture := newRuntimeSelfRemediationFixture(t)
-	if fixture.active.Revision == fixture.postBind.Revision {
-		t.Fatal("fixture did not advance runtime HEAD after acquire")
-	}
-	legacy := fixture.finishRequest("compact-self-remediation")
-	result, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
-		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,
-		EvidenceRevision: legacy.EvidenceRevision, Diagnosis: legacy.Diagnosis,
-		HarnessDisposition: legacy.HarnessDisposition, CleanupEvidence: legacy.CleanupEvidence,
-		ProcessEvidence: legacy.ProcessEvidence, RemediatesEvidenceRevision: legacy.RemediatesEvidenceRevision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, statusErr := fixture.store.Status()
-	if statusErr != nil {
-		t.Fatal(statusErr)
-	}
-	if result.State != CompactStateComplete || !status.Complete || status.Binding == nil || status.Binding.Lineage != fixture.lineage {
-		t.Fatalf("compact self-remediation result=%#v status=%#v", result, status)
 	}
 }
 

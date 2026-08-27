@@ -25,12 +25,14 @@ done
 [ "$scratch" = "$PWD" ] && [ -z "$(ls -A "$PWD")" ] && [ "$output" = "$PWD/result" ]
 hash=$(sed -n 's/.*"subject_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$log/stdin" | head -n 1)
 [ -n "$hash" ]
-printf '{"subject_hash":"%s","inspection":{"status":"completed","paths":["src/add.js"]},"evidence":["deterministic Codex model completed immutable inspection"],"findings":[]}' "$hash" | tee "$output" > "$log/raw"
+printf '{"subject_hash":"%s","inspection":{"status":"completed","paths":["src/add.js"]},"evidence":["double is introduced by the committed candidate and violates the required behavior"],"findings":[{"claim":"double returns an incorrect committed candidate result","severity":"CRITICAL","evidence_class":"deterministic","causal_disposition":"introduced","lens":"review-reliability","location":"src/add.js:5","proof_refs":["src/add.js:4-6 is an introduced committed candidate hunk"]}]}' "$hash" | tee "$output" > "$log/raw"
 `
 
 func (b *battery) runCodexLane() {
-	repo, ok := b.hostMediumCandidate(codexLane, "codex-lane")
-	if !ok {
+	base := "export function add(a, b) {\n  return a + b;\n}\n"
+	candidate := base + "export function double(a) {\n  return add(a, a);\n}\n"
+	repo, baseTree, ok := b.committedMediumCandidate(codexLane, "codex-committed", "src/add.js", base, candidate)
+	if !ok || !b.startCommittedMedium(codexLane, repo, "codex", baseTree) {
 		return
 	}
 	log := filepath.Join(b.workRoot, "codex-model")
@@ -43,9 +45,6 @@ func (b *battery) runCodexLane() {
 		return
 	}
 	env := []string{"CROSSLANE_CODEX_LOG=" + log, "PATH=" + filepath.Join(log, "bin") + string(os.PathListSeparator) + os.Getenv("PATH")}
-	if !b.hostNegotiatedMediumStart(codexLane, repo, "codex", env) {
-		return
-	}
 	status, stderr, _ := b.statusEnv(repo, "codex", env)
 	input := collectInput(status)
 	if input == nil || input["capture_operation"] != "review.capture-result" {
@@ -66,11 +65,21 @@ func (b *battery) runCodexLane() {
 	if !b.checkCodexBoundary(log, subject) {
 		return
 	}
-	if operationState(capture) != "approved" {
-		b.fail(codexLane, "final capture and burned lifecycle", fmt.Sprintf("terminal state = %q, want approved", operationState(capture)))
+	if operationState(capture) != "correction_required" {
+		b.fail(codexLane, "committed Codex correction capture", fmt.Sprintf("terminal state = %q, want correction_required", operationState(capture)))
 		return
 	}
-	b.burnApproved(codexLane, "final capture and burned lifecycle", repo, "codex", env, capture)
+	continuation := getMap(capture, "status_continuation")
+	if getString(continuation, "operation") != "review.status" ||
+		!transitionCarriesToken(continuation, "--lineage="+operationLineage(capture)) ||
+		!transitionCarriesToken(continuation, "--base-ref="+baseTree) ||
+		!transitionCarriesToken(continuation, "--committed-only=true") ||
+		!transitionCarriesToken(continuation, "--agent=codex") {
+		b.fail(codexLane, "committed Codex correction continuation", "closure did not preserve lineage, frozen base, committed-only mode, and Codex binding")
+		return
+	}
+	b.pass(codexLane, "committed Codex correction continuation", "closure preserved lineage, frozen base, committed-only mode, and Codex binding in ordered tokens")
+	b.hostCorrectionReentry(codexLane, "committed Codex correction re-entry", repo, env, capture)
 }
 
 func (b *battery) checkCodexBoundary(log, subject string) bool {

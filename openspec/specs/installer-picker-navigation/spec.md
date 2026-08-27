@@ -16,11 +16,11 @@ The installer's conditional picker chain MUST be navigated forward from a single
 Claude → Kiro → Codex → SDDMode → ModelPicker → StrictTDD → OpenCodePlugins → DependencyTree
 ```
 
-`ScreenModelPicker` MUST be included only when `SDDMode == Multi` AND the model cache file is present (the package-level injectable `osStatModelCache` returns no error). No screen may appear out of this order, and none may be skipped unless its predicate is false. When `Preset == PresetCustom`, `ScreenDependencyTree` precedes the picker sequence (component selector first) instead of being the terminal anchor.
+`ScreenModelPicker` MUST be included when `SDDMode == Multi`. It asynchronously discovers the active project's effective OpenCode catalog after opening, so no private model-cache file gates navigation. No screen may appear out of this order, and none may be skipped unless its predicate is false. When `Preset == PresetCustom`, `ScreenDependencyTree` precedes the picker sequence (component selector first) instead of being the terminal anchor.
 
 #### Scenario: All agents selected, full forward pass
 
-- GIVEN all `shouldShow*` predicates return true and `SDDMode == Multi` with model cache present
+- GIVEN all `shouldShow*` predicates return true and `SDDMode == Multi`
 - WHEN the user confirms each picker screen in sequence
 - THEN the screens visited in order are Claude → Kiro → Codex → SDDMode → ModelPicker → StrictTDD → OpenCodePlugins → DependencyTree
 
@@ -30,11 +30,15 @@ Claude → Kiro → Codex → SDDMode → ModelPicker → StrictTDD → OpenCode
 - WHEN the user confirms Claude and continues
 - THEN the next screen is Codex (Kiro is skipped)
 
-#### Scenario: ModelPicker excluded when not multi or cache absent
+#### Scenario: ModelPicker is independent of private cache state
 
-- GIVEN `SDDMode != Multi`, OR `SDDMode == Multi` but `osStatModelCache` returns an error
+- GIVEN `SDDMode != Multi`
 - WHEN the user confirms SDDMode
 - THEN the next screen is StrictTDD and ModelPicker is not visited
+
+- GIVEN `SDDMode == Multi` and no private OpenCode cache file exists
+- WHEN the user confirms SDDMode
+- THEN ModelPicker opens and begins runtime catalog discovery
 
 #### Scenario: PresetCustom ordering inversion
 
@@ -42,11 +46,6 @@ Claude → Kiro → Codex → SDDMode → ModelPicker → StrictTDD → OpenCode
 - WHEN navigation enters the picker chain
 - THEN DependencyTree appears first (before Claude/Kiro/Codex), not last
 
-#### Scenario: ModelPicker condition uses the injectable stat boundary
-
-- GIVEN tests override the package-level `osStatModelCache` variable
-- WHEN `pickerFlowSlice` decides whether to include `ScreenModelPicker`
-- THEN it calls `osStatModelCache` (not a hardcoded `os.Stat`), so the injectable boundary remains testable
 
 ### Requirement: Symmetric reverse navigation
 

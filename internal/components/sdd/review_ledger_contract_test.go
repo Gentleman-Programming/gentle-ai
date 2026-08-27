@@ -682,8 +682,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3417 replaces the terminal commit question with non-deciding delivery
 		// guidance and adds the one-status ambiguous-FINALIZE reconciliation rule.
 		// The rendered byte pins are regenerated from those shared source bytes.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_657, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_002, maxCharacters: 30_063},
+		// #3748 adds the public status_continuation execution rule (+339 rendered
+		// characters in each row), so the pins move from 14,657/27,002 to
+		// 14,996/27,341 after deterministic fixture measurement.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_996, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_341, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

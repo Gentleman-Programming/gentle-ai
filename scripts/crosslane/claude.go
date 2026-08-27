@@ -1,6 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
 
 const claudeLane = "claude"
 
@@ -55,97 +59,78 @@ func (b *battery) runClaudeLowLifecycle() {
 }
 
 func (b *battery) runClaudeMediumConsent() {
-	repo, err := b.scratchRepo("claude-medium")
-	if err != nil {
-		b.fail(claudeLane, "medium consent scratch repository", err.Error())
-		return
-	}
 	base := "export function mul(a, b) {\n  return a * b;\n}\n"
-	err = writeFile(repo, "src/mul.js", base)
-	if err == nil {
-		err = commitAll(repo, "feat: mul")
-	}
-	if err != nil {
-		b.fail(claudeLane, "medium consent scratch repository", err.Error())
+	candidate := base + "export function twice(a) {\n  return a + a;\n}\n"
+	repo, baseTree, ok := b.committedMediumCandidate(claudeLane, "claude-committed", "src/claude.js", base, candidate)
+	if !ok || !b.startCommittedMedium(claudeLane, repo, "claude-code", baseTree) {
 		return
 	}
-	if err := writeFile(repo, "src/mul.js", base+"export function twice(a) {\n  return a + a;\n}\n"); err != nil {
-		b.fail(claudeLane, "medium consent scratch repository", err.Error())
-		return
+	b.runClaudeCommittedProcess(repo)
+	if b.withModel {
+		b.skip(claudeLane, "live reviewer model run", "--with-model remains intentionally disabled; the default lane is deterministic process proof, not live model proof")
 	}
-
-	statusDoc, stderr, code := b.status(repo, "claude-code")
-	target := getString(statusDoc, "target_identity")
-	if target == "" {
-		b.fail(claudeLane, "medium consent: negotiated status", fmt.Sprintf("exit=%d %s", code, firstLine(stderr)))
-		return
-	}
-	consent, stderr, _ := b.runJSON("consent", repo,
-		"review", "start", "--contract", reviewContract, "--cwd", repo,
-		"--target", target, "--projection", "workspace", "--agent", "claude-code", "--consent", "relay")
-	if getString(consent, "schema") != "gentle-ai.review-integration.consent/v3" || getString(consent, "action") != "consent_required" {
-		b.fail(claudeLane, "medium consent: envelope surfaced", fmt.Sprintf("schema=%q action=%q %s", getString(consent, "schema"), getString(consent, "action"), firstLine(stderr)))
-		return
-	}
-	granted := grantedInvocation(consent)
-	if granted == "" {
-		b.fail(claudeLane, "medium consent: envelope surfaced", "no granted choice invocation in envelope")
-		return
-	}
-	startDoc, stderr, code := b.runCommandLine("start", repo, granted)
-	lenses := getSlice(startDoc, "selected_lenses")
-	if code != 0 || getString(startDoc, "state") != "reviewing" || getString(startDoc, "risk_level") != "medium" || len(lenses) != 1 {
-		b.fail(claudeLane, "medium consent: granted round-trip", fmt.Sprintf("exit=%d state=%q risk=%q lenses=%d %s",
-			code, getString(startDoc, "state"), getString(startDoc, "risk_level"), len(lenses), firstLine(stderr)))
-		return
-	}
-	if err := b.rememberStarted(repo, target, startDoc); err != nil {
-		b.fail(claudeLane, "medium consent: granted round-trip", err.Error())
-		return
-	}
-	b.pass(claudeLane, "medium consent: granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage with one lens")
-
-	if !b.withModel {
-		b.skip(claudeLane, "medium reviewer model run", "pass --with-model to run the real claude-code reviewer (dev subscription)")
-		return
-	}
-	b.runClaudeModelReview(repo)
 }
 
-// runClaudeModelReview lets the compiled claude-code reviewer runtime execute
-// the provider-owned request for the pending lens slot; its final capture
-// closes the lifecycle without a receipt or delivery gate.
-func (b *battery) runClaudeModelReview(repo string) {
+// runClaudeCommittedProcess executes a local provider-shaped fixture through the
+// real Claude adapter process boundary. It intentionally proves transport and
+// closure behavior without a subscription, credential, or live model request.
+func (b *battery) runClaudeCommittedProcess(repo string) {
+	env, promptPath, err := b.prepareClaudeProcessFixture()
+	if err != nil {
+		b.fail(claudeLane, "committed Claude process fixture", err.Error())
+		return
+	}
 	statusDoc, stderr, _ := b.status(repo, "claude-code")
 	input := collectInput(statusDoc)
 	if input == nil || input["capture_operation"] != "review.capture-result" {
-		b.fail(claudeLane, "medium reviewer model run", fmt.Sprintf("no capture-result collect input; %s", firstLine(stderr)))
+		b.fail(claudeLane, "committed Claude process collect", fmt.Sprintf("no capture-result collect input; %s", firstLine(stderr)))
 		return
 	}
-	args := argumentValues(input)
-	capture, stderr, code := b.runJSON("result-artifact", repo,
-		"review", "capture-result",
-		"--lineage", args["lineage"],
-		"--expected-revision", args["expected-revision"],
-		"--target", args["target"],
-		"--repository-context", args["repository-context"],
-		"--lens", args["lens"],
-		"--order", args["order"],
-		"--subject-hash", args["subject-hash"],
-		"--agent", "claude-code")
-	if code != 0 || !admittedCapture(capture) {
-		b.fail(claudeLane, "medium reviewer model run", fmt.Sprintf("exit=%d schema=%q state=%q %s", code, getString(capture, "schema"), operationState(capture), firstLine(stderr)))
+	captureArgs := append([]string{"review", "capture-result"}, argumentTokens(input)...)
+	captureArgs = append(captureArgs, "--agent=claude-code")
+	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env, captureArgs...)
+	if code != 0 || !admittedCapture(capture) || operationState(capture) != "correction_required" {
+		b.fail(claudeLane, "committed Claude process capture", fmt.Sprintf("exit=%d schema=%q state=%q %s", code, getString(capture, "schema"), operationState(capture), firstLine(stderr)))
 		return
 	}
-	b.pass(claudeLane, "medium reviewer model run", "compiled claude-code reviewer runtime captured a native result")
-	switch operationState(capture) {
-	case "approved":
-		b.burnApproved(claudeLane, "medium lifecycle after model run", repo, "claude-code", nil, capture)
-	case "correction_required":
-		// A real model finding against scratch code is a legitimate outcome;
-		// transport and terminal capture are proven without a synthetic repair.
-		b.pass(claudeLane, "medium lifecycle after model run", "model review reported candidate-causal findings (correction_required)")
-	default:
-		b.fail(claudeLane, "medium lifecycle after model run", fmt.Sprintf("capture remained nonterminal at state %q", operationState(capture)))
+	if _, err := os.Stat(promptPath); err != nil {
+		b.fail(claudeLane, "committed Claude process capture", "fixture did not receive the Claude adapter stdin prompt: "+err.Error())
+		return
 	}
+	b.pass(claudeLane, "committed Claude process capture", "local provider-shaped fixture ran through the real Claude process transport and produced correction_required")
+
+	status, continuationStderr, continuationCode := b.statusFromClosure(repo, capture)
+	if continuationCode != 0 || getString(status, "authority", "lineage_id") != operationLineage(capture) ||
+		getString(status, "next_transition", "reason_code") != "correction_plan_required" {
+		b.fail(claudeLane, "committed Claude correction re-entry", fmt.Sprintf("exit=%d lineage=%q reason=%q %s",
+			continuationCode, getString(status, "authority", "lineage_id"), getString(status, "next_transition", "reason_code"), firstLine(continuationStderr)))
+		return
+	}
+	b.pass(claudeLane, "committed Claude correction re-entry", "closure operation plus ordered tokens preserved the lineage and reached correction_plan_required")
+}
+
+func (b *battery) prepareClaudeProcessFixture() ([]string, string, error) {
+	dir := filepath.Join(b.workRoot, "claude-process-fixture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", err
+	}
+	promptPath := filepath.Join(dir, "provider-prompt.json")
+	fixture := `#!/bin/sh
+set -eu
+prompt_path="${GENTLE_AI_CROSSLANE_CLAUDE_PROMPT:?}"
+cat > "$prompt_path"
+subject_hash=$(sed -n 's/.*"subject_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$prompt_path" | head -n 1)
+if [ -z "$subject_hash" ]; then
+  echo "fixture did not receive a provider subject hash" >&2
+  exit 1
+fi
+printf '%s\n' '{"subject_hash":"'"$subject_hash"'","inspection":{"status":"completed","paths":["src/claude.js"]},"evidence":["twice is introduced by the committed candidate and returns the wrong result"],"findings":[{"claim":"twice returns a + a instead of using the required multiplication behavior","severity":"BLOCKER","evidence_class":"deterministic","causal_disposition":"introduced","lens":"review-reliability","location":"src/claude.js:5","proof_refs":["src/claude.js:4-6 is an introduced committed candidate hunk"]}]}'
+`
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(fixture), 0o755); err != nil {
+		return nil, "", err
+	}
+	return []string{
+		"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GENTLE_AI_CROSSLANE_CLAUDE_PROMPT=" + promptPath,
+	}, promptPath, nil
 }

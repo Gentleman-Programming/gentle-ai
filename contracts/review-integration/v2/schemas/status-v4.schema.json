@@ -46,7 +46,7 @@
       "properties": {
         "kind": {"enum": ["execute", "collect", "stop"]},
         "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
-        "execute": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_execution"},
+        "execute": {"$ref": "../../v1/schemas/transition-execution.schema.json"},
         "collect": {"$ref": "#/$defs/transition_collection"},
         "correction_request": {"$ref": "../../v1/schemas/correction-plan-request.schema.json"}
       },
@@ -71,7 +71,7 @@
         "name": {"type": "string", "pattern": "^[a-z0-9_]+$"},
         "schema": {"type": "string", "minLength": 1},
         "capture_operation": {"type": "string", "minLength": 1},
-        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}},
+        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "../../v1/schemas/transition-execution.schema.json#/$defs/transition_argument"}},
         "submission": {"$ref": "#/$defs/submission_descriptor"},
         "artifact_subject": {"$ref": "artifact-subject.schema.json"},
         "base_tree": {"$ref": "#/$defs/git_tree"},

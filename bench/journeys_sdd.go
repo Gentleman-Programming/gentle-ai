@@ -10,17 +10,8 @@ import (
 	"strings"
 )
 
-// This file extends the corpus with the SDD remediation successor cycle and the
-// two surfaces around it that nothing else in this benchmark had ever driven:
-// the kill switch pointed at SDD, and the recovery guard rails as an operator
-// meets them.
-//
-// It is the corpus's largest blind spot closed. A community tester found a hard
-// deadlock on this path that no internal audit had caught; two of its blocks
-// were fixed by hand and neither was pinned by anything that runs in a loop.
-// Until these journeys existed the benchmark reported zero out-of-band blocks
-// and zero dead ends for a surface it simply never looked at, which is the same
-// way four macOS defects shipped.
+// This file extends the corpus with SDD lifecycle coverage, including the kill
+// switch pointed at SDD and the recovery guard rails an operator meets.
 //
 // The five defect shapes named in journeys_edge.go still apply and every journey
 // here names the ones it stresses. Two more properties are specific to this file:
@@ -52,11 +43,6 @@ const (
 	sddCorrectedEvidence = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	sddWrongEvidence     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
-
-// sddSuccessorLineage is the name a recovery successor is minted under. The CLI
-// help is explicit that the successor's name is the operator's to choose, so the
-// benchmark chooses one and keeps it stable.
-const sddSuccessorLineage = "review-sdd-successor"
 
 const (
 	sddStaleAuthorityLineage   = "review-sdd-stale"
@@ -212,71 +198,6 @@ func proveActiveAttempt(sandbox *Sandbox, ordinal int, evidenceRevision string) 
 	return nil
 }
 
-// proveBinding asserts the runtime carries a populated binding for this change.
-func proveBinding(sandbox *Sandbox, lineage string) error {
-	status, err := proveRuntime(sandbox)
-	if err != nil {
-		return err
-	}
-	if status.BindingRevision == "" || status.Binding == nil {
-		return errors.New("fixture claims a populated review binding but the runtime publishes none")
-	}
-	if status.Binding.Lineage != lineage {
-		return fmt.Errorf("fixture claims the binding names %q but the runtime publishes %q", lineage, status.Binding.Lineage)
-	}
-	if status.Binding.Change != sddChange {
-		return fmt.Errorf("binding names change %q, want %q", status.Binding.Change, sddChange)
-	}
-	return nil
-}
-
-// proveLeafTopology asserts the bound lineage IS the compact recovery leaf: it
-// is the only authority and its live post-apply gate allows. That is the exact
-// condition the product's read-only probe checks before it names the
-// self-successor finish, so a journey claiming the leaf branch must hold it.
-func proveLeafTopology(sandbox *Sandbox, lineage string) error {
-	head, err := proveAuthorities(sandbox)
-	if err != nil {
-		return err
-	}
-	if len(head.Entries) != 1 || head.Entries[0].LineageID != lineage || head.Entries[0].State != "approved" {
-		return fmt.Errorf("fixture claims one approved leaf %q but review status lists %d entries: %+v",
-			lineage, len(head.Entries), head.Entries)
-	}
-	if !provePostApplyAllows(sandbox) {
-		return errors.New("fixture claims the bound lineage is the leaf but its post-apply gate does not allow")
-	}
-	return nil
-}
-
-// proveNonLeafTopology asserts the opposite shape: a real recovery successor now
-// exists, so the bound lineage is no longer the leaf and its gate stops allowing.
-func proveNonLeafTopology(sandbox *Sandbox, bound, successor string) error {
-	head, err := proveAuthorities(sandbox)
-	if err != nil {
-		return err
-	}
-	if _, ok := head.entry(bound); !ok {
-		return fmt.Errorf("fixture claims the bound lineage %q survives recovery but review status does not list it", bound)
-	}
-	found := false
-	for _, entry := range head.Entries {
-		if entry.LineageID == successor {
-			found = true
-			if entry.State != "reviewing" {
-				return fmt.Errorf("fixture claims a pristine successor but %q is %q", successor, entry.State)
-			}
-		}
-	}
-	if !found {
-		return fmt.Errorf("fixture claims a minted successor %q but review status does not list it", successor)
-	}
-	if provePostApplyAllows(sandbox) {
-		return errors.New("fixture claims a non-leaf bound lineage but its post-apply gate still allows")
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -290,10 +211,9 @@ func sddChangeRoot(sandbox *Sandbox) string {
 // carrying a committed OpenSpec change, plus one staged prose file as the
 // candidate under work.
 //
-// The OpenSpec change is COMMITTED on purpose. `review bind-sdd` refuses a
-// change that does not exist, and an uncommitted change directory would join the
-// candidate and make every later candidate comparison a comparison of the
-// fixture rather than of the work.
+// The OpenSpec change is COMMITTED on purpose. An uncommitted change directory
+// would join the candidate and make every later candidate comparison a
+// comparison of the fixture rather than of the work.
 func sddRuntimeRepo(sandbox *Sandbox) error {
 	if err := sandbox.initRepo(sandbox.Repo); err != nil {
 		return err
@@ -369,60 +289,6 @@ func sddBoundedCorrection(sandbox *Sandbox) error {
 	}
 	if before == after {
 		return fmt.Errorf("fixture claims a bounded correction but the staged blob is still %s", before)
-	}
-	return nil
-}
-
-// sddWidenScope stages a second prose file. The approved scope really changes,
-// which is what `review recover` requires and what turns the bound lineage into
-// a non-leaf.
-func sddWidenScope(sandbox *Sandbox) error {
-	if err := stageProse("", "widened")(sandbox); err != nil {
-		return err
-	}
-	staged, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(staged, "docs/widened.md") {
-		return fmt.Errorf("fixture claims a widened scope but the staged diff is %q", staged)
-	}
-	return nil
-}
-
-// sddStrandSuccessor takes the widened path back out. The successor's frozen
-// target still names it, so that successor can never be finalized: its live
-// projection will never match its own authority again.
-func sddStrandSuccessor(sandbox *Sandbox) error {
-	if err := sandbox.git(sandbox.Repo, "rm", "-q", "--cached", "docs/widened.md"); err != nil {
-		return err
-	}
-	if err := os.Remove(filepath.Join(sandbox.Repo, "docs", "widened.md")); err != nil {
-		return err
-	}
-
-	// Proof, from the product rather than from git: the successor is still a
-	// pristine reviewing authority, and the identity it froze is no longer the
-	// identity of the candidate on disk. That pair is what "stranded" means.
-	head, err := proveAuthorities(sandbox)
-	if err != nil {
-		return err
-	}
-	entry, ok := head.entry(sddSuccessorLineage)
-	if !ok {
-		return fmt.Errorf("fixture claims a stranded successor but review status does not list %q", sddSuccessorLineage)
-	}
-	frozen := entry.SnapshotIdentity
-	var live statusEnvelope
-	if err := proveJSON(sandbox, &live, "review", "status", "--cwd", sandbox.Repo,
-		"--contract", reviewContract, "--next-transition"); err != nil {
-		return err
-	}
-	if live.TargetIdentity == "" {
-		return errors.New("fixture cannot prove a stranded successor: the product published no live target identity")
-	}
-	if frozen == live.TargetIdentity {
-		return fmt.Errorf("fixture claims a stranded successor but its frozen target %s is still the live candidate", frozen)
 	}
 	return nil
 }
@@ -1101,327 +967,6 @@ func sddBeginThenInterrupt(r *journeyRun) error {
 	return nil
 }
 
-// sddBindApprovedReview binds the approved lineage to the change. The lineage is
-// read out of the product, never remembered from the review that produced it.
-func sddBindApprovedReview(r *journeyRun) error {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
-	var head authorityHead
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
-		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	if len(head.Entries) != 1 || head.Entries[0].State != "approved" {
-		return fmt.Errorf("expected exactly one approved lineage to bind, got %+v", head.Entries)
-	}
-	lineage := head.Entries[0].LineageID
-	r.sandbox.Scratch["bound"] = lineage
-	r.run([]string{
-		"review", "bind-sdd", "--cwd", r.sandbox.Repo,
-		"--change", sddChange, "--lineage", lineage, "--expected-binding-revision", "",
-	}, false)
-	return proveBinding(r.sandbox, lineage)
-}
-
-// sddPassingFinish issues the plain passing finish and returns what the product
-// said. Every remediation journey turns on this one invocation.
-func sddPassingFinish(r *journeyRun, requestID string) (Observation, error) {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return Observation{}, err
-	}
-	observation := r.run(sddAttemptArgs(r, "finish", status.Revision, requestID,
-		append([]string{"--outcome", "passed", "--evidence-revision", sddCorrectedEvidence}, sddTerminalEvidence...)...), false)
-	if observation.ExitCode == 0 {
-		return observation, errors.New(
-			"a bound passing finish over a changed candidate completed without a block: " +
-				"the journey's premise no longer holds, so its number would be meaningless")
-	}
-	return observation, nil
-}
-
-// sddNamesFinishExit reports whether a refusal named a runnable
-// `gentle-ai sdd-attempt finish`. That is the leaf branch's promise.
-func sddNamesFinishExit(observation Observation) bool {
-	return strings.Contains(observation.Stdout+observation.Stderr, "`gentle-ai sdd-attempt finish ")
-}
-
-// sddNamesReviewRouter reports whether a refusal named the review router
-// instead. That is the non-leaf branch's promise, and the two must not overlap:
-// naming a finish that would be refused one layer deeper is the exact defect
-// shape this branch exists to avoid.
-func sddNamesReviewRouter(observation Observation) bool {
-	return strings.Contains(observation.Stdout+observation.Stderr, "`gentle-ai review status ")
-}
-
-// sddBlockedLeafFinish drives the block and holds the leaf branch's contract:
-// the topology really is a leaf, and the refusal named a finish command.
-// sddBoundPassingFinishCloses is j37's assertion after #1993: a passing
-// implementation attempt closes even though the binding covers the bytes from
-// before the correction. Review acts after implementation and verification;
-// any later review validation is informational and ordinary repository policy
-// owns delivery.
-func sddBoundPassingFinishCloses(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
-	}
-	// Deliberately NOT sddPassingFinish: that helper asserts the block this
-	// journey exists to prove is gone.
-	observation := r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-finish-bound-passing",
-		append([]string{"--outcome", "passed", "--evidence-revision", sddCorrectedEvidence}, sddTerminalEvidence...)...), false)
-	if observation.ExitCode != 0 {
-		return fmt.Errorf("a bound passing finish over a corrected candidate was refused: %s", firstLine(observation.Stderr))
-	}
-	settled, err := proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	if settled.ActiveAttempt != nil {
-		return errors.New("the finish ran but the attempt is still active")
-	}
-	// The binding stays recorded for informational review reporting. It does
-	// not decide delivery, which remains ordinary repository policy.
-	if settled.BindingRevision == "" {
-		return errors.New("the finish dropped the review binding; it must stay recorded on the ledger")
-	}
-	return nil
-}
-
-// sddDriftAfterApproval moves the candidate AFTER the review approved and bound
-// it, which is the exact state the removed #2956 gate used to intercept: bytes
-// the approved review never saw, about to be settled as passed.
-func sddDriftAfterApproval(sandbox *Sandbox) error {
-	return sandbox.write(filepath.Join(sandbox.Repo, "docs", "attempt.md"),
-		"# attempt\n\nplain prose, no executable content.\nbytes the approved review never saw.\n")
-}
-
-// sddDecoyUnreviewedCandidateIsReportedByReviewValidation is the decoy for #2956.
-//
-// Removing the bound-passing-finish gate rested on one argument: native review
-// validation would still report that a candidate the review never saw is not
-// the reviewed candidate. That result is informational, not a delivery gate.
-// The table still proves the `changed` relation; this journey proves that the
-// settled candidate reaches the informational mismatch report.
-func sddDecoyUnreviewedCandidateIsReportedByReviewValidation(r *journeyRun) error {
-	if provePostApplyAllows(r.sandbox) {
-		return errors.New("post-apply review validation reported allow for a candidate the approved review never saw; #2956 requires an informational mismatch report")
-	}
-	return nil
-}
-
-func sddBlockedLeafFinish(r *journeyRun) error {
-	if err := proveLeafTopology(r.sandbox, r.sandbox.Scratch["bound"]); err != nil {
-		return err
-	}
-	observation, err := sddPassingFinish(r, "bench-finish-blocked")
-	if err != nil {
-		return err
-	}
-	if !sddNamesFinishExit(observation) {
-		return fmt.Errorf("the leaf refusal named no self-successor finish: %s", firstLine(observation.Stderr))
-	}
-	return nil
-}
-
-// sddBlockedNonLeafFinish is the same invocation against the other topology. The
-// refusal must name the review router and must NOT name a finish, because on
-// this shape a finish is refused one layer deeper with a message that names
-// nothing at all.
-func sddBlockedNonLeafFinish(r *journeyRun) error {
-	if err := proveNonLeafTopology(r.sandbox, r.sandbox.Scratch["bound"], sddSuccessorLineage); err != nil {
-		return err
-	}
-	observation, err := sddPassingFinish(r, "bench-finish-blocked")
-	if err != nil {
-		return err
-	}
-	if !sddNamesReviewRouter(observation) {
-		return fmt.Errorf("the non-leaf refusal named no review router: %s", firstLine(observation.Stderr))
-	}
-	if sddNamesFinishExit(observation) {
-		return fmt.Errorf("the non-leaf refusal named a finish command that cannot be accepted: %s", firstLine(observation.Stderr))
-	}
-	return nil
-}
-
-// sddTransitionCreatesALineage runs the transition the negotiated status
-// publishes and requires it to have actually created something.
-//
-// This step exists because of a bug that is easy to reintroduce and almost
-// impossible to notice. The default lineage name is a pure function of the
-// target, so a superseded lineage permanently occupies the name its own target
-// derives. Status was right that no leaf governed the live candidate and right
-// to route to a start, but the command it printed carried no lineage, so the
-// start collided with the superseded record and answered "blocked" at exit 0.
-//
-// The product named the next thing to run, the operator ran it exactly as
-// printed, it succeeded, and nothing happened. `executeNextTransitionVerbatim`
-// would not have caught it: running verbatim was never the problem.
-func sddTransitionCreatesALineage(r *journeyRun) error {
-	observation, err := runNextTransitionVerbatim(r)
-	if err != nil {
-		return err
-	}
-	var envelope struct {
-		Action    string `json:"action"`
-		LineageID string `json:"lineage_id"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
-		return fmt.Errorf("the transition's own output is not readable: %w", err)
-	}
-	if envelope.LineageID == "" {
-		return fmt.Errorf("the transition ran and created no lineage: action %q", envelope.Action)
-	}
-	return nil
-}
-
-// sddNamesAbandonExit reports whether a refusal named the abandonment. The
-// backtick is part of the match for the same reason the two helpers above carry
-// one: prose mentioning a verb is not a named command, and this branch exists
-// precisely because prose was what the operator got.
-func sddNamesAbandonExit(observation Observation) bool {
-	return strings.Contains(observation.Stdout+observation.Stderr, "`gentle-ai review abandon ")
-}
-
-// sddBlockedStrandedFinish holds the contract for the third topology, and it is
-// deliberately NOT the non-leaf one.
-//
-// A stranded successor is also non-leaf, so this journey used to assert the
-// non-leaf promise: name the review router, name no finish. That promise turned
-// out to be wrong here, and wrong in the most expensive way. The router's
-// transition ran, exited 0 and changed nothing, and the finish it then asked
-// for was refused naming nothing at all. Routing to a dead end is worse than
-// routing nowhere, because the operator spends their trust on it.
-//
-// So the branch is split at the source now, and the contract splits with it.
-// A stranded successor is pristine by construction: it froze a target the
-// candidate no longer has, so it never captured a result, a finding or a
-// correction. Abandoning it is not discarding the operator's work, it restores
-// it, because the approved predecessor it superseded is the authority holding
-// the corrected candidate and becomes the leaf again.
-//
-// Naming the router here would now be the defect. So would naming a finish.
-func sddBlockedStrandedFinish(r *journeyRun) error {
-	if err := proveNonLeafTopology(r.sandbox, r.sandbox.Scratch["bound"], sddSuccessorLineage); err != nil {
-		return err
-	}
-	observation, err := sddPassingFinish(r, "bench-finish-blocked")
-	if err != nil {
-		return err
-	}
-	if !sddNamesAbandonExit(observation) {
-		return fmt.Errorf("the stranded refusal named no abandonment: %s", firstLine(observation.Stderr))
-	}
-	if sddNamesReviewRouter(observation) {
-		return fmt.Errorf("the stranded refusal named the review router, which runs and changes nothing here: %s", firstLine(observation.Stderr))
-	}
-	if sddNamesFinishExit(observation) {
-		return fmt.Errorf("the stranded refusal named a finish that is refused one layer deeper: %s", firstLine(observation.Stderr))
-	}
-	return nil
-}
-
-// sddRemediationFinish re-runs the finish with the remediation trio, taking all
-// three values from where the refusal said they are published — binding_revision,
-// binding.lineage and evidence_revision on `sdd-attempt status` — and nothing
-// from the journey's memory of what it did earlier.
-//
-// successor empty means the self-successor exit: the lineage the binding already
-// names. A non-empty successor is the distinct-successor exit.
-func sddRemediationFinish(successor, requestID string) func(*journeyRun) error {
-	return func(r *journeyRun) error {
-		status, err := readRuntimeStatus(r)
-		if err != nil {
-			return err
-		}
-		if status.Binding == nil || status.BindingRevision == "" || status.EvidenceRevision == "" {
-			return fmt.Errorf("the refusal named three published values but status publishes binding=%v binding_revision=%q evidence_revision=%q",
-				status.Binding, status.BindingRevision, status.EvidenceRevision)
-		}
-		lineage := successor
-		if lineage == "" {
-			lineage = status.Binding.Lineage
-		}
-		r.run(sddAttemptArgs(r, "finish", status.Revision, requestID,
-			append([]string{
-				"--outcome", "passed",
-				"--evidence-revision", sddCorrectedEvidence,
-				"--expected-binding-revision", status.BindingRevision,
-				"--successor-lineage", lineage,
-				"--remediates-evidence-revision", status.EvidenceRevision,
-			}, sddTerminalEvidence...)...), false)
-		return nil
-	}
-}
-
-// sddProveObjectiveComplete asserts the exit really closed the objective. An
-// exit that runs and leaves the attempt open would be a worse answer than a
-// refusal, and it would be invisible without this.
-func sddProveObjectiveComplete(r *journeyRun) error {
-	status, err := proveRuntime(r.sandbox)
-	if err != nil {
-		return err
-	}
-	if status.ActiveAttempt != nil {
-		return errors.New("the remediation exit ran but the attempt is still active")
-	}
-	if !status.Complete || status.NextAction != "complete" {
-		return fmt.Errorf("the remediation exit ran but the objective reports complete=%v next_action=%q",
-			status.Complete, status.NextAction)
-	}
-	return nil
-}
-
-// sddRecoverSuccessor follows the scope-changed gate denial exactly as it is
-// written, mints the successor, and proves the topology really flipped.
-func sddRecoverSuccessor(r *journeyRun) error {
-	observation := r.run(productArgsFor(r, "review", "validate", "--gate", "post-apply"), false)
-	var denial gateDenial
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &denial); err != nil {
-		return fmt.Errorf("parse gate denial: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	change := denial.Context.ScopeChange
-	if change.PredecessorLineageID == "" || change.PredecessorRevision == "" {
-		return fmt.Errorf("gate result %q named no recoverable predecessor", denial.Result)
-	}
-	r.run(productArgsFor(r, "review", "recover",
-		"--predecessor-lineage", change.PredecessorLineageID,
-		"--expected-predecessor-revision", change.PredecessorRevision,
-		"--successor-lineage", sddSuccessorLineage,
-		"--disposition", "scope_changed"), false)
-	return proveNonLeafTopology(r.sandbox, r.sandbox.Scratch["bound"], sddSuccessorLineage)
-}
-
-// sddAbandonStrandedSuccessor is the exit that clears a stranded successor.
-// Its V2 authorization is assembled from the exact status summary that the
-// abandon validator binds, so the journey drives the refusal's real contract.
-func sddAbandonStrandedSuccessor(r *journeyRun) error {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
-	var head authorityHead
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
-		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	entry, ok := head.entry(sddSuccessorLineage)
-	if !ok {
-		return fmt.Errorf("review status no longer lists the stranded successor %q", sddSuccessorLineage)
-	}
-	const actor = "bench"
-	const reason = "operator_disposition"
-	authorization := renderAbandonAuthorization(entry, actor, reason)
-	r.run([]string{
-		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", sddSuccessorLineage,
-		"--expected-revision", entry.Revision,
-		"--reason", reason,
-		"--actor", actor,
-		"--maintainer-authorization", authorization,
-	}, false)
-
-	if !provePostApplyAllows(r.sandbox) {
-		return errors.New("the stranded successor was abandoned but the bound lineage's post-apply gate still does not allow")
-	}
-	return nil
-}
-
 // sddBeginAfterDrift issues the begin the drift refuses, then the reset, then the
 // begin again. The middle command is the one that used to have no way out.
 func sddBeginAfterDrift(r *journeyRun) error {
@@ -1662,12 +1207,6 @@ var sddStatusCapability = &Capability{
 	Probe: []string{"sdd-status", "--json"},
 }
 
-// review bind-sdd has an ordinary help surface, so it is probed the ordinary way.
-var bindSDDCapability = &Capability{
-	Verb:  []string{"review", "bind-sdd"},
-	Flags: []string{"--cwd", "--change", "--lineage", "--expected-binding-revision"},
-}
-
 var selectedFinalizeResultsCapability = &Capability{
 	Verb:  []string{"review", "finalize"},
 	Flags: []string{"--cwd", "--lineage", "--captured-results"},
@@ -1689,39 +1228,9 @@ var invalidateCapability = &Capability{
 
 // sddJourneys is the third part of the corpus. Journeys 1 to 14 came from the
 // community testing guide, 15 to 36 are the edge cases those flows never
-// reached, and these are the SDD remediation successor cycle plus the two
-// surfaces that meet it — none of which any journey had driven before.
+// reached, and these exercise active SDD lifecycle surfaces.
 func sddJourneys() []Journey {
 	return []Journey{
-		// ------------------------------------------ remediation successor cycle
-		{
-			ID:     "j37-sdd-bound-passing-attempt-closes-over-a-corrected-candidate",
-			Review: reviewOptedIn,
-			Title:  "Bound passing attempt over a corrected candidate closes; review validation remains informational",
-			Source: "community deadlock report (#1993)",
-			// This journey used to prove the opposite: that the plain passing
-			// finish was REFUSED, and that the refusal named a self-successor
-			// finish which then ran. Review acts after implementation and
-			// verification, so there is no block here to name an exit for. The
-			// binding stays recorded only for informational review reporting; ordinary
-			// repository policy decides delivery.
-			//
-			// j38 (the refusal routing to the review router) and j39 (the
-			// stranded-successor exit) are deleted with the refusal that was
-			// their whole subject.
-			Steps: []Step{
-				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
-				{Name: "begin, fail, begin again", Requires: sddAttemptBeginCapability, Composite: sddBeginFailBegin},
-				{Name: "fixture: the bounded correction moves the candidate", Fixture: sddBoundedCorrection},
-				{Name: "review start on the corrected candidate", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "bind the approved review to the change", Requires: bindSDDCapability, Composite: sddBindApprovedReview},
-				{Name: "fixture: the candidate drifts AFTER the review approved it", Fixture: sddDriftAfterApproval},
-				{Name: "the plain passing finish closes over the changed candidate, and keeps the binding", Requires: sddAttemptFinishCapability, Composite: sddBoundPassingFinishCloses},
-				{Name: "decoy: review validation reports the unreviewed candidate", Composite: sddDecoyUnreviewedCandidateIsReportedByReviewValidation},
-				{Name: "decoy: repeated review validation keeps the mismatch informational", Composite: sddDecoyUnreviewedCandidateIsReportedByReviewValidation},
-			},
-		},
 		{
 			ID:     "j40-sdd-attempt-reset-after-drift",
 			Review: reviewOptedIn,

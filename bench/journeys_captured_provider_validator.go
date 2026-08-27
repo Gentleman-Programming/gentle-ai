@@ -157,8 +157,9 @@ func readCapturedProviderValidatorStatus(r *journeyRun, withOpenCodeTask bool) (
 	return readProviderValidatorStatus(r, capturedProviderValidatorLineage, withOpenCodeTask)
 }
 
-func readProviderValidatorStatus(r *journeyRun, lineage string, withOpenCodeTask bool) (waveCorrectionStatus, error) {
+func readProviderValidatorStatus(r *journeyRun, lineage string, withOpenCodeTask bool, selectors ...string) (waveCorrectionStatus, error) {
 	arguments := []string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--lineage", lineage}
+	arguments = append(arguments, selectors...)
 	if withOpenCodeTask {
 		arguments = append(arguments, "--agent", "opencode")
 	}

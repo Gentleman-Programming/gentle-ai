@@ -15,13 +15,14 @@ const reviewLastEventClosureSchema = "gentle-ai.review-last-event-closure/v1"
 const reviewApprovedLastEventBurnedAction = "the approved review completed on the last admitted event and burned; delivery follows ordinary repository policy"
 
 type reviewLastEventClosureResult struct {
-	Schema           string                                `json:"schema"`
-	Operation        string                                `json:"operation"`
-	LineageID        string                                `json:"lineage_id"`
-	State            reviewtransaction.State               `json:"state"`
-	Action           string                                `json:"action"`
-	AdvisoryFindings *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings,omitempty"`
-	StoreRevision    string                                `json:"store_revision"`
+	Schema             string                                `json:"schema"`
+	Operation          string                                `json:"operation"`
+	LineageID          string                                `json:"lineage_id"`
+	State              reviewtransaction.State               `json:"state"`
+	Action             string                                `json:"action"`
+	AdvisoryFindings   *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings,omitempty"`
+	StatusContinuation *ReviewTransitionExecution            `json:"status_continuation,omitempty"`
+	StoreRevision      string                                `json:"store_revision"`
 }
 
 func closeCorrectionOnCapturedValidator(
@@ -90,7 +91,7 @@ func closeReviewOnLastCapturedLens(
 	repo string,
 	store reviewtransaction.CompactStore,
 	record reviewtransaction.CompactRecord,
-	runtime ...model.AgentID,
+	runtime model.AgentID,
 ) (*reviewLastEventClosureResult, error) {
 	state := record.State
 	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, store.Dir, state, record.Revision)
@@ -127,8 +128,8 @@ func closeReviewOnLastCapturedLens(
 			return nil, err
 		}
 		if !slot.Occupied {
-			if len(runtime) == 1 && reviewProviderCaptureRuntime(runtime[0]) {
-				if _, captured, err := reviewProviderCaptureRefuter(ctx, repo, store, state, record.Revision, runtime[0]); err != nil {
+			if reviewProviderCaptureRuntime(runtime) {
+				if _, captured, err := reviewProviderCaptureRefuter(ctx, repo, store, state, record.Revision, runtime); err != nil {
 					return nil, err
 				} else if !captured {
 					return nil, errors.New("compiled provider refuter was required but no result was captured; rerun `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` and follow its capture route")
@@ -177,10 +178,54 @@ func closeReviewOnLastCapturedLens(
 		}
 	case reviewtransaction.StateCorrectionRequired:
 		result.Action = "candidate-caused severe findings require one bounded correction"
+		result.StatusContinuation = reviewCorrectionStatusContinuation(repo, state, revision, runtime)
+		if result.StatusContinuation == nil {
+			return nil, fmt.Errorf("correction-required review has unsupported initial target kind %q", state.InitialSnapshot.Kind) // refusal:by-design human-authority: only a recognized frozen selector may reopen correction planning
+		}
 	case reviewtransaction.StateEscalated:
 		result.Action = "review completed with inconclusive severe findings; maintainer action is informational"
 	default:
 		return nil, fmt.Errorf("last reviewer capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection
 	}
 	return result, nil
+}
+
+// reviewCorrectionStatusContinuation is the one provider-owned re-entry after a
+// final reviewer event opened the bounded correction. It uses frozen authority
+// facts rather than a caller's remembered selector spelling.
+func reviewCorrectionStatusContinuation(repo string, state reviewtransaction.CompactState, revision string, runtime model.AgentID) *ReviewTransitionExecution {
+	arguments := []ReviewTransitionArgument{
+		{Name: "cwd", Value: repo},
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+		{Name: "next-transition", Value: "true"},
+		{Name: "lineage", Value: state.LineageID},
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
+	}
+	switch state.InitialSnapshot.Kind {
+	case reviewtransaction.TargetBaseDiff:
+		arguments = append(arguments,
+			ReviewTransitionArgument{Name: "base-ref", Value: state.InitialSnapshot.BaseTree},
+			ReviewTransitionArgument{Name: "committed-only", Value: "true"},
+		)
+	case reviewtransaction.TargetCurrentChanges:
+		if state.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)})
+		}
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		arguments = append(arguments,
+			ReviewTransitionArgument{Name: "base-ref", Value: state.InitialSnapshot.BaseTree},
+			ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"},
+		)
+		if state.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)})
+		}
+	default:
+		return nil
+	}
+	return reviewExecuteTransition("correction_status_required", "review.status", arguments,
+		[]ReviewTransitionArgument{{Name: "state", Value: string(reviewtransaction.StateCorrectionRequired)}},
+		ReviewTransitionBinding{LineageID: state.LineageID, Revision: revision, TargetIdentity: state.InitialSnapshot.Identity}, nil,
+	).Execute
 }

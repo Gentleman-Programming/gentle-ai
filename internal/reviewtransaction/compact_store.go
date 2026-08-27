@@ -678,6 +678,9 @@ func compactHistoricalFailedValidator(state CompactState) bool {
 		state.FixDeltaHash != EmptyFixDeltaHash || state.OriginalCriteria != nil || state.CorrectionRegression != nil {
 		return false
 	}
+	if len(state.CorrectionAttempts) == 0 {
+		return false
+	}
 	last := state.CorrectionAttempts[len(state.CorrectionAttempts)-1]
 	return !last.OriginalCriteria.Passed || !last.CorrectionRegression.Passed
 }

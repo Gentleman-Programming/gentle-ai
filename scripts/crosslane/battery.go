@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 )
 
 // commandTimeout bounds every non-host command: the --with-model lane drives
@@ -41,9 +43,11 @@ type capturedEnvelope struct {
 // lineageScope is the Go-issued authority binding a lane received at START.
 // The lineage is immutable; revision and target advance only from native STATUS.
 type lineageScope struct {
-	Lineage  string
-	Revision string
-	Target   string
+	Lineage       string
+	Revision      string
+	Target        string
+	BaseRef       string
+	CommittedOnly bool
 }
 
 type battery struct {
@@ -146,8 +150,68 @@ func (b *battery) statusArgs(repo, agent string, extra ...string) []string {
 	args = append(args, extra...)
 	if scope, found := b.lineages[repo]; found {
 		args = append(args, "--lineage", scope.Lineage)
+		if scope.BaseRef != "" {
+			args = append(args, "--base-ref", scope.BaseRef)
+		}
+		if scope.CommittedOnly {
+			args = append(args, "--committed-only")
+		}
 	}
 	return args
+}
+
+// statusFromClosure follows the final capture's provider-owned continuation.
+// It intentionally consumes operation plus ordered tokens, never a command line
+// or the lane's retained lineage state.
+func (b *battery) statusFromClosure(repo string, closure map[string]any) (map[string]any, string, int) {
+	return b.statusFromClosureEnv(repo, nil, closure)
+}
+
+func (b *battery) statusFromClosureEnv(repo string, env []string, closure map[string]any) (map[string]any, string, int) {
+	continuation := getMap(closure, "status_continuation")
+	if getString(continuation, "operation") != "review.status" {
+		return nil, "last-event closure omitted review.status continuation", 1
+	}
+	if scope, found := b.lineages[repo]; found && operationLineage(closure) != scope.Lineage {
+		return nil, "last-event closure lineage does not match the started authority", 1
+	}
+	doc, stderr, code := b.runTransitionExecution("status", repo, env, continuation)
+	if err := b.admitStatusScope(repo, doc); err != nil {
+		return nil, err.Error(), 1
+	}
+	return doc, stderr, code
+}
+
+// runTransitionExecution dispatches a public operation and its ordered argument
+// tokens. It never reparses the rendered command or rebuilds any selector.
+func (b *battery) runTransitionExecution(source, repo string, env []string, execution map[string]any) (map[string]any, string, int) {
+	var args []string
+	switch getString(execution, "operation") {
+	case "review.start":
+		args = []string{"review", "start"}
+	case "review.status":
+		args = []string{"review", "status"}
+	case "review.recover":
+		args = []string{"review", "recover"}
+	case "review.repair":
+		args = []string{"review", "repair"}
+	case "review.validate":
+		args = []string{"review", "validate"}
+	default:
+		return nil, "unsupported provider transition operation", 1
+	}
+	for _, argument := range getSlice(execution, "arguments") {
+		entry, ok := argument.(map[string]any)
+		if !ok {
+			return nil, "provider transition argument is not an object", 1
+		}
+		token, _ := entry["token"].(string)
+		if token == "" {
+			return nil, "provider transition argument omitted its token", 1
+		}
+		args = append(args, token)
+	}
+	return b.runJSONEnv(source, repo, env, args...)
 }
 
 func (b *battery) rememberStarted(repo, target string, start map[string]any) error {
@@ -188,14 +252,15 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 	return nil
 }
 
-// runCommandLine splits a provider-rendered command string and executes it
-// verbatim through the binary under test, from the given directory.
+// runCommandLine executes a provider-rendered command with the product's
+// quoting-aware splitter. Transition closures use runTransitionExecution instead,
+// because their operation and ordered argument tokens are already structured.
 func (b *battery) runCommandLine(source, dir, command string) (map[string]any, string, int) {
-	fields := strings.Fields(command)
-	if len(fields) < 2 || fields[0] != "gentle-ai" {
+	words, err := cli.SplitPrintedCommandWords(command)
+	if err != nil || len(words) < 2 || words[0] != "gentle-ai" {
 		return nil, fmt.Sprintf("unexpected provider command %q", command), 1
 	}
-	return b.runJSON(source, dir, fields[1:]...)
+	return b.runJSON(source, dir, words[1:]...)
 }
 
 // scratchRepo creates one initialized scratch git repository.
@@ -217,15 +282,104 @@ func (b *battery) scratchRepo(name string) (string, error) {
 	return dir, nil
 }
 
+// committedMediumCandidate creates the exact committed-only review shape: an
+// immutable base tree followed by a clean committed candidate. The later
+// lifecycle never depends on a mutable workspace diff for its initial target.
+func (b *battery) committedMediumCandidate(lane, name, path, base, candidate string) (string, string, bool) {
+	repo, err := b.scratchRepo(name)
+	if err != nil {
+		b.fail(lane, "committed process scratch repository", err.Error())
+		return "", "", false
+	}
+	if err := writeFile(repo, path, base); err != nil {
+		b.fail(lane, "committed process base", err.Error())
+		return "", "", false
+	}
+	if err := commitAll(repo, "feat: committed base"); err != nil {
+		b.fail(lane, "committed process base", err.Error())
+		return "", "", false
+	}
+	baseTree, err := runGitOutput(repo, "rev-parse", "HEAD^{tree}")
+	if err != nil || baseTree == "" {
+		b.fail(lane, "committed process base", fmt.Sprintf("resolve immutable base tree: %v", err))
+		return "", "", false
+	}
+	if err := writeFile(repo, path, candidate); err != nil {
+		b.fail(lane, "committed process candidate", err.Error())
+		return "", "", false
+	}
+	if err := commitAll(repo, "feat: review candidate"); err != nil {
+		b.fail(lane, "committed process candidate", err.Error())
+		return "", "", false
+	}
+	return repo, baseTree, true
+}
+
+// startCommittedMedium follows STATUS's structured START operation for an exact
+// base tree and committed-only candidate, then runs the consent envelope's
+// provider-owned granted invocation through the product's quoting-aware splitter.
+func (b *battery) startCommittedMedium(lane, repo, agent, baseTree string) bool {
+	statusDoc, stderr, code := b.status(repo, agent, "--base-ref", baseTree, "--committed-only")
+	execution := getMap(statusDoc, "next_transition", "execute")
+	if code != 0 || getString(execution, "operation") != "review.start" ||
+		!transitionCarriesToken(execution, "--base-ref="+baseTree) || !transitionCarriesToken(execution, "--committed-only=true") {
+		b.fail(lane, "committed START advertised", fmt.Sprintf("exit=%d operation=%q base-ref=%t committed-only=%t %s",
+			code, getString(execution, "operation"), transitionCarriesToken(execution, "--base-ref="+baseTree),
+			transitionCarriesToken(execution, "--committed-only=true"), firstLine(stderr)))
+		return false
+	}
+	consent, stderr, code := b.runTransitionExecution("start", repo, nil, execution)
+	if code != 0 || getString(consent, "schema") != "gentle-ai.review-integration.consent/v3" || getString(consent, "action") != "consent_required" {
+		b.fail(lane, "committed START consent", fmt.Sprintf("exit=%d schema=%q action=%q %s",
+			code, getString(consent, "schema"), getString(consent, "action"), firstLine(stderr)))
+		return false
+	}
+	granted := grantedInvocation(consent)
+	if granted == "" {
+		b.fail(lane, "committed START consent", "no granted choice invocation in envelope")
+		return false
+	}
+	started, stderr, code := b.runCommandLine("start", repo, granted)
+	if code != 0 || getString(started, "state") != "reviewing" || getString(started, "risk_level") != "medium" || len(getSlice(started, "selected_lenses")) != 1 {
+		b.fail(lane, "committed START consent", fmt.Sprintf("exit=%d state=%q risk=%q lenses=%d %s",
+			code, getString(started, "state"), getString(started, "risk_level"), len(getSlice(started, "selected_lenses")), firstLine(stderr)))
+		return false
+	}
+	if err := b.rememberStarted(repo, getString(statusDoc, "target_identity"), started); err != nil {
+		b.fail(lane, "committed START consent", err.Error())
+		return false
+	}
+	scope := b.lineages[repo]
+	scope.BaseRef, scope.CommittedOnly = baseTree, true
+	b.lineages[repo] = scope
+	b.pass(lane, "committed START consent", "immutable base tree and committed-only candidate created a reviewing medium lineage")
+	return true
+}
+
+func transitionCarriesToken(execution map[string]any, want string) bool {
+	for _, argument := range getSlice(execution, "arguments") {
+		entry, ok := argument.(map[string]any)
+		if ok && entry["token"] == want {
+			return true
+		}
+	}
+	return false
+}
+
 func runGit(dir string, args ...string) error {
+	_, err := runGitOutput(dir, args...)
+	return err
+}
+
+func runGitOutput(dir string, args ...string) (string, error) {
 	command := exec.Command("git", args...)
 	command.Dir = dir
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, stderr.String())
+		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, stderr.String())
 	}
-	return nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func commitAll(dir, message string) error {

@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -212,6 +213,74 @@ func TestAgentInstallStepSkipsMissingNonPiRuntime(t *testing.T) {
 	}
 	if got := recorder.get(); len(got) != 0 {
 		t.Fatalf("commands executed = %v, want none for non-Pi agent", got)
+	}
+}
+
+func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) { return name, nil })
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+	runCommand = func(string, ...string) error { return nil }
+
+	var events []pipeline.ProgressEvent
+	step := agentInstallStep{
+		id:      "agent:pi",
+		agent:   model.AgentPi,
+		homeDir: t.TempDir(),
+		progress: func(event pipeline.ProgressEvent) {
+			events = append(events, event)
+		},
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v", err)
+	}
+
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:pi-subagents-j0k3r", "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:@juicesharp/rpiv-todo", "pi install npm:pi-btw"}
+	if len(events) != len(wantPackages)*2 {
+		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
+	}
+	for i, commandLabel := range wantPackages {
+		wantID := "agent:pi:" + commandLabel
+		if events[i*2].StepID != wantID || events[i*2].Status != pipeline.StepStatusRunning {
+			t.Fatalf("running event[%d] = %+v, want step %q", i*2, events[i*2], wantID)
+		}
+		if events[i*2+1].StepID != wantID || events[i*2+1].Status != pipeline.StepStatusSucceeded {
+			t.Fatalf("succeeded event[%d] = %+v, want step %q", i*2+1, events[i*2+1], wantID)
+		}
+	}
+}
+
+func TestRunCommandSequenceWithProgressStopsAfterFailedCommand(t *testing.T) {
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return errors.New("package install failed")
+	}
+
+	var events []pipeline.ProgressEvent
+	err := runCommandSequenceWithProgress(
+		[][]string{{"pi", "install", "npm:first"}, {"pi", "install", "npm:second"}},
+		func(event pipeline.ProgressEvent) { events = append(events, event) },
+		"agent:pi",
+	)
+	if err == nil || !strings.Contains(err.Error(), "package install failed") {
+		t.Fatalf("runCommandSequenceWithProgress() error = %v, want package failure", err)
+	}
+	if len(commands) != 1 || commands[0] != "pi install npm:first" {
+		t.Fatalf("commands = %v, want only the failed command", commands)
+	}
+	if len(events) != 2 {
+		t.Fatalf("progress events = %v, want running and failed", events)
+	}
+	if events[0].StepID != "agent:pi:pi install npm:first" || events[0].Status != pipeline.StepStatusRunning {
+		t.Fatalf("running event = %+v", events[0])
+	}
+	if events[1].StepID != events[0].StepID || events[1].Status != pipeline.StepStatusFailed || events[1].Err == nil {
+		t.Fatalf("failed event = %+v", events[1])
 	}
 }
 
@@ -1959,9 +2028,9 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 12 SDD skills + 2 explicit skills + 1 _shared/SKILL.md = 15.
-	if skillCount != 15 {
-		t.Fatalf("expected 15 skill files (12 SDD + 2 explicit + 1 _shared), got %d", skillCount)
+	// 12 SDD skills + 2 explicit skills = 14. _shared is support-only.
+	if skillCount != 14 {
+		t.Fatalf("expected 14 skill files (12 SDD + 2 explicit), got %d", skillCount)
 	}
 }
 
@@ -2018,9 +2087,9 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect 13 files: 11 SDD phases + judgment-day + _shared/SKILL.md.
-	if skillCount != 13 {
-		t.Fatalf("expected 13 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	// Expect 12 files: 11 SDD phases + judgment-day. _shared is support-only.
+	if skillCount != 12 {
+		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
 	}
 }
 

@@ -13,6 +13,19 @@
         "not": {"required": ["action"]}
       },
       "else": {"required": ["action"]}
+    },
+    {
+      "if": {"properties": {"operation": {"enum": ["review/capture-result", "review.capture-refuter"]}, "state": {"const": "correction_required"}}, "required": ["operation", "state"]},
+      "then": {
+        "required": ["status_continuation"],
+        "properties": {
+          "status_continuation": {
+            "required": ["operation"],
+            "properties": {"operation": {"const": "review.status"}}
+          }
+        }
+      },
+      "else": {"not": {"required": ["status_continuation"]}}
     }
   ],
   "properties": {
@@ -24,6 +37,7 @@
     "correction_lines": {"type": "integer", "minimum": 1},
     "state": {"enum": ["approved", "correction_required", "escalated"]},
     "action": {"type": "string", "minLength": 1},
+    "status_continuation": {"$ref": "../../v1/schemas/transition-execution.schema.json"},
     "store_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "advisory_findings": {
       "type": "object",

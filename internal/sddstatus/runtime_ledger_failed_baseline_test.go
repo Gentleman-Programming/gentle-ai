@@ -70,7 +70,7 @@ func TestRuntimeRemediationSettlesWhenCorrectionPredatesAcquire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("correction changed against the failed evidence was refused: %v", err)
 	}
-	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil {
+	if !completed.Complete || completed.ActiveAttempt != nil {
 		t.Fatalf("pre-acquire correction settle = %#v", completed)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]

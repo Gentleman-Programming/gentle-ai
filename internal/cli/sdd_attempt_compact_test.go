@@ -101,8 +101,7 @@ func TestRunSDDAttemptLegacyStatusJSONIsUnchanged(t *testing.T) {
   "evidence_revision": "",
   "decision_required": false,
   "complete": false,
-  "next_action": "begin",
-  "binding_revision": ""
+  "next_action": "begin"
 }
 `
 	if output.String() != want {

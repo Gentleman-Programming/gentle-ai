@@ -1395,7 +1395,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	}
 	if *releaseScope {
 		*authorization = reviewtransaction.ReleaseScopeRecoveryAuthorization
-	} else if !stagedScopeOverlay && *authorization == reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, *successor, *actor, *reason) {
+	} else if (!stagedScopeOverlay || reviewtransaction.RecoveryDisposition(*disposition) == reviewtransaction.RecoveryEscalated) && *authorization == reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, *successor, *actor, *reason) {
 		*authorization = reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, "", *actor, *reason)
 	}
 	reviewRecoverBeforePersist()
@@ -2452,11 +2452,6 @@ func runNonDecidingReviewGate(ctx context.Context, cwd string, gate reviewtransa
 	}
 	return emitEnabledUnmanagedDelivery(stdout, gate, negotiated, contract)
 }
-
-// reviewEmptyPublicationRangeReason states what the empty-range allow does and
-// does not mean. It is an allow because there is no delivery to gate, never
-// because anything was reviewed, so it says so in the same sentence.
-const reviewEmptyPublicationRangeReason = "the publication range is empty: every commit reachable from HEAD is already published on the push destination, so this push delivers nothing and no review receipt governs it"
 
 // emitDisabledUnmanagedDelivery reports a candidate no receipt governs under a
 // user-disabled kill switch.

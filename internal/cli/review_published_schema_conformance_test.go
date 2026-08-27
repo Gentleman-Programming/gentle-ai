@@ -85,6 +85,26 @@ func TestLowRiskStartBurnsUnderPublishedStatusContract(t *testing.T) {
 	}
 }
 
+func TestPublishedLastEventClosureSchemaAcceptsApprovedTerminalCapture(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, repo, "published-approved-terminal-closure")
+	var output bytes.Buffer
+	for order := range started.SelectedLenses {
+		destination := &bytes.Buffer{}
+		if order == len(started.SelectedLenses)-1 {
+			destination = &output
+		}
+		captureCleanCLIReviewerResult(t, repo, ReviewFacadeStartResult{
+			LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, SelectedLenses: started.SelectedLenses,
+		}, order, destination)
+	}
+
+	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+}
+
 func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
@@ -98,4 +118,30 @@ func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing
 
 	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
 	validatePublishedReviewSchema(t, schema, output.Bytes())
+}
+
+func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, handle := piRefuterReview(t)
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
+
+	var output bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
+		t.Fatal(err)
+	}
+	var closure map[string]any
+	if err := json.Unmarshal(output.Bytes(), &closure); err != nil {
+		t.Fatal(err)
+	}
+	continuation, ok := closure["status_continuation"].(map[string]any)
+	if !ok || closure["state"] != string(reviewtransaction.StateCorrectionRequired) {
+		t.Fatalf("real correction closure = %#v", closure)
+	}
+	continuation["operation"] = "review.start"
+
+	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted non-STATUS correction continuation: %#v", closure)
+	}
 }

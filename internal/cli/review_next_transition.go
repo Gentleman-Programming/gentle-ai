@@ -776,15 +776,15 @@ func (selector reviewTransitionSelector) recoveryArguments(scope reviewIntendedU
 		if target.BaseRef == "" {
 			return nil, false
 		}
-		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: target.BaseRef})
-		if target.Projection == reviewtransaction.ProjectionStaged {
-			arguments = append(arguments,
-				ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)},
-				ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"},
-			)
-			return arguments, true
+		if target.Projection != reviewtransaction.ProjectionStaged {
+			return nil, false
 		}
-		arguments = append(arguments, ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"})
+		arguments = append(arguments,
+			ReviewTransitionArgument{Name: "base-ref", Value: target.BaseRef},
+			ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)},
+			ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"},
+		)
+		return arguments, true
 	default:
 		return nil, false
 	}

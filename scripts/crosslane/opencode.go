@@ -42,62 +42,19 @@ type harnessCase struct {
 }
 
 // runOpenCodeLane drives the real plugin bytes through host-assembled binding
-// frames against a live medium-risk lineage: consent round-trip, lens frame
-// (host-faithful and Go-typed), correction flow, and validator role frame
-// (host-serialized and exact relay).
+// frames against the committed-only issue scenario: immutable base tree,
+// committed medium candidate, terminal correction closure, and its exact
+// status_continuation before the bounded correction/validator path continues.
 func (b *battery) runOpenCodeLane() {
-	repo, err := b.scratchRepo("opencode-lane")
-	if err != nil {
-		b.fail(openCodeLane, "scratch repository", err.Error())
-		return
-	}
 	base := "export function greet(name) {\n  return \"hi \" + name;\n}\n"
-	err = writeFile(repo, "src/greet.js", base)
-	if err == nil {
-		err = commitAll(repo, "feat: greet")
-	}
-	if err != nil {
-		b.fail(openCodeLane, "scratch repository", err.Error())
-		return
-	}
 	unsafe := base + "export function shout(name) {\n  return name.toUpperCase() + \"!\";\n}\n"
-	if err := writeFile(repo, "src/greet.js", unsafe); err != nil {
-		b.fail(openCodeLane, "scratch repository", err.Error())
+	repo, baseTree, ok := b.committedMediumCandidate(openCodeLane, "opencode-committed", "src/greet.js", base, unsafe)
+	if !ok || !b.startCommittedMedium(openCodeLane, repo, "opencode", baseTree) {
 		return
 	}
-
-	// Consent round-trip with the opencode runtime identity.
-	statusDoc, stderr, code := b.status(repo, "opencode")
-	target := getString(statusDoc, "target_identity")
-	if target == "" {
-		b.fail(openCodeLane, "negotiated status", fmt.Sprintf("exit=%d %s", code, firstLine(stderr)))
-		return
-	}
-	consent, stderr, _ := b.runJSON("consent", repo,
-		"review", "start", "--contract", reviewContract, "--cwd", repo,
-		"--target", target, "--projection", "workspace", "--agent", "opencode", "--consent", "relay")
-	if getString(consent, "action") != "consent_required" || getString(consent, "schema") != "gentle-ai.review-integration.consent/v3" {
-		b.fail(openCodeLane, "consent envelope surfaced", fmt.Sprintf("schema=%q action=%q %s", getString(consent, "schema"), getString(consent, "action"), firstLine(stderr)))
-		return
-	}
-	granted := grantedInvocation(consent)
-	if granted == "" {
-		b.fail(openCodeLane, "consent envelope surfaced", "no granted choice invocation in envelope")
-		return
-	}
-	startDoc, stderr, code := b.runCommandLine("start", repo, granted)
-	if code != 0 || getString(startDoc, "state") != "reviewing" || getString(startDoc, "risk_level") != "medium" {
-		b.fail(openCodeLane, "consent granted round-trip", fmt.Sprintf("exit=%d state=%q risk=%q %s", code, getString(startDoc, "state"), getString(startDoc, "risk_level"), firstLine(stderr)))
-		return
-	}
-	if err := b.rememberStarted(repo, target, startDoc); err != nil {
-		b.fail(openCodeLane, "consent granted round-trip", err.Error())
-		return
-	}
-	b.pass(openCodeLane, "consent granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage")
 
 	// Reviewer collect slot: this is where the host assembles the binding.
-	statusDoc, stderr, _ = b.status(repo, "opencode")
+	statusDoc, stderr, _ := b.status(repo, "opencode")
 	input := collectInput(statusDoc)
 	if input == nil || input["capture_operation"] != "review.capture-result" {
 		b.fail(openCodeLane, "reviewer collect slot", fmt.Sprintf("no review.capture-result collect input; %s", firstLine(stderr)))
@@ -156,10 +113,16 @@ func (b *battery) runOpenCodeLane() {
 	}
 	hostResult, err := b.runHookCase(node, hostCase)
 	lensCaptured := false
+	var lensClosure map[string]any
 	switch {
 	case err != nil:
 		b.fail(openCodeLane, "lens frame: host-assembled", err.Error())
 	case hostResult.AfterOK:
+		lensClosure = b.record("result-artifact", []byte(hostResult.Output))
+		if !admittedCapture(lensClosure) {
+			b.fail(openCodeLane, "lens frame: host-assembled", "completion did not round-trip an admitted terminal capture")
+			return
+		}
 		lensCaptured = true
 		b.pass(openCodeLane, "lens frame: host-assembled", "host-serialized binding accepted end to end (fix merged)")
 		b.skip(openCodeLane, "lens frame: Go-typed control", "host frame already captured the slot; control unnecessary")
@@ -194,8 +157,8 @@ func (b *battery) runOpenCodeLane() {
 			b.fail(openCodeLane, "lens frame: Go-typed control", "child prompt is not the Go-issued materialization")
 			return
 		default:
-			manifest := b.record("result-artifact", []byte(controlResult.Output))
-			if !admittedCapture(manifest) {
+			lensClosure = b.record("result-artifact", []byte(controlResult.Output))
+			if !admittedCapture(lensClosure) {
 				b.fail(openCodeLane, "lens frame: Go-typed control", "completion did not round-trip a completed result artifact")
 				return
 			}
@@ -204,7 +167,7 @@ func (b *battery) runOpenCodeLane() {
 	}
 
 	// Correction flow to reach a live validator role slot.
-	if !b.driveCorrectionToValidation(repo, base) {
+	if !b.driveCorrectionToValidation(repo, base, lensClosure) {
 		return
 	}
 
@@ -376,10 +339,17 @@ func (b *battery) runOpenCodeLane() {
 
 // driveCorrectionToValidation follows the final reviewer capture directly to
 // the correction plan, then captures targeted validator evidence after editing.
-func (b *battery) driveCorrectionToValidation(repo, fixedBase string) bool {
-	// The final reviewer capture already produced correction_required; STATUS
-	// now offers only the narrow correction-plan capture before any edit.
-	statusDoc, stderr, _ := b.status(repo, "opencode")
+func (b *battery) driveCorrectionToValidation(repo, fixedBase string, closure map[string]any) bool {
+	// The final reviewer capture already produced correction_required; its exact
+	// continuation now offers the narrow correction-plan capture before any edit.
+	statusDoc, stderr, code := b.statusFromClosure(repo, closure)
+	if code != 0 || getString(statusDoc, "authority", "lineage_id") != operationLineage(closure) ||
+		getString(statusDoc, "next_transition", "reason_code") != "correction_plan_required" {
+		b.fail(openCodeLane, "committed OpenCode correction re-entry", fmt.Sprintf("exit=%d lineage=%q reason=%q %s",
+			code, getString(statusDoc, "authority", "lineage_id"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+		return false
+	}
+	b.pass(openCodeLane, "committed OpenCode correction re-entry", "fresh Node/plugin process followed closure operation plus ordered tokens to correction_plan_required")
 	input := collectInput(statusDoc)
 	if input == nil || input["capture_operation"] != "review.capture-correction-plan" {
 		b.fail(openCodeLane, "correction: plan forecast", fmt.Sprintf("no capture-correction-plan collect input; %s", firstLine(stderr)))
@@ -395,12 +365,16 @@ func (b *battery) driveCorrectionToValidation(repo, fixedBase string) bool {
 
 	// Bounded fix edit.
 	fixed := fixedBase + "export function shout(name) {\n  if (name == null) return \"!\";\n  return name.toUpperCase() + \"!\";\n}\n"
-	if err := writeFile(repo, "src/greet.js", fixed); err != nil {
+	err := writeFile(repo, "src/greet.js", fixed)
+	if err == nil {
+		err = commitAll(repo, "fix: guarded correction candidate")
+	}
+	if err != nil {
 		b.fail(openCodeLane, "correction: bounded fix edit", err.Error())
 		return false
 	}
 
-	b.pass(openCodeLane, "correction: plan and fix", "forecast captured before the bounded edit; STATUS now owns the targeted-validator role route")
+	b.pass(openCodeLane, "correction: plan and fix", "forecast captured before the bounded committed fix; STATUS now owns the targeted-validator role route")
 	return true
 }
 

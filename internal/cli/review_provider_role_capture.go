@@ -209,7 +209,7 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, record.Revision, raw); err != nil {
 		return reviewPreflightError(err)
 	}
-	closure, err := closeReviewOnLastCapturedLens(ctx, binding.root, store, record)
+	closure, err := closeReviewOnLastCapturedLens(ctx, binding.root, store, record, binding.runtime)
 	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, record) {
 		return reviewPreflightError(err)
 	}

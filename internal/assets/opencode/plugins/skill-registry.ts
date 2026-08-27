@@ -49,8 +49,9 @@ export const SkillRegistryPlugin: Plugin = async (input) => {
 
     if (!(await isProjectRoot(cwd))) {
       // Startup hooks must not scream: a non-project directory is a normal
-      // situation, not an error.
-      console.info("[skill-registry] skipping refresh: not a project root:", cwd)
+      // situation, not an error. Log to stderr — stdout belongs to commands
+      // like `opencode models --verbose`, whose output gentle-ai parses.
+      console.error("[skill-registry] skipping refresh: not a project root:", cwd)
       return
     }
 

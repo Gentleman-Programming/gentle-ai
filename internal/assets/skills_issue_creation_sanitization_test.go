@@ -5,37 +5,37 @@ import (
 	"testing"
 )
 
-// TestIssueCreationSkillHasSanitizationRule walks the embedded
-// issue-creation skill asset and asserts the privacy/sanitization
-// requirements from issue #1906 are present. If any required element
-// is removed in a future update, this test fails — preventing the
-// safety rule from disappearing silently.
 func TestIssueCreationSkillHasSanitizationRule(t *testing.T) {
 	content := MustRead("skills/issue-creation/SKILL.md")
 
-	requiredSubstrings := []string{
-		// Critical Rule #6 title
-		"Pre-submission privacy review",
-		// Section header
-		"Pre-submission Privacy Review",
-		// Required placeholders from the issue's "Expected Behavior"
+	for _, term := range []string{
+		"practical privacy scan",
+		"Immediately before mutation",
 		"<project-name>",
 		"<user>",
 		"<hostname>",
 		"<token>",
-		// "Don't redact public identifiers" requirement
-		"intentionally public",
-	}
-
-	for _, sub := range requiredSubstrings {
-		if !strings.Contains(content, sub) {
-			t.Errorf("issue-creation SKILL.md is missing required sanitization element %q (see issue #1906)", sub)
+		"intentionally public identifiers",
+		"useful reproduction structure",
+	} {
+		if !strings.Contains(content, term) {
+			t.Errorf("issue-creation skill is missing privacy contract marker %q (see issue #1906)", term)
 		}
 	}
 
-	// Version guard: the frontmatter must declare at least 1.2 — the
-	// repository-discovery rewrite already used 1.1 without this rule.
-	if !strings.Contains(content, `version: "1.2"`) {
-		t.Errorf("issue-creation SKILL.md version must be at least 1.2 to mark the sanitization rule; check the frontmatter metadata.version field")
+	privacyIndex := strings.Index(content, "Immediately before mutation")
+	publicationCommands := []string{
+		`gh issue create --repo "$TARGET" --title "$TITLE" --body-file "$BODY_FILE"`,
+		`gh issue comment "$NUMBER" --repo "$TARGET" --body-file "$BODY_FILE"`,
+	}
+	for _, command := range publicationCommands {
+		commandIndex := strings.Index(content, command)
+		if privacyIndex == -1 || commandIndex == -1 || privacyIndex > commandIndex {
+			t.Errorf("issue-creation skill must place its privacy scan before publication command %q", command)
+		}
+	}
+
+	if !strings.Contains(content, `version: "1.3"`) {
+		t.Errorf("issue-creation skill must preserve canonical version 1.3")
 	}
 }

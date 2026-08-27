@@ -190,6 +190,37 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 	}
 }
 
+func TestReviewNextTransitionDefaultWorkspaceOverlayCollectsTargetBeforeAuthorization(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Applicability:           reviewtransaction.TargetApplicabilityCurrent,
+		Action:                  reviewtransaction.TargetStatusActionRecover,
+		ActionDisposition:       reviewtransaction.RecoveryEscalated,
+		TargetIdentity:          "sha256:" + strings.Repeat("b", 64),
+		AuthorityTargetIdentity: "sha256:" + strings.Repeat("a", 64),
+		Authority: &ReviewTargetStatusAuthority{
+			LineageID: "review-overlay", Revision: "sha256:" + strings.Repeat("c", 64), State: reviewtransaction.StateEscalated,
+		},
+		Projection: ReviewTargetStatusProjection{
+			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace,
+		},
+	}
+	input := reviewNextTransitionInput{
+		Successor: "review-overlay-successor", Reason: "recover workspace overlay", Actor: "maintainer",
+		Selector: &reviewTransitionSelector{
+			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "main",
+			Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "main"},
+		},
+	}
+	binding := reviewTransitionBinding(status.Authority, status.TargetIdentity, "")
+	input.Authorization = reviewTransitionRecoveryAuthorization(binding, input.Successor, input.Actor, input.Reason)
+
+	got := newReviewNextTransition(status, nil, nil, nil, input)
+	if got.Kind != reviewNextTransitionCollect || got.ReasonCode != "recovery_target_unrepresentable" ||
+		got.Collect == nil || len(got.Collect.Inputs) != 1 || got.Collect.Inputs[0].Name != "recovery_target_selector" {
+		t.Fatalf("default workspace-overlay recovery transition = %#v, want target selection before authorization", got)
+	}
+}
+
 // TestReviewTransitionArgumentToken verifies that executable transition
 // arguments remain literal argv tokens while preconditions remain assertions.
 func TestReviewTransitionArgumentToken(t *testing.T) {
@@ -566,6 +597,7 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	compiler := jsonschema.NewCompiler()
 	resources := []struct{ version, name string }{
 		{"v1", "status-v2.schema.json"},
+		{"v1", "transition-execution.schema.json"},
 		{"v1", "targeted-validation-request.schema.json"},
 		{"v1", "correction-plan-request.schema.json"},
 		{"v1", "artifact-subject.schema.json"},

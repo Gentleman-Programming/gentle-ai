@@ -231,7 +231,7 @@ The managed installer tracks the channel's latest version and does not accept an
 
 > **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native review records bounded evidence while ordinary repository policy owns delivery.
 
-5. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
+1. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
 
    ```bash
    gentle-ai upgrade
@@ -461,3 +461,5 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 <div align="center">
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </div>
+
+> **Trademark notice:** The Gentle AI names and logos are trademarks of Alan Buscaglia. The MIT License applies to the code; it does not permit implying endorsement or official affiliation. See [TRADEMARKS.md](TRADEMARKS.md).

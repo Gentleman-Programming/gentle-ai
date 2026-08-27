@@ -11,9 +11,291 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
+
+func TestCommittedBaseDiffLastReviewerCapturePublishesExactStatusContinuation(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo := initReviewCLIRepo(t)
+	const baseRef = "frozen-base"
+	const lineage = "committed-last-capture-continuation"
+	runReviewCLIGit(t, repo, "branch", baseRef, "HEAD")
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 1\n}\n", 0o755)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "wrong candidate")
+
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", lineage, "--base-ref", baseRef, "--committed-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for order := 0; order < len(started.SelectedLenses)-1; order++ {
+		captureCleanCLIReviewerResult(t, repo, started, order, &bytes.Buffer{})
+	}
+	var closureOutput bytes.Buffer
+	captureCLIReviewerResultWithFindings(t, repo, started, len(started.SelectedLenses)-1, []facadeFinding{{
+		ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate is wrong",
+		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, &closureOutput)
+
+	var closure struct {
+		Schema             string                     `json:"schema"`
+		Operation          string                     `json:"operation"`
+		LineageID          string                     `json:"lineage_id"`
+		State              reviewtransaction.State    `json:"state"`
+		StatusContinuation *ReviewTransitionExecution `json:"status_continuation"`
+	}
+	if err := json.Unmarshal(closureOutput.Bytes(), &closure); err != nil {
+		t.Fatalf("decode committed final capture closure: %v\n%s", err, closureOutput.String())
+	}
+	if closure.Schema != reviewLastEventClosureSchema || closure.Operation != "review/capture-result" ||
+		closure.LineageID != lineage || closure.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("committed final capture closure = %#v, want correction-required public closure", closure)
+	}
+	if closure.StatusContinuation == nil {
+		t.Fatalf("committed correction closure lacks required status_continuation: %s", closureOutput.String())
+	}
+
+	continuation := closure.StatusContinuation
+	if continuation.Operation != "review.status" || continuation.Command == "" {
+		t.Fatalf("status continuation = %#v, want runnable review.status", continuation)
+	}
+	arguments, err := reviewTransitionArgumentMap(continuation.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArguments := map[string]string{
+		"cwd": repo, "contract": ReviewIntegrationContractV2, "next-transition": "true",
+		"lineage": lineage, "base-ref": record.State.InitialSnapshot.BaseTree, "committed-only": "true",
+	}
+	if len(arguments) != len(wantArguments) {
+		t.Fatalf("status continuation arguments = %#v, want exactly %#v", continuation.Arguments, wantArguments)
+	}
+	for name, want := range wantArguments {
+		got, ok := arguments[name]
+		if !ok || got != want {
+			t.Fatalf("status continuation argument %q = %q, want %q; all=%#v", name, got, want, continuation.Arguments)
+		}
+	}
+	for _, argument := range continuation.Arguments {
+		if want := "--" + argument.Name + "=" + argument.Value; argument.Token != want {
+			t.Fatalf("status continuation argument %q token = %q, want %q", argument.Name, argument.Token, want)
+		}
+	}
+	if want := reviewTransitionCommandLine(continuation.Operation, continuation.Arguments); continuation.Command != want {
+		t.Fatalf("status continuation command = %q, want %q", continuation.Command, want)
+	}
+
+	// The named branch is mutable after START. Re-entry must remain bound to the
+	// frozen BaseTree carried by the continuation rather than this symbolic ref.
+	runReviewCLIGit(t, repo, "branch", "-f", baseRef, "HEAD")
+	statusArgs := []string{strings.TrimPrefix(continuation.Operation, "review.")}
+	for _, argument := range continuation.Arguments {
+		statusArgs = append(statusArgs, argument.Token)
+	}
+	var statusOutput bytes.Buffer
+	if err := RunReview(statusArgs, &statusOutput); err != nil {
+		t.Fatalf("run closure status continuation unchanged: %v\n%s", err, statusOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "correction_plan_required" {
+		t.Fatalf("closure status continuation = %#v, want correction_plan_required", status.NextTransition)
+	}
+}
+
+func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertisedLanes(t *testing.T) {
+	for _, runtime := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
+		t.Run(string(runtime), func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 1\n}\n", 0o644)
+			runReviewCLIGit(t, repo, "add", "candidate.go")
+			runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
+
+			lineage := "committed-" + string(runtime) + "-closure"
+			var startOutput bytes.Buffer
+			if err := RunReview(boundNegotiatedStartArgs(t, []string{
+				"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
+				"--base-ref", baseTree,
+			}), &startOutput); err != nil {
+				t.Fatal(negotiatedReviewStartFailure(err, startOutput.String()))
+			}
+			started := decodeNegotiatedReviewStart(t, startOutput.Bytes())
+			if started.LineageID != lineage || len(started.SelectedLenses) == 0 {
+				t.Fatalf("committed negotiated START = %#v", started)
+			}
+
+			store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.State.InitialSnapshot.BaseTree != baseTree {
+				t.Fatalf("committed START base tree = %q, want frozen %q", record.State.InitialSnapshot.BaseTree, baseTree)
+			}
+
+			if started.RepositoryContext == nil || len(started.SelectedLenses) != 1 {
+				t.Fatalf("committed START = %#v, want one provider-owned lens", started)
+			}
+			reviewer := admittedReviewerResultForTest(t, repo, record, started.SelectedLenses[0], 0)
+			reviewer.Findings = []facadeFinding{{
+				ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate is wrong",
+				ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+			payload, err := json.Marshal(reviewer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var terminal []byte
+			switch runtime {
+			case model.AgentClaudeCode, model.AgentCodex:
+				previous := reviewProviderAdapterFor
+				reviewProviderAdapterFor = func(_ reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
+					if agent != runtime {
+						return nil, errors.New("unexpected runtime")
+					}
+					return providerTestAdapter{raw: payload}, nil
+				}
+				t.Cleanup(func() { reviewProviderAdapterFor = previous })
+				var output bytes.Buffer
+				if err := RunReviewCaptureResult([]string{
+					"--repository-context", started.RepositoryContext.Handle, "--lineage", lineage,
+					"--target", started.RepositoryContext.TargetIdentity, "--expected-revision", record.Revision,
+					"--lens", started.SelectedLenses[0], "--order", "0", "--agent", string(runtime),
+				}, &output); err != nil {
+					t.Fatalf("%s final capture: %v\n%s", runtime, err, output.String())
+				}
+				terminal = output.Bytes()
+			case model.AgentOpenCode:
+				relay := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, started.SelectedLenses[0]))
+				hostOutput := string(payload)
+				completed, err := relay.complete(openCodeTransportEnvelope{
+					Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
+				})
+				if err != nil || completed.Output == nil {
+					t.Fatalf("%s final capture = %#v, %v", runtime, completed, err)
+				}
+				terminal = []byte(*completed.Output)
+			}
+
+			var closure reviewLastEventClosureResult
+			decodeStrictReviewJSON(t, terminal, &closure)
+			if closure.LineageID != lineage || closure.State != reviewtransaction.StateCorrectionRequired || closure.StatusContinuation == nil {
+				t.Fatalf("%s terminal committed closure = %#v", runtime, closure)
+			}
+			continuation := closure.StatusContinuation
+			if continuation.Operation != "review.status" {
+				t.Fatalf("%s continuation operation = %q, want review.status", runtime, continuation.Operation)
+			}
+			arguments, err := reviewTransitionArgumentMap(continuation.Arguments)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if arguments["agent"] != string(runtime) || arguments["base-ref"] != baseTree || arguments["committed-only"] != "true" {
+				t.Fatalf("%s continuation selectors = %#v", runtime, arguments)
+			}
+			verb, found := reviewTransitionCommandVerb(continuation.Operation)
+			if !found {
+				t.Fatalf("%s continuation operation %q has no dispatched verb", runtime, continuation.Operation)
+			}
+			statusArgs := []string{verb}
+			for _, argument := range continuation.Arguments {
+				statusArgs = append(statusArgs, argument.Token)
+			}
+			var statusOutput bytes.Buffer
+			if err := RunReview(statusArgs, &statusOutput); err != nil {
+				t.Fatalf("%s closure continuation: %v\n%s", runtime, err, statusOutput.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+			if status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
+				status.NextTransition.ReasonCode != "correction_plan_required" {
+				t.Fatalf("%s closure re-entry = authority=%#v transition=%#v", runtime, status.Authority, status.NextTransition)
+			}
+		})
+	}
+}
+
+func TestCorrectionStatusContinuationUsesFrozenTargetSelectors(t *testing.T) {
+	const tree = "0123456789abcdef0123456789abcdef01234567"
+	for _, testCase := range []struct {
+		name       string
+		kind       reviewtransaction.TargetKind
+		projection reviewtransaction.Projection
+		want       map[string]string
+		absent     []string
+	}{
+		{name: "workspace", kind: reviewtransaction.TargetCurrentChanges, projection: reviewtransaction.ProjectionWorkspace,
+			want: map[string]string{}, absent: []string{"agent", "base-ref", "committed-only", "workspace-overlay", "projection"}},
+		{name: "staged", kind: reviewtransaction.TargetCurrentChanges, projection: reviewtransaction.ProjectionStaged,
+			want: map[string]string{"projection": "staged"}, absent: []string{"agent", "base-ref", "committed-only", "workspace-overlay"}},
+		{name: "workspace-overlay", kind: reviewtransaction.TargetBaseWorkspaceOverlay, projection: reviewtransaction.ProjectionWorkspace,
+			want: map[string]string{"base-ref": tree, "workspace-overlay": "true"}, absent: []string{"agent", "committed-only", "projection"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			continuation := reviewCorrectionStatusContinuation("/frozen/repository", reviewtransaction.CompactState{
+				LineageID:       "correction-status-" + testCase.name,
+				InitialSnapshot: reviewtransaction.Snapshot{Kind: testCase.kind, Projection: testCase.projection, BaseTree: tree, Identity: "sha256:" + strings.Repeat("a", 64)},
+			}, "sha256:"+strings.Repeat("b", 64), "")
+			arguments, err := reviewTransitionArgumentMap(continuation.Arguments)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range testCase.want {
+				if got := arguments[name]; got != want {
+					t.Fatalf("%s selector %q = %q, want %q", testCase.name, name, got, want)
+				}
+			}
+			for _, name := range testCase.absent {
+				if _, found := arguments[name]; found {
+					t.Fatalf("%s continuation added non-applicable selector %q: %#v", testCase.name, name, continuation.Arguments)
+				}
+			}
+		})
+	}
+}
+
+func TestCorrectionStatusContinuationRefusesUnsupportedTargetKind(t *testing.T) {
+	for _, kind := range []reviewtransaction.TargetKind{
+		reviewtransaction.TargetExactRevision,
+		reviewtransaction.TargetFixDiff,
+		reviewtransaction.TargetKind("malformed-target-kind"),
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			continuation := reviewCorrectionStatusContinuation("/frozen/repository", reviewtransaction.CompactState{
+				LineageID: "unsupported-correction-status",
+				InitialSnapshot: reviewtransaction.Snapshot{
+					Kind: kind, Identity: "sha256:" + strings.Repeat("a", 64),
+				},
+			}, "sha256:"+strings.Repeat("b", 64), model.AgentPi)
+			if continuation != nil {
+				t.Fatalf("unsupported target kind %q emitted selector-incomplete continuation %#v", kind, continuation)
+			}
+		})
+	}
+}
 
 func TestSelectorlessCommittedCorrectionClosesOnTargetedValidation(t *testing.T) {
 	for _, amend := range []bool{false, true} {

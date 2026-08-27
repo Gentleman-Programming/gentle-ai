@@ -3814,6 +3814,77 @@ func TestInjectSharedDirCreatedWithAllFiles(t *testing.T) {
 	}
 }
 
+func TestInjectSkillDirectoryRemovesLegacySharedSkillMarker(t *testing.T) {
+	skillDir := filepath.Join(t.TempDir(), "compatibility-root")
+	sharedDir := filepath.Join(skillDir, "_shared")
+	legacyMarker := filepath.Join(sharedDir, "SKILL.md")
+
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", sharedDir, err)
+	}
+	if err := os.WriteFile(legacyMarker, []byte("legacy generated shared skill marker\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", legacyMarker, err)
+	}
+
+	result, err := InjectSkillDirectory(skillDir, "")
+	if err != nil {
+		t.Fatalf("InjectSkillDirectory() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("InjectSkillDirectory() changed = false, want legacy marker cleanup to report a change")
+	}
+	if _, err := os.Stat(legacyMarker); !os.IsNotExist(err) {
+		t.Fatalf("legacy shared marker %q still exists or could not be checked: %v", legacyMarker, err)
+	}
+
+	readmePath := filepath.Join(sharedDir, "README.md")
+	readme, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", readmePath, err)
+	}
+	if string(readme) != assets.MustRead("skills/_shared/README.md") {
+		t.Fatalf("README.md = %q, want current embedded support-directory documentation", readme)
+	}
+
+	for _, name := range mustSharedSkillFileNames(t) {
+		path := filepath.Join(sharedDir, filepath.FromSlash(name))
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("shared reference %q was not preserved: %v", path, err)
+		}
+	}
+}
+
+func TestInjectSkillDirectoryRefusesToRemoveNonRegularLegacySharedMarker(t *testing.T) {
+	skillDir := filepath.Join(t.TempDir(), "compatibility-root")
+	legacyMarker := filepath.Join(skillDir, "_shared", "SKILL.md")
+
+	if err := os.MkdirAll(legacyMarker, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", legacyMarker, err)
+	}
+
+	_, err := InjectSkillDirectory(skillDir, "")
+	if err == nil {
+		t.Fatal("InjectSkillDirectory() error = nil, want refusal to remove a non-regular legacy marker")
+	}
+	info, statErr := os.Stat(legacyMarker)
+	if statErr != nil {
+		t.Fatalf("Stat(%q) error = %v", legacyMarker, statErr)
+	}
+	if !info.IsDir() {
+		t.Fatalf("legacy marker mode = %v, want directory preserved after refusal", info.Mode())
+	}
+}
+
+func mustSharedSkillFileNames(t *testing.T) []string {
+	t.Helper()
+
+	names, err := assets.SharedSkillFileNames()
+	if err != nil {
+		t.Fatalf("SharedSkillFileNames() error = %v", err)
+	}
+	return names
+}
+
 // ---------------------------------------------------------------------------
 // Fix 2: orchestrator dedup — stripBareOrchestratorSection unit tests
 // ---------------------------------------------------------------------------

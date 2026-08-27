@@ -344,10 +344,41 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 		t.Fatalf("Codex version = %q, %v", strings.TrimSpace(string(version)), err)
 	}
 	harness := newOrganicHarness(t)
+	baseTree := strings.TrimSpace(harness.git("rev-parse", "HEAD^{tree}"))
 	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+	harness.git("add", "--", "internal/provider/candidate.go")
+	harness.git("commit", "-qm", "feat: committed Codex correction candidate")
 	const lineage = "codex-loopback-egress-proof"
-	_ = organicProviderStart(t, harness, lineage, "codex")
-	binding := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, "codex"))
+	statusPayload := harness.gentle(
+		"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--agent", "codex", "--lineage", lineage, "--base-ref", baseTree, "--committed-only", "--next-transition",
+	)
+	var negotiated organicProviderStatusResult
+	if err := json.Unmarshal(statusPayload, &negotiated); err != nil || negotiated.NextTransition == nil || negotiated.NextTransition.Execute == nil {
+		t.Fatalf("decode committed Codex START: %v\n%s", err, statusPayload)
+	}
+	start := negotiated.NextTransition.Execute
+	stdout, stderr, err := harness.gentleAllowFailure(
+		"review", "start", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--target", start.argument("target"), "--projection", start.argument("projection"), "--base-ref", baseTree, "--committed-only",
+		"--lineage", lineage, "--agent", "codex", "--consent", "granted", "--focus", "reliability",
+	)
+	if err != nil {
+		t.Fatalf("committed Codex START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var started organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &started); err != nil || started.State != "reviewing" || len(started.SelectedLenses) != 1 {
+		t.Fatalf("committed Codex START = %#v, %v\n%s", started, err, stdout)
+	}
+	statusPayload = harness.gentle(
+		"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--agent", "codex", "--lineage", lineage, "--base-ref", baseTree, "--committed-only", "--next-transition",
+	)
+	var reviewing organicProviderStatusResult
+	if err := json.Unmarshal(statusPayload, &reviewing); err != nil {
+		t.Fatalf("decode committed Codex capture STATUS: %v\n%s", err, statusPayload)
+	}
+	binding := organicProviderBinding(t, reviewing)
 	order, err := strconv.Atoi(binding["order"])
 	if err != nil {
 		t.Fatal(err)
@@ -356,8 +387,13 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 		"subject_hash": binding["subject-hash"],
 		"inspection":   map[string]any{"status": "completed", "paths": []string{"internal/provider/candidate.go"}},
 		"lens":         binding["lens"],
-		"findings":     []any{},
-		"evidence":     []string{"loopback inspected the frozen candidate"},
+		"findings": []any{map[string]any{
+			"location": "internal/provider/candidate.go:3", "severity": "CRITICAL",
+			"claim":          "the committed candidate returns the wrong value",
+			"proof_refs":     []string{"internal/provider/candidate.go:3 is introduced by the committed candidate"},
+			"evidence_class": "deterministic", "causal_disposition": "introduced",
+		}},
+		"evidence": []string{"loopback found a candidate-caused blocker in the frozen committed candidate"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +459,7 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		"--repository-context", binding["repository-context"], "--expected-revision", binding["expected-revision"],
 		"--lineage", binding["lineage"], "--target", binding["target"], "--lens", binding["lens"], "--order", strconv.Itoa(order),
 	}
-	stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+	stdout, stderr, err = runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
 	if err != nil {
 		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -444,14 +480,45 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("Codex egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", denied, len(connections), connections)
-	var terminal organicFinalizeResult
+	var terminal struct {
+		organicFinalizeResult
+		StatusContinuation *organicProviderExecute `json:"status_continuation"`
+	}
 	if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
 		t.Fatalf("decode terminal Codex provider capture: %v\n%s", err, stdout)
 	}
-	if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
-		t.Fatalf("registered Codex provider capture did not close the clean review: %#v", terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != organicStateCorrectionRequired || terminal.StatusContinuation == nil {
+		t.Fatalf("registered Codex provider capture did not open committed correction: %#v", terminal)
 	}
-	harness.assertReviewBurned(lineage, terminal)
+	if terminal.StatusContinuation.Operation != "review.status" {
+		t.Fatalf("Codex committed correction continuation operation = %q, want review.status", terminal.StatusContinuation.Operation)
+	}
+	wantTokens := map[string]bool{
+		"--lineage=" + lineage: false, "--base-ref=" + baseTree: false,
+		"--committed-only=true": false, "--agent=codex": false,
+	}
+	continuationArguments := []string{"review", "status"}
+	for _, argument := range terminal.StatusContinuation.Arguments {
+		continuationArguments = append(continuationArguments, argument.Token)
+		if _, found := wantTokens[argument.Token]; found {
+			wantTokens[argument.Token] = true
+		}
+	}
+	for token, found := range wantTokens {
+		if !found {
+			t.Fatalf("Codex committed correction continuation omitted %q: %#v", token, terminal.StatusContinuation)
+		}
+	}
+	continuationPayload := harness.gentle(continuationArguments...)
+	var correction organicProviderStatusResult
+	if err := json.Unmarshal(continuationPayload, &correction); err != nil {
+		t.Fatalf("decode returned Codex correction STATUS: %v\n%s", err, continuationPayload)
+	}
+	if correction.Authority.LineageID != lineage || correction.Authority.State != organicStateCorrectionRequired ||
+		correction.Projection.BaseTree != baseTree || correction.NextTransition == nil ||
+		correction.NextTransition.ReasonCode != "correction_plan_required" {
+		t.Fatalf("returned Codex committed correction STATUS = %#v", correction)
+	}
 }
 
 // codexTracedConnectAddresses parses one trace per child process. strace -ff
@@ -1464,7 +1531,16 @@ func organicProviderStart(t *testing.T, harness *organicHarness, lineage, agent 
 }
 
 type organicProviderStatusResult struct {
+	TargetIdentity string                     `json:"target_identity"`
+	Applicability  string                     `json:"applicability"`
 	NextTransition *organicProviderTransition `json:"next_transition"`
+	Authority      struct {
+		LineageID string `json:"lineage_id"`
+		State     string `json:"state"`
+	} `json:"authority"`
+	Projection struct {
+		BaseTree string `json:"base_tree"`
+	} `json:"projection"`
 }
 
 type organicProviderTransition struct {
@@ -1497,6 +1573,7 @@ type organicProviderArtifact struct {
 type organicProviderArgument struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+	Token string `json:"token"`
 }
 
 func (execute organicProviderExecute) argument(name string) string {
@@ -2082,6 +2159,436 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 	harness.writeFiles(map[string]string{"docs/correction-follow-up.md": organicLines("fresh correction follow-up", 3)})
 	fresh, _ := harness.startReview(lineage + "-fresh")
 	harness.approveReview(lineage+"-fresh", fresh)
+}
+
+// TestOrganicRuntimeCurrentReviewHardening consolidates the remaining current
+// lifecycle hardening journeys on the v2 negotiated STATUS and last-event routes.
+func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
+	t.Run("issue-1699-capture-admission", func(t *testing.T) {
+		for _, test := range []struct {
+			name string
+			id   string
+		}{
+			{name: "whitespace-wrapped-id", id: " \tR3-001\n "},
+			{name: "omitted-id"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				harness := newOrganicHarness(t)
+				const path = "internal/feature/candidate.go"
+				lineage := "organic-current-capture-admission-" + test.name
+				harness.writeFiles(map[string]string{path: organicLimitSource("broken")})
+				started := organicProviderStart(t, harness, lineage, "opencode")
+				if len(started.SelectedLenses) != 1 || started.SelectedLenses[0] != "review-reliability" {
+					t.Fatalf("capture admission selected lenses = %v, want [review-reliability]", started.SelectedLenses)
+				}
+
+				stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+					Lens: started.SelectedLenses[0],
+					Findings: []organicFinding{{
+						ID:                test.id,
+						Location:          path + ":5",
+						Severity:          "CRITICAL",
+						Claim:             "the candidate returns the wrong terminal value",
+						ProofRefs:         []string{"a differential test passes on base and fails on the candidate"},
+						EvidenceClass:     "deterministic",
+						CausalDisposition: "introduced",
+					}},
+					Evidence: []string{"the focused differential test failed on the candidate"},
+				})
+				if err != nil {
+					t.Fatalf("capture canonicalized candidate-causal finding: %v\nstderr:\n%s", err, stderr)
+				}
+				var terminal struct {
+					Operation string `json:"operation"`
+					State     string `json:"state"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
+					t.Fatalf("decode terminal capture: %v\n%s", err, stdout)
+				}
+				if terminal.Operation != "review/capture-result" || terminal.State != organicStateCorrectionRequired {
+					t.Fatalf("capture terminal = %#v, want correction_required", terminal)
+				}
+			})
+		}
+	})
+
+	t.Run("issue-1666-and-1807-policy-preflight", func(t *testing.T) {
+		for _, test := range []struct {
+			name      string
+			directory bool
+		}{
+			{name: "missing-policy-file"},
+			{name: "directory-as-policy", directory: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				harness := newOrganicHarness(t)
+				lineage := "organic-current-policy-preflight-" + test.name
+				harness.writeFiles(map[string]string{"tracked.txt": "policy preflight candidate\n"})
+				status := organicProviderStatus(t, harness, lineage, "opencode")
+				if status.NextTransition == nil || status.NextTransition.Execute == nil {
+					t.Fatalf("provider START transition = %#v", status.NextTransition)
+				}
+				start := status.NextTransition.Execute
+				policy := filepath.Join(harness.repo.worktree, "missing-policy.json")
+				if test.directory {
+					policy = harness.repo.worktree
+				}
+
+				stdout, stderr, err := harness.gentleAllowFailure(
+					"review", "start", "--cwd", harness.repo.worktree,
+					"--contract", "gentle-ai.review-integration/v2", "--target", start.argument("target"), "--projection", start.argument("projection"),
+					"--lineage", lineage, "--agent", "opencode", "--consent", "granted", "--policy", policy,
+				)
+				if err == nil {
+					t.Fatalf("START with unusable policy succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+				}
+				var failure struct {
+					Code            string `json:"code"`
+					Phase           string `json:"phase"`
+					MutationOutcome string `json:"mutation_outcome"`
+					Cause           string `json:"cause"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &failure); err != nil {
+					t.Fatalf("decode policy preflight failure: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+				}
+				if failure.Code != "invalid_request" || failure.Phase != "preflight" || failure.MutationOutcome != "not_started" {
+					t.Fatalf("policy preflight failure = %#v, want invalid_request/preflight/not_started", failure)
+				}
+				if !strings.Contains(failure.Cause, "read facade review policy") {
+					t.Fatalf("policy preflight cause = %q, want wrapped policy read", failure.Cause)
+				}
+				if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "defect-reports")); !os.IsNotExist(statErr) {
+					t.Fatalf("policy preflight created a defect-report entry: %v", statErr)
+				}
+			})
+		}
+	})
+
+	t.Run("issue-1832-disabled-no-upstream", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		harness.git("remote", "remove", "origin")
+		harness.disableReview()
+
+		result := harness.gate("pre-push")
+		if result.Delivery != "disabled/unmanaged" {
+			t.Fatalf("disabled pre-push without upstream = %#v, want disabled/unmanaged", result)
+		}
+		if result.Allowed || result.Result == organicGateAllow {
+			t.Fatalf("disabled pre-push without upstream fabricated an allow result: %#v", result)
+		}
+		if result.Context.Denial != nil {
+			t.Fatalf("disabled pre-push without upstream leaked a denial: %#v", result.Context.Denial)
+		}
+	})
+
+	t.Run("issue-1812-target-shape", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		harness.writeFiles(map[string]string{"tracked.txt": organicLines("staged candidate", 4)})
+		harness.git("add", "--", "tracked.txt")
+		base := strings.TrimSpace(harness.git("rev-parse", "HEAD"))
+
+		stdout, stderr, err := harness.gentleAllowFailure(
+			"review", "start", "--cwd", harness.repo.worktree,
+			"--projection", "staged", "--base-ref", base, "--committed-only",
+		)
+		if err == nil {
+			t.Fatalf("staged base-diff START unexpectedly succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+		}
+		if strings.Contains(stderr, "intent is ambiguous") || !strings.Contains(stderr, "candidate has no pending changes") ||
+			!strings.Contains(stderr, "--base-ref <commit>") {
+			t.Fatalf("staged base-diff continuation = %q", stderr)
+		}
+	})
+
+	t.Run("issue-1771-unborn-status-and-start", func(t *testing.T) {
+		harness := newOrganicHarnessForWorktree(t, initOrganicCurrentUnbornRepository(t))
+		harness.writeFiles(map[string]string{"candidate.txt": organicLines("unborn selector-free candidate", 4)})
+		harness.git("add", "--", "candidate.txt")
+
+		const lineage = "organic-current-unborn"
+		status := organicProviderStatus(t, harness, "", "opencode")
+		if status.TargetIdentity == "" || status.NextTransition == nil || status.NextTransition.Execute == nil {
+			t.Fatalf("selector-free unborn STATUS = %#v, want target identity and START transition", status)
+		}
+		start := status.NextTransition.Execute
+		stdout, stderr, err := harness.gentleAllowFailure(
+			"review", "start", "--cwd", harness.repo.worktree,
+			"--contract", "gentle-ai.review-integration/v2", "--target", start.argument("target"), "--projection", start.argument("projection"),
+			"--lineage", lineage, "--agent", "opencode", "--consent", "granted",
+		)
+		if err != nil {
+			t.Fatalf("unborn START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		var started organicStartResult
+		if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+			t.Fatalf("decode unborn START: %v\n%s", err, stdout)
+		}
+		if started.targetIdentity() == "" || started.targetIdentity() != status.TargetIdentity || started.targetIdentity() != start.argument("target") {
+			t.Fatalf("unborn target identities: status=%q transition=%q start=%q", status.TargetIdentity, start.argument("target"), started.targetIdentity())
+		}
+	})
+
+	t.Run("issue-1813-store-quarantine", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		const (
+			lineage = "organic-current-store-quarantine"
+			path    = "internal/feature/quarantine.go"
+		)
+		harness.writeFiles(map[string]string{path: organicLimitSource("broken")})
+		started := organicProviderStart(t, harness, lineage, "opencode")
+		if len(started.SelectedLenses) != 1 {
+			t.Fatalf("quarantine fixture selected lenses = %v, want one", started.SelectedLenses)
+		}
+		stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+			Lens: started.SelectedLenses[0],
+			Findings: []organicFinding{{
+				Location:          path + ":5",
+				Severity:          "CRITICAL",
+				Claim:             "the candidate returns the wrong terminal value",
+				ProofRefs:         []string{"a differential test passes on base and fails on the candidate"},
+				EvidenceClass:     "deterministic",
+				CausalDisposition: "introduced",
+			}},
+			Evidence: []string{"the focused differential test failed on the candidate"},
+		})
+		if err != nil {
+			t.Fatalf("capture correction-required result: %v\nstderr:\n%s", err, stderr)
+		}
+		var required struct {
+			Operation string `json:"operation"`
+			State     string `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &required); err != nil {
+			t.Fatalf("decode correction-required capture: %v\n%s", err, stdout)
+		}
+		if required.Operation != "review/capture-result" || required.State != organicStateCorrectionRequired {
+			t.Fatalf("quarantine capture = %#v, want correction_required", required)
+		}
+
+		waiting := harnessCorrectionStatus(t, harness, lineage)
+		if waiting.NextTransition == nil || waiting.NextTransition.Kind != "collect" ||
+			waiting.NextTransition.ReasonCode != "correction_plan_required" || waiting.NextTransition.Collect == nil ||
+			len(waiting.NextTransition.Collect.Inputs) != 1 {
+			t.Fatalf("quarantine correction STATUS = %#v", waiting)
+		}
+		input := waiting.NextTransition.Collect.Inputs[0]
+		if input.CaptureOperation != "review.capture-correction-plan" {
+			t.Fatalf("quarantine plan capture operation = %q", input.CaptureOperation)
+		}
+		planArguments := []string{"review", "capture-correction-plan"}
+		hasRepositoryContext := false
+		for _, argument := range input.Arguments {
+			if argument.Name == "repository-context" && argument.Value != "" {
+				hasRepositoryContext = true
+			}
+			planArguments = append(planArguments, "--"+argument.Name, argument.Value)
+		}
+		if !hasRepositoryContext {
+			planArguments = append(planArguments, "--cwd", harness.repo.worktree)
+		}
+		planArguments = append(planArguments, "--correction-lines", "1")
+		planPayload := harness.gentle(planArguments...)
+		var planned struct {
+			Operation string `json:"operation"`
+			State     string `json:"state"`
+		}
+		if err := json.Unmarshal(planPayload, &planned); err != nil {
+			t.Fatalf("decode correction plan: %v\n%s", err, planPayload)
+		}
+		if planned.Operation != "review.capture-correction-plan" || planned.State != organicStateCorrectionRequired {
+			t.Fatalf("quarantine correction plan = %#v", planned)
+		}
+
+		statePath := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage, "review-state.json")
+		payload, err := os.ReadFile(statePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		corrupted := strings.Replace(string(payload), `"state": "correction_required",`, `"state": "invalidated",`, 1)
+		if corrupted == string(payload) {
+			t.Fatal("quarantine fixture did not contain correction_required state")
+		}
+		if err := os.WriteFile(statePath, []byte(corrupted), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		inventoryPayload := harness.gentle("review", "status", "--cwd", harness.repo.worktree)
+		var inventory struct {
+			Complete      bool `json:"complete"`
+			Authoritative bool `json:"authoritative"`
+			Entries       []struct {
+				LineageID string `json:"lineage_id"`
+			} `json:"entries"`
+			Diagnostics []struct {
+				Path    string `json:"path"`
+				Problem string `json:"problem"`
+			} `json:"diagnostics"`
+		}
+		if err := json.Unmarshal(inventoryPayload, &inventory); err != nil {
+			t.Fatalf("decode selector-free quarantine diagnostic: %v\n%s", err, inventoryPayload)
+		}
+		if !inventory.Complete || !inventory.Authoritative {
+			t.Fatalf("selector-free quarantine inventory = %#v", inventory)
+		}
+		foundDiagnostic := false
+		for _, diagnostic := range inventory.Diagnostics {
+			if strings.Contains(diagnostic.Path, lineage) && strings.HasPrefix(diagnostic.Problem, "quarantined-semantic-lineage:") {
+				foundDiagnostic = true
+			}
+		}
+		if !foundDiagnostic {
+			t.Fatalf("selector-free quarantine diagnostic = %#v", inventory.Diagnostics)
+		}
+		for _, entry := range inventory.Entries {
+			if entry.LineageID == lineage {
+				t.Fatalf("quarantined lineage remained selectable: %#v", entry)
+			}
+		}
+
+		explicitPayload := harness.gentle(
+			"review", "status", "--cwd", harness.repo.worktree,
+			"--contract", "gentle-ai.review-integration/v2", "--agent", "opencode", "--lineage", lineage, "--next-transition",
+		)
+		var explicit organicProviderStatusResult
+		if err := json.Unmarshal(explicitPayload, &explicit); err != nil {
+			t.Fatalf("decode explicit quarantine STATUS: %v\n%s", err, explicitPayload)
+		}
+		if explicit.Applicability != "corrupted" {
+			t.Fatalf("explicit selector did not fail closed: %#v", explicit)
+		}
+	})
+
+	t.Run("selector-free-status-is-silent", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		harness.writeFiles(map[string]string{"tracked.txt": "selector-free status base\n"})
+		harness.git("add", "-A")
+		harness.git("commit", "-qm", "selector-free status base")
+		harness.writeFiles(map[string]string{"tracked.txt": "selector-free status current\n"})
+
+		stdout, stderr, err := harness.gentleAllowFailure(
+			"review", "status", "--cwd", harness.repo.worktree,
+			"--contract", "gentle-ai.review-integration/v2", "--agent", "opencode", "--next-transition",
+		)
+		if err != nil {
+			t.Fatalf("fresh selector-free STATUS: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		var fresh organicProviderStatusResult
+		if err := json.Unmarshal([]byte(stdout), &fresh); err != nil {
+			t.Fatalf("decode fresh selector-free STATUS: %v\n%s", err, stdout)
+		}
+		if fresh.NextTransition == nil || fresh.NextTransition.Kind != "execute" || fresh.NextTransition.ReasonCode != "fresh_target_ready" {
+			t.Fatalf("fresh selector-free transition = %#v", fresh.NextTransition)
+		}
+		if stderr != "" {
+			t.Fatalf("fresh selector-free STATUS wrote stderr: %q", stderr)
+		}
+
+		stdout, stderr, err = harness.gentleAllowFailure(
+			"review", "status", "--cwd", harness.repo.worktree,
+			"--contract", "gentle-ai.review-integration/v2", "--agent", "opencode", "--next-transition",
+			"--workspace-overlay", "--projection", "staged", "--base-ref", "HEAD",
+		)
+		if err != nil {
+			t.Fatalf("staged-overlay selector-free STATUS: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		var terminal organicProviderStatusResult
+		if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
+			t.Fatalf("decode staged-overlay selector-free STATUS: %v\n%s", err, stdout)
+		}
+		if terminal.NextTransition == nil || terminal.NextTransition.Kind != "stop" || terminal.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
+			t.Fatalf("staged-overlay selector-free transition = %#v", terminal.NextTransition)
+		}
+		if stderr != "" {
+			t.Fatalf("staged-overlay selector-free STATUS wrote stderr: %q", stderr)
+		}
+	})
+
+	t.Run("occupied-reviewer-slot-has-no-report", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		const (
+			lineage = "organic-current-occupied-slot"
+			path    = "internal/auth/session.go"
+		)
+		harness.writeFiles(map[string]string{path: "package auth\n\nfunc Session() bool { return true }\n"})
+		status := organicProviderStatus(t, harness, lineage, "opencode")
+		if status.NextTransition == nil || status.NextTransition.Execute == nil {
+			t.Fatalf("high-risk START transition = %#v", status.NextTransition)
+		}
+		start := status.NextTransition.Execute
+		stdout, stderr, err := harness.gentleAllowFailure(
+			"review", "start", "--cwd", harness.repo.worktree,
+			"--contract", "gentle-ai.review-integration/v2", "--target", start.argument("target"), "--projection", start.argument("projection"),
+			"--lineage", lineage, "--agent", "opencode", "--consent", "granted",
+		)
+		if err != nil {
+			t.Fatalf("high-risk START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		}
+		var started organicStartResult
+		if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+			t.Fatalf("decode high-risk START: %v\n%s", err, stdout)
+		}
+		if started.RiskLevel != organicRiskHigh || len(started.SelectedLenses) != 4 {
+			t.Fatalf("occupied-slot fixture = %#v, want high-risk four-lens review", started)
+		}
+
+		first, firstStderr, firstErr := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+			Lens: started.SelectedLenses[0], Findings: []organicFinding{}, Evidence: []string{"first reviewer evidence"},
+		})
+		if firstErr != nil {
+			t.Fatalf("first high-risk capture: %v\nstderr:\n%s", firstErr, firstStderr)
+		}
+		var firstEvent struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(first), &firstEvent); err != nil {
+			t.Fatalf("decode first high-risk capture: %v\n%s", err, first)
+		}
+		if firstEvent.State == organicStateApproved || firstEvent.State == organicStateCorrectionRequired {
+			t.Fatalf("first high-risk capture was terminal: %#v", firstEvent)
+		}
+
+		_, conflictStderr, conflictErr := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+			Lens: started.SelectedLenses[0], Findings: []organicFinding{}, Evidence: []string{"second reviewer evidence"},
+		})
+		if conflictErr == nil {
+			t.Fatal("differing result replaced an occupied reviewer slot")
+		}
+		if !strings.Contains(conflictStderr, "reviewer_result_slot_occupied") ||
+			!strings.Contains(conflictStderr, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition") ||
+			!strings.Contains(conflictStderr, "authoritative continuation") {
+			t.Fatalf("occupied-slot continuation = %q", conflictStderr)
+		}
+		for _, forbidden := range []string{"retry", "review dispose-result", "review preserve-result"} {
+			if strings.Contains(conflictStderr, forbidden) {
+				t.Fatalf("occupied-slot continuation advertised %q: %q", forbidden, conflictStderr)
+			}
+		}
+		continued := organicProviderStatus(t, harness, lineage, "opencode")
+		if continued.NextTransition == nil || continued.NextTransition.Kind != "collect" || continued.NextTransition.ReasonCode != "reviewer_results_required" {
+			t.Fatalf("occupied-slot STATUS continuation = %#v", continued.NextTransition)
+		}
+		if _, statErr := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "defect-reports")); !os.IsNotExist(statErr) {
+			t.Fatalf("occupied-slot conflict created a defect-report entry: %v", statErr)
+		}
+	})
+}
+
+// initOrganicCurrentUnbornRepository creates an unborn repository for the
+// negotiated target-resolution journey without reusing the tagged fixture name.
+func initOrganicCurrentUnbornRepository(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	for _, arguments := range [][]string{
+		{"init", "--quiet", "--initial-branch=main", "."},
+		{"config", "user.name", "Organic E2E"},
+		{"config", "user.email", "organic-e2e@example.invalid"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		if _, err := organicGitOutput(context.Background(), repo, arguments...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo
 }
 
 // TestOrganicFlexibleDeliveryReusesOneReceipt keeps every delivery route after

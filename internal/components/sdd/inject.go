@@ -233,7 +233,9 @@ var compatibilitySDDSkillIDs = []model.SkillID{
 	"sdd-onboard", "judgment-day",
 }
 
-// SkillDirectoryPaths returns every file that InjectSkillDirectory may write.
+// SkillDirectoryPaths returns every file that InjectSkillDirectory may write or
+// remove. The legacy marker remains a transaction target so a failed refresh can
+// restore it from the compatibility backup.
 func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
@@ -246,6 +248,7 @@ func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 	for _, fileName := range sharedFiles {
 		paths = append(paths, filepath.Join(skillDir, "_shared", fileName))
 	}
+	paths = append(paths, filepath.Join(skillDir, "_shared", "SKILL.md"))
 	if capability == "" {
 		capability = "capable"
 	}
@@ -265,6 +268,16 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 
 // InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
 func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacySharedSkillMarker)
+}
+
+// InjectSkillDirectoryWithCompatibilityWriter refreshes SDD skills through a
+// compatibility-root writer that owns both writes and legacy-marker removal.
+func InjectSkillDirectoryWithCompatibilityWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
+	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacyMarker)
+}
+
+func injectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
@@ -292,6 +305,16 @@ func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(
 		result.Files = append(result.Files, path)
 	}
 
+	legacyMarkerPath := filepath.Join(skillDir, "_shared", "SKILL.md")
+	removedLegacyMarker, err := removeLegacyMarker(legacyMarkerPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if removedLegacyMarker {
+		result.Changed = true
+		result.Files = append(result.Files, legacyMarkerPath)
+	}
+
 	if capability == "" {
 		capability = "capable"
 	}
@@ -302,6 +325,27 @@ func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(
 	result.Changed = result.Changed || sddResult.Changed
 	result.Files = append(result.Files, sddResult.Files...)
 	return result, nil
+}
+
+// removeLegacySharedSkillMarker removes the obsolete generated file that made
+// the _shared support directory look like an invokable skill. It never touches
+// README.md or shared reference files, and rejects non-regular paths rather than
+// following or removing them.
+func removeLegacySharedSkillMarker(markerPath string) (bool, error) {
+	info, err := os.Lstat(markerPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat legacy shared skill marker %s: %w", markerPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("legacy shared skill marker %s is not a regular file", markerPath) // refusal:by-design world-action: replace or remove the non-regular legacy marker before refreshing shared SDD assets
+	}
+	if err := os.Remove(markerPath); err != nil {
+		return false, fmt.Errorf("remove legacy shared skill marker %s: %w", markerPath, err)
+	}
+	return true, nil
 }
 
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {

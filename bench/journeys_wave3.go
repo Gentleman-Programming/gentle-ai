@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -65,11 +66,12 @@ func readAtomicReviewStatus(r *journeyRun, lineage string) (statusEnvelope, erro
 	return readAtomicReviewStatusAt(r, r.sandbox.Repo, lineage)
 }
 
-func readAtomicReviewStatusAt(r *journeyRun, cwd, lineage string) (statusEnvelope, error) {
+func readAtomicReviewStatusAt(r *journeyRun, cwd, lineage string, selectors ...string) (statusEnvelope, error) {
 	args := []string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--cwd", cwd}
 	if lineage != "" {
 		args = append(args, "--lineage", lineage)
 	}
+	args = append(args, selectors...)
 	observation := r.runAt(cwd, args, false)
 	if observation.ExitCode != 0 {
 		return statusEnvelope{}, fmt.Errorf("atomic STATUS exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
@@ -349,6 +351,7 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 	if err != nil {
 		return err
 	}
+	var terminal Observation
 	for capture := range expected {
 		status, err := readAtomicReviewStatus(r, lineageID)
 		if err != nil {
@@ -399,20 +402,29 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 		if observation.ExitCode != 0 {
 			return fmt.Errorf("capture selected reviewer slot %d: %s", capture, firstLine(observation.Stderr))
 		}
+		terminal = observation
 	}
 
-	after, err := readAtomicReviewStatus(r, lineageID)
-	if err != nil {
-		return err
-	}
 	if includeCorrectableFinding {
+		after, continued, err := correctionStatusFromLastEventCapture(r, terminal)
+		if err != nil {
+			return err
+		}
+		if !continued {
+			return errors.New("final selected reviewer capture did not carry correction status continuation")
+		}
 		if after.Authority.LineageID != lineageID || after.Authority.State != "correction_required" ||
 			after.NextTransition.Kind != "collect" || after.NextTransition.ReasonCode != "correction_plan_required" ||
 			len(after.NextTransition.Collect.Inputs) != 1 || after.NextTransition.Collect.Inputs[0].Name != "correction_lines" ||
 			after.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-correction-plan" {
 			return fmt.Errorf("full selected lens set did not advance to its correction-plan capture: authority=%+v transition=%+v", after.Authority, after.NextTransition)
 		}
-		return nil
+		return rememberCorrectionStatusContinuation(r, lineageID, after)
+	}
+
+	after, err := readAtomicReviewStatus(r, lineageID)
+	if err != nil {
+		return err
 	}
 	if after.Authority.LineageID != "" || after.Authority.State != "" || after.NextTransition.Kind != "execute" ||
 		after.NextTransition.Execute.Operation != "review.start" {
@@ -424,13 +436,24 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 // captureCorrectionPlanFor follows the correction-plan input STATUS published
 // after the last severe reviewer capture. The plan is the one public pre-edit
 // event; FINALIZE never participates in a last-event-closure correction.
-func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines int) error {
+func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines int, selectors ...string) error {
 	if correctionLines <= 0 {
 		return fmt.Errorf("correction plan needs a positive line forecast")
 	}
-	status, err := readAtomicReviewStatus(r, lineageID)
+	var status statusEnvelope
+	payload, found, err := readCorrectionPlanStatusContinuation(r, lineageID)
 	if err != nil {
 		return err
+	}
+	if found {
+		if err := json.Unmarshal([]byte(payload), &status); err != nil {
+			return fmt.Errorf("decode carried correction-plan STATUS: %w", err)
+		}
+	} else {
+		status, err = readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+		if err != nil {
+			return err
+		}
 	}
 	if status.Authority.LineageID != lineageID || status.Authority.State != "correction_required" ||
 		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "correction_plan_required" ||
@@ -465,6 +488,11 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 	if captured.Schema != "gentle-ai.review-last-event-closure/v1" || captured.Operation != "review.capture-correction-plan" ||
 		captured.LineageID != lineageID || captured.State != "correction_required" {
 		return fmt.Errorf("correction-plan capture = %+v", captured)
+	}
+	// The carried STATUS belongs solely to this successful bounded-plan advance.
+	// Failed invocation or validation paths retain it for diagnostics and retry.
+	if found {
+		clearCorrectionPlanStatusContinuation(r, lineageID)
 	}
 	return nil
 }
