@@ -180,14 +180,17 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 		return result
 	}
 	complete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
-	if report.Verdict != "fail" {
+	switch {
+	case report.Verdict != "fail":
 		if report.TestExit != 0 || report.BuildExit != 0 || report.Blockers != 0 || report.Critical != 0 || !complete {
 			result.Reason = "passing verdict contradicts failing or incomplete evidence"
 			return result
 		}
-	} else if report.TestExit == 0 && report.BuildExit == 0 && report.Blockers == 0 && report.Critical == 0 && complete {
-		result.Reason = "fail verdict is contradictory with all-green evidence"
-		return result
+	default:
+		if report.TestExit == 0 && report.BuildExit == 0 && report.Blockers == 0 && report.Critical == 0 && complete {
+			result.Reason = "fail verdict is contradictory with all-green evidence"
+			return result
+		}
 	}
 	result.Valid, result.Reason = true, ""
 	return result
@@ -198,25 +201,23 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportLegacyFields))
-	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportLegacyFields...) {
-		allowed[field] = true
-	}
-	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
+	fields, reason := parseScalarFields(lines[1:end], verifyReportAllowedFields(), "verify result")
 	report := verifyReport{Fields: fields}
-	if fields["schema"] == VerifyResultSchema && sha256IdentityPattern.MatchString(fields["evidence_revision"]) {
+	if verifyReportSchemaSupported(fields["schema"]) && sha256IdentityPattern.MatchString(fields["evidence_revision"]) {
 		report.EvidenceRevision = fields["evidence_revision"]
 	}
 	if reason != "" {
 		return report, reason
 	}
-	for _, required := range verifyReportRequiredFields {
+	// The schema decides which fields are required, optional, and forbidden, so
+	// it is resolved before absence is judged.
+	if reason := verifyReportSchemaConstraints(fields); reason != "" {
+		return report, reason
+	}
+	for _, required := range verifyReportRequiredFieldsFor(fields) {
 		if _, ok := fields[required]; !ok {
 			return report, fmt.Sprintf("missing %s in verify result envelope", required)
 		}
-	}
-	if fields["schema"] != VerifyResultSchema {
-		return report, fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
 	}
 	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
 		if !sha256IdentityPattern.MatchString(fields[field]) {
@@ -233,10 +234,15 @@ func parseVerifyReport(text string) (verifyReport, string) {
 		}
 		report.LegacyMissingReview = legacy == "true"
 	}
-	for _, target := range []struct {
+	type counter struct {
 		name  string
 		value *int
-	}{{"blockers", &report.Blockers}, {"critical_findings", &report.Critical}, {"test_exit_code", &report.TestExit}, {"build_exit_code", &report.BuildExit}} {
+	}
+	counters := []counter{
+		{"blockers", &report.Blockers}, {"critical_findings", &report.Critical},
+		{"test_exit_code", &report.TestExit}, {"build_exit_code", &report.BuildExit},
+	}
+	for _, target := range counters {
 		value, ok := parseNonnegativeInt(fields[target.name])
 		if !ok {
 			return report, fmt.Sprintf("invalid %s in verify result envelope", target.name)
