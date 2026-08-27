@@ -574,6 +574,17 @@ func TestComponentPathsPermissionsSkipsAgentsWithoutInjectionTarget(t *testing.T
 	}
 }
 
+func TestComponentPathsPermissionsIncludesOpenCodeSensitivePathGuard(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+	guard := filepath.Join(home, ".config", "opencode", "plugins", "opencode-sensitive-path-guard.ts")
+	if !containsPath(paths, guard) {
+		t.Fatalf("componentPaths(permissions,opencode) missing managed guard %q\npaths=%v", guard, paths)
+	}
+}
+
 func TestComponentPathsPermissionsIncludesAgentsWithInjectionTarget(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{

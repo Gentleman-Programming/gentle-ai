@@ -602,10 +602,10 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 4 {
-		t.Fatalf("opencode plugins count = %d, want 4", len(pluginEntries))
+	if len(pluginEntries) != 5 {
+		t.Fatalf("opencode plugins count = %d, want 5", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true, "opencode-review-transport.ts": true, "sdd-task-result-artifacts.ts": true, "skill-registry.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true, "opencode-review-transport.ts": true, "opencode-sensitive-path-guard.ts": true, "sdd-task-result-artifacts.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
@@ -631,6 +631,15 @@ func TestOpenCodeBackgroundPolicyMarkersAreBalanced(t *testing.T) {
 // TestOpenCodeReviewTransportPluginContract pins the adapter-minimality
 // boundary: the plugin correlates one host Task with one Go process, while Go
 // owns all prompt, schema, admission, and capture semantics.
+func TestOpenCodeSensitivePathGuardPluginContract(t *testing.T) {
+	source := MustRead("opencode/plugins/opencode-sensitive-path-guard.ts")
+	for _, want := range []string{`"tool.execute.before"`, `input.tool !== "grep"`, `opencode_sensitive_path_guard_refused`, `path`, `include`} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("sensitive-path guard missing %q", want)
+		}
+	}
+}
+
 func TestOpenCodeReviewTransportPluginContract(t *testing.T) {
 	source, err := Read("opencode/plugins/opencode-review-transport.ts")
 	if err != nil {
