@@ -15,7 +15,9 @@ j115-recovery-selector-is-collected-before-authorization
 j116-codex-committed-correction-runs-returned-status-continuation
 j117-doctor-dangling-managed-config
 j118-doctor-dangling-config-ancestor
+j119-passive-candidate-does-not-owe-final-verification
 j12-rejected-capture-then-recapture
+j120-active-candidate-still-owes-final-verification
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
 j17-bare-repository

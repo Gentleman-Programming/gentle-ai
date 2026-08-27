@@ -293,3 +293,32 @@ func TestSDDVerifyApplicabilityClassifiesCommittedWork(t *testing.T) {
 		}
 	})
 }
+
+// TestSDDVerifyApplicabilityHelpDetectionSkipsFlagValues covers a defect an
+// external review pass found: a value-blind help scan reads `--change help` as
+// a help request and prints usage instead of assessing the named change.
+func TestSDDVerifyApplicabilityHelpDetectionSkipsFlagValues(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "no help", args: []string{"--cwd", "/repo"}},
+		{name: "long form", args: []string{"--help"}, want: true},
+		{name: "short form", args: []string{"-h"}, want: true},
+		{name: "bare verb", args: []string{"help"}, want: true},
+		{name: "help as a change name", args: []string{"--change", "help"}},
+		{name: "help as a path", args: []string{"--operational-path", "help"}},
+		{name: "help as a base ref", args: []string{"--base-ref", "help"}},
+		{name: "single-dash value", args: []string{"-change", "help"}},
+		{name: "after an inline value", args: []string{"--change=x", "--help"}, want: true},
+		{name: "real help after a value", args: []string{"--change", "release", "--help"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasSDDVerifyApplicabilityHelp(tt.args); got != tt.want {
+				t.Fatalf("hasSDDVerifyApplicabilityHelp(%q) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}

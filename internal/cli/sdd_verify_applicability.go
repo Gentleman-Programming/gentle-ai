@@ -116,6 +116,9 @@ func RunSDDVerifyApplicability(args []string, stdout io.Writer) error {
 }
 
 func runSDDVerifyApplicability(ctx context.Context, args []string, stdout io.Writer) error {
+	if hasSDDVerifyApplicabilityHelp(args) {
+		return renderSDDVerifyApplicabilityHelp(stdout)
+	}
 	flags := flag.NewFlagSet("sdd-verify-applicability", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", "", "Repository directory; defaults to the process working directory")
@@ -236,4 +239,52 @@ func (flagValue *repeatedPathFlag) values() []string {
 		return []string{}
 	}
 	return flagValue.collected
+}
+
+// renderSDDVerifyApplicabilityHelp names every flag, which is also how a
+// capability probe learns this surface exists in a given build.
+func renderSDDVerifyApplicabilityHelp(stdout io.Writer) error {
+	_, err := fmt.Fprint(stdout, `Usage: gentle-ai sdd-verify-applicability [flags]
+
+Assess whether an independent final SDD verification is still required for the
+current candidate. Read-only unless --emit is given.
+
+  --cwd <repo>                 Repository directory; defaults to the working directory
+  --base-ref <ref>             Compare against this committed base instead of the working tree
+  --projection <workspace|staged>
+                               Candidate projection when no base is given
+  --intended-untracked <path>  Untracked path that belongs to the candidate; repeatable
+  --operational-path <path>    Path SDD treats as operational; repeatable
+  --emit                       Write the canonical verify report when verification is not required
+  --change <change>            Active change name; required with --emit
+  --evidence-revision <sha256:...>
+                               Settling attempt evidence revision; required with --emit
+`)
+	return err
+}
+
+// sddVerifyApplicabilityValueFlags take a value, so the token after them is
+// data and must never be read as a help request.
+var sddVerifyApplicabilityValueFlags = map[string]bool{
+	"cwd": true, "base-ref": true, "projection": true,
+	"intended-untracked": true, "operational-path": true,
+	"change": true, "evidence-revision": true,
+}
+
+// hasSDDVerifyApplicabilityHelp reports a real help request, skipping over flag
+// values. A value-blind scan would treat `--change help` as a help request and
+// print usage instead of assessing the change actually named.
+func hasSDDVerifyApplicabilityHelp(args []string) bool {
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "-h" || argument == "--help" || argument == "help" {
+			return true
+		}
+		name := strings.TrimLeft(argument, "-")
+		if strings.HasPrefix(argument, "-") && !strings.Contains(argument, "=") &&
+			sddVerifyApplicabilityValueFlags[name] && index+1 < len(args) {
+			index++
+		}
+	}
+	return false
 }
