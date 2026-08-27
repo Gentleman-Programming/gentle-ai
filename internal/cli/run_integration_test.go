@@ -123,10 +123,25 @@ func TestRunInstallReviewModePersistsOnlyExplicitRequest(t *testing.T) {
 func TestRunInstallReviewModeDryRunDoesNotPersist(t *testing.T) {
 	installArgs := []string{"--agent", "opencode", "--component", "permissions", "--dry-run"}
 
+	t.Run("omitted request is not rendered", func(t *testing.T) {
+		configureInstallReviewModeTest(t)
+		result, err := RunInstall(installArgs, system.DetectionResult{})
+		if err != nil {
+			t.Fatalf("dry-run without review mode: %v", err)
+		}
+		if output := RenderDryRun(result); strings.Contains(output, "Global Review Mode:") {
+			t.Fatalf("dry-run output claimed a global review mode change without a request:\n%s", output)
+		}
+	})
+
 	t.Run("fresh install remains unconfigured", func(t *testing.T) {
 		home := configureInstallReviewModeTest(t)
-		if _, err := RunInstall(append(installArgs, "--review-mode", "on"), system.DetectionResult{}); err != nil {
+		result, err := RunInstall(append(installArgs, "--review-mode", "on"), system.DetectionResult{})
+		if err != nil {
 			t.Fatalf("dry-run with review mode on: %v", err)
+		}
+		if output := RenderDryRun(result); !strings.Contains(output, "Global Review Mode: on (would be persisted globally after a successful non-dry-run install)") {
+			t.Fatalf("dry-run output missing requested global review mode on:\n%s", output)
 		}
 		if _, err := os.Stat(state.Path(home)); !os.IsNotExist(err) {
 			t.Fatalf("state after fresh dry-run stat error = %v, want absent", err)
@@ -143,8 +158,12 @@ func TestRunInstallReviewModeDryRunDoesNotPersist(t *testing.T) {
 			t.Fatalf("read review mode before dry-run: %v", err)
 		}
 
-		if _, err := RunInstall(append(installArgs, "--review-mode", "off"), system.DetectionResult{}); err != nil {
+		result, err := RunInstall(append(installArgs, "--review-mode", "off"), system.DetectionResult{})
+		if err != nil {
 			t.Fatalf("dry-run with review mode off: %v", err)
+		}
+		if output := RenderDryRun(result); !strings.Contains(output, "Global Review Mode: off (would be persisted globally after a successful non-dry-run install)") {
+			t.Fatalf("dry-run output missing requested global review mode off:\n%s", output)
 		}
 		after, err := state.Read(home)
 		if err != nil {
