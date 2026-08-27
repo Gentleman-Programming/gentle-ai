@@ -37,6 +37,17 @@ Choose one strategy explicitly:
 
 Portable routes retain explicit strategy selection and manual chaining. A maintainer-approved `size:exception` is available only for a portable route that cannot be split safely.
 
+### Portable Chain Closure Safety
+
+Before deleting a parent branch, enumerate dependent child PRs through the selected host adapter. Fail closed when enumeration is unavailable, incomplete, or ambiguous.
+
+For every dependent child PR:
+
+1. Retarget each child through the selected host adapter to its intended successor base.
+2. Verify the new base and postcondition through that adapter before continuing.
+
+Delete only after no child depends on that branch, as verified through the selected host adapter. If deletion already closed a child, use the provider-supported equivalent to recreate/open the review from the preserved head against the intended base and link the closed review history. Fail closed if the adapter cannot verify the retarget, dependency absence, recreation/opening, or history link.
+
 ## Remote Authority
 
 Issue approval, planning, SDD phase approval, `auto-chain`, RDD reviews/receipts, and delivery approval do not authorize remote create/submit/sync/update/merge operations. Each remote operation consumes its own separate bounded authority. Planning or review artifacts are evidence, never authority for a remote mutation.

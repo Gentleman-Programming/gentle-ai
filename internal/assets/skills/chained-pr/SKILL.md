@@ -17,6 +17,7 @@ Load when a planned PR may exceed **400 changed lines**, SDD forecasts chain ris
 - Use the GitHub native route only when #3356 proves the exact host/build capability. Do not silently install it or fall back to manual GitHub choreography.
 - Keep every PR at **≤400 additions + deletions**. The native GitHub route must never permit `size:exception`.
 - Positively identified non-GitHub hosts use a host-specific adapter and portable chaining; a maintainer-approved `size:exception` is available only there.
+- Close a portable parent branch only under the fail-closed dependency safety invariant in the reference; no dependent child may remain.
 - Issue approval, planning, SDD phase approval, `auto-chain`, RDD reviews/receipts, and delivery approval do not authorize remote create/submit/sync/update/merge operations. Those consume separate bounded authority.
 - Compose Chain Context into generated `pr-body.md`; agents must not modify the target repository's PR template.
 
