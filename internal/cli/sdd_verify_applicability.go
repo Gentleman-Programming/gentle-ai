@@ -115,6 +115,7 @@ func runSDDVerifyApplicability(ctx context.Context, args []string, stdout io.Wri
 	flags := flag.NewFlagSet("sdd-verify-applicability", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", "", "Repository directory; defaults to the process working directory")
+	baseRef := flags.String("base-ref", "", "Compare against this committed base instead of the working tree")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "Candidate projection: workspace or staged")
 	var intended, operational repeatedPathFlag
 	flags.Var(&intended, "intended-untracked", "Untracked path that belongs to the candidate; repeatable")
@@ -141,11 +142,24 @@ func runSDDVerifyApplicability(ctx context.Context, args []string, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	builder := reviewtransaction.SnapshotBuilder{Repo: root}
-	snapshot, err := builder.Build(ctx, reviewtransaction.Target{
+	// Without a base, the candidate is the working-tree delta. That is only the
+	// right answer while the work is uncommitted; SDD normally commits each
+	// work unit, which leaves a clean tree and an empty candidate at verify
+	// time. --base-ref names the commit the change started from, so the
+	// candidate is everything the change produced rather than whatever happens
+	// to be unstaged right now.
+	target := reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: selected,
 		IntendedUntracked: intended.values(),
-	})
+	}
+	if base := strings.TrimSpace(*baseRef); base != "" {
+		if len(intended.values()) != 0 && selected == reviewtransaction.ProjectionStaged {
+			return errors.New("a staged base diff does not accept intended-untracked paths; run `gentle-ai sdd-verify-applicability --base-ref <ref> --projection workspace` instead, or drop --intended-untracked")
+		}
+		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, base
+	}
+	builder := reviewtransaction.SnapshotBuilder{Repo: root}
+	snapshot, err := builder.Build(ctx, target)
 	if err != nil {
 		return err
 	}

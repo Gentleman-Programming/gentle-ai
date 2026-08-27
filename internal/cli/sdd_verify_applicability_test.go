@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -189,4 +190,45 @@ func TestSDDVerifyApplicabilityRejectsUnsupportedProjection(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("rejected input still produced output: %q", stdout.String())
 	}
+}
+
+// TestSDDVerifyApplicabilityClassifiesCommittedWork is the regression test for
+// the case the feature exists to serve. SDD commits each work unit, so by the
+// time verification is considered the working tree is clean. Without a base the
+// candidate is empty and the assessment reads that as an anomaly, leaving the
+// verifier to run on every passive change — the exact cost this was built to
+// remove.
+func TestSDDVerifyApplicabilityClassifiesCommittedWork(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeApplicabilityFile(t, repo, "docs/guide.md", "# Guide\n\nPlain prose.\n")
+	runReviewCLIGit(t, repo, "add", "-A")
+	runReviewCLIGit(t, repo, "commit", "-qm", "docs: add a guide")
+
+	t.Run("a clean tree with no base reads as an empty candidate", func(t *testing.T) {
+		result := runApplicability(t, "--cwd", repo)
+		if result.Decision != SDDVerifyRequired || result.Reason != SDDVerifyReasonEmptyCandidate {
+			t.Fatalf("decision = %q (%q); the working-tree default should see nothing", result.Decision, result.Reason)
+		}
+	})
+
+	t.Run("the committed change classifies against its base", func(t *testing.T) {
+		result := runApplicability(t, "--cwd", repo, "--base-ref", base)
+		if result.Decision != SDDVerifyNotRequired || result.Reason != SDDVerifyReasonPassiveCandidate {
+			t.Fatalf("decision = %q (%q), want %q", result.Decision, result.Reason, SDDVerifyNotRequired)
+		}
+		if !reflect.DeepEqual(result.CoveredPaths, []string{"docs/guide.md"}) {
+			t.Fatalf("covered paths = %#v", result.CoveredPaths)
+		}
+	})
+
+	t.Run("a committed active change still requires verification", func(t *testing.T) {
+		writeApplicabilityFile(t, repo, "internal/run.go", "package internal\n\nfunc Run() {}\n")
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", "feat: add run")
+		result := runApplicability(t, "--cwd", repo, "--base-ref", base)
+		if result.Decision != SDDVerifyRequired || result.Reason != SDDVerifyReasonActiveContent {
+			t.Fatalf("decision = %q (%q), want %q", result.Decision, result.Reason, SDDVerifyRequired)
+		}
+	})
 }
