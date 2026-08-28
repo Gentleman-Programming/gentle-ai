@@ -639,7 +639,10 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
 				emptyToolsContract := false
 				if tc.toolGrant != "" {
-					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
+					// The asset carries {{ENGRAM_TOOL_PREFIX}}; injection expands it to
+					// both Engram MCP shapes (#2698). Compare against the same
+					// expansion production performs rather than restating it here.
+					sourceTools := expandEngramToolNames(nativeToolsLineForCodeGraphTest(t, source))
 					emptyToolsContract = strings.TrimSpace(strings.TrimPrefix(sourceTools, "tools:")) == "[]"
 					foundEmptyTools = foundEmptyTools || emptyToolsContract
 					wantTools := sourceTools + ", " + tc.toolGrant

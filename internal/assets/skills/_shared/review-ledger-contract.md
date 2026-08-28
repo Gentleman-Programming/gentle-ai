@@ -31,7 +31,9 @@ This lifecycle is rendered for exactly Claude Code, Codex, OpenCode, and Pi. Uns
 
 ## Capture and correction
 
+<!-- reviewer-capture-transport:start -->
 For each returned `review.capture-result` input, run the exact capture operation once. The reviewer prompt begins with the exact literal prefix `GENTLE_AI_REVIEW_BINDING ` (trailing space, never `=`), followed by one-line JSON assembled only from that input: `lineage`, `target`, `lens`, `order`, `revision` from `expected-revision`, `repository_context`, and `subject_hash` from `artifact_subject.subject_hash`; omit only provider-omitted fields. Return one JSON object that echoes `subject_hash`, reports completed inspection of every manifest path in order, and contains findings/evidence with severe evidence class and causality. Access failure is incomplete inspection, never completion.
+<!-- reviewer-capture-transport:end -->
 
 After an empty, malformed, schema-invalid, access/provider-failed, or incomplete capture, query the same exact-lineage STATUS. Relaunch only if its fresh `next_transition` reoffers the same bound slot. Never infer a retry from transcript text. Use repeated `--result-artifact-file <path>` in lens order; BOM-less UTF-8 is required on Windows PowerShell 5.1. POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatibility forms.
 

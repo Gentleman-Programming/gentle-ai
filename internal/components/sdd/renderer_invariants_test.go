@@ -51,8 +51,11 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		name:   "dispatcher guard",
 		marker: "### Native SDD Dispatcher Guard",
 		sentinels: []string{
-			"reads ONLY OpenSpec file artifacts",
-			"When the session artifact store is `engram`, do NOT invoke the dispatcher",
+			// #3814: these used to pin the store-branching prose. The dispatcher
+			// resolves the declared store itself, so the invariant is now that
+			// the guard tells the actor NOT to re-derive it.
+			"invoke the native dispatcher",
+			"Do NOT determine the artifact store yourself, and do NOT branch on it",
 			"Route only by `nextRecommended` and dependency states",
 		},
 	},
