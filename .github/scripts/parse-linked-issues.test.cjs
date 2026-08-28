@@ -113,7 +113,7 @@ test('malformed and cross-repository keyword references fail closed with raw and
 });
 
 test('slash-heavy text and URL/path fragments are not issue references', () => {
-  const body = `https://x/refs#anchor Refs ${'segment/'.repeat(10_000)}tail`;
+  const body = `https://x/refs#anchor https://x/path?next=Refs#43&other=1 Refs ${'segment/'.repeat(10_000)}tail`;
 
   assert.deepEqual(parseLinkedIssues(body), ok());
 });
