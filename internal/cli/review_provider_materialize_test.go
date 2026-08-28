@@ -90,7 +90,7 @@ func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t 
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--input", input), &output); err != nil {
+	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--agent", string(model.AgentPi), "--input", input), &output); err != nil {
 		t.Fatal(err)
 	}
 	var terminal reviewLastEventClosureResult
@@ -148,6 +148,11 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "cannot be combined with --input or --preflight",
 		},
 		{
+			name: "compiled runtime cannot label caller input", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--input", "-"),
+			want: "only a compiled host-relay runtime may submit its raw reviewer result",
+		},
+		{
 			name: "without agent", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--materialize=true"),
 			want: "requires --agent",
@@ -201,9 +206,9 @@ func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T)
 	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
 		t.Fatalf("pi host relay capture arguments = %#v", input.Arguments)
 	}
-	wantTokens := make([]string, 0, len(input.Arguments)-1)
+	wantTokens := make([]string, 0, len(input.Arguments))
 	for _, argument := range input.Arguments {
-		if argument.Name != "agent" && argument.Name != "materialize" {
+		if argument.Name != "materialize" {
 			wantTokens = append(wantTokens, argument.Token)
 		}
 	}

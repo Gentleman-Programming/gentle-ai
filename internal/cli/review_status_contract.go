@@ -1026,7 +1026,7 @@ func (transition ReviewNextTransition) Validate() error {
 					argumentCount += 2
 					expected := make([]string, 0, len(input.Arguments)-1)
 					for _, argument := range input.Arguments {
-						if argument.Name != "agent" && argument.Name != "materialize" {
+						if argument.Name != "materialize" {
 							expected = append(expected, reviewTransitionArgumentToken(argument))
 						}
 					}

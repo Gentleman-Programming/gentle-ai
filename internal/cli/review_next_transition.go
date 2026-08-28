@@ -482,14 +482,21 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 			// The Pi host relay learns the whole flow from this one input: the
 			// materialize arguments are only the prelude that prints the
 			// Go-issued opaque prompt bytes for its fresh locked-down reviewer
-			// subprocess, and the submission descriptor -- the same binding
-			// tokens with the raw result substituted into --input -- is what
-			// actually advances reviewing authority.
-			tokens := make([]string, 0, len(input.Arguments)+1)
-			for _, argument := range input.Arguments {
+			// subprocess, and the submission descriptor -- the same binding and
+			// runtime tokens with the raw result substituted into --input -- is
+			// what actually advances reviewing authority. Keeping the runtime in
+			// the provider-owned submission lets a terminal closure issue its exact
+			// runtime-bound STATUS continuation without host reconstruction.
+			// Snapshot only the binding arguments; runtime and materialize are appended after the submission is complete.
+			bindingArguments := input.Arguments
+			tokens := make([]string, 0, len(bindingArguments)+2)
+			for _, argument := range bindingArguments {
 				tokens = append(tokens, reviewTransitionArgumentToken(argument))
 			}
-			tokens = append(tokens, "--input="+reviewSubmissionValuePlaceholder)
+			tokens = append(tokens,
+				reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])}),
+				"--input="+reviewSubmissionValuePlaceholder,
+			)
 			input.Submission = &ReviewTransitionSubmission{
 				OperationToken: "capture-result", ArgumentTokens: tokens,
 				Value: &ReviewTransitionSubmissionValue{

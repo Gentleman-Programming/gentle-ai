@@ -146,7 +146,10 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return nil
 	}
 	providerRuntime := model.AgentID(strings.TrimSpace(*runtimeAgent))
-	providerExecution := providerRuntime != ""
+	providerRuntimeSupplied := providerRuntime != ""
+	rawInputSupplied := strings.TrimSpace(*input) != ""
+	providerExecution := providerRuntimeSupplied && !rawInputSupplied
+	hostRelaySubmission := providerRuntimeSupplied && rawInputSupplied
 	if *materialize {
 		if *preflight || strings.TrimSpace(*input) != "" {
 			return reviewPreflightError(errors.New("review capture-result --materialize only prints the Go-materialized provider task and cannot be combined with --input or --preflight")) // refusal:by-design world-action: materialization is read-only and never authors or admits reviewer output
@@ -156,11 +159,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
-		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && strings.TrimSpace(*input) == "" && !providerExecution) {
+		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && !rawInputSupplied && !providerExecution) {
 		return reviewPreflightError(errors.New("review capture-result requires an exact repository context, --lineage, --target, --lens, --order, and either --input or --agent (or --preflight); `gentle-ai review status --contract gentle-ai.review-integration/v1 --next-transition` prints the exact bindings and `gentle-ai review schema reviewer` emits the result schema with a working example"))
 	}
-	if providerExecution && (strings.TrimSpace(*input) != "" || *preflight) {
-		return reviewPreflightError(errors.New("review capture-result --agent requires no --input and cannot be combined with --preflight")) // refusal:by-design world-action: provider invocation and caller input cannot both author reviewer output
+	if providerRuntimeSupplied && *preflight {
+		return reviewPreflightError(errors.New("review capture-result --agent cannot be combined with --preflight")) // refusal:by-design world-action: a provider runtime identity belongs only to a real materialize, capture, or host-relay submission
 	}
 	contextHandle := strings.TrimSpace(*repositoryContext)
 	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
@@ -169,9 +172,9 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if contextHandle != "" && strings.TrimSpace(*revision) == "" {
 		return reviewPreflightError(errors.New("review capture-result with --repository-context requires --expected-revision"))
 	}
-	if providerExecution {
+	if providerRuntimeSupplied {
 		if contextHandle == "" {
-			return reviewPreflightError(errors.New("review capture-result --agent requires the provider-issued --repository-context")) // refusal:by-design operator-knowledge: provider invocation must use negotiated opaque context
+			return reviewPreflightError(errors.New("review capture-result --agent requires the provider-issued --repository-context")) // refusal:by-design operator-knowledge: provider invocation and host-relay submission must use negotiated opaque context
 		}
 		if _, err := reviewRuntimeWithImmutableTransport(string(providerRuntime)); err != nil {
 			return reviewPreflightError(err)
@@ -189,6 +192,10 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			}
 			if !reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
 				return reviewPreflightError(fmt.Errorf("review capture-result --materialize is unavailable for %q: printing the Go-materialized provider task is the host-relay form, and this runtime's compiled transport is %q; collect its reviewer result through that live host transport instead", providerRuntime, providerTransport)) // refusal:by-design world-action: only the Pi host relay collects a printed provider task
+			}
+		} else if hostRelaySubmission {
+			if !reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
+				return reviewPreflightError(fmt.Errorf("review capture-result --agent %q with --input is unavailable: only a compiled host-relay runtime may submit its raw reviewer result with the provider-owned runtime binding; this runtime's compiled transport is %q", providerRuntime, providerTransport)) // refusal:by-design world-action: caller input cannot impersonate an in-process provider runtime
 			}
 		} else if !reviewProviderCaptureRuntime(providerRuntime) {
 			if reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
@@ -339,7 +346,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 		return reviewPreflightError(err)
 	}
-	if providerExecution {
+	if providerExecution || hostRelaySubmission {
 		if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
 			Schema: reviewtransaction.LensContextEmissionSchema, LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity,
 			AuthorityRevision: record.Revision, Lens: *lens, SelectedOrder: *order, SubjectHash: captured.Subject.SubjectHash,
