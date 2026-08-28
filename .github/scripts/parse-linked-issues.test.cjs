@@ -90,6 +90,7 @@ test('malformed and cross-repository keyword references fail closed with raw and
   const cases = [
     ['Closes #abc', /malformed/i],
     ['Refs #', /malformed/i],
+    ['Refs#43', /malformed/i],
     ['Refs #12foo', /malformed/i],
     ['Refs #12_bar', /malformed/i],
     ['Fixes #7x', /malformed/i],
@@ -111,8 +112,8 @@ test('malformed and cross-repository keyword references fail closed with raw and
   }
 });
 
-test('slash-heavy text without a hash is not a cross-repository reference', () => {
-  const body = `Refs ${'segment/'.repeat(10_000)}tail`;
+test('slash-heavy text and URL/path fragments are not issue references', () => {
+  const body = `https://x/refs#anchor Refs ${'segment/'.repeat(10_000)}tail`;
 
   assert.deepEqual(parseLinkedIssues(body), ok());
 });

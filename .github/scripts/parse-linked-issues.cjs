@@ -25,7 +25,7 @@ const CROSS_REPO_PATTERN = new RegExp(
 // Catch keyword + invalid `#` tokens and numeric suffixes that are not valid
 // reference delimiters.
 const MALFORMED_PATTERN = new RegExp(
-  `\\b(${KEYWORDS})\\s+#(?:(?!\\d)\\S*|\\d+(?=[^\\d])(?!${VALID_REFERENCE_END})\\S*)`,
+  `(?<![\\w/])(${KEYWORDS})(?:#\\S*|\\s+#(?:(?!\\d)\\S*|\\d+(?=[^\\d])(?!${VALID_REFERENCE_END})\\S*))`,
   'gi'
 );
 
