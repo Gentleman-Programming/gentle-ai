@@ -33,16 +33,34 @@ const MALFORMED_PATTERN = new RegExp(
 // unclosed `<!--` hides the remaining references from reviewers.
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?(?:-->|$)/g;
 
-// Markdown reference definitions are not reviewer-visible text. Multiline
-// destinations are one complete, indented non-space token or angle-bracket form.
-const MARKDOWN_REFERENCE_DEFINITION_PATTERN =
-  /^[ \t]{0,3}\[[^\]\r\n]+\]:(?:[ \t]*\r?\n[ \t]+(?:<[^>\r\n]+>|[^\s<>\r\n]+)[ \t]*(?:\r?\n[ \t]+(?:"[^\r\n]*"|'[^\r\n]*'|\([^\r\n]*\)))?|[^\r\n]*(?:\r?\n[ \t]+(?:"[^\r\n]*"|'[^\r\n]*'|\([^\r\n]*\)))?)/gm;
-
-// Removes non-visible Markdown constructs so only reviewer-visible text remains.
+// GitHub's rendered body_text is authoritative for Markdown visibility.
 function stripHtmlComments(body) {
-  return (body || '')
-    .replace(HTML_COMMENT_PATTERN, '')
-    .replace(MARKDOWN_REFERENCE_DEFINITION_PATTERN, '');
+  return (body || '').replace(HTML_COMMENT_PATTERN, '');
+}
+
+function bindRenderedBody(eventPR, currentPR) {
+  if (!eventPR) {
+    throw new Error('Cannot bind rendered PR body: event pull request is missing.');
+  }
+  if (!currentPR) {
+    throw new Error('Cannot bind rendered PR body: fetched pull request is missing.');
+  }
+
+  if (!Number.isSafeInteger(eventPR.number) || eventPR.number < 1 ||
+      !Number.isSafeInteger(currentPR.number) || currentPR.number < 1 ||
+      eventPR.number !== currentPR.number) {
+    throw new Error('Cannot bind rendered PR body: pull request numbers do not match.');
+  }
+  if ((typeof eventPR.body !== 'string' && eventPR.body !== null) ||
+      (typeof currentPR.body !== 'string' && currentPR.body !== null) ||
+      eventPR.body !== currentPR.body) {
+    throw new Error('Cannot bind rendered PR body: raw bodies do not match.');
+  }
+  if (typeof currentPR.body_text !== 'string') {
+    throw new Error('Cannot bind rendered PR body: fetched body_text is not a string.');
+  }
+
+  return currentPR.body_text;
 }
 
 function kindFor(keyword) {
@@ -93,4 +111,4 @@ function parseLinkedIssues(body) {
   return { references, errors };
 }
 
-module.exports = { parseLinkedIssues, stripHtmlComments };
+module.exports = { bindRenderedBody, parseLinkedIssues, stripHtmlComments };

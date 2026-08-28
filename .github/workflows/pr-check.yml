@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, edited, synchronize, labeled, unlabeled]
 
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
 jobs:
   check-pr-size:
     name: Check PR Cognitive Load
@@ -65,14 +70,34 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         with:
           script: |
-            const { parseLinkedIssues } = require(
+            const { bindRenderedBody, parseLinkedIssues } = require(
               `${process.env.GITHUB_WORKSPACE}/.github/scripts/parse-linked-issues.cjs`
             );
 
-            // Single parse seam: HTML comments (like the PR template's
-            // `Closes #42` example) are stripped; check-issue-approved
-            // reuses this exact kind-tagged result.
-            const { references, errors } = parseLinkedIssues(context.payload.pull_request.body);
+            let bodyText;
+            try {
+              const { data: currentPR } = await github.request(
+                'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                  headers: {
+                    accept: 'application/vnd.github.text+json',
+                  },
+                }
+              );
+              bodyText = bindRenderedBody(context.payload.pull_request, currentPR);
+            } catch {
+              core.setFailed(
+                '❌ Could not retrieve and validate the current rendered PR body. Retry the check; if it persists, update the PR body and retry.'
+              );
+              return;
+            }
+
+            // Parse only GitHub's bound reviewer-visible rendered text. The
+            // approval gate reuses this exact kind-tagged result.
+            const { references, errors } = parseLinkedIssues(bodyText);
             core.setOutput('references', JSON.stringify(references));
             core.setOutput('errors', JSON.stringify(errors));
 
