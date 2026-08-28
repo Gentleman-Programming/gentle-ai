@@ -371,7 +371,7 @@ All PRs go through automated checks:
 | Check | What It Verifies |
 |-------|-----------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
-| **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
+| **Check Issue Reference** | PR body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or non-closing `Refs #N`; malformed, cross-repository, and mixed closing/non-closing references for the same issue fail |
 | **Check Issue Has status:approved** | The linked issue has `status:approved` under the canonical issue-creation workflow contract |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |
 | **Unit Tests** | `go test ./...` passes |
@@ -387,7 +387,10 @@ In the PR body, include one of:
 Closes #42
 Fixes #42
 Resolves #42
+Refs #42
 ```
+
+`Closes`/`Fixes`/`Resolves` close the issue on merge; use `Refs #N` for a non-closing approved-issue link. References inside HTML comments, malformed references, cross-repository references, and using both closing and non-closing forms for the same issue fail CI.
 
 ---
 
