@@ -135,7 +135,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	order := flags.Int("order", -1, "zero-based selected lens order")
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	subjectHash := flags.String("subject-hash", "", "provider-issued artifact subject hash for native-Git context")
-	runtimeAgent := flags.String("agent", "", "compiled reviewer runtime that invokes the provider-owned request; mutually exclusive with --input and --preflight")
+	runtimeAgent := flags.String("agent", "", "compiled reviewer runtime that invokes the provider-owned request; may be combined with --input only for compiled host-relay submissions and remains mutually exclusive with --preflight")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "validate the capture binding and, when --input is supplied, the result admission without persisting anything")
 	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider task for a host-relay --agent runtime without capturing anything; mutually exclusive with --input and --preflight")
