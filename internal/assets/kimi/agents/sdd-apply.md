@@ -18,9 +18,9 @@ Read the skill file at `~/.config/agents/skills/sdd-apply/SKILL.md` and follow i
 Also read shared conventions at `~/.config/agents/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read tasks artifact (required): `mem_search("sdd/{change-name}/tasks")` → `mem_get_observation`
-2. Read spec artifact (required): `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-3. Read design artifact (required): `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
+1. Read tasks artifact (required): read the `tasks` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+2. Read spec artifact (required): read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+3. Read design artifact (required): read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 4. Detect TDD mode from config or existing test patterns
 5. Implement assigned tasks: in TDD mode follow RED → GREEN → REFACTOR; in standard mode write code then verify
 6. Match existing code patterns and conventions
@@ -36,7 +36,7 @@ After completing work, call `mem_save` with:
 - project: `{project-name from context}`
 - capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
-Also update the tasks artifact with `[x]` marks via `mem_update` (engram) or file edit (openspec/hybrid).
+Also mark completed tasks `[x]` at the `tasks` locator, using the write mechanism the reported store requires (see `sdd-phase-common.md` section C). Do not detect the store yourself.
 
 ## Result Contract
 

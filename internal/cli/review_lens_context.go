@@ -42,15 +42,19 @@ const reviewLensContextTimeout = 120 * time.Second
 // property splitting a candidate barely changes (issue #3367).
 const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffBytes
 
+// The two markers an installed agent definition also names are read from the
+// canonical constants both halves share, never respelled here: a reviewer
+// admits the block by marker name, so a second spelling on either side is the
+// whole of issue #2777.
 const (
-	reviewLensContextBindingHeader = "GENTLE_AI_REVIEW_BINDING"
-	reviewLensContextContextHeader = "GENTLE_AI_REVIEW_CONTEXT"
+	reviewLensContextBindingHeader = reviewtransaction.ReviewerBindingMarker
+	reviewLensContextContextHeader = reviewtransaction.ReviewerContextMarker
+	reviewLensContextTerminator    = reviewtransaction.ReviewerContextTerminator
 	reviewLensContextNameStatus    = "GENTLE_AI_REVIEW_NAME_STATUS"
 	reviewLensContextNumstat       = "GENTLE_AI_REVIEW_NUMSTAT"
 	reviewLensContextInstruction   = "GENTLE_AI_REVIEW_INSTRUCTION"
 	reviewLensContextResultSchema  = "GENTLE_AI_REVIEW_RESULT_SCHEMA"
 	reviewLensContextPatch         = "GENTLE_AI_REVIEW_PATCH"
-	reviewLensContextTerminator    = "GENTLE_AI_REVIEW_CONTEXT_END"
 )
 
 // reviewLensContextBinding is the machine data a relaying orchestrator used to

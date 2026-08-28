@@ -35,7 +35,7 @@ You are a sub-agent responsible for IMPLEMENTATION. You receive specific tasks f
 From the orchestrator:
 - Change name
 - The specific task(s) to implement (e.g., "Phase 1, tasks 1.1-1.3")
-- Artifact store mode (`engram | openspec | hybrid | none`)
+- Artifact store mode as REPORTED by native status (`engram | openspec | hybrid | none`) — consume it, never re-derive it
 - Structured status from `skills/_shared/sdd-status-contract.md`: `schemaName`, `planningHome`, `changeRoot`, `artifactPaths`, `contextFiles`, `applyState`, task progress, dependency states, and `actionContext`
 - Delivery strategy and resolved workload decision (`ask-on-risk | auto-chain | single-pr | exception-ok`, plus PR slice or `size:exception` when applicable)
 
@@ -43,10 +43,14 @@ From the orchestrator:
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks` (all required — keep tasks ID for updates). Mark tasks complete via `mem_update(id: {tasks-observation-id}, content: "...")`. Save progress as `sdd/{change-name}/apply-progress`.
-- **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Update `tasks.md` with `[x]` marks.
-- **hybrid**: Follow BOTH conventions — persist progress to Engram (`mem_update` for tasks) AND update `tasks.md` with `[x]` marks on filesystem.
-- **none**: Return progress only. Do not update project artifacts.
+**Reads are store-blind.** Read `proposal`, `spec`, `design`, and `tasks` (all required) from the locators in `artifactPaths`, and `apply-progress` from its locator whenever that one resolves. Do not detect the store and do not assemble locators yourself.
+
+Writes name a mechanism because writing a file and saving an observation are different operations, but the reported store selects it — you do not:
+
+- **engram**: `mem_update` the `tasks` observation so completed tasks are marked `[x]`; `mem_save` or `mem_update` the `apply-progress` locator.
+- **openspec**: follow `skills/_shared/openspec-convention.md`; mark `[x]` in the file at the `tasks` locator.
+- **hybrid**: both mechanisms, against that artifact's locators.
+- **none**: return progress only. Do not update project artifacts.
 
 ## Status and Workspace Guard
 
@@ -192,7 +196,7 @@ Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
 - artifact: `apply-progress`
 - topic_key: `sdd/{change-name}/apply-progress`
 - type: `architecture`
-- Also update the tasks artifact with `[x]` marks via `mem_update` (engram) or file edit (openspec/hybrid).
+- Also mark completed tasks `[x]` at the `tasks` locator, using the write mechanism the reported store requires.
 
 #### Merge Protocol
 
@@ -315,8 +319,8 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 5. Read only files explicitly referenced by the task (max 3 files)
 6. Implement code changes — minimal, localized edits
 7. Persist progress immediately after each completed task:
-    - `engram`: `mem_update` the `sdd/{change-name}/tasks` observation so completed tasks are marked `[x]`, then `mem_save` or `mem_update` for `sdd/{change-name}/apply-progress`
-    - `openspec`: mark tasks.md checkboxes
+    - `engram`: `mem_update` the `tasks` observation so completed tasks are marked `[x]`, then `mem_save` or `mem_update` the `apply-progress` locator
+    - `openspec`: mark the checkboxes in the file at the `tasks` locator
     - `hybrid`: both
 8. Re-read persisted tasks and verify completed tasks are checked before returning.
 9. Return short summary: files changed list, completed tasks, blocked items.

@@ -77,8 +77,14 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 	}
 
 	appendRuntimeLedgerFile(t, repo, "attempt-two\n")
+	// #3815: this settlement spends the second attempt so the objective is
+	// genuinely exhausted, which is what the rest of this test is about. It used
+	// to be an interrupted settlement; an interrupted call that delivered
+	// increment now refunds the attempt instead of discharging it, and that rule
+	// has its own coverage in runtime_budget_granularity_test.go.
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
-		ExpectedRevision: second.Revision, RequestID: "finish-2", Outcome: AttemptInterrupted,
+		ExpectedRevision: second.Revision, RequestID: "finish-2", Outcome: AttemptFailed,
+		EvidenceRevision:   runtimeTestHash('2'),
 		Diagnosis:          "executor transport closed after bounded output capture",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup trap terminated the recorded process group",
 		ProcessEvidence: "post-interruption process scan found no matching descendants",
