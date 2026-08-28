@@ -12,7 +12,7 @@ RDD is opt-in. Until a user enables it with `gentle-ai review mode enable --scop
 
 1. Preflight only the current worktree with selectorless negotiated STATUS.
 2. Execute its exact START, then retain the returned lineage, revision, and target tokens.
-3. Use those exact tokens for every STATUS and capture call until native approval burns the transaction.
+3. Use those exact tokens for every STATUS and capture call; after approval, run only the exact acknowledgement transition STATUS or the terminal response owns.
 4. Follow ordinary repository policy for commit, push, PR, release, and archive.
 
 ```bash
@@ -61,11 +61,20 @@ Every later STATUS and bound capture call for this transaction carries the exact
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
 
-### 4. Approval burns authority
+### 4. Approved authority awaits acknowledgement, then burns
 
-Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. On success it reads back terminal approval, then burns the exact lineage and its artifacts before returning `approved`.
+Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. A successful final capture or zero-lens START first records `approved` with one exact acknowledgement transition. The terminal closure and approved authority remain replayable until that acknowledgement succeeds.
 
-No terminal receipt, tombstone, witness, mirror, or delivery authority survives the burn. Other lineages and worktrees are unaffected. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
+| Moment | Consumer action | Native behavior |
+| --- | --- | --- |
+| Approval response | Retain the provider-owned acknowledgement operation, ordered arguments, binding, and token exactly as returned. | START or the terminal closure returns `approved` without burning the authority. |
+| Retry before acknowledgement | Re-query bound STATUS; do not reconstruct or substitute an acknowledgement. | STATUS reoffers the same exact acknowledgement transition while the approved authority remains current. |
+| Wrong, stale, or mismatched acknowledgement | Treat the error as non-mutating, retain the original binding, then re-query bound STATUS. | Validation fails before mutation; the authority and pending acknowledgement remain replayable. |
+| Exact acknowledgement | Run the returned command once. If its outcome is uncertain, re-query bound STATUS instead of guessing or replaying an invented command. | Under the existing lock, Go validates the complete binding and token, then burns the exact lineage and artifacts. |
+
+The acknowledgement transition is an execution detail of `gentle-ai.review-integration/v2`; it does not authorize delivery. Escalated and other non-approved terminal paths retain their existing response and STATUS behavior and do not gain an acknowledgement transition. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
+
+After a successful burn, no terminal receipt, tombstone, witness, mirror, or delivery authority survives. Other lineages and worktrees are unaffected.
 
 ## Reviewer transport
 
@@ -132,6 +141,6 @@ The published v1 directory contains 23 strict JSON Schemas and 24 deterministic 
 - [ ] Selectorless STATUS was used only to preflight the current worktree candidate.
 - [ ] START's lineage, revision, and target tokens were retained and replayed unchanged.
 - [ ] Reviewers and validators used only provider-issued immutable context.
-- [ ] `approved` was reported only after native burn completed.
+- [ ] `approved` acknowledgement was retained and run only from the provider-owned START, STATUS, or terminal-closure transition.
 - [ ] Commit, push, PR, release, and archive followed ordinary repository policy.
 - [ ] Each delivery action has explicit authorization.

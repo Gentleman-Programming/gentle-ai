@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,6 +28,33 @@ type repositoryContextStatus struct {
 	RepositoryContext *repositoryContextReference `json:"repository_context"`
 }
 
+type selfContainedRepositoryContext struct {
+	Schema               string `json:"schema"`
+	RepositoryRoot       string `json:"repository_root"`
+	GitCommonDir         string `json:"git_common_dir"`
+	GitDir               string `json:"git_dir"`
+	RepositoryRef        string `json:"repository_ref"`
+	LineageID            string `json:"lineage_id"`
+	TargetIdentity       string `json:"target_identity"`
+	CapturePhaseRevision string `json:"capture_phase_revision"`
+}
+
+func decodeSelfContainedRepositoryContext(handle string) (selfContainedRepositoryContext, error) {
+	const prefix = "rctx2_"
+	if !strings.HasPrefix(handle, prefix) {
+		return selfContainedRepositoryContext{}, fmt.Errorf("repository context is not self-contained rctx2: %q", handle)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(handle, prefix))
+	if err != nil {
+		return selfContainedRepositoryContext{}, fmt.Errorf("decode rctx2 payload: %w", err)
+	}
+	var context selfContainedRepositoryContext
+	if err := json.Unmarshal(payload, &context); err != nil {
+		return selfContainedRepositoryContext{}, fmt.Errorf("decode rctx2 JSON: %w", err)
+	}
+	return context, nil
+}
+
 func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 	negotiated, err := readStatusForContract(r, reviewContractV2)
 	if err != nil {
@@ -51,8 +79,18 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 	}
 	want := start.RepositoryContext
 	if start.LineageID == "" || want.Capability != "review.opaque_repository_context" ||
-		!strings.HasPrefix(want.Handle, "rctx1_") || want.Revision == "" || want.TargetIdentity == "" {
+		!strings.HasPrefix(want.Handle, "rctx2_") || want.Revision == "" || want.TargetIdentity == "" {
 		return fmt.Errorf("START repository context = %+v, lineage=%q", want, start.LineageID)
+	}
+	context, err := decodeSelfContainedRepositoryContext(want.Handle)
+	if err != nil {
+		return err
+	}
+	if context.Schema != "gentle-ai.review-repository-context/v2" || context.RepositoryRoot != r.sandbox.Repo ||
+		context.GitCommonDir == "" || context.GitDir == "" || context.RepositoryRef == "" ||
+		context.LineageID != start.LineageID || context.TargetIdentity != want.TargetIdentity ||
+		context.CapturePhaseRevision != want.Revision {
+		return fmt.Errorf("START self-contained rctx2 context = %+v, reference=%+v", context, want)
 	}
 	if leaksRepositoryPath(started.Stdout, r.sandbox.Repo) {
 		return fmt.Errorf("START leaked repository path in its public envelope")
@@ -67,7 +105,7 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 			return err
 		}
 		if status.RepositoryContext == nil || *status.RepositoryContext != want ||
-			status.Authority.LineageID != start.LineageID || status.Authority.Revision != want.Revision ||
+			status.Authority.LineageID != start.LineageID || status.Authority.Revision == "" ||
 			status.TargetIdentity != want.TargetIdentity {
 			return fmt.Errorf("STATUS retry %d changed repository context: authority=%+v context=%+v", attempt, status.Authority, status.RepositoryContext)
 		}
@@ -79,11 +117,12 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 		}
 	}
 
-	foreign := "gairc_v1_" + strings.Repeat("0", 64)
+	foreign := "rctx2_" + strings.Repeat("A", 64)
 	if capture.NextTransition.Kind != "collect" || len(capture.NextTransition.Collect.Inputs) != 1 ||
 		capture.Authority.LineageID != start.LineageID || capture.TargetIdentity != want.TargetIdentity ||
 		capture.argument("lineage") != start.LineageID || capture.argument("target") != want.TargetIdentity ||
-		capture.argument("expected-revision") != want.Revision || capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash == "" {
+		capture.argument("expected-revision") != want.Revision || capture.argument("repository-context") != want.Handle ||
+		capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash == "" {
 		return fmt.Errorf("STATUS did not preserve target, repository/worktree context, and subject binding: %+v", capture)
 	}
 	payload, err := synthesizeReviewerResult(capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, capture.paths())
@@ -130,8 +169,8 @@ func repositoryContextJourneys() []Journey {
 	return []Journey{{
 		ID:     "j104-repository-context-survives-fresh-process",
 		Review: reviewOptedIn,
-		Title:  "#3417: repository context preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
-		Source: "issue #1875 under #3417: the current path-free repository context binds target, repository/worktree, and reviewer subject integrity; retired event/outcome placeholders do not exist",
+		Title:  "#3797: self-contained rctx2 preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
+		Source: "issue #3797: active rctx2 is self-contained and authority-derived across fresh processes; rctx1 locators remain historical read-only only",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged ordinary-code candidate", Fixture: stageOrdinaryCode},

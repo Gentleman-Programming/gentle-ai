@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -377,67 +376,35 @@ func reviewResultReference(artifact reviewResultArtifact) string {
 	return reviewResultReferencePrefix + strings.TrimPrefix(facadePayloadHash(payload), "sha256:")
 }
 
-func syncReviewerArtifactDirectoryCompatible(dir string) error {
-	err := syncReviewerArtifactDirectory(dir)
-	if errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported) || reviewArtifactRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission) {
-		return nil
-	}
-	return err
-}
-func ensureReviewerArtifactDir(path string) error {
-	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("create reviewer result directory: %w", err)
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !reviewArtifactModeSafe(info.Mode(), true) {
-		return errors.New("reviewer result directory is not a private native directory")
-	}
-	return nil
-}
-
 // discoverCapturedReviewerArtifacts reads only the canonical native capture
 // locations. It makes status restart-safe without exposing provider paths or
 // asking a consumer to reconstruct result manifests.
 func discoverCapturedReviewerArtifacts(ctx context.Context, repo, _ string, state reviewtransaction.CompactState, phase string) ([]ReviewTransitionArtifact, error) {
+	if phase != state.CapturePhaseRevision {
+		return nil, errors.New("captured reviewer discovery requires the current compact capture phase") // refusal:by-design operator-knowledge: refresh STATUS and use its current capture phase before discovering reviewer artifacts
+	}
+	if _, err := state.CompactReviewView(); err != nil {
+		return nil, fmt.Errorf("derive captured reviewer artifacts from admitted authority: %w", err)
+	}
 	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
 	if err != nil {
 		return nil, err
 	}
 	artifacts := make([]ReviewTransitionArtifact, 0, len(state.SelectedLenses))
 	for order, lens := range state.SelectedLenses {
-		payload, found := state.AdmittedRoleResult(reviewtransaction.CompactRoleLens, phase, state.InitialSnapshot.Identity, "")
-		if found {
-			// A lens tuple additionally includes selected order and lens, so select it
-			// from the one canonical record collection rather than a result file.
-			found = false
-			for _, entry := range state.AdmittedRoleResults {
-				if !state.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == reviewtransaction.CompactRoleLens && entry.CapturePhaseRevision == phase &&
-					entry.TargetIdentity == state.InitialSnapshot.Identity && entry.SelectedOrder == order && entry.Lens == lens {
-					payload, found = append([]byte(nil), entry.Value...), true
-					break
-				}
-			}
+		entry, found, lookupErr := state.ActiveAdmittedLensResult(order)
+		if lookupErr != nil {
+			return nil, fmt.Errorf("lookup active captured reviewer result %d: %w", order, lookupErr)
 		}
 		if !found {
 			continue
 		}
-		artifactDigest := ""
-		for _, entry := range state.AdmittedRoleResults {
-			if !state.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == reviewtransaction.CompactRoleLens && entry.CapturePhaseRevision == phase &&
-				entry.TargetIdentity == state.InitialSnapshot.Identity && entry.SelectedOrder == order && entry.Lens == lens {
-				artifactDigest = entry.ArtifactDigest
-				break
-			}
-		}
-		if artifactDigest == "" {
-			return nil, fmt.Errorf("captured reviewer result %d has no canonical record digest", order) // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
-		}
-		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, append(payload, '\n'), artifactDigest, state, phase, order, frozen)
+		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, append(entry.Value, '\n'), entry.ArtifactDigest, state, entry.CapturePhaseRevision, order, frozen)
 		if err != nil {
 			return nil, fmt.Errorf("verify captured reviewer admission %d: %w", order, err)
 		}
 		artifacts = append(artifacts, ReviewTransitionArtifact{
-			Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: artifactDigest,
+			Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: entry.ArtifactDigest,
 			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: lens, SelectedOrder: order,
 			SubjectHash: subject.SubjectHash, AdmissionDecision: reviewtransaction.ArtifactAdmissionCompleted,
 		})
@@ -445,41 +412,26 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, _ string, stat
 	return artifacts, nil
 }
 
-func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, phase string) ([]facadeReviewerResult, error) {
+// capturedCompactReviewView combines public artifact verification with the
+// transaction-owned semantic interpretation. The view intentionally ignores
+// retained projections, while discovery preserves the public artifact subject
+// and G1 retained-phase provenance.
+func capturedCompactReviewView(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, phase string) (reviewtransaction.CompactReviewView, []ReviewTransitionArtifact, error) {
 	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, phase)
 	if err != nil {
-		return nil, err
+		return reviewtransaction.CompactReviewView{}, nil, err
 	}
 	if len(artifacts) != len(state.SelectedLenses) {
-		return nil, fmt.Errorf("last-event closure requires all %d captured reviewer result(s); capture each missing one with `%s` (see `%s` for the exact lineage/target/lens/order bindings)", len(state.SelectedLenses), reviewCaptureResultCommandName(), reviewNextTransitionRefreshCommand)
+		return reviewtransaction.CompactReviewView{}, nil, fmt.Errorf("last-event closure requires all %d captured reviewer result(s); capture each missing one with `%s` (see `%s` for the exact lineage/target/lens/order bindings)", len(state.SelectedLenses), reviewCaptureResultCommandName(), reviewNextTransitionRefreshCommand)
 	}
-	results := make([]facadeReviewerResult, len(artifacts))
-	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
+	view, err := state.CompactReviewView()
 	if err != nil {
-		return nil, err
+		return reviewtransaction.CompactReviewView{}, nil, fmt.Errorf("derive captured reviewer semantics from admitted authority: %w", err)
 	}
-	for index, published := range artifacts {
-		var payload []byte
-		for _, entry := range state.AdmittedRoleResults {
-			if !state.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == reviewtransaction.CompactRoleLens && entry.CapturePhaseRevision == phase &&
-				entry.TargetIdentity == state.InitialSnapshot.Identity && entry.SelectedOrder == index && entry.Lens == published.Lens {
-				payload = append(append([]byte(nil), entry.Value...), '\n')
-				break
-			}
-		}
-		if len(payload) == 0 {
-			return nil, errors.New("captured reviewer record value is missing") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
-		}
-		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, published.SHA256, state, phase, index, frozen)
-		if err != nil {
-			return nil, err
-		}
-		if published.SubjectHash != subject.SubjectHash || published.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
-			return nil, errors.New("captured reviewer artifact does not match its admitted subject")
-		}
-		results[index] = result
+	if len(view.LensResults) != len(artifacts) {
+		return reviewtransaction.CompactReviewView{}, nil, errors.New("captured reviewer view does not cover every admitted artifact") // refusal:by-design world-action: compact role evidence must map one-to-one to public artifacts
 	}
-	return results, nil
+	return view, artifacts, nil
 }
 
 func reviewerArtifactFrozenContext(ctx context.Context, repo string, state reviewtransaction.CompactState) (reviewtransaction.FrozenCandidateContext, error) {
@@ -490,14 +442,14 @@ func reviewerArtifactFrozenContext(ctx context.Context, repo string, state revie
 	return frozen, nil
 }
 
-func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload []byte, artifactDigest string, state reviewtransaction.CompactState, currentRevision string, order int, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, reviewtransaction.ArtifactSubject, error) {
+func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload []byte, artifactDigest string, state reviewtransaction.CompactState, storedPhase string, order int, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, reviewtransaction.ArtifactSubject, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
 	if order < 0 || order >= len(state.SelectedLenses) ||
-		state.State == reviewtransaction.StateReviewing && envelope.Subject.AuthorityRevision != currentRevision {
-		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, errors.New("captured reviewer result does not bind the active authority phase") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		state.State == reviewtransaction.StateReviewing && envelope.Subject.AuthorityRevision != storedPhase {
+		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, errors.New("captured reviewer result does not bind its stored capture phase") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 	}
 	subjectFrozen := frozen
 	var expected reviewtransaction.ArtifactSubject
@@ -521,14 +473,9 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
-	if state.State != reviewtransaction.StateReviewing && len(state.LensResults) > 0 {
-		native := result.nativeLensResult()
-		native.Lens = expected.Lens
-		canonical, canonicalErr := reviewtransaction.CanonicalCompactLensResult(native)
-		if canonicalErr != nil || order >= len(state.LensResults) || state.LensResults[order].ResultHash != canonical.ResultHash {
-			return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, errors.New("captured reviewer result does not match the completed authority")
-		}
-	}
+	// Completed-state projections are retained only for compatibility. Artifact
+	// verification stays bound to the admitted envelope; CompactReviewView
+	// independently derives completed semantics from those same role values.
 	return result, expected, nil
 }
 
@@ -592,26 +539,6 @@ func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapsho
 	return ids, nil
 }
 
-func readVerifiedReviewerArtifact(artifact reviewResultArtifact, _ string, state reviewtransaction.CompactState, subjects ...reviewtransaction.ArtifactSubject) ([]byte, error) {
-	if artifact.Schema != reviewResultArtifactSchema || artifact.Capability != reviewResultArtifactCapability ||
-		artifact.LineageID != state.LineageID || artifact.TargetIdentity != state.InitialSnapshot.Identity ||
-		artifact.SelectedOrder < 0 || artifact.SelectedOrder >= len(state.SelectedLenses) ||
-		artifact.Lens != state.SelectedLenses[artifact.SelectedOrder] || !validReviewCapabilitySHA256(artifact.SHA256) ||
-		artifact.Reference == "" || artifact.Reference != reviewResultReference(artifact) || artifact.Path != "" {
-		return nil, errors.New("artifact manifest does not match frozen lineage, target, lens, and order")
-	}
-	if len(subjects) > 0 && (artifact.SubjectHash != subjects[0].SubjectHash || artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted) {
-		return nil, errors.New("artifact manifest does not match the provider-owned subject")
-	}
-	for _, entry := range state.AdmittedRoleResults {
-		if !state.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == reviewtransaction.CompactRoleLens && entry.Lens == artifact.Lens && entry.SelectedOrder == artifact.SelectedOrder &&
-			entry.TargetIdentity == artifact.TargetIdentity && entry.ArtifactDigest == artifact.SHA256 {
-			return append(append([]byte(nil), entry.Value...), '\n'), nil
-		}
-	}
-	return nil, errors.New("artifact does not name a canonical admitted record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
-}
-
 func decodeFacadeJSONBytes(payload []byte, value any) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
@@ -623,19 +550,4 @@ func decodeFacadeJSONBytes(payload []byte, value any) error {
 		return errors.New("input contains multiple JSON values")
 	}
 	return nil
-}
-func reviewArtifactModeSafe(mode os.FileMode, directory bool) bool {
-	return reviewArtifactModeSafeForOS(mode, directory, runtime.GOOS)
-}
-func reviewArtifactModeSafeForOS(mode os.FileMode, directory bool, goos string) bool {
-	return goos == "windows" || mode.Perm()&0o077 == 0 && (!directory || mode.Perm()&0o700 == 0o700)
-}
-
-func removeOwnedArtifact(path string, owned os.FileInfo) {
-	if owned == nil {
-		return
-	}
-	if current, err := os.Lstat(path); err == nil && os.SameFile(current, owned) {
-		_ = os.Remove(path)
-	}
 }

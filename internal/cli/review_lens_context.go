@@ -106,23 +106,6 @@ const (
 		reviewNextTransitionRefreshCommandV21
 )
 
-// reviewLensContextConflictActionFor names the mechanism the slot really
-// recorded, so the exit is runnable without guessing which one it was.
-//
-// The generic wording is kept for the case where the record cannot be read
-// back: naming a mechanism this code did not actually observe would be worse
-// than staying general, because an exit that does not work sends an operator in
-// circles blaming themselves.
-func reviewLensContextConflictActionFor(recorded reviewtransaction.ReviewerContextLevel) string {
-	if strings.TrimSpace(string(recorded)) == "" {
-		return reviewLensContextConflictAction
-	}
-	return "this frozen lens slot already recorded a reviewer context produced by " + string(recorded) +
-		", and audit history is never rewritten; re-run this operation with --delivery " + string(recorded) +
-		" to produce the same context by the mechanism the slot recorded, or start a review for a fresh candidate by running " +
-		reviewNextTransitionRefreshCommandV21
-}
-
 // RunReviewLensContext emits the finished reviewer lens context for one
 // selected lens: the provider-authored binding, the provider-authored capture
 // context, and the materialized immutable candidate evidence, budget already

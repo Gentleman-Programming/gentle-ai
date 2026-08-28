@@ -559,18 +559,6 @@ func (err *reviewRepositoryContextIdentityError) Error() string {
 
 func (err *reviewRepositoryContextIdentityError) Unwrap() error { return err.cause }
 
-func validateLiveReviewRepositoryContext(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) error {
-	store, err := CompactAuthoritativeStore(ctx, repo, binding.LineageID)
-	if err != nil {
-		return err
-	}
-	record, err := store.Load()
-	if err != nil {
-		return err
-	}
-	return validateReviewRepositoryContextRecord(ctx, repo, binding, record)
-}
-
 func validateReviewRepositoryContextRecord(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, record CompactRecord) error {
 	if record.State.LineageID != binding.LineageID {
 		return errors.New("review repository context is stale or has no live matching authority")

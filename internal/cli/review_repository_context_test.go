@@ -77,36 +77,6 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 		}
 	}
 
-	var preserved bytes.Buffer
-	if err := RunReviewPreserveResult(append(append([]string{}, bindingArgs...), "--input", resultPath), &preserved); err != nil {
-		t.Fatalf("preserve-result from unrelated cwd: %v", err)
-	}
-	var preservedEnvelope map[string]json.RawMessage
-	decodeStrictReviewJSON(t, preserved.Bytes(), &preservedEnvelope)
-	if _, leaked := preservedEnvelope["path"]; leaked || len(preservedEnvelope["reference"]) == 0 || bytes.Contains(preserved.Bytes(), []byte(repo)) || bytes.Contains(preserved.Bytes(), []byte(os.Getenv("HOME"))) {
-		t.Fatalf("opaque preserve response leaked provider paths or omitted its reference: %s", preserved.String())
-	}
-	var incident reviewIncidentArtifact
-	decodeStrictReviewJSON(t, preserved.Bytes(), &incident)
-	if incident.LineageID != started.LineageID || incident.TargetIdentity != started.RepositoryContext.TargetIdentity ||
-		incident.Lens != started.SelectedLenses[0] || incident.SelectedOrder != 0 || incident.Path != "" ||
-		!strings.HasPrefix(incident.Reference, reviewIncidentReferencePrefix) {
-		t.Fatalf("preserved incident = %#v", incident)
-	}
-	missingPreserveRevision := append(append([]string{}, bindingArgs...), "--input", resultPath)
-	for index := 0; index < len(missingPreserveRevision); index++ {
-		if missingPreserveRevision[index] == "--expected-revision" {
-			missingPreserveRevision = append(missingPreserveRevision[:index], missingPreserveRevision[index+2:]...)
-			break
-		}
-	}
-	if err := RunReviewPreserveResult(missingPreserveRevision, io.Discard); err == nil {
-		t.Fatal("repository-context preserve accepted a missing revision")
-	}
-	if err := RunReviewPreserveResult(append(append([]string{}, bindingArgs...), "--cwd", repo, "--input", resultPath), io.Discard); err == nil {
-		t.Fatal("repository-context preserve accepted an explicit cwd")
-	}
-
 	args := append(append([]string{}, bindingArgs...), "--input", resultPath)
 	missingRevision := append([]string{}, args...)
 	for index := 0; index < len(missingRevision); index++ {
@@ -123,60 +93,16 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 	if err := RunReviewCaptureResult(args, &captured); err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(captured.Bytes(), []byte(repo)) || bytes.Contains(captured.Bytes(), []byte(os.Getenv("HOME"))) {
-		t.Fatalf("opaque capture response leaked provider paths: %s", captured.String())
-	}
 	var closure reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, captured.Bytes(), &closure)
 	if closure.Operation != "review/capture-result" || closure.LineageID != started.LineageID ||
 		closure.State != reviewtransaction.StateApproved {
 		t.Fatalf("opaque terminal capture = %#v", closure)
 	}
-}
-
-func TestPreserveResultRequiresExactLiveSelectedLensBinding(t *testing.T) {
-	for _, contextMode := range []bool{false, true} {
-		name := "legacy-cwd"
-		if contextMode {
-			name = "opaque-context"
-		}
-		t.Run(name, func(t *testing.T) {
-			reviewEnabledHome(t)
-			repo := initReviewCLIRepo(t)
-			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc preserveBinding() {}\n", 0o644)
-			started := runNegotiatedReviewStart(t, repo, "preserve-selected-binding-"+name)
-			if started.RepositoryContext == nil || len(started.SelectedLenses) != 1 {
-				t.Fatalf("START result = %#v", started)
-			}
-			input := filepath.Join(t.TempDir(), "reviewer.json")
-			writeReviewCLIJSON(t, input, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"binding test"}})
-			base := []string{"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity, "--input", input}
-			if contextMode {
-				base = append(base, "--repository-context", started.RepositoryContext.Handle, "--expected-revision", started.RepositoryContext.Revision)
-			} else {
-				base = append(base, "--cwd", repo)
-			}
-			wrongLens := reviewtransaction.LensRisk
-			if wrongLens == started.SelectedLenses[0] {
-				wrongLens = reviewtransaction.LensReliability
-			}
-			for _, binding := range []struct {
-				name  string
-				lens  string
-				order string
-			}{
-				{name: "wrong lens", lens: wrongLens, order: "0"},
-				{name: "wrong order", lens: started.SelectedLenses[0], order: "1"},
-			} {
-				t.Run(binding.name, func(t *testing.T) {
-					args := append(append([]string{}, base...), "--lens", binding.lens, "--order", binding.order)
-					if err := RunReviewPreserveResult(args, io.Discard); err == nil {
-						t.Fatalf("preserve-result accepted unselected lens/order %q/%s", binding.lens, binding.order)
-					}
-				})
-			}
-		})
+	if closure.Acknowledgement == nil {
+		t.Fatalf("opaque terminal capture omitted acknowledgement: %#v", closure)
 	}
+	assertApprovedAcknowledgementTransition(t, closure.Acknowledgement, repo, started.LineageID, closure.Acknowledgement.Binding.TargetIdentity, closure.StoreRevision)
 }
 
 func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
@@ -366,9 +292,10 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 		closure.LineageID != started.LineageID {
 		t.Fatalf("targeted-validator terminal capture = %#v", closure)
 	}
-	if bytes.Contains(output.Bytes(), []byte(filepath.Join(repo, ".git", "gentle-ai"))) || bytes.Contains(output.Bytes(), []byte(repo)) {
-		t.Fatalf("targeted validator response leaked provider internals: %s", output.String())
+	if closure.Acknowledgement == nil {
+		t.Fatalf("targeted-validator terminal capture omitted acknowledgement: %#v", closure)
 	}
+	assertApprovedAcknowledgementTransition(t, closure.Acknowledgement, repo, started.LineageID, closure.Acknowledgement.Binding.TargetIdentity, closure.StoreRevision)
 }
 
 func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {

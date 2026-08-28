@@ -120,32 +120,35 @@ type CompactState struct {
 	// PolicyHash. A non-nil empty string intentionally represents an empty policy;
 	// nil remains readable historical authority and fails closed only when a
 	// targeted validator needs this semantic context.
-	FrozenPolicyContent       *string                      `json:"frozen_policy_content,omitempty"`
-	RiskLevel                 RiskLevel                    `json:"risk_level"`
-	SelectedLenses            []string                     `json:"selected_lenses"`
-	OriginalChangedLines      int                          `json:"original_changed_lines"`
-	CorrectionBudget          int                          `json:"correction_budget"`
-	CorrectionBudgetPolicy    string                       `json:"correction_budget_policy,omitempty"`
-	LensResults               []LensResult                 `json:"lens_results"`
-	Findings                  []Finding                    `json:"findings"`
-	Classifications           map[string]FindingEvidence   `json:"classifications"`
-	Outcomes                  map[string]EvidenceOutcome   `json:"outcomes"`
-	FixFindingIDs             []string                     `json:"fix_finding_ids"`
-	FollowUps                 []FollowUp                   `json:"follow_ups"`
-	ProposedCorrectionLines   *int                         `json:"proposed_correction_lines,omitempty"`
-	ActualCorrectionLines     *int                         `json:"actual_correction_lines,omitempty"`
-	FixDeltaHash              string                       `json:"fix_delta_hash"`
-	OriginalCriteria          *ValidationCheck             `json:"original_criteria,omitempty"`
-	CorrectionRegression      *ValidationCheck             `json:"correction_regression,omitempty"`
-	EvidenceHash              string                       `json:"evidence_hash,omitempty"`
-	InvalidationReason        string                       `json:"invalidation_reason,omitempty"`
-	InvalidationEvidence      *CompactInvalidationEvidence `json:"invalidation_evidence,omitempty"`
-	Recovery                  *CompactRecoveryProvenance   `json:"recovery,omitempty"`
-	CorrectionAttempts        []CompactCorrectionAttempt   `json:"correction_attempts,omitempty"`
-	CumulativeCorrectionLines int                          `json:"cumulative_correction_lines,omitempty"`
-	ResultDispositions        []CompactResultDisposition   `json:"result_dispositions,omitempty"`
-	ResultReopens             []CompactResultReopen        `json:"result_reopens,omitempty"`
-	ReviewerContextLevel      ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
+	FrozenPolicyContent    *string   `json:"frozen_policy_content,omitempty"`
+	RiskLevel              RiskLevel `json:"risk_level"`
+	SelectedLenses         []string  `json:"selected_lenses"`
+	OriginalChangedLines   int       `json:"original_changed_lines"`
+	CorrectionBudget       int       `json:"correction_budget"`
+	CorrectionBudgetPolicy string    `json:"correction_budget_policy,omitempty"`
+	// Historical review projections remain decode-only so released records can
+	// be classified as outdated and quarantined without restoring them as active
+	// authority. CompactReviewView derives all live review semantics from
+	// AdmittedRoleResults instead.
+	HistoricalLensResults     *compactHistoricalEmptyArray  `json:"lens_results,omitempty"`
+	HistoricalFindings        *compactHistoricalEmptyArray  `json:"findings,omitempty"`
+	HistoricalClassifications *compactHistoricalEmptyObject `json:"classifications,omitempty"`
+	HistoricalOutcomes        *compactHistoricalEmptyObject `json:"outcomes,omitempty"`
+	FixFindingIDs             []string                      `json:"fix_finding_ids"`
+	HistoricalFollowUps       *compactHistoricalEmptyArray  `json:"follow_ups,omitempty"`
+	ProposedCorrectionLines   *int                          `json:"proposed_correction_lines,omitempty"`
+	ActualCorrectionLines     *int                          `json:"actual_correction_lines,omitempty"`
+	FixDeltaHash              string                        `json:"fix_delta_hash"`
+	OriginalCriteria          *ValidationCheck              `json:"original_criteria,omitempty"`
+	CorrectionRegression      *ValidationCheck              `json:"correction_regression,omitempty"`
+	EvidenceHash              string                        `json:"evidence_hash,omitempty"`
+	InvalidationReason        string                        `json:"invalidation_reason,omitempty"`
+	InvalidationEvidence      *CompactInvalidationEvidence  `json:"invalidation_evidence,omitempty"`
+	Recovery                  *CompactRecoveryProvenance    `json:"recovery,omitempty"`
+	CorrectionAttempts        []CompactCorrectionAttempt    `json:"correction_attempts,omitempty"`
+	CumulativeCorrectionLines int                           `json:"cumulative_correction_lines,omitempty"`
+	ResultReopens             []CompactResultReopen         `json:"result_reopens,omitempty"`
+	ReviewerContextLevel      ReviewerContextLevel          `json:"reviewer_context_level,omitempty"`
 	// CapturePhaseRevision is the stable capture binding for the frozen review
 	// phase. Unlike CompactRecord.Revision, it does not advance when sibling
 	// captures merge their admitted values under the CAS lock.
@@ -161,10 +164,55 @@ type CompactState struct {
 	// current correction phase. It intentionally excludes rejected output bytes,
 	// evidence bodies, artifact paths, and role values.
 	TargetedValidatorAttempts []CompactTargetedValidatorAttempt `json:"targeted_validator_attempts,omitempty"`
+	// ApprovedAckToken is the one bounded opaque 256-bit acknowledgement token.
+	// It is present only on an active approved authority and is cleared by burn.
+	ApprovedAckToken string `json:"approved_ack_token,omitempty"`
 	// InitialAtomicStart is the optional immutable binding written only by the
 	// exact worktree-bound atomic START API. Its absence keeps historical compact
 	// records readable, but makes them ineligible for atomic START replay.
 	InitialAtomicStart *CompactAtomicStartBinding `json:"initial_atomic_start,omitempty"`
+}
+
+// compactHistoricalEmptyArray preserves an empty retired projection only long
+// enough for a released record's checksum and outdated-identity proof to be
+// reconstructed. A non-empty projection follows the existing historical parser,
+// which removes it and marks the authority read-only.
+type compactHistoricalEmptyArray struct{ raw json.RawMessage }
+
+func (projection *compactHistoricalEmptyArray) UnmarshalJSON(payload []byte) error {
+	var values []json.RawMessage
+	if err := json.Unmarshal(payload, &values); err != nil || len(values) != 0 {
+		return errors.New(`json: unknown field "lens_results"`) // refusal:by-design world-action: a non-empty retired projection must take the existing read-only historical compatibility path instead of becoming active authority
+	}
+	projection.raw = append(projection.raw[:0], payload...)
+	return nil
+}
+
+func (projection compactHistoricalEmptyArray) MarshalJSON() ([]byte, error) {
+	if projection.raw == nil {
+		return []byte("[]"), nil
+	}
+	return projection.raw, nil
+}
+
+// compactHistoricalEmptyObject is the map counterpart for retired findings
+// routing projections. It preserves only the empty release shape.
+type compactHistoricalEmptyObject struct{ raw json.RawMessage }
+
+func (projection *compactHistoricalEmptyObject) UnmarshalJSON(payload []byte) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &values); err != nil || len(values) != 0 {
+		return errors.New(`json: unknown field "classifications"`) // refusal:by-design world-action: a non-empty retired projection must take the existing read-only historical compatibility path instead of becoming active authority
+	}
+	projection.raw = append(projection.raw[:0], payload...)
+	return nil
+}
+
+func (projection compactHistoricalEmptyObject) MarshalJSON() ([]byte, error) {
+	if projection.raw == nil {
+		return []byte("{}"), nil
+	}
+	return projection.raw, nil
 }
 
 // CompactAtomicStartBinding is the immutable compact-v2 START identity. It
@@ -388,6 +436,11 @@ func cloneCompactAdmittedRoleResults(values []CompactAdmittedRoleResult) []Compa
 	return cloned
 }
 
+func compactPreservedPayloadDigest(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // deriveCompactCapturePhaseRevision creates the stable Pn binding before a
 // record exists. Its preimage is deliberately record-free: including a record
 // revision (or an admitted result) would make Pn advance with Rn and break
@@ -495,79 +548,20 @@ func IsCorrectionBudgetExceeded(err error) bool {
 }
 
 // CompactResultReopen is payload-free audit metadata for one lock-owned
-// selected-lens reopening. Removed references are not slots, paths, or a second
+// quarantine set reopening. Removed references are not slots, paths, or a second
 // role-value source; they cannot be read back into active capture.
 type CompactResultReopen struct {
-	PreviousRevision        string                         `json:"previous_revision"`
-	TargetIdentity          string                         `json:"target_identity"`
-	SelectedLens            string                         `json:"selected_lens"`
+	PreviousRevision string `json:"previous_revision"`
+	TargetIdentity   string `json:"target_identity"`
+	// SelectedLens is the historical singular audit field. New audit records use
+	// QuarantineLenses, while this remains readable for persisted authority.
+	SelectedLens            string                         `json:"selected_lens,omitempty"`
+	QuarantineLenses        []string                       `json:"quarantine_lenses,omitempty"`
 	Removed                 []CompactResultReopenReference `json:"removed"`
 	Reason                  string                         `json:"reason"`
 	Actor                   string                         `json:"actor"`
 	ReopenedAt              time.Time                      `json:"reopened_at"`
 	MaintainerAuthorization string                         `json:"maintainer_authorization"`
-}
-
-// ResultDispositionClass names which class of failure makes one preserved
-// reviewer result inapplicable to the frozen candidate. The two classes are
-// deliberately distinct: a transport or syntax failure says the payload never
-// decoded, while a wrong-target failure says a decodable payload described a
-// candidate that is not the frozen one. Both are recorded verbatim so an
-// auditor can tell which claim was actually proven.
-type ResultDispositionClass string
-
-const (
-	ResultDispositionTransportSyntax ResultDispositionClass = "transport_syntax"
-	ResultDispositionWrongTarget     ResultDispositionClass = "wrong_target"
-)
-
-// ResultIncidentClass names which extraction-failure shape a preserved raw
-// reviewer envelope was classified as at the plugin boundary. This is a
-// distinct type from ResultDispositionClass on purpose: disposition classes
-// judge candidate-inapplicability of a decodable payload, while incident
-// classes describe why the plugin could never extract a payload at all.
-type ResultIncidentClass string
-
-const (
-	ResultIncidentEmptyResult    ResultIncidentClass = "empty_result"
-	ResultIncidentNestedEnvelope ResultIncidentClass = "nested_envelope"
-)
-
-// ValidResultIncidentClass reports whether c is a known incident class or the
-// empty string (backward-compatible: omitting --class remains valid).
-func ValidResultIncidentClass(c ResultIncidentClass) bool {
-	switch c {
-	case "", ResultIncidentEmptyResult, ResultIncidentNestedEnvelope:
-		return true
-	default:
-		return false
-	}
-}
-
-// CompactResultDisposition records one audited refusal of a preserved reviewer
-// result as candidate-inapplicable. It binds the exact lens, selected order,
-// frozen target identity, and preserved-artifact digest it dispositions, and
-// it never carries findings, evidence, or any other admissible review content:
-// a disposition terminally escalates a lineage, it never contributes to one.
-type CompactResultDisposition struct {
-	Lens           string                 `json:"lens"`
-	SelectedOrder  int                    `json:"selected_order"`
-	TargetIdentity string                 `json:"target_identity"`
-	ArtifactDigest string                 `json:"artifact_digest"`
-	Class          ResultDispositionClass `json:"class"`
-	// PayloadDecodable records the decodability the disposition actually
-	// observed in the preserved bytes. It is what makes the two classes
-	// mutually exclusive in persisted shape: transport_syntax may only be
-	// recorded for a payload that did not decode, and wrong_target only for one
-	// that did, so no stored record can claim the stronger semantic class over
-	// a payload that never decoded at all.
-	PayloadDecodable        bool      `json:"payload_decodable,omitempty"`
-	Diagnostic              string    `json:"diagnostic"`
-	AbsentPaths             []string  `json:"absent_paths,omitempty"`
-	Reason                  string    `json:"reason"`
-	Actor                   string    `json:"actor"`
-	DisposedAt              time.Time `json:"disposed_at"`
-	MaintainerAuthorization string    `json:"maintainer_authorization"`
 }
 
 type CompactCorrectionAttempt struct {
@@ -681,9 +675,7 @@ func NewCompactState(start Start) (CompactState, error) {
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...), PolicyHash: start.PolicyHash,
 		FrozenPolicyContent: frozenPolicy, RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
 		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
-		LensResults: []LensResult{}, Findings: []Finding{}, AdmittedRoleResults: []CompactAdmittedRoleResult{},
-		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
-		FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
+		AdmittedRoleResults: []CompactAdmittedRoleResult{}, FixFindingIDs: []string{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
 	phase, err := deriveCompactCapturePhaseRevision(state)
 	if err != nil {
@@ -745,9 +737,6 @@ func (state CompactState) Validate() error {
 		if recovery.ConsumedCorrectionAttempts > 0 && recovery.Disposition != RecoveryScopeChanged {
 			return errors.New("only scope-changed recovery may preserve consumed correction accounting") // refusal:by-design world-action: contradictory persisted recovery provenance requires code or storage repair
 		}
-	}
-	if err := validateCompactResultDispositions(state); err != nil {
-		return err
 	}
 	if err := validateCompactResultReopens(state); err != nil {
 		return err
@@ -845,19 +834,14 @@ func (state CompactState) Validate() error {
 			return fmt.Errorf("compact initial atomic START binding does not match state at %s", field) // refusal:by-design world-action: contradictory persisted atomic authority requires code or storage repair
 		}
 	}
-	if state.LensResults == nil || state.Findings == nil || state.Classifications == nil || state.Outcomes == nil || state.FixFindingIDs == nil || state.FollowUps == nil {
-		return errors.New("compact review collections must be explicit arrays or objects")
+	if state.FixFindingIDs == nil {
+		return errors.New("compact fix finding IDs must be explicit")
 	}
-	if len(state.LensResults) > len(state.SelectedLenses) {
-		return errors.New("compact review has more results than selected lenses")
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return err
 	}
-	for index, result := range state.LensResults {
-		canonical, canonicalErr := CanonicalCompactLensResult(result)
-		if canonicalErr != nil || result.Lens != state.SelectedLenses[index] || !reflect.DeepEqual(result, canonical) {
-			return errors.New("compact lens results must be complete and canonically ordered")
-		}
-	}
-	if err := validateCompactFindings(state); err != nil {
+	if err := validateCompactReviewLifecycle(state, view); err != nil {
 		return err
 	}
 	if state.ProposedCorrectionLines != nil && *state.ProposedCorrectionLines <= 0 {
@@ -872,40 +856,11 @@ func (state CompactState) Validate() error {
 	if err := validateCompactCorrection(state); err != nil {
 		return err
 	}
-	switch state.State {
-	case StateReviewing:
-		if len(state.Findings) != 0 || len(state.Classifications) != 0 || len(state.Outcomes) != 0 || len(state.FixFindingIDs) != 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil || state.EvidenceHash != "" {
-			return errors.New("reviewing compact state contains post-review data")
-		}
-		if state.InvalidationReason != "" {
-			return errors.New("reviewing compact state cannot contain an invalidation reason")
-		}
-	case StateInvalidated:
-		reviewing := state
-		reviewing.State, reviewing.InvalidationReason = StateReviewing, ""
-		if strings.TrimSpace(state.InvalidationReason) == "" || !compactPristineReviewing(reviewing) {
-			return errors.New("invalidated compact state must retain only a pristine reviewing authority and reason")
-		}
-	case StateCorrectionRequired:
-		if len(state.LensResults) != len(state.SelectedLenses) || len(state.FixFindingIDs) == 0 || state.EvidenceHash != "" {
-			return errors.New("correction-required compact state is incomplete")
-		}
-	case StateValidating:
-		if state.Recovery == nil || state.Recovery.Evidence == nil {
-			if len(state.LensResults) != len(state.SelectedLenses) || state.EvidenceHash != "" {
-				return errors.New("validating compact state is incomplete")
-			}
-		}
-	case StateApproved:
-		if len(state.CorrectionAttempts) == 0 && !validSHA256(state.EvidenceHash) {
-			return errors.New("approved clean compact state requires admitted review evidence") // refusal:by-design human-authority: an approval without its immutable admitted-result digest requires authority inspection
-		}
-		if len(state.CorrectionAttempts) > 0 && state.EvidenceHash != "" && !validSHA256(state.EvidenceHash) {
-			return errors.New("approved corrected compact state has invalid historical verification evidence") // refusal:by-design human-authority: malformed historical evidence on an approved authority requires maintainer inspection
-		}
-	case StateEscalated:
-	default:
-		return fmt.Errorf("invalid compact review state %q", state.State)
+	if state.State != StateApproved && state.ApprovedAckToken != "" {
+		return errors.New("compact acknowledgement token requires approved authority state") // refusal:by-design world-action: a pending acknowledgement is valid only for the active approved authority that owns it
+	}
+	if state.State == StateApproved && state.ApprovedAckToken != "" && !validCompactAcknowledgementToken(state.ApprovedAckToken) {
+		return errors.New("approved compact acknowledgement token is malformed") // refusal:by-design world-action: only the exact opaque token returned by the provider can acknowledge this authority
 	}
 	return nil
 }
@@ -1016,50 +971,306 @@ func (state CompactState) AdmittedRoleResult(role CompactRole, phase, targetIden
 	return nil, false
 }
 
-// reopenCompactAdmittedRoleResults removes exactly one active selected lens and
-// its dependent refuter from the canonical record values. It retains only digest
-// and tuple metadata for the caller's audit; no removed payload can be reused.
-func reopenCompactAdmittedRoleResults(state CompactState, lens string) (CompactState, []CompactAdmittedRoleResult, error) {
-	order := stringIndex(state.SelectedLenses, lens)
-	if order < 0 || state.State != StateValidating && state.State != StateCorrectionRequired {
-		return CompactState{}, nil, errors.New("review reopen-results requires an uncorrected authority and selected lens") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+// CompactReviewView is the deterministic semantic interpretation of active
+// admitted role values. Persisted result projections remain compatibility data
+// until every consumer moves, but never contribute to this derived view.
+type CompactReviewView struct {
+	LensResults              []LensResult
+	Findings                 []Finding
+	Classifications          map[string]FindingEvidence
+	Outcomes                 map[string]EvidenceOutcome
+	FixFindingIDs            []string
+	FollowUps                []FollowUp
+	RefuterOutcomes          []EvidenceResult
+	TargetedValidatorOutcome string
+}
+
+func invalidCompactReviewView(format string, args ...any) error {
+	return fmt.Errorf("compact review view: "+format, args...)
+}
+
+// CompactReviewView derives all review semantics from active admitted values.
+// It intentionally does not consult the persisted result projections while the
+// migration retains them for old consumers.
+func (state CompactState) CompactReviewView() (CompactReviewView, error) {
+	view := CompactReviewView{
+		LensResults: []LensResult{}, Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
+		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, FollowUps: []FollowUp{},
+		RefuterOutcomes: []EvidenceResult{},
 	}
-	target := state.InitialSnapshot.Identity
-	selectedPhase := ""
+	seenLensOrders := map[int]bool{}
+	var refuter []EvidenceResult
+	previousRole, previousOrder := -1, -1
+	candidateCausal := map[string]bool{}
+	seenFindings := map[string]bool{}
 	for _, entry := range state.AdmittedRoleResults {
-		if entry.Role == CompactRoleLens && entry.TargetIdentity == target && entry.SelectedOrder == order && entry.Lens == lens &&
-			!compactAdmittedRoleResultWasReopened(state, entry) {
-			if selectedPhase != "" {
-				return CompactState{}, nil, errors.New("review reopen-results selected lens has ambiguous active capture history") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		if state.IsAccountingOnlyAdmittedRoleResult(entry) {
+			continue
+		}
+		value, err := canonicalCompactRoleValue(entry.Value)
+		if err != nil || !validSHA256(entry.TargetIdentity) || !validSHA256(entry.CapturePhaseRevision) ||
+			!validSHA256(entry.ArtifactDigest) || entry.RequestHash != "" && !validSHA256(entry.RequestHash) ||
+			entry.ResultHash != "" && !validSHA256(entry.ResultHash) || compactPreservedPayloadDigest(append(value, '\n')) != entry.ArtifactDigest {
+			return CompactReviewView{}, invalidCompactReviewView("role value does not match its authority binding")
+		}
+		roleOrder := map[CompactRole]int{CompactRoleLens: 0, CompactRoleRefuter: 1, CompactRoleTargetedValidator: 2}[entry.Role]
+		if entry.Role != CompactRoleLens && entry.Role != CompactRoleRefuter && entry.Role != CompactRoleTargetedValidator || roleOrder < previousRole ||
+			roleOrder == previousRole && entry.Role == CompactRoleLens && entry.SelectedOrder <= previousOrder {
+			return CompactReviewView{}, invalidCompactReviewView("active roles are not canonically ordered")
+		}
+		previousRole = roleOrder
+		if entry.Role == CompactRoleLens {
+			previousOrder = entry.SelectedOrder
+		}
+		switch entry.Role {
+		case CompactRoleLens:
+			if entry.TargetIdentity != state.InitialSnapshot.Identity || entry.RequestHash != "" || entry.SelectedOrder < 0 ||
+				entry.SelectedOrder >= len(state.SelectedLenses) || entry.Lens != state.SelectedLenses[entry.SelectedOrder] || entry.ResultHash == "" ||
+				!compactAdmittedLensCapturePhaseIsKnown(state, entry.CapturePhaseRevision) {
+				return CompactReviewView{}, invalidCompactReviewView("lens tuple does not match the active authority")
 			}
-			selectedPhase = entry.CapturePhaseRevision
+			envelope, err := decodeCompactAdmittedReviewerValue(value)
+			if err != nil || envelope.Schema != admittedReviewerResultSchemaForSubject(envelope.Subject) ||
+				envelope.Subject.LineageID != state.LineageID || envelope.Subject.AuthorityRevision != entry.CapturePhaseRevision ||
+				envelope.Subject.TargetIdentity != entry.TargetIdentity || envelope.Subject.Lens != entry.Lens ||
+				envelope.Subject.SelectedOrder != entry.SelectedOrder || envelope.Subject.CorrectionTargetIdentity != "" ||
+				envelope.Admission.Validate(envelope.Subject) != nil {
+				return CompactReviewView{}, invalidCompactReviewView("lens envelope does not bind its active tuple")
+			}
+			var provider compactProviderReviewerResult
+			if err := decodeCompactAdmittedRoleValue(envelope.Result, &provider); err != nil || provider.SubjectHash != envelope.Subject.SubjectHash || provider.Lens != entry.Lens {
+				return CompactReviewView{}, invalidCompactReviewView("lens provider value does not bind its admitted envelope")
+			}
+			canonicalPayload, err := json.Marshal(provider)
+			if err != nil || envelope.Admission.CanonicalSHA256 != payloadSHA256(append(canonicalPayload, '\n')) {
+				return CompactReviewView{}, invalidCompactReviewView("lens envelope canonical digest is invalid")
+			}
+			result, err := canonicalReviewerResult(LensResult{Lens: provider.Lens, Findings: provider.Findings, Evidence: provider.Evidence}, entry.Lens)
+			if err != nil || !reflect.DeepEqual(provider.Findings, result.Findings) || !reflect.DeepEqual(provider.Evidence, result.Evidence) ||
+				envelope.Admission.ResultHash != result.ResultHash || entry.ResultHash != result.ResultHash {
+				return CompactReviewView{}, invalidCompactReviewView("lens result is not the canonical admitted result")
+			}
+			if duplicate := seenLensOrders[entry.SelectedOrder]; duplicate {
+				return CompactReviewView{}, invalidCompactReviewView("lens slot is ambiguous")
+			}
+			for _, id := range envelope.Admission.CandidateCausalFindingIDs {
+				if candidateCausal[id] {
+					return CompactReviewView{}, invalidCompactReviewView("candidate-causal finding ID is admitted more than once")
+				}
+				candidateCausal[id] = true
+			}
+			seenLensOrders[entry.SelectedOrder] = true
+			view.LensResults = append(view.LensResults, result)
+			view.Findings = append(view.Findings, result.Findings...)
+		case CompactRoleRefuter:
+			if entry.TargetIdentity != state.InitialSnapshot.Identity || entry.Lens != "" || entry.SelectedOrder != 0 || entry.RequestHash == "" || refuter != nil ||
+				!compactAdmittedLensCapturePhaseIsKnown(state, entry.CapturePhaseRevision) {
+				return CompactReviewView{}, invalidCompactReviewView("refuter tuple is ambiguous or mismatched")
+			}
+			refuter, err = decodeCompactAdmittedRefuterValue(value)
+			if err != nil {
+				return CompactReviewView{}, fmt.Errorf("decode active admitted refuter: %w", err)
+			}
+		case CompactRoleTargetedValidator:
+			if entry.Lens != "" || entry.SelectedOrder != 0 || entry.RequestHash == "" || view.TargetedValidatorOutcome != "" ||
+				entry.CapturePhaseRevision != state.CapturePhaseRevision {
+				return CompactReviewView{}, invalidCompactReviewView("targeted-validator tuple is ambiguous or mismatched")
+			}
+			outcome, err := decodeCompactAdmittedTargetedValidatorValue(value)
+			if err != nil {
+				return CompactReviewView{}, fmt.Errorf("decode active admitted targeted validator: %w", err)
+			}
+			view.TargetedValidatorOutcome = outcome
 		}
 	}
-	if selectedPhase == "" {
-		return CompactState{}, nil, errors.New("review reopen-results selected lens is not admitted in the active capture batch") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	refuterByID := map[string]EvidenceResult{}
+	for _, result := range refuter {
+		if result.FindingID == "" || !isConcreteEvidence(result.Proof) || refuterByID[result.FindingID].FindingID != "" {
+			return CompactReviewView{}, invalidCompactReviewView("refuter results are malformed or duplicate")
+		}
+		refuterByID[result.FindingID] = result
 	}
-	removed := make([]CompactAdmittedRoleResult, 0, 2)
-	remaining := make([]CompactAdmittedRoleResult, 0, len(state.AdmittedRoleResults))
+	for _, finding := range view.Findings {
+		if seenFindings[finding.ID] {
+			return CompactReviewView{}, invalidCompactReviewView("admitted lens findings repeat an ID")
+		}
+		seenFindings[finding.ID] = true
+		if !isSevereSeverity(finding.Severity) {
+			if candidateCausal[finding.ID] {
+				return CompactReviewView{}, invalidCompactReviewView("admission marks a non-severe finding candidate-causal")
+			}
+			view.Outcomes[finding.ID] = OutcomeInfo
+			continue
+		}
+		if !isSupportedEvidenceClass(finding.EvidenceClass) || !isSupportedCausalDisposition(finding.CausalDisposition) {
+			return CompactReviewView{}, invalidCompactReviewView("severe finding has unsupported evidence")
+		}
+		causality := finding.CausalDisposition
+		candidateClaim := causality == CausalIntroduced || causality == CausalBehaviorActivated || causality == CausalWorsened
+		if candidateClaim && !candidateCausal[finding.ID] {
+			causality = CausalUnknown
+		} else if !candidateClaim && candidateCausal[finding.ID] {
+			return CompactReviewView{}, invalidCompactReviewView("admission candidate-causal ID contradicts its finding")
+		}
+		proof := strings.Join(finding.ProofRefs, "\n")
+		if !isConcreteEvidence(proof) {
+			return CompactReviewView{}, invalidCompactReviewView("severe finding has no concrete proof")
+		}
+		view.Classifications[finding.ID] = FindingEvidence{FindingID: finding.ID, Severity: finding.Severity, Class: finding.EvidenceClass, Causality: causality, Proof: proof}
+		switch {
+		case finding.EvidenceClass == EvidenceInsufficient || causality == CausalUnknown:
+			view.Outcomes[finding.ID] = OutcomeInconclusive
+		case causality == CausalPreExisting || causality == CausalBaseOnly:
+			view.Outcomes[finding.ID] = OutcomeInfo
+			view.FollowUps = append(view.FollowUps, causalFollowUp(finding, proof))
+		case finding.EvidenceClass == EvidenceDeterministic:
+			view.Outcomes[finding.ID] = OutcomeCorroborated
+			view.FixFindingIDs = append(view.FixFindingIDs, finding.ID)
+		default:
+			result, found := refuterByID[finding.ID]
+			if !found {
+				view.Outcomes[finding.ID] = OutcomeInconclusive
+				continue
+			}
+			if result.Outcome != OutcomeCorroborated && result.Outcome != OutcomeRefuted && result.Outcome != OutcomeInconclusive {
+				return CompactReviewView{}, invalidCompactReviewView("refuter outcome is unsupported")
+			}
+			view.Outcomes[finding.ID] = result.Outcome
+			if result.Outcome == OutcomeCorroborated {
+				view.FixFindingIDs = append(view.FixFindingIDs, finding.ID)
+			}
+		}
+	}
+	for id := range candidateCausal {
+		if !seenFindings[id] {
+			return CompactReviewView{}, invalidCompactReviewView("admission names an unadmitted finding")
+		}
+	}
+	for id := range refuterByID {
+		if _, found := view.Classifications[id]; !found || view.Classifications[id].Class != EvidenceInferential {
+			return CompactReviewView{}, invalidCompactReviewView("refuter result does not match an inferential finding")
+		}
+	}
+	sort.Strings(view.FixFindingIDs)
+	view.RefuterOutcomes = append(view.RefuterOutcomes, refuter...)
+	sort.Slice(view.RefuterOutcomes, func(left, right int) bool {
+		return view.RefuterOutcomes[left].FindingID < view.RefuterOutcomes[right].FindingID
+	})
+	return view, nil
+}
+
+// ActiveAdmittedLensResult returns the one active value for a selected lens.
+// A lens capture keeps its immutable reviewing phase through later normal
+// lifecycle advances; a reopen only removes the exact quarantined tuple.
+func (state CompactState) ActiveAdmittedLensResult(order int) (CompactAdmittedRoleResult, bool, error) {
+	if order < 0 || order >= len(state.SelectedLenses) {
+		return CompactAdmittedRoleResult{}, false, nil
+	}
+	if err := state.Validate(); err != nil {
+		return CompactAdmittedRoleResult{}, false, fmt.Errorf("validate active admitted lens result: %w", err)
+	}
+	lens := state.SelectedLenses[order]
+	var active CompactAdmittedRoleResult
 	for _, entry := range state.AdmittedRoleResults {
-		remove := entry.CapturePhaseRevision == selectedPhase && entry.TargetIdentity == target &&
-			(entry.Role == CompactRoleLens && entry.SelectedOrder == order && entry.Lens == lens || entry.Role == CompactRoleRefuter) &&
-			!compactAdmittedRoleResultWasReopened(state, entry)
-		if !remove {
+		if state.IsAccountingOnlyAdmittedRoleResult(entry) || entry.Role != CompactRoleLens || entry.TargetIdentity != state.InitialSnapshot.Identity ||
+			entry.SelectedOrder != order || entry.Lens != lens {
+			continue
+		}
+		if compactAdmittedRoleResultWasReopened(state, entry) {
+			return CompactAdmittedRoleResult{}, false, errors.New("active admitted lens result was removed by reopen") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if !compactAdmittedLensCapturePhaseIsKnown(state, entry.CapturePhaseRevision) ||
+			entry.CapturePhaseRevision != state.CapturePhaseRevision && state.State == StateReviewing && len(state.ResultReopens) == 0 {
+			return CompactAdmittedRoleResult{}, false, errors.New("retained admitted lens result lacks ordered reopen provenance") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if active.Role != "" {
+			return CompactAdmittedRoleResult{}, false, errors.New("active admitted lens result is ambiguous") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		active = entry
+	}
+	if active.Role == "" {
+		return CompactAdmittedRoleResult{}, false, nil
+	}
+	active.Value = append(json.RawMessage(nil), active.Value...)
+	return active, true, nil
+}
+
+// compactAdmittedLensCapturePhaseIsKnown recognizes only phases derivable from
+// immutable reviewing inputs. CompleteReview and BeginCorrection advance Pn
+// without rewriting lens tuples; reopened and recaptured lenses therefore remain
+// active while arbitrary stale phase hashes fail closed.
+func compactAdmittedLensCapturePhaseIsKnown(state CompactState, phase string) bool {
+	for epoch := 0; epoch <= state.CapturePhaseEpoch; epoch++ {
+		reviewing := state
+		reviewing.State = StateReviewing
+		reviewing.CurrentSnapshot = state.InitialSnapshot
+		reviewing.CapturePhaseEpoch = epoch
+		reviewing.FixFindingIDs = []string{}
+		reviewing.ProposedCorrectionLines = nil
+		expected, err := deriveCompactCapturePhaseRevision(reviewing)
+		if err == nil && phase == expected {
+			return true
+		}
+	}
+	return false
+}
+
+// reopenCompactAdmittedRoleResults removes one active, canonically ordered
+// quarantine set and its one dependent refuter from the canonical record values.
+// It retains only digest and tuple metadata for the caller's audit; no removed
+// payload can be reused.
+func reopenCompactAdmittedRoleResults(state CompactState, quarantineLenses []string) (CompactState, []CompactAdmittedRoleResult, error) {
+	if state.State != StateValidating && state.State != StateCorrectionRequired {
+		return CompactState{}, nil, errors.New("review reopen-results requires an uncorrected authority and selected lens") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	quarantined := make(map[int]string, len(quarantineLenses))
+	for _, lens := range quarantineLenses {
+		order := stringIndex(state.SelectedLenses, lens)
+		if order < 0 || quarantined[order] != "" {
+			return CompactState{}, nil, errors.New("review reopen-results requires a canonical selected lens set") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		quarantined[order] = lens
+	}
+	if len(quarantined) == 0 {
+		return CompactState{}, nil, errors.New("review reopen-results requires a selected lens") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	target, selectedPhase := state.InitialSnapshot.Identity, ""
+	selectedEntries := make(map[int]CompactAdmittedRoleResult, len(quarantined))
+	for order := range quarantined {
+		entry, found, err := state.ActiveAdmittedLensResult(order)
+		if err != nil || !found || entry.TargetIdentity != target || compactAdmittedRoleResultWasReopened(state, entry) {
+			return CompactState{}, nil, errors.New("review reopen-results selected lens is not admitted in the active capture batch") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if selectedPhase != "" && selectedPhase != entry.CapturePhaseRevision {
+			return CompactState{}, nil, errors.New("review reopen-results selected lenses have ambiguous active capture history") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		selectedPhase, selectedEntries[order] = entry.CapturePhaseRevision, entry
+	}
+	removed := make([]CompactAdmittedRoleResult, 0, len(quarantined)+1)
+	remaining := make([]CompactAdmittedRoleResult, 0, len(state.AdmittedRoleResults))
+	refuterRemoved := false
+	for _, entry := range state.AdmittedRoleResults {
+		expected, selected := selectedEntries[entry.SelectedOrder]
+		removeLens := selected && entry.Role == CompactRoleLens && entry.TargetIdentity == expected.TargetIdentity &&
+			entry.CapturePhaseRevision == expected.CapturePhaseRevision && entry.Lens == expected.Lens && entry.ArtifactDigest == expected.ArtifactDigest &&
+			entry.ResultHash == expected.ResultHash && compactAdmittedRoleResultCanSatisfyActiveCapture(state, entry) && !compactAdmittedRoleResultWasReopened(state, entry)
+		removeRefuter := entry.Role == CompactRoleRefuter && entry.TargetIdentity == target && entry.CapturePhaseRevision == selectedPhase &&
+			compactAdmittedRoleResultCanSatisfyActiveCapture(state, entry) && !compactAdmittedRoleResultWasReopened(state, entry)
+		if removeRefuter && refuterRemoved {
+			return CompactState{}, nil, errors.New("review reopen-results has more than one dependent refuter") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if !removeLens && !removeRefuter {
 			remaining = append(remaining, entry)
 			continue
 		}
+		refuterRemoved = refuterRemoved || removeRefuter
 		entry.Value = nil
 		removed = append(removed, entry)
 	}
 	next := cloneCompactStateInitialAtomicStart(state)
 	next.State = StateReviewing
 	next.AdmittedRoleResults = remaining
-	next.LensResults = []LensResult{}
-	next.Findings = []Finding{}
-	next.Classifications = map[string]FindingEvidence{}
-	next.Outcomes = map[string]EvidenceOutcome{}
 	next.FixFindingIDs = []string{}
-	next.FollowUps = []FollowUp{}
 	next.ProposedCorrectionLines = nil
 	next.ActualCorrectionLines = nil
 	next.FixDeltaHash = EmptyFixDeltaHash
@@ -1089,23 +1300,15 @@ func compactAdmittedRoleResultWasReopened(state CompactState, entry CompactAdmit
 	return false
 }
 
-// LedgerHash derives the canonical findings-ledger binding of the
-// authoritative compact record. Compact authority never persists a separate
-// ledger artifact: the frozen findings themselves are the ledger, validated by
-// Validate as the exact concatenation of the completed lens results. When at
-// least one finding was frozen, the binding is the SHA-256 of the canonical
-// gentle-ai.review-ledger/v1 bytes for exactly those findings, so auditors can
-// reconstruct and verify it from the persisted state. A pristine lineage — one
-// whose completed review froze no findings at all — has no ledger content to
-// bind and keeps the honest empty-input hash (SHA-256 of zero bytes); it never
-// fabricates a canonical empty-ledger artifact that was not persisted.
+// LedgerHash derives the canonical findings-ledger binding from admitted role
+// values. Compact authority never persists a second findings projection; callers
+// reconstruct the ledger from the canonical active review view.
 func (state CompactState) LedgerHash() string {
-	if len(state.Findings) == 0 {
+	view, err := state.CompactReviewView()
+	if err != nil || len(view.Findings) == 0 {
 		return EmptyFixDeltaHash
 	}
-	// CanonicalLedger only fails for a nil findings array, which the length
-	// guard above already excludes.
-	ledger, err := CanonicalLedger(state.Findings)
+	ledger, err := CanonicalLedger(view.Findings)
 	if err != nil {
 		return EmptyFixDeltaHash
 	}
@@ -1144,136 +1347,63 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 // narrating them as damage.
 var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
-func validateCompactFindings(state CompactState) error {
-	if state.State == StateReviewing || state.State == StateInvalidated || state.Recovery != nil && state.Recovery.Evidence != nil {
-		return nil
-	}
-	// A lineage terminally escalated by an audited reviewer-result disposition
-	// never completed its review, so by construction it holds no lens results
-	// to require. The exemption is exactly as narrow as that shape: it demands
-	// that no review content was frozen at all, so it can never excuse a
-	// partially completed review from the ordinary every-lens requirement.
-	if state.State == StateEscalated && len(state.ResultDispositions) > 0 {
-		if len(state.LensResults) != 0 || len(state.Findings) != 0 || len(state.Classifications) != 0 ||
-			len(state.Outcomes) != 0 || len(state.FixFindingIDs) != 0 || state.EvidenceHash != "" {
-			return errors.New("a reviewer-result-dispositioned compact state must hold no frozen review content")
-		}
-		return nil
-	}
-	if len(state.LensResults) != len(state.SelectedLenses) {
-		return errors.New("post-review compact state requires every selected lens result")
-	}
-	canonicalFindings := make([]Finding, 0, len(state.Findings))
-	for _, result := range state.LensResults {
-		canonicalFindings = append(canonicalFindings, result.Findings...)
-	}
-	if !reflect.DeepEqual(canonicalFindings, state.Findings) {
-		return errors.New("compact findings must exactly match canonical lens result concatenation")
-	}
-	seen := make(map[string]Finding, len(state.Findings))
-	for _, finding := range state.Findings {
-		if err := validateLensFinding(finding, true); err != nil {
-			return err
-		}
-		if _, exists := seen[finding.ID]; exists {
-			return fmt.Errorf("duplicate compact finding %q", finding.ID)
-		}
-		seen[finding.ID] = finding
-	}
-	fixIDs, err := canonicalStrings(state.FixFindingIDs, "fix finding id")
-	if err != nil || !equalStrings(fixIDs, state.FixFindingIDs) {
+func validateCompactReviewLifecycle(state CompactState, view CompactReviewView) error {
+	fixFindingIDs, err := canonicalStrings(state.FixFindingIDs, "fix finding id")
+	if err != nil || !equalStrings(fixFindingIDs, state.FixFindingIDs) {
 		return errors.New("compact fix finding IDs must be canonical")
 	}
-	expectedFixIDs := []string{}
-	unresolved := false
-	for _, finding := range state.Findings {
-		classification, classified := state.Classifications[finding.ID]
-		outcome, hasOutcome := state.Outcomes[finding.ID]
-		if !isSevereSeverity(finding.Severity) {
-			if classified || !hasOutcome || outcome != OutcomeInfo || stringIndex(state.FixFindingIDs, finding.ID) >= 0 {
-				return fmt.Errorf("non-severe compact finding %q must be informational only", finding.ID)
-			}
-			continue
+	completeReview := func() error {
+		if len(view.LensResults) != len(state.SelectedLenses) {
+			return errors.New("post-review compact state requires every selected admitted lens result")
 		}
-		if !classified || classification.FindingID != finding.ID || !isConcreteEvidence(classification.Proof) {
-			return fmt.Errorf("severe compact finding %q requires exactly one concrete classification", finding.ID)
+		if !equalStrings(view.FixFindingIDs, state.FixFindingIDs) {
+			return errors.New("compact fix finding IDs must match the admitted review view")
 		}
-		switch classification.Class {
-		case EvidenceDeterministic, EvidenceInferential, EvidenceInsufficient:
-		default:
-			return fmt.Errorf("compact finding %q has unsupported evidence class %q", finding.ID, classification.Class)
+		return nil
+	}
+	switch state.State {
+	case StateReviewing:
+		if len(state.FixFindingIDs) != 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil || state.EvidenceHash != "" {
+			return errors.New("reviewing compact state contains post-review data")
 		}
-		if !isSupportedCausalDisposition(classification.Causality) || !hasOutcome {
-			return fmt.Errorf("compact finding %q has incomplete causal routing", finding.ID)
+		if state.InvalidationReason != "" {
+			return errors.New("reviewing compact state cannot contain an invalidation reason")
 		}
-		if classification.Class == EvidenceInsufficient {
-			if outcome != OutcomeInconclusive {
-				return fmt.Errorf("insufficient compact finding %q must be inconclusive", finding.ID)
-			}
-			unresolved = true
-			continue
+	case StateInvalidated:
+		reviewing := state
+		reviewing.State, reviewing.InvalidationReason = StateReviewing, ""
+		if strings.TrimSpace(state.InvalidationReason) == "" || !compactPristineReviewing(reviewing) {
+			return errors.New("invalidated compact state must retain only a pristine reviewing authority and reason")
 		}
-		switch classification.Causality {
-		case CausalPreExisting, CausalBaseOnly:
-			if outcome != OutcomeInfo || !hasFollowUp(state.FollowUps, causalFollowUp(finding, classification.Proof)) {
-				return fmt.Errorf("non-candidate compact finding %q must route to an informational follow-up", finding.ID)
-			}
-		case CausalUnknown:
-			if outcome != OutcomeInconclusive {
-				return fmt.Errorf("unknown-causality compact finding %q must be inconclusive", finding.ID)
-			}
-			unresolved = true
-		case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
-			switch classification.Class {
-			case EvidenceDeterministic:
-				if outcome != OutcomeCorroborated {
-					return fmt.Errorf("deterministic candidate-causal finding %q must be corroborated", finding.ID)
-				}
-				expectedFixIDs = append(expectedFixIDs, finding.ID)
-			case EvidenceInferential:
-				switch outcome {
-				case OutcomeCorroborated:
-					expectedFixIDs = append(expectedFixIDs, finding.ID)
-				case OutcomeRefuted:
-				case OutcomeInconclusive:
-					unresolved = true
-				default:
-					return fmt.Errorf("inferential compact finding %q has unsupported outcome %q", finding.ID, outcome)
-				}
+	case StateCorrectionRequired:
+		if err := completeReview(); err != nil || len(state.FixFindingIDs) == 0 || state.EvidenceHash != "" {
+			return errors.New("correction-required compact state is incomplete")
+		}
+	case StateValidating:
+		if state.Recovery == nil || state.Recovery.Evidence == nil {
+			if err := completeReview(); err != nil || state.EvidenceHash != "" {
+				return errors.New("validating compact state is incomplete")
 			}
 		}
-	}
-	if len(state.Classifications) != compactSevereFindingCount(state.Findings) || len(state.Outcomes) != len(state.Findings) {
-		return errors.New("compact finding routing contains missing or extra classifications or outcomes")
-	}
-	sort.Strings(expectedFixIDs)
-	if !equalStrings(expectedFixIDs, state.FixFindingIDs) {
-		return errors.New("compact fix finding IDs must exactly match candidate-causal corroborated findings")
-	}
-	if unresolved && state.State != StateEscalated {
-		return errors.New("unresolved compact finding routing must be terminally escalated")
-	}
-	for id := range state.Classifications {
-		if _, exists := seen[id]; !exists {
-			return fmt.Errorf("compact classification %q does not name a finding", id)
+	case StateApproved:
+		if err := completeReview(); err != nil {
+			return err
 		}
-	}
-	for id := range state.Outcomes {
-		if _, exists := seen[id]; !exists {
-			return fmt.Errorf("compact outcome %q does not name a finding", id)
+		if len(state.CorrectionAttempts) == 0 {
+			if state.EvidenceHash != compactReviewEvidenceHash(view) {
+				return errors.New("approved clean compact state requires admitted review evidence") // refusal:by-design human-authority: an approval without its immutable admitted-result digest requires authority inspection
+			}
+		} else if state.EvidenceHash != "" && !validSHA256(state.EvidenceHash) {
+			return errors.New("approved corrected compact state has invalid historical verification evidence") // refusal:by-design human-authority: malformed historical evidence on an approved authority requires maintainer inspection
 		}
-	}
-	return validateFollowUps(state.FollowUps)
-}
-
-func compactSevereFindingCount(findings []Finding) int {
-	count := 0
-	for _, finding := range findings {
-		if isSevereSeverity(finding.Severity) {
-			count++
+	case StateEscalated:
+		if err := completeReview(); err != nil {
+			return err
 		}
+	default:
+		return fmt.Errorf("invalid compact review state %q", state.State)
 	}
-	return count
+	return nil
 }
 
 func validateCompactCorrection(state CompactState) error {
@@ -1420,7 +1550,6 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 		return err
 	}
 	if state.State != StateValidating || !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) ||
-		len(state.LensResults) != 0 || len(state.Findings) != 0 || len(state.Classifications) != 0 || len(state.Outcomes) != 0 || len(state.FollowUps) != 0 ||
 		len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 || state.ProposedCorrectionLines == nil ||
 		state.ActualCorrectionLines == nil || *state.ProposedCorrectionLines < evidence.NativeCorrectionLines ||
 		*state.ActualCorrectionLines != evidence.NativeCorrectionLines || len(state.FixFindingIDs) == 0 || state.EvidenceHash != "" {
@@ -1429,7 +1558,7 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 	return nil
 }
 
-func compactReviewEvidenceHash(state CompactState) string {
+func compactReviewEvidenceHash(view CompactReviewView) string {
 	payload, _ := json.Marshal(struct {
 		LensResults     []LensResult               `json:"lens_results"`
 		Findings        []Finding                  `json:"findings"`
@@ -1438,125 +1567,88 @@ func compactReviewEvidenceHash(state CompactState) string {
 		FixFindingIDs   []string                   `json:"fix_finding_ids"`
 		FollowUps       []FollowUp                 `json:"follow_ups"`
 	}{
-		LensResults: state.LensResults, Findings: state.Findings, Classifications: state.Classifications,
-		Outcomes: state.Outcomes, FixFindingIDs: state.FixFindingIDs, FollowUps: state.FollowUps,
+		LensResults: view.LensResults, Findings: view.Findings, Classifications: view.Classifications,
+		Outcomes: view.Outcomes, FixFindingIDs: view.FixFindingIDs, FollowUps: view.FollowUps,
 	})
 	sum := sha256.Sum256(append([]byte(CompactRecoveredEvidenceSchema+"/review\x00"), payload...))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func validateCompactReviewInput(state CompactState, input CompactReviewInput, view CompactReviewView) error {
+	if len(input.LensResults) != len(state.SelectedLenses) {
+		return fmt.Errorf("compact review requires all %d selected lens results", len(state.SelectedLenses))
+	}
+	results := make([]LensResult, len(input.LensResults))
+	for index, result := range input.LensResults {
+		if result.Lens != state.SelectedLenses[index] {
+			return fmt.Errorf("lens result %d does not name its selected lens", index+1)
+		}
+		for _, evidence := range result.Evidence {
+			if evidenceReportsUnavailableInspection(evidence) {
+				return fmt.Errorf("lens result %d reports unavailable candidate inspection", index+1)
+			}
+		}
+		canonical, err := CanonicalCompactLensResult(result)
+		if err != nil {
+			return fmt.Errorf("lens result %d: %w", index+1, err)
+		}
+		results[index] = canonical
+	}
+	if !reflect.DeepEqual(results, view.LensResults) {
+		return errors.New("compact review input does not match admitted lens results")
+	}
+	classifications := make(map[string]FindingEvidence, len(input.Classifications))
+	for _, classification := range input.Classifications {
+		expected, found := view.Classifications[classification.FindingID]
+		if !found || classifications[classification.FindingID].FindingID != "" {
+			return fmt.Errorf("compact review input has an unknown or duplicate classification for %q", classification.FindingID)
+		}
+		if classification.Severity != "" && classification.Severity != expected.Severity {
+			return fmt.Errorf("compact review input classification severity does not match %q", classification.FindingID)
+		}
+		classification.Severity = expected.Severity
+		classifications[classification.FindingID] = classification
+	}
+	if !reflect.DeepEqual(classifications, view.Classifications) {
+		return errors.New("compact review input does not match admitted classifications")
+	}
+	refuterOutcomes := append([]EvidenceResult{}, input.RefuterOutcomes...)
+	for _, result := range refuterOutcomes {
+		if result.FindingID == "" || !isConcreteEvidence(result.Proof) {
+			return fmt.Errorf("refuter result %q is invalid", result.FindingID)
+		}
+	}
+	sort.Slice(refuterOutcomes, func(left, right int) bool {
+		return refuterOutcomes[left].FindingID < refuterOutcomes[right].FindingID
+	})
+	if !reflect.DeepEqual(refuterOutcomes, view.RefuterOutcomes) {
+		return errors.New("compact review input does not match admitted refuter outcomes")
+	}
+	return nil
+}
+
+func compactReviewViewHasUnresolvedFindings(view CompactReviewView) bool {
+	for _, outcome := range view.Outcomes {
+		if outcome == OutcomeInconclusive {
+			return true
+		}
+	}
+	return false
 }
 
 func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	if state.State != StateReviewing {
 		return fmt.Errorf("cannot complete review from compact state %q", state.State)
 	}
-	if len(input.LensResults) != len(state.SelectedLenses) {
-		return fmt.Errorf("compact review requires all %d selected lens results", len(state.SelectedLenses))
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return err
 	}
-	// Historical validating authority may contain evidence from a provider
-	// that never inspected the candidate. Keep that state parseable so the
-	// explicit reopen transition can quarantine it, but never admit the same
-	// evidence through a new review completion.
-	for index, result := range input.LensResults {
-		for _, evidence := range result.Evidence {
-			if evidenceReportsUnavailableInspection(evidence) {
-				return fmt.Errorf("lens result %d reports unavailable candidate inspection", index+1)
-			}
-		}
+	if err := validateCompactReviewInput(*state, input, view); err != nil {
+		return err
 	}
-	state.LensResults = []LensResult{}
-	state.Findings = []Finding{}
-	for index, result := range input.LensResults {
-		result.Lens = state.SelectedLenses[index]
-		canonical, err := CanonicalCompactLensResult(result)
-		if err != nil {
-			return fmt.Errorf("lens result %d: %w", index+1, err)
-		}
-		state.LensResults = append(state.LensResults, canonical)
-		state.Findings = append(state.Findings, canonical.Findings...)
-	}
-	severe := map[string]Finding{}
-	for _, finding := range state.Findings {
-		if isSevereSeverity(finding.Severity) {
-			severe[finding.ID] = finding
-		} else {
-			state.Outcomes[finding.ID] = OutcomeInfo
-		}
-	}
-	classifications := map[string]FindingEvidence{}
-	for _, item := range input.Classifications {
-		if _, exists := classifications[item.FindingID]; exists {
-			return fmt.Errorf("duplicate evidence for finding %q", item.FindingID)
-		}
-		if _, exists := severe[item.FindingID]; !exists || !isSupportedCausalDisposition(item.Causality) || !isConcreteEvidence(item.Proof) {
-			return fmt.Errorf("finding %q requires valid causal evidence", item.FindingID)
-		}
-		classifications[item.FindingID] = item
-	}
-	if len(classifications) != len(severe) {
-		return errors.New("compact evidence classification must cover every severe finding")
-	}
-	refuted := map[string]EvidenceResult{}
-	for _, result := range input.RefuterOutcomes {
-		if _, exists := refuted[result.FindingID]; exists || !isConcreteEvidence(result.Proof) {
-			return fmt.Errorf("refuter result %q is invalid", result.FindingID)
-		}
-		refuted[result.FindingID] = result
-	}
-	escalate := false
-	for _, finding := range state.Findings {
-		item, severeFinding := classifications[finding.ID]
-		if !severeFinding {
-			continue
-		}
-		switch item.Causality {
-		case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
-			if !findingLocationInGenesis(finding.Location, state.GenesisPaths) {
-				item.Causality = CausalUnknown
-			}
-		}
-		state.Classifications[finding.ID] = item
-		if item.Class == EvidenceInsufficient {
-			state.Outcomes[finding.ID] = OutcomeInconclusive
-			escalate = true
-			continue
-		}
-		switch item.Causality {
-		case CausalPreExisting, CausalBaseOnly:
-			state.Outcomes[finding.ID] = OutcomeInfo
-			state.FollowUps = append(state.FollowUps, causalFollowUp(finding, item.Proof))
-			continue
-		case CausalUnknown:
-			state.Outcomes[finding.ID] = OutcomeInconclusive
-			escalate = true
-			continue
-		}
-		switch item.Class {
-		case EvidenceDeterministic:
-			state.Outcomes[finding.ID] = OutcomeCorroborated
-			state.FixFindingIDs = append(state.FixFindingIDs, finding.ID)
-		case EvidenceInferential:
-			result, ok := refuted[finding.ID]
-			if !ok {
-				return fmt.Errorf("inferential finding %q requires one refuter outcome", finding.ID)
-			}
-			switch result.Outcome {
-			case OutcomeCorroborated:
-				state.Outcomes[finding.ID] = result.Outcome
-				state.FixFindingIDs = append(state.FixFindingIDs, finding.ID)
-			case OutcomeRefuted:
-				state.Outcomes[finding.ID] = result.Outcome
-			case OutcomeInconclusive:
-				state.Outcomes[finding.ID] = result.Outcome
-				escalate = true
-			default:
-				return fmt.Errorf("unsupported refuter outcome %q", result.Outcome)
-			}
-		default:
-			return fmt.Errorf("unsupported evidence class %q", item.Class)
-		}
-	}
-	sort.Strings(state.FixFindingIDs)
-	if escalate {
+	state.FixFindingIDs = append([]string{}, view.FixFindingIDs...)
+	if compactReviewViewHasUnresolvedFindings(view) {
 		state.State = StateEscalated
 	} else if len(state.FixFindingIDs) > 0 {
 		state.State = StateCorrectionRequired
@@ -1575,14 +1667,13 @@ func (state *CompactState) CloseCleanReviewOnLastEvent() error {
 	if state.State != StateValidating || len(state.FixFindingIDs) != 0 {
 		return errors.New("last review event closure requires a clean validating review") // refusal:by-design operator-knowledge: only a clean final lens result may take the no-FINALIZE closure
 	}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return err
+	}
 	state.State = StateApproved
-	state.EvidenceHash = compactReviewEvidenceHash(*state)
+	state.EvidenceHash = compactReviewEvidenceHash(view)
 	return state.Validate()
-}
-
-func findingLocationInGenesis(location string, genesisPaths []string) bool {
-	finding, err := parseFindingLocation(location)
-	return err == nil && stringIndex(genesisPaths, finding.Path) >= 0
 }
 
 // ErrInvalidFindingLocation identifies reviewer locations that cannot be used
@@ -1712,96 +1803,33 @@ func (state *CompactState) Invalidate(reason string) error {
 	return nil
 }
 
-// validateCompactResultDispositions enforces the persisted shape of audited
-// reviewer-result dispositions. Only a terminally escalated authority may
-// carry them, each binds a distinct selected lens/order pair on the frozen
-// target, and each records the class it actually proved.
-func validateCompactResultDispositions(state CompactState) error {
-	if len(state.ResultDispositions) == 0 {
-		return nil
-	}
-	if state.State != StateEscalated {
-		return errors.New("only a terminally escalated compact state may record reviewer result dispositions")
-	}
-	orders := make(map[int]struct{}, len(state.ResultDispositions))
-	for _, disposition := range state.ResultDispositions {
-		if disposition.SelectedOrder < 0 || disposition.SelectedOrder >= len(state.SelectedLenses) ||
-			state.SelectedLenses[disposition.SelectedOrder] != disposition.Lens {
-			return errors.New("reviewer result disposition does not bind a selected lens and order")
-		}
-		if _, duplicate := orders[disposition.SelectedOrder]; duplicate {
-			return errors.New("reviewer result disposition order is recorded twice")
-		}
-		orders[disposition.SelectedOrder] = struct{}{}
-		if disposition.TargetIdentity != state.InitialSnapshot.Identity || !validSHA256(disposition.ArtifactDigest) {
-			return errors.New("reviewer result disposition does not bind the frozen target and preserved artifact digest")
-		}
-		if strings.TrimSpace(disposition.Diagnostic) == "" || strings.TrimSpace(disposition.Reason) == "" ||
-			strings.TrimSpace(disposition.Actor) == "" || strings.TrimSpace(disposition.MaintainerAuthorization) == "" ||
-			disposition.DisposedAt.IsZero() {
-			return errors.New("reviewer result disposition requires a diagnostic, reason, actor, authorization, and timestamp")
-		}
-		switch disposition.Class {
-		case ResultDispositionTransportSyntax:
-			if len(disposition.AbsentPaths) != 0 {
-				return errors.New("transport/syntax reviewer result disposition carries no wrong-target path evidence")
-			}
-			if disposition.PayloadDecodable {
-				return errors.New("transport/syntax reviewer result disposition must record a payload that did not decode")
-			}
-		case ResultDispositionWrongTarget:
-			absent, err := canonicalPaths(disposition.AbsentPaths)
-			if err != nil || len(absent) == 0 || !equalStrings(absent, disposition.AbsentPaths) {
-				return errors.New("wrong-target reviewer result disposition requires canonical absent-path evidence")
-			}
-			for _, path := range absent {
-				for _, candidate := range state.InitialSnapshot.Paths {
-					if candidate == path {
-						return errors.New("wrong-target reviewer result disposition cites a path inside the frozen candidate")
-					}
-				}
-			}
-			if !disposition.PayloadDecodable {
-				return errors.New("wrong-target reviewer result disposition must record a payload that actually decoded")
-			}
-		default:
-			return errors.New("invalid reviewer result disposition class")
-		}
-	}
-	return nil
-}
-
 func validateCompactResultReopens(state CompactState) error {
 	for _, reopen := range state.ResultReopens {
-		if !validSHA256(reopen.PreviousRevision) || reopen.TargetIdentity != state.InitialSnapshot.Identity ||
-			stringIndex(state.SelectedLenses, reopen.SelectedLens) < 0 ||
+		lenses, err := compactResultReopenAuditQuarantineLenses(state, reopen)
+		if !validSHA256(reopen.PreviousRevision) || reopen.TargetIdentity != state.InitialSnapshot.Identity || err != nil ||
 			strings.TrimSpace(reopen.Reason) == "" || strings.TrimSpace(reopen.Actor) == "" ||
-			strings.TrimSpace(reopen.MaintainerAuthorization) == "" || reopen.ReopenedAt.IsZero() || len(reopen.Removed) == 0 {
+			strings.TrimSpace(reopen.MaintainerAuthorization) == "" || reopen.ReopenedAt.IsZero() || len(reopen.Removed) < len(lenses) {
 			return errors.New("reviewer result reopen audit record is incomplete")
 		}
-		selected, dependent := false, false
-		for _, reference := range reopen.Removed {
-			if !validSHA256(reference.TargetIdentity) || !validSHA256(reference.CapturePhaseRevision) ||
-				!validSHA256(reference.ArtifactDigest) || reference.TargetIdentity != reopen.TargetIdentity {
-				return errors.New("reviewer result reopen reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
-			}
-			switch reference.Role {
-			case CompactRoleLens:
-				if reference.Lens != reopen.SelectedLens || reference.SelectedOrder != stringIndex(state.SelectedLenses, reopen.SelectedLens) || !validSHA256(reference.ResultHash) {
-					return errors.New("reviewer result reopen selected lens reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
-				}
-				selected = true
-			case CompactRoleRefuter:
-				if reference.Lens != "" || reference.SelectedOrder != 0 || !validSHA256(reference.RequestHash) {
-					return errors.New("reviewer result reopen refuter reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
-				}
-				dependent = true
-			default:
-				return errors.New("reviewer result reopen may only audit a lens and dependent refuter") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		for index, lens := range lenses {
+			reference := reopen.Removed[index]
+			if reference.Role != CompactRoleLens || reference.Lens != lens || reference.SelectedOrder != stringIndex(state.SelectedLenses, lens) ||
+				!validSHA256(reference.TargetIdentity) || !validSHA256(reference.CapturePhaseRevision) || !validSHA256(reference.ArtifactDigest) ||
+				reference.TargetIdentity != reopen.TargetIdentity || !validSHA256(reference.ResultHash) {
+				return errors.New("reviewer result reopen selected lens reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 			}
 		}
-		if !selected || len(reopen.Removed) > 2 || dependent && len(reopen.Removed) != 2 {
+		if len(reopen.Removed) == len(lenses) {
+			continue
+		}
+		if len(reopen.Removed) != len(lenses)+1 {
 			return errors.New("reviewer result reopen audit has an invalid selected/dependent cardinality") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		reference := reopen.Removed[len(lenses)]
+		if reference.Role != CompactRoleRefuter || reference.Lens != "" || reference.SelectedOrder != 0 ||
+			!validSHA256(reference.TargetIdentity) || !validSHA256(reference.CapturePhaseRevision) || !validSHA256(reference.ArtifactDigest) ||
+			reference.TargetIdentity != reopen.TargetIdentity || !validSHA256(reference.RequestHash) {
+			return errors.New("reviewer result reopen refuter reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 	}
 	return nil
@@ -1820,11 +1848,10 @@ func cloneCompactStateValue(state CompactState) (CompactState, error) {
 }
 
 func compactPristineReviewing(state CompactState) bool {
-	return state.State == StateReviewing && len(state.ResultDispositions) == 0 && snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) &&
-		len(state.LensResults) == 0 && len(state.Findings) == 0 && len(state.Classifications) == 0 && len(state.Outcomes) == 0 &&
-		len(state.FixFindingIDs) == 0 && len(state.FollowUps) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
+	return state.State == StateReviewing && snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) &&
+		len(state.AdmittedRoleResults) == 0 && len(state.FixFindingIDs) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
 		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" &&
-		state.InvalidationReason == "" &&
+		state.InvalidationReason == "" && len(state.TargetedValidatorAttempts) == 0 &&
 		len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines == 0
 }
 
@@ -1915,7 +1942,6 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	state.CorrectionAttempts = append(state.CorrectionAttempts, attempt)
 	state.CumulativeCorrectionLines += actual
 	state.CurrentSnapshot = snapshot
-	state.FollowUps = append(state.FollowUps, validation.FollowUps...)
 	state.FixDeltaHash, state.ActualCorrectionLines = fixHash, &actual
 	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
 	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
@@ -2063,31 +2089,8 @@ func normalizeCompactState(state *CompactState) {
 	if state.SelectedLenses == nil {
 		state.SelectedLenses = []string{}
 	}
-	if state.LensResults == nil {
-		state.LensResults = []LensResult{}
-	}
-	for index := range state.LensResults {
-		if state.LensResults[index].Findings == nil {
-			state.LensResults[index].Findings = []Finding{}
-		}
-		if state.LensResults[index].Evidence == nil {
-			state.LensResults[index].Evidence = []string{}
-		}
-	}
-	if state.Findings == nil {
-		state.Findings = []Finding{}
-	}
-	if state.Classifications == nil {
-		state.Classifications = map[string]FindingEvidence{}
-	}
-	if state.Outcomes == nil {
-		state.Outcomes = map[string]EvidenceOutcome{}
-	}
 	if state.FixFindingIDs == nil {
 		state.FixFindingIDs = []string{}
-	}
-	if state.FollowUps == nil {
-		state.FollowUps = []FollowUp{}
 	}
 	if state.AdmittedRoleResults == nil {
 		state.AdmittedRoleResults = []CompactAdmittedRoleResult{}

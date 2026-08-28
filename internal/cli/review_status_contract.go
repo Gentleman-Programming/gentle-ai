@@ -719,7 +719,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return result.validateStartNextTransition()
 	}
 	expectedExecutionTarget := result.TargetIdentity
-	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
+	if result.Authority != nil && (result.Authority.State == reviewtransaction.StateValidating || result.NextTransition.Execute != nil && result.NextTransition.Execute.Operation == "review.acknowledge-approved") {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
 	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
 		result.ValidationRequest != nil && (result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
@@ -1128,7 +1128,7 @@ func (transition ReviewNextTransition) Validate() error {
 		if transition.Collect != nil || transition.Execute == nil || transition.Execute.Arguments == nil || len(transition.Execute.Preconditions) == 0 || !validReviewCapabilitySHA256(transition.Execute.Binding.TargetIdentity) {
 			return errors.New("execution transition is incomplete")
 		}
-		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
+		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" && transition.Execute.Operation != "review.acknowledge-approved" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
 			return errors.New("execution transition operation or binding is invalid")
 		}
 		if transition.Execute.Binding.RepositoryContext != "" && reviewtransaction.ValidateReviewRepositoryContextHandle(transition.Execute.Binding.RepositoryContext) != nil {
@@ -1243,6 +1243,25 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation
 	return values, nil
 }
 
+func validateReviewApprovedAcknowledgementExecution(execution ReviewTransitionExecution) error {
+	transition := ReviewNextTransition{
+		Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: &execution,
+	}
+	return transition.Validate()
+}
+
+func validReviewAcknowledgementToken(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			return false
+		}
+	}
+	return true
+}
+
 func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
 	if execution.Command != reviewTransitionCommandLine(execution.Operation, execution.Arguments) {
 		return errors.New("execution transition command does not match its arguments") // refusal:by-design world-action: a producer must publish the exact command its executable arguments define
@@ -1265,6 +1284,18 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		return true
 	}
 	switch execution.Operation {
+	case "review.acknowledge-approved":
+		if !exact([]string{"cwd", "lineage", "target", "expected-revision", "token"}, nil) ||
+			arguments["lineage"] != execution.Binding.LineageID || arguments["target"] != execution.Binding.TargetIdentity ||
+			arguments["expected-revision"] != execution.Binding.Revision || !validReviewAcknowledgementToken(arguments["token"]) ||
+			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateApproved)}) {
+			return errors.New("approved acknowledgement transition binding is invalid") // refusal:by-design world-action: only the exact pending acknowledgement continuation can burn approved authority
+		}
+		for _, argument := range execution.Arguments {
+			if argument.Token != reviewTransitionArgumentToken(argument) {
+				return errors.New("approved acknowledgement transition token is invalid") // refusal:by-design world-action: the published acknowledgement command must execute exactly its bound arguments
+			}
+		}
 	case "review.validate":
 		gate := reviewtransaction.GateKind(arguments["gate"])
 		wantSelectors := []ReviewTransitionArgument{}

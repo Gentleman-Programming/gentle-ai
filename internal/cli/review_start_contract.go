@@ -41,6 +41,7 @@ type ReviewIntegrationStartResult struct {
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	RepositoryContext   *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
+	Acknowledgement     *ReviewTransitionExecution                    `json:"acknowledgement,omitempty"`
 }
 
 // ReviewRepositoryContextReference is the path-free provider context that a
@@ -75,6 +76,9 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 		Projection: legacy.Projection, ChangedFiles: legacy.ChangedFiles, ChangedLines: legacy.ChangedLines,
 		CorrectionBudget: legacy.CorrectionBudget, RiskReasons: append([]reviewtransaction.RiskReason{}, assessment.Reasons...),
 		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, RepositoryContext: repositoryContext,
+	}
+	if !legacyTransport {
+		result.Acknowledgement = legacy.Acknowledgement
 	}
 	if targetMode == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = targetMode
@@ -226,6 +230,18 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		(result.Action == "created" || result.Action == "resumed" || result.Action == "replayed")
 	if needsRepositoryContext != (result.RepositoryContext != nil) {
 		return errors.New("negotiated START repository context does not match the active reviewing authority")
+	}
+	needsAcknowledgement := nativeGitTransport && result.Action == "closed" && result.State == reviewtransaction.StateApproved
+	if needsAcknowledgement != (result.Acknowledgement != nil) {
+		return errors.New("negotiated START acknowledgement does not match the approved zero-lens authority") // refusal:by-design world-action: STATUS must re-render the exact pending acknowledgement from active authority
+	}
+	if result.Acknowledgement != nil {
+		if err := validateReviewApprovedAcknowledgementExecution(*result.Acknowledgement); err != nil {
+			return err
+		}
+		if result.Acknowledgement.Binding.LineageID != result.LineageID {
+			return errors.New("negotiated START acknowledgement does not bind the approved zero-lens authority") // refusal:by-design world-action: STATUS must re-render the exact pending acknowledgement from active authority
+		}
 	}
 	if needsRepositoryContext {
 		if len(result.ArtifactSubjects) != len(result.SelectedLenses) {

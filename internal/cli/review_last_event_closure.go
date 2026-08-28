@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -12,7 +13,7 @@ import (
 
 const reviewLastEventClosureSchema = "gentle-ai.review-last-event-closure/v1"
 
-const reviewApprovedLastEventBurnedAction = "the approved review completed on the last admitted event and burned; delivery follows ordinary repository policy"
+const reviewApprovedLastEventAcknowledgementAction = "the approved review completed on the last admitted event and awaits its exact acknowledgement"
 
 type reviewLastEventClosureResult struct {
 	Schema             string                                `json:"schema"`
@@ -22,7 +23,45 @@ type reviewLastEventClosureResult struct {
 	Action             string                                `json:"action"`
 	AdvisoryFindings   *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings,omitempty"`
 	StatusContinuation *ReviewTransitionExecution            `json:"status_continuation,omitempty"`
+	Acknowledgement    *ReviewTransitionExecution            `json:"acknowledgement,omitempty"`
 	StoreRevision      string                                `json:"store_revision"`
+}
+
+func reviewApprovedAcknowledgementTransition(repo string, acknowledgement reviewtransaction.ApprovedCompactAcknowledgement) *ReviewTransitionExecution {
+	return reviewExecuteTransition("approved_acknowledgement_required", "review.acknowledge-approved", []ReviewTransitionArgument{
+		{Name: "cwd", Value: repo},
+		{Name: "lineage", Value: acknowledgement.LineageID},
+		{Name: "target", Value: acknowledgement.TargetIdentity},
+		{Name: "expected-revision", Value: acknowledgement.ExpectedRevision},
+		{Name: "token", Value: acknowledgement.Token},
+	}, []ReviewTransitionArgument{{Name: "state", Value: string(reviewtransaction.StateApproved)}}, ReviewTransitionBinding{
+		LineageID: acknowledgement.LineageID, TargetIdentity: acknowledgement.TargetIdentity, Revision: acknowledgement.ExpectedRevision,
+	}, nil).Execute
+}
+
+// RunReviewAcknowledgeApproved executes the one v2-local acknowledgement
+// continuation. It intentionally returns no independent result: ambiguous
+// delivery is resolved by rerunning the STATUS transition against authority.
+func RunReviewAcknowledgeApproved(args []string, _ io.Writer) error {
+	flags := newReviewFlagSet("review acknowledge-approved", io.Discard, "Acknowledge one approved review authority using its exact v2 continuation.")
+	cwd := flags.String("cwd", ".", "repository path")
+	lineage := flags.String("lineage", "", "exact approved review lineage")
+	target := flags.String("target", "", "exact approved target identity")
+	expectedRevision := flags.String("expected-revision", "", "exact approved authority revision")
+	token := flags.String("token", "", "opaque approved acknowledgement token")
+	if err := parseReviewFlags(flags, args); err != nil {
+		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected review acknowledge-approved argument %q", flags.Arg(0)) // refusal:by-design operator-knowledge: run the exact acknowledgement continuation without positional arguments
+	}
+	if *lineage == "" || *target == "" || *expectedRevision == "" || *token == "" {
+		return errors.New("review acknowledge-approved requires --lineage, --target, --expected-revision, and --token") // refusal:by-design operator-knowledge: run the exact v2 acknowledgement continuation emitted by STATUS or terminal closure
+	}
+	return reviewtransaction.AcknowledgeApprovedCompactAuthority(context.Background(), *cwd, *lineage, *target, *expectedRevision, *token)
 }
 
 func closeCorrectionOnCapturedValidator(
@@ -51,9 +90,19 @@ func closeCorrectionOnCapturedValidator(
 	if err := state.CompleteCorrectionVerification(fix, actual, validation, complete); err != nil {
 		return nil, err
 	}
-	revision, err := store.Replace(record.Revision, "review/complete-correction-verification", state)
-	if err != nil {
-		return nil, err
+	var revision string
+	var acknowledgement reviewtransaction.ApprovedCompactAcknowledgement
+	if state.State == reviewtransaction.StateApproved {
+		acknowledgement, err = reviewtransaction.CommitApprovedCompactAcknowledgement(ctx, store, record.Revision, "review/complete-correction-verification", state)
+		if err != nil {
+			return nil, fmt.Errorf("commit approved review acknowledgement with targeted validator capture: %w", err)
+		}
+		revision = acknowledgement.ExpectedRevision
+	} else {
+		revision, err = store.Replace(record.Revision, "review/complete-correction-verification", state)
+		if err != nil {
+			return nil, err
+		}
 	}
 	result := &reviewLastEventClosureResult{
 		Schema: reviewLastEventClosureSchema, Operation: "review/capture-validation",
@@ -62,10 +111,8 @@ func closeCorrectionOnCapturedValidator(
 	}
 	switch state.State {
 	case reviewtransaction.StateApproved:
-		result.Action = reviewApprovedLastEventBurnedAction
-		if err := reviewtransaction.BurnApprovedCompactAuthority(ctx, repo, state.LineageID, revision); err != nil {
-			return nil, fmt.Errorf("burn approved review after targeted validator capture: %w", err)
-		}
+		result.Action = reviewApprovedLastEventAcknowledgementAction
+		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
 	case reviewtransaction.StateEscalated:
 		result.Action = "the targeted validator rejected the correction; maintainer action is informational"
 	default:
@@ -102,14 +149,11 @@ func closeReviewOnLastCapturedLens(
 		return nil, nil
 	}
 
-	results, err := readCapturedReviewerResults(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
+	view, _, err := capturedCompactReviewView(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
 	if err != nil {
 		return nil, err
 	}
-	input, err := prepareCompactReviewerResults(state, results, facadeRefuterResult{}, facadeRepositoryEvidence{ctx: ctx, repo: repo})
-	if err != nil {
-		return nil, err
-	}
+	input := compactReviewInputFromView(view)
 	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, input)
 	if errors.Is(err, errReviewProviderRefuterNotRequired) {
 		claims = nil
@@ -117,17 +161,8 @@ func closeReviewOnLastCapturedLens(
 		return nil, err
 	}
 	if len(claims) > 0 {
-		_, captured, readErr := func() (facadeRefuterResult, bool, error) {
-			refuter, err := readCapturedProviderRefuterResult(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
-			if errors.Is(err, errReviewProviderRefuterResultNotCaptured) {
-				return facadeRefuterResult{}, false, nil
-			}
-			return refuter, err == nil, err
-		}()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if !captured {
+		_, readErr := readCapturedProviderRefuterResult(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
+		if errors.Is(readErr, errReviewProviderRefuterResultNotCaptured) {
 			if !reviewProviderCaptureRuntime(runtime) {
 				return nil, nil
 			}
@@ -142,14 +177,14 @@ func closeReviewOnLastCapturedLens(
 			}
 			return closeReviewOnLastCapturedLens(ctx, repo, store, current, runtime)
 		}
-		refuter, err := readCapturedProviderRefuterResult(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
+		if readErr != nil {
+			return nil, readErr
+		}
+		view, _, err = capturedCompactReviewView(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
 		if err != nil {
 			return nil, err
 		}
-		input, err = prepareCompactReviewerResults(state, results, refuter, facadeRepositoryEvidence{ctx: ctx, repo: repo})
-		if err != nil {
-			return nil, err
-		}
+		input = compactReviewInputFromView(view)
 	}
 
 	// Current lifecycle context is ephemeral; historical diagnostics remain read-only.
@@ -162,9 +197,19 @@ func closeReviewOnLastCapturedLens(
 			return nil, err
 		}
 	}
-	revision, err := store.Replace(record.Revision, "review/complete-review", state)
-	if err != nil {
-		return nil, err
+	var revision string
+	var acknowledgement reviewtransaction.ApprovedCompactAcknowledgement
+	if state.State == reviewtransaction.StateApproved {
+		acknowledgement, err = reviewtransaction.CommitApprovedCompactAcknowledgement(ctx, store, record.Revision, "review/complete-review", state)
+		if err != nil {
+			return nil, fmt.Errorf("commit approved review acknowledgement with final lens capture: %w", err)
+		}
+		revision = acknowledgement.ExpectedRevision
+	} else {
+		revision, err = store.Replace(record.Revision, "review/complete-review", state)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	result := &reviewLastEventClosureResult{
@@ -176,11 +221,9 @@ func closeReviewOnLastCapturedLens(
 	}
 	switch state.State {
 	case reviewtransaction.StateApproved:
-		result.Action = reviewApprovedLastEventBurnedAction
+		result.Action = reviewApprovedLastEventAcknowledgementAction
 		result.AdvisoryFindings = reviewtransaction.AdvisoryFindingSetFor(state)
-		if err := reviewtransaction.BurnApprovedCompactAuthority(ctx, repo, state.LineageID, revision); err != nil {
-			return nil, fmt.Errorf("burn approved review after final lens capture: %w", err)
-		}
+		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
 	case reviewtransaction.StateCorrectionRequired:
 		result.Action = "candidate-caused severe findings require one bounded correction"
 		result.StatusContinuation = reviewCorrectionStatusContinuation(repo, state, revision, runtime)

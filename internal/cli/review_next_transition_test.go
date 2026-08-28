@@ -607,6 +607,8 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 		resources = append(resources,
 			struct{ version, name string }{"v2", "artifact-subject.schema.json"},
 			struct{ version, name string }{"v2", "start.schema.json"},
+			struct{ version, name string }{"v2", "transition-binding.schema.json"},
+			struct{ version, name string }{"v2", "transition-execution.schema.json"},
 		)
 	}
 	for _, resource := range resources {

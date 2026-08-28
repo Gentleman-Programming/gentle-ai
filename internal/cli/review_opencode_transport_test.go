@@ -42,7 +42,7 @@ func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t 
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
 	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved ||
-		!strings.Contains(terminal.Action, "burned") {
+		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
 		t.Fatalf("transport terminal closure = %#v", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
@@ -518,7 +518,7 @@ func TestOpenCodeReviewTransportValidatorClosesThroughSharedGoReducer(t *testing
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved ||
-		!strings.Contains(terminal.Action, "burned") {
+		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
 		t.Fatalf("provider targeted-validator terminal closure = %#v", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)

@@ -195,7 +195,8 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		return reviewStopTransition("missing_authority_binding")
 	}
 	bindingTarget := status.TargetIdentity
-	if status.Authority.State == reviewtransaction.StateValidating || status.Authority.State == reviewtransaction.StateCorrectionRequired {
+	if status.Authority.State == reviewtransaction.StateValidating || status.Authority.State == reviewtransaction.StateCorrectionRequired ||
+		status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
 		// Correction-plan capture is bound to the severe reviewer event's frozen
 		// candidate, never to a live correction candidate STATUS may be
 		// projecting. Targeted validation replaces this value with its own
@@ -206,6 +207,13 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	captureBinding := binding
 	if status.Authority.CapturePhaseRevision != "" {
 		captureBinding.Revision = status.Authority.CapturePhaseRevision
+	}
+	if status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+		acknowledgement := *input.Acknowledgement
+		if acknowledgement.LineageID != binding.LineageID || acknowledgement.TargetIdentity != binding.TargetIdentity || acknowledgement.ExpectedRevision != binding.Revision {
+			return reviewStopTransition("corrupted_or_unverifiable_authority")
+		}
+		return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: reviewApprovedAcknowledgementTransition(status.repositoryRoot, acknowledgement)}
 	}
 	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
@@ -527,6 +535,7 @@ type reviewNextTransitionInput struct {
 	CapturedProviderTargetedValidatorInconclusive  bool
 	Contract                                       string
 	RepositoryContext                              string
+	Acknowledgement                                *reviewtransaction.ApprovedCompactAcknowledgement
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
 	CorrectionForecasted                           bool

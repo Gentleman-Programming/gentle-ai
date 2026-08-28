@@ -107,7 +107,6 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 		terminal.LineageID != started.LineageID || terminal.State != reviewtransaction.StateApproved {
 		t.Fatalf("binding_mismatch recapture terminal result = %#v", terminal)
 	}
-	if _, err := store.Load(); !os.IsNotExist(err) {
-		t.Fatalf("binding_mismatch recapture left durable approved authority: %v", err)
-	}
+	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }

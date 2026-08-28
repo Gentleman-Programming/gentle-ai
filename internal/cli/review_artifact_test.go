@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -57,11 +56,18 @@ func TestReviewCaptureResultStrictBindingTerminalCapture(t *testing.T) {
 	}
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
-	if terminal.Schema != reviewLastEventClosureSchema || terminal.State != reviewtransaction.StateApproved || terminal.Action != reviewApprovedLastEventBurnedAction {
+	if terminal.Schema != reviewLastEventClosureSchema || terminal.State != reviewtransaction.StateApproved || terminal.Action != reviewApprovedLastEventAcknowledgementAction {
 		t.Fatalf("terminal capture result = %#v", terminal)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
+	if err := RunReview([]string{
+		"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", started.TargetIdentity, "--expected-revision", terminal.StoreRevision, "--token", terminal.Acknowledgement.Arguments[4].Value,
+	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
@@ -186,9 +192,16 @@ func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := readVerifiedReviewerArtifact(artifact, "", current.State)
-	if err != nil {
-		t.Fatal(err)
+	var payload []byte
+	for _, entry := range current.State.AdmittedRoleResults {
+		if entry.Role == reviewtransaction.CompactRoleLens && entry.Lens == artifact.Lens && entry.SelectedOrder == artifact.SelectedOrder &&
+			entry.TargetIdentity == artifact.TargetIdentity && entry.ArtifactDigest == artifact.SHA256 {
+			payload = append(append([]byte(nil), entry.Value...), '\n')
+			break
+		}
+	}
+	if len(payload) == 0 {
+		t.Fatal("captured result is missing from the canonical compact record")
 	}
 	var published admittedReviewerResult
 	decodeStrictReviewJSON(t, payload, &published)
@@ -354,14 +367,18 @@ func TestReviewCaptureResultTerminalCapturePreservesCausalClassification(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	finding := completed.State.LensResults[0].Findings[0]
-	classification := completed.State.Classifications[finding.ID]
+	view, err := completed.State.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := view.LensResults[0].Findings[0]
+	classification := view.Classifications[finding.ID]
 	if finding.EvidenceClass != reviewtransaction.EvidenceDeterministic || finding.CausalDisposition != reviewtransaction.CausalIntroduced ||
 		classification.Class != reviewtransaction.EvidenceDeterministic || classification.Causality != reviewtransaction.CausalIntroduced ||
-		completed.State.Outcomes[finding.ID] != reviewtransaction.OutcomeCorroborated ||
+		view.Outcomes[finding.ID] != reviewtransaction.OutcomeCorroborated ||
 		completed.State.State != reviewtransaction.StateCorrectionRequired || !reflect.DeepEqual(completed.State.FixFindingIDs, []string{finding.ID}) {
 		t.Fatalf("causal result was not preserved: finding=%#v classification=%#v state=%q outcomes=%#v fixes=%v",
-			finding, classification, completed.State.State, completed.State.Outcomes, completed.State.FixFindingIDs)
+			finding, classification, completed.State.State, view.Outcomes, completed.State.FixFindingIDs)
 	}
 }
 
@@ -454,30 +471,6 @@ func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
-func TestReviewerArtifactDirectorySyncCompatibility(t *testing.T) {
-	originalGOOS, originalSync := reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory
-	t.Cleanup(func() { reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory = originalGOOS, originalSync })
-	cases := []struct {
-		name, goos string
-		err        error
-		wantOK     bool
-	}{
-		{"fatal", "linux", errors.New("disk sync failed"), false},
-		{"invalid", "linux", syscall.EINVAL, true},
-		{"unsupported", "linux", errors.ErrUnsupported, true},
-		{"windows permission", "windows", os.ErrPermission, true},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			reviewArtifactRuntimeGOOS = func() string { return tt.goos }
-			syncReviewerArtifactDirectory = func(string) error { return tt.err }
-			err := syncReviewerArtifactDirectoryCompatible(t.TempDir())
-			if (err == nil) != tt.wantOK {
-				t.Fatalf("sync compatibility error = %v, want success %v", err, tt.wantOK)
-			}
-		})
-	}
-}
 func newArtifactReview(t *testing.T, high bool) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
@@ -537,7 +530,7 @@ func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 		capture, high              bool
 	}{
 		{"clean pending", "collect", "reviewer_results_required", false, false},
-		{"complete last event burns", "execute", "fresh_target_ready", true, false},
+		{"complete last event requires acknowledgement", "execute", "approved_acknowledgement_required", true, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -552,7 +545,7 @@ func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 				}
 			}
 			var output bytes.Buffer
-			if err := RunReviewStatus([]string{"--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &output); err != nil {
+			if err := RunReviewStatus([]string{"--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2, "--next-transition"}, &output); err != nil {
 				t.Fatal(err)
 			}
 			var status ReviewTargetStatusResult
@@ -561,6 +554,50 @@ func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 				t.Fatalf("slot status = %#v", status.NextTransition)
 			}
 		})
+	}
+}
+
+func TestCapturedCompactReviewViewUsesAdmittedRolesOverDuplicateProjections(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, false)
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	captured, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := captured.State
+	state.State, state.EvidenceHash, state.ApprovedAckToken = reviewtransaction.StateValidating, "", ""
+	if err := state.Validate(); err != nil {
+		t.Fatalf("admitted capture must remain readable: %v", err)
+	}
+
+	view, artifacts, err := capturedCompactReviewView(context.Background(), repo, store.Dir, state, state.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 1 || len(view.LensResults) != 1 || view.LensResults[0].Evidence[0] != "inspection: reviewed every frozen candidate path" {
+		t.Fatalf("captured artifact view must use admitted authority: artifacts=%#v view=%#v", artifacts, view)
+	}
+
+	malformed := state
+	malformed.AdmittedRoleResults = append([]reviewtransaction.CompactAdmittedRoleResult(nil), state.AdmittedRoleResults...)
+	malformed.AdmittedRoleResults[0].Value = json.RawMessage(`{}`)
+	malformed.AdmittedRoleResults[0].ArtifactDigest = facadePayloadHash([]byte("{}\n"))
+	if err := malformed.Validate(); err == nil {
+		t.Fatal("malformed admitted role bytes remained valid active authority")
+	}
+	if _, _, err := capturedCompactReviewView(context.Background(), repo, store.Dir, malformed, malformed.CapturePhaseRevision); err == nil {
+		t.Fatal("malformed admitted role bytes must fail closed")
 	}
 }
 
