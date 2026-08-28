@@ -18,7 +18,7 @@ Read the skill file at `~/.config/agents/skills/sdd-design/SKILL.md` and follow 
 Also read shared conventions at `~/.config/agents/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read proposal artifact (required): `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
+1. Read proposal artifact (required): read the `proposal` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Read existing code architecture to understand current patterns
 3. Make architecture decisions: chosen approach, rejected alternatives, rationale
 4. Produce file-change table: each file that will be created, modified, or deleted

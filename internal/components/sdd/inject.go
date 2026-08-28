@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -346,6 +347,24 @@ func removeLegacySharedSkillMarker(markerPath string) (bool, error) {
 		return false, fmt.Errorf("remove legacy shared skill marker %s: %w", markerPath, err)
 	}
 	return true, nil
+}
+
+// Engram registers under two valid shapes for Claude Code: `claude mcp add
+// engram` exposes its tools as mcp__engram__*, and the plugin route namespaces
+// them as mcp__plugin_engram_engram__*. #2698/#3778: the agent contracts
+// hardcoded the plugin form, so on the direct route every declared Engram tool
+// named a tool that does not exist and the phase actor returned an empty
+// result.
+//
+// The assets carry {{ENGRAM_TOOL_PREFIX}}<tool> and injection expands it to
+// BOTH shapes, which is what #2698 proposes. Probing the ambient config
+// instead would be order-dependent: the Engram component registers the
+// user-scope entry during the same sync that renders these agents, so a probe
+// resolves one way on first render and the other way on the next.
+var engramToolPlaceholder = regexp.MustCompile(`\{\{ENGRAM_TOOL_PREFIX\}\}([A-Za-z0-9_]+)`)
+
+func expandEngramToolNames(content string) string {
+	return engramToolPlaceholder.ReplaceAllString(content, "mcp__engram__$1, mcp__plugin_engram_engram__$1")
 }
 
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
@@ -758,6 +777,8 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
 				contentStr = injectClaudeEffortFrontmatter(contentStr, assignment)
 			}
+
+			contentStr = expandEngramToolNames(contentStr)
 
 			if isMarkdownSubAgentPromptFile(entry.Name()) {
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
