@@ -467,7 +467,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// sdd-research collection permissions, so the baseline is rederived here.
 	// Merged with main's #3563 causal-failure precedence and #3168 empty
 	// CodeGraph tool-grant changes, so the combined baseline is rederived.
-	const want = "673ed8caf9d34e0b88eeb6a1d1b479762189532a8e35b9e6e082a91be86e7938"
+	// #3814 replaces the dispatcher guard's store-branching prose across every
+	// runtime orchestrator: the native surface resolves the declared store, so
+	// the actor no longer determines or branches on it. Kilo renders through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "45b63ab97aad4a5f31b20bf834a43d1df25a5521db2e8008473cb99ebaaa593f"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

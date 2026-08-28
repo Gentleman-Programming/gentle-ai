@@ -16,27 +16,31 @@ Executor boundary: every SDD phase agent is an EXECUTOR, not an orchestrator. Do
 
 NOTE: the preferred path is (1) — exact skill paths selected by the orchestrator. Paths (2) and (3) are fallbacks. Searching the registry is SKILL LOADING, not delegation. If `## Skills to load before work` is present, IGNORE redundant `SKILL: Load` instructions.
 
-## B. Artifact Retrieval (Engram Mode)
+## B. Artifact Retrieval
 
-**CRITICAL**: `mem_search` returns 300-char PREVIEWS, not full content. You MUST call `mem_get_observation(id)` for EVERY artifact. **Skipping this produces wrong output.**
+The orchestrator injects the artifact store and the locators native status already resolved (`artifactStore` and `artifactPaths` from `gentle-ai sdd-status --json --instructions`). Read what you are given.
 
-**Run all searches in parallel** — do NOT search sequentially.
+**Do NOT detect the artifact store, and do NOT branch on it.** The dispatcher resolved it from the store the workspace DECLARES. An agent that re-derives the store disagrees with the authority that launched it, which is exactly how a phase ends up reading a store the workspace never declared — or reading nothing at all and returning an empty result.
 
-```
-mem_search(query: "sdd/{change-name}/{artifact-type}", project: "{project}") → save ID
-```
+For each artifact your phase requires, read its locator:
 
-Then **run all retrievals in parallel**:
+| reported store | locator shape | how to read it |
+|---|---|---|
+| `openspec` | repo path, e.g. `openspec/changes/{change-name}/tasks.md` | read the file |
+| `engram` | topic key, e.g. `sdd/{change-name}/tasks` | `mem_search(query: "<locator>", project: "{project}")` → `mem_get_observation(id)` |
+| `hybrid` | either shape | read the file when the locator is a path, the observation when it is a topic key |
 
-```
-mem_get_observation(id: {saved_id}) → full content (REQUIRED)
-```
+**CRITICAL for topic-key locators**: `mem_search` returns 300-char PREVIEWS, not full content. You MUST call `mem_get_observation(id)` for EVERY artifact. **Skipping this produces wrong output.** Do NOT use search previews as source material.
 
-Do NOT use search previews as source material.
+**Run all retrievals in parallel** — do NOT read sequentially.
+
+A required locator reported as `<unresolved>` means the artifact does not exist. Report it as a blocker. Never substitute another store's copy, and never go looking for one.
 
 ## C. Artifact Persistence
 
 Every phase that produces an artifact MUST persist it. Skipping this BREAKS the pipeline — downstream phases will not find your output.
+
+Persist to the store the orchestrator reported, using that artifact's locator. As in section B, the store is told to you; do not detect it. The write mechanisms below differ because writing a file and saving an observation are genuinely different operations, not because the agent gets to choose between them.
 
 For `verify-report`, first build exact candidate bytes and run `gentle-ai sdd-verify-validate` with authoritative requirement/scenario counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist only the same admitted bytes, including a valid `fail`.
 
@@ -81,6 +85,8 @@ Every phase MUST return a structured envelope to the orchestrator:
 - `next_recommended`: the next SDD phase to run, or "none"
 - `risks`: risks discovered, or "None"
 - `skill_resolution`: how skills were loaded — `paths-injected` (received exact skill paths from orchestrator), `fallback-registry` (self-loaded paths from registry), `fallback-path` (loaded via SKILL: Load path), or `none` (no skills loaded)
+
+**Validating a delegated phase result.** A runtime whose host does not validate task results itself MUST run `gentle-ai sdd-task-result --phase <phase> --cwd <repo> --input <path|->` over the child's raw output before treating it as a result. It exits zero for a usable result and otherwise renders the typed terminal failure below, byte-identical to the one a validating host emits, because both read one definition. Never classify a task result by reading it yourself.
 
 If terminal task-result validation reports `sdd_task_result_empty` or `sdd_task_result_malformed`, do not assume this envelope was delivered. Do not retry automatically or initiate another phase. The terminal value starts with `GENTLE_AI_SDD_FAILURE ` followed by a `gentle-ai.sdd-task-result-failure/v1` JSON handoff; preserve it unchanged, run its `continuation` exactly once to inspect current state, report the typed failure to the user, and wait for an explicit decision. A later launch in the same session receives `sdd_task_dispatch_latched` instead: that launch never dispatched, so it names the phase it requested, the earlier phase and code that actually failed, and its `exit` -- start a new session to launch SDD phases again.
 

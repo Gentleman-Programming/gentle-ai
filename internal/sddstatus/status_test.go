@@ -1058,8 +1058,15 @@ func TestResolveIncludesInstructionsWhenRequested(t *testing.T) {
 	if status.PhaseInstructions == nil {
 		t.Fatal("PhaseInstructions is nil")
 	}
-	if !strings.Contains(strings.Join(status.PhaseInstructions.Archive, "\n"), "verify-report.md exists") {
-		t.Fatalf("Archive instructions = %v", status.PhaseInstructions.Archive)
+	// #3814: the archive gate names the resolved verify-report locator and the
+	// active store's read verb instead of a hardcoded OpenSpec filename, so the
+	// same instruction is correct under every artifact store.
+	archive := strings.Join(status.PhaseInstructions.Archive, "\n")
+	if !strings.Contains(archive, "Verify-report locator:") {
+		t.Fatalf("Archive instructions omit the verify-report locator = %v", status.PhaseInstructions.Archive)
+	}
+	if !strings.Contains(archive, "a verify report resolves at that locator") {
+		t.Fatalf("Archive instructions omit the archive gate = %v", status.PhaseInstructions.Archive)
 	}
 }
 

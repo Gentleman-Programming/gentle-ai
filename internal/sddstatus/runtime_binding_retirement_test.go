@@ -40,7 +40,9 @@ func TestRuntimeRecordRejectsRetiredBindingSetOperation(t *testing.T) {
 		Schema: runtimeRecordSchema, Change: "retired-binding-set", Operation: "binding/set",
 		RequestID: "retired-binding-set", RequestDigest: runtimeTestHash('a'),
 	}
-	if err := validateRuntimeRecordShape(record); err == nil || !strings.Contains(err.Error(), "invalid SDD runtime record operation") {
-		t.Fatalf("binding/set dispatch = %v, want invalid runtime record operation", err)
+	// #3816: assert the typed condition rather than a bespoke message. The
+	// message collapsed; the condition is the information it carried.
+	if err := validateRuntimeRecordShape(record); !isRuntimeRecordRejection(err, "invalid_operation") {
+		t.Fatalf("binding/set dispatch = %v, want the invalid_operation rejection", err)
 	}
 }

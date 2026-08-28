@@ -255,8 +255,27 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		path := ":(literal)" + frozen.ChangedPathManifest[pathIndex].Path
 		args = append(common, "diff", "--stat", "--text", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
 	case "patch":
+		// This is the one operation that emits candidate content, and it
+		// deliberately does NOT force --text. The discovery operations above do,
+		// because they emit counts and names whose determinism is worth pinning;
+		// here the same flag would override Git's binary classification and
+		// spill a blob's raw bytes into a reviewer prompt.
+		//
+		// That costs twice. A lens holds no tools and cannot skip what its
+		// prompt contains, so one candidate carrying a PDF filled a lens prompt
+		// with roughly 114K tokens of bytes no text reviewer can act on. And
+		// arbitrary content bytes are arbitrary control material downstream: an
+		// `@\` sequence inside one blob made a host's file-mention resolver
+		// staple a drive-root attachment onto every lens launch (issue #3193).
+		//
+		// Without it Git reports "Binary files a/... and b/... differ", which
+		// still names the path and still proves it changed, so the empty-patch
+		// refusal in the lens-context surface stays satisfied. Determinism is
+		// preserved by the isolation this inspector already installs: an empty
+		// attributes file plus GIT_ATTR_NOSYSTEM, so neither the repository's
+		// .gitattributes nor the machine's can move the classification.
 		path := ":(literal)" + frozen.ChangedPathManifest[pathIndex].Path
-		args = append(common, "diff", "--patch", "--text", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
+		args = append(common, "diff", "--patch", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
 	case "object":
 		tree := frozen.CandidateTree
 		if side == "base" {
