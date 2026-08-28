@@ -8,6 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -15,8 +16,32 @@ import (
 // clauses state the runtime identity the negotiated route must carry. Pinning
 // them to a constant is what let issue #2440 ship: every runtime's generated
 // instructions claimed to be claude-code, and the test suite agreed.
-func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+// captureTransportClausesFor returns the capture clauses that belong to the
+// transport this runtime actually uses. A runtime whose compiled adapter
+// captures in process is never told to assemble a reviewer prompt, because
+// following that instruction would move the complete candidate onto the parent
+// for every lens to reach a result one returned command already produces
+// (issue #3825). Every other runtime keeps the relay wording: it is their only
+// capture path.
+func captureTransportClausesFor(agent model.AgentID) []string {
+	if reviewerprovider.CapturesInProcess(agent) {
+		return []string{
+			"with its argument tokens exactly as returned",
+			"This runtime captures in process",
+			"Never assemble a reviewer prompt",
+			"never add `--input` to a returned token list",
+		}
+	}
 	return []string{
+		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
+		"one-line JSON assembled only from that input",
+		"`revision` from `expected-revision`",
+		"`subject_hash` from `artifact_subject.subject_hash`",
+	}
+}
+
+func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+	return append(captureTransportClausesFor(agent), []string{
 		"Native Compact Review Orchestration",
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"Selectorless STATUS only preflights the current worktree candidate",
@@ -24,10 +49,6 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"exact captured lineage, revision, and target tokens",
 		"Route only from that transaction's returned `next_transition`",
 		"Forecast is informational; route only from `next_transition`",
-		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
-		"one-line JSON assembled only from that input",
-		"`revision` from `expected-revision`",
-		"`subject_hash` from `artifact_subject.subject_hash`",
 		"query the same exact-lineage STATUS",
 		"reoffers the same bound slot",
 		"repeated `--result-artifact-file <path>`",
@@ -66,7 +87,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"one lossless grouped prompt",
 		"persist the pending state before prompting",
 		"STOP without invoking `sdd-propose`",
-	}
+	}...)
 }
 
 func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -66,7 +67,16 @@ const (
 		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 )
 
+// boundedReviewContract is the shared contract as any consumer sees it: the
+// transport markers are already resolved, and the host-mediated relay is the
+// default because it is the path every runtime without a compiled transport
+// must take. Only selectReviewerCaptureTransport ever sees the marked source,
+// so a delimiter can never reach an installed file or a measured cost.
 func boundedReviewContract() string {
+	return selectReviewerCaptureTransport(boundedReviewContractSource(), "")
+}
+
+func boundedReviewContractSource() string {
 	return strings.TrimSpace(assets.MustRead(boundedReviewContractAsset))
 }
 
@@ -75,11 +85,54 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 }
 
 func boundedReviewContractFor(agent model.AgentID) string {
-	contract := boundedReviewContract()
+	contract := selectReviewerCaptureTransport(boundedReviewContractSource(), agent)
 	if agent != model.AgentOpenCode {
 		return contract
 	}
 	return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+}
+
+const (
+	reviewerCaptureTransportStart = "<!-- reviewer-capture-transport:start -->"
+	reviewerCaptureTransportEnd   = "<!-- reviewer-capture-transport:end -->"
+)
+
+// compiledCaptureTransportContract is what a parent needs to know when the
+// runtime captures in process, and it is deliberately shorter than the relay it
+// replaces: there is no prompt to assemble, so the only correct instruction is
+// to run what STATUS returned.
+//
+// Spelling out what NOT to do earns its words here. The relay wording is the
+// one a parent reaches for by habit, and following it on this runtime is not a
+// harmless detour: it puts the complete immutable candidate on the parent for
+// every lens, so a review that one command finishes becomes one a large
+// candidate cannot finish at all (issue #3825).
+const compiledCaptureTransportContract = "For each returned `review.capture-result` input, run its exact capture operation once with its argument tokens exactly as returned. " +
+	"This runtime captures in process: those tokens carry `--agent` and no `--input`, and running them makes Go materialize the immutable reviewer context, run its own locked-down reviewer on it, and admit the result. " +
+	"Never assemble a reviewer prompt, never launch a lens subagent, and never add `--input` to a returned token list. " +
+	"Each of those rebuilds the returned command into the relay form and moves the complete candidate evidence onto the parent for every lens, to reach a result the returned command already produces carrying nothing. " +
+	"An empty, malformed, schema-invalid, or incomplete result is handled by the recovery rule below, exactly as a relayed one is."
+
+// selectReviewerCaptureTransport renders the capture paragraph that matches the
+// transport this runtime actually uses. The runtime split is read from the one
+// package that owns it, never restated here, because a contract that disagrees
+// with the dispatcher about which transport a runtime has is the defect this
+// function exists to prevent.
+//
+// The markers are always removed. A host-mediated runtime keeps the relay text
+// verbatim -- it is that runtime's only capture path -- and simply loses the
+// comments that delimited it.
+func selectReviewerCaptureTransport(contract string, agent model.AgentID) string {
+	start := strings.Index(contract, reviewerCaptureTransportStart)
+	end := strings.Index(contract, reviewerCaptureTransportEnd)
+	if start < 0 || end < start {
+		return contract
+	}
+	body := strings.TrimSpace(contract[start+len(reviewerCaptureTransportStart) : end])
+	if reviewerprovider.CapturesInProcess(agent) {
+		body = compiledCaptureTransportContract
+	}
+	return contract[:start] + body + contract[end+len(reviewerCaptureTransportEnd):]
 }
 
 func researchLifecycleContract() string {
