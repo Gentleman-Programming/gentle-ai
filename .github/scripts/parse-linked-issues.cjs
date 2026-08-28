@@ -33,9 +33,10 @@ const MALFORMED_PATTERN = new RegExp(
 // unclosed `<!--` hides the remaining references from reviewers.
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?(?:-->|$)/g;
 
-// Markdown reference definitions are not reviewer-visible text.
+// Markdown reference definitions are not reviewer-visible text. Multiline
+// destinations are one complete, indented non-space token or angle-bracket form.
 const MARKDOWN_REFERENCE_DEFINITION_PATTERN =
-  /^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*(?:\r?\n[ \t]+(?:"[^\r\n]*"|'[^\r\n]*'|\([^\r\n]*\)))?/gm;
+  /^[ \t]{0,3}\[[^\]\r\n]+\]:(?:[ \t]*\r?\n[ \t]+(?:<[^>\r\n]+>|[^\s<>\r\n]+)[ \t]*(?:\r?\n[ \t]+(?:"[^\r\n]*"|'[^\r\n]*'|\([^\r\n]*\)))?|[^\r\n]*(?:\r?\n[ \t]+(?:"[^\r\n]*"|'[^\r\n]*'|\([^\r\n]*\)))?)/gm;
 
 // Removes non-visible Markdown constructs so only reviewer-visible text remains.
 function stripHtmlComments(body) {

@@ -34,6 +34,36 @@ test('Markdown reference definitions are ignored while visible references remain
   assert.deepEqual(parseLinkedIssues(body), ok(nonClosing(43), closing(44)));
 });
 
+test('complete multiline Markdown reference definitions are ignored', () => {
+  const cases = [
+    ['relative/path', 42],
+    ['/absolute-path', 43],
+    ['mailto:team@example.com', 44],
+    ['https://example.invalid', 45],
+  ];
+
+  for (const [destination, issueNumber] of cases) {
+    const body = [
+      '[hidden]:',
+      `  ${destination}`,
+      `  "Refs #${issueNumber}"`,
+    ].join('\n');
+
+    assert.deepEqual(parseLinkedIssues(body), ok());
+  }
+});
+
+test('an indented visible reference following a multiline definition remains visible', () => {
+  const body = [
+    '[hidden]:',
+    '  https://example.invalid',
+    '  "non-reference title"',
+    '  Refs #43',
+  ].join('\n');
+
+  assert.deepEqual(parseLinkedIssues(body), ok(nonClosing(43)));
+});
+
 test('closing and non-closing references are kind-tagged, in order of appearance', () => {
   const cases = [
     ['Closes #10\nFixes #11\nResolves #12', [closing(10), closing(11), closing(12)]],

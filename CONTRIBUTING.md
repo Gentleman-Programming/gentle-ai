@@ -345,7 +345,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 
 ### Before Opening a PR
 
-- [ ] There is a linked approved issue (`Closes #<N>`)
+- [ ] There is a linked approved issue (`Closes #<N>`, `Fixes #<N>`, `Resolves #<N>`, or non-closing `Refs #<N>`)
 - [ ] The PR is at or below 400 changed lines, or a maintainer approved `size:exception`
 - [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
