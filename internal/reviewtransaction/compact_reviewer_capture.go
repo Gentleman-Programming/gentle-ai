@@ -16,6 +16,90 @@ import (
 // slot occupied by different canonical bytes.
 var ErrCapturedReviewerResultSlotConflict = errors.New("captured reviewer result slot conflicts with different canonical bytes") // refusal:by-design world-action: transaction-layer capture cannot alter an immutable occupied slot
 
+// compactAdmittedReviewerResult is the canonical lens envelope retained in the
+// sole admitted-role owner. It is decoded by readback and derived review views.
+type compactAdmittedReviewerResult struct {
+	Schema    string            `json:"schema"`
+	Subject   ArtifactSubject   `json:"subject"`
+	Admission ArtifactAdmission `json:"admission"`
+	Result    json.RawMessage   `json:"result"`
+}
+
+type compactProviderReviewerResult struct {
+	SubjectHash string             `json:"subject_hash"`
+	Inspection  ArtifactInspection `json:"inspection"`
+	Lens        string             `json:"lens,omitempty"`
+	Findings    []Finding          `json:"findings"`
+	Evidence    []string           `json:"evidence"`
+}
+
+type compactAdmittedRefuterValue struct {
+	Results []EvidenceResult `json:"results"`
+}
+
+type compactAdmittedTargetedValidatorValue struct {
+	Outcome string `json:"outcome"`
+}
+
+func decodeCompactAdmittedReviewerValue(value []byte) (compactAdmittedReviewerResult, error) {
+	canonical, err := canonicalCompactRoleValue(value)
+	if err != nil {
+		return compactAdmittedReviewerResult{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.DisallowUnknownFields()
+	var envelope compactAdmittedReviewerResult
+	if err := decoder.Decode(&envelope); err != nil {
+		return compactAdmittedReviewerResult{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return compactAdmittedReviewerResult{}, errors.New("admitted reviewer value must contain exactly one object") // refusal:by-design world-action: an immutable role value that is not one canonical envelope requires authority replacement
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil || !bytes.Equal(canonical, encoded) {
+		return compactAdmittedReviewerResult{}, errors.New("admitted reviewer value is not canonical") // refusal:by-design world-action: an immutable role value that is not canonical requires authority replacement
+	}
+	return envelope, nil
+}
+
+func decodeCompactAdmittedRefuterValue(value []byte) ([]EvidenceResult, error) {
+	var payload compactAdmittedRefuterValue
+	if err := decodeCompactAdmittedRoleValue(value, &payload); err != nil || payload.Results == nil {
+		return nil, errors.New("admitted refuter value is invalid") // refusal:by-design world-action: an immutable refuter value must be replaced by its provider
+	}
+	return append([]EvidenceResult(nil), payload.Results...), nil
+}
+
+func decodeCompactAdmittedTargetedValidatorValue(value []byte) (string, error) {
+	var payload compactAdmittedTargetedValidatorValue
+	if err := decodeCompactAdmittedRoleValue(value, &payload); err != nil || payload.Outcome != "passed" && payload.Outcome != "failed" {
+		return "", errors.New("admitted targeted-validator value is invalid") // refusal:by-design world-action: an immutable validator value must be replaced by its provider
+	}
+	return payload.Outcome, nil
+}
+
+func decodeCompactAdmittedRoleValue(value []byte, target any) error {
+	canonical, err := canonicalCompactRoleValue(value)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("admitted role value must contain exactly one object") // refusal:by-design world-action: an immutable role value that is not one canonical object requires authority replacement
+	}
+	encoded, err := json.Marshal(target)
+	if err != nil || !bytes.Equal(canonical, encoded) {
+		return errors.New("admitted role value is not canonical") // refusal:by-design world-action: an immutable role value that is not canonical requires authority replacement
+	}
+	return nil
+}
+
 // CompactAdmittedReviewerResultRequest contains one provider-observed reviewer
 // result and the exact native authority preimages that result must bind.
 type CompactAdmittedReviewerResultRequest struct {
@@ -329,7 +413,7 @@ func (store CompactStore) mergeAdmittedLensResult(
 		}
 		return leftEntry.Lens < rightEntry.Lens
 	})
-	_, payload, err := makeCompactRecordWithIntents(next, record.EffectIntents)
+	_, payload, err := makeCompactRecord(next)
 	if err != nil {
 		return CompactAdmittedReviewerCapture{}, err
 	}
@@ -458,7 +542,7 @@ func (store CompactStore) mergeAdmittedNonLensRoleResult(
 		}
 		return leftEntry.SelectedOrder < rightEntry.SelectedOrder
 	})
-	_, recordPayload, err := makeCompactRecordWithIntents(next, record.EffectIntents)
+	_, recordPayload, err := makeCompactRecord(next)
 	if err != nil {
 		return err
 	}
@@ -475,15 +559,11 @@ func compactAdmittedReviewerCaptureFromSlot(
 		// refusal:by-design human-authority: a successful immutable publication without a verifiable readback requires storage inspection, not a retry that could misstate evidence
 		return CompactAdmittedReviewerCapture{}, errors.New("admitted reviewer result readback is missing")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(slot.Payload))
-	decoder.DisallowUnknownFields()
-	var envelope compactAdmittedReviewerResult
-	if err := decoder.Decode(&envelope); err != nil {
+	envelope, err := decodeCompactAdmittedReviewerValue(slot.Payload)
+	if err != nil {
 		return CompactAdmittedReviewerCapture{}, fmt.Errorf("decode admitted reviewer result readback: %w", err)
 	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(subject) ||
-		envelope.Subject != subject || envelope.Admission.Validate(subject) != nil {
+	if envelope.Schema != admittedReviewerResultSchemaForSubject(subject) || envelope.Subject != subject || envelope.Admission.Validate(subject) != nil {
 		// refusal:by-design human-authority: immutable readback bytes that no longer bind the admitted authority require storage inspection rather than replacement
 		return CompactAdmittedReviewerCapture{}, errors.New("admitted reviewer result readback does not match repository authority")
 	}
@@ -645,7 +725,7 @@ func (store CompactStore) RecordInconclusiveTargetedValidatorAttempt(ctx context
 		CapturePhaseRevision: request.ExpectedRevision, TargetIdentity: request.CorrectionTargetIdentity,
 		RequestHash: request.RequestHash, AttemptDigest: attemptDigest, Outcome: compactTargetedValidatorAttemptInconclusive,
 	})
-	_, payload, err := makeCompactRecordWithIntents(next, record.EffectIntents)
+	_, payload, err := makeCompactRecord(next)
 	if err != nil {
 		return false, err
 	}

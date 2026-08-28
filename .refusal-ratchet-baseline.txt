@@ -780,7 +780,6 @@ internal/reviewtransaction/repository_locator.go	"review repository context is o
 internal/reviewtransaction/repository_locator.go	"review repository context is stale or has no live matching authority"
 internal/reviewtransaction/repository_locator.go	"review repository context private root is unsafe"
 internal/reviewtransaction/repository_locator.go	"review repository context storage root escapes HOME"
-internal/reviewtransaction/repository_locator.go	"review repository context storage root is unsafe"
 internal/reviewtransaction/repository_locator.go	"review repository identity path is not a directory"
 internal/reviewtransaction/risk.go	"duplicate diff stat path %q"
 internal/reviewtransaction/risk.go	"invalid logical path %q"

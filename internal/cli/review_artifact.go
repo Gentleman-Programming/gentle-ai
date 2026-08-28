@@ -341,15 +341,6 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 		return reviewPreflightError(err)
 	}
-	if providerExecution || hostRelaySubmission {
-		if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
-			Schema: reviewtransaction.LensContextEmissionSchema, LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity,
-			AuthorityRevision: state.CapturePhaseRevision, Lens: *lens, SelectedOrder: *order, SubjectHash: captured.Subject.SubjectHash,
-			Level: reviewtransaction.ReviewerContextLevelProviderContract,
-		}); err != nil {
-			return reviewPreflightError(fmt.Errorf("record provider reviewer execution: %w", err))
-		}
-	}
 	currentRecord, currentErr := store.LoadContext(ctx)
 	if currentErr != nil {
 		return reviewPreflightError(currentErr)
@@ -452,29 +443,6 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, _ string, stat
 		})
 	}
 	return artifacts, nil
-}
-
-// discoverReviewerContextLevel resolves the mechanism that produced this
-// review's reviewer lens contexts, from what the provider itself recorded when
-// it produced them. The terminal capture path cannot claim a mechanism that
-// never ran.
-//
-// It resolves a level only when every selected lens has a captured artifact and
-// a bound emission naming the same mechanism. Anything else resolves to no
-// level, which remains "not established" rather than a fabricated mechanism.
-func discoverReviewerContextLevel(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) reviewtransaction.ReviewerContextLevel {
-	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, revision)
-	if err != nil || len(artifacts) != len(state.SelectedLenses) {
-		return ""
-	}
-	subjects := make([]string, len(artifacts))
-	for index, artifact := range artifacts {
-		if artifact.SelectedOrder != index || artifact.Lens != state.SelectedLenses[index] {
-			return ""
-		}
-		subjects[index] = artifact.SubjectHash
-	}
-	return reviewtransaction.DiscoverReviewerContextLevel(storeDir, state.LineageID, state.InitialSnapshot.Identity, revision, state.SelectedLenses, subjects)
 }
 
 func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, phase string) ([]facadeReviewerResult, error) {

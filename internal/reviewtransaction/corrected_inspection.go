@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 )
 
 // CorrectedCandidateInspectionRepositoryContextError marks opaque repository
@@ -22,7 +23,14 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextH
 	if err := ValidateTargetedValidationRequest(request); err != nil {
 		return Snapshot{}, errors.New("corrected candidate inspection request is invalid") // refusal:by-design operator-knowledge: only a fresh native transition can provide an exact provider-issued request
 	}
-	repo, binding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
+	var repo string
+	var binding ReviewRepositoryContextBinding
+	var err error
+	if strings.HasPrefix(repositoryContextHandle, reviewRepositoryContextV2HandlePrefix) {
+		repo, binding, err = resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx, repositoryContextHandle)
+	} else {
+		repo, binding, err = resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
+	}
 	if err != nil {
 		return Snapshot{}, &CorrectedCandidateInspectionRepositoryContextError{cause: err}
 	}

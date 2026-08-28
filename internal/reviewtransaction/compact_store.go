@@ -18,9 +18,7 @@ import (
 )
 
 const (
-	compactRecordSchema                 = "gentle-ai.review-state-record/v2"
-	CompactEffectClassRepositoryContext = "repository_context"
-	compactEffectClassRequestedTrace    = "requested_trace"
+	compactRecordSchema = "gentle-ai.review-state-record/v2"
 
 	compactMaxAdmittedRoleResults = 6
 	compactNonRoleStateSizeLimit  = 7 << 20
@@ -162,10 +160,9 @@ func NewLegacyReadOnlyError(operation, lineageID string) error {
 }
 
 type CompactRecord struct {
-	Schema        string                `json:"schema"`
-	Revision      string                `json:"revision"`
-	State         CompactState          `json:"state"`
-	EffectIntents []CompactEffectIntent `json:"effect_intents,omitempty"`
+	Schema   string       `json:"schema"`
+	Revision string       `json:"revision"`
+	State    CompactState `json:"state"`
 	// HistoricalCompat marks a record loaded through the retired-field
 	// compatibility path; such authority is read-only.
 	HistoricalCompat bool `json:"-"`
@@ -187,14 +184,6 @@ type CompactStore struct {
 	lockPath            string
 	maintenanceLockPath string
 	TracePath           string
-}
-
-type CompactEffectIntent struct {
-	Class           string `json:"class"`
-	Destination     string `json:"destination"`
-	PayloadHash     string `json:"payload_hash"`
-	BindingRevision string `json:"binding_revision"`
-	EventID         string `json:"event_id"`
 }
 
 // CompactAtomicStartRequest holds the state prepared by the compact lifecycle
@@ -309,9 +298,6 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	predecessor, err := predecessorStore.Load()
 	if err != nil {
 		return CompactRecord{}, fmt.Errorf("load recovery predecessor: %w", err)
-	}
-	if err := reconcileCompactRepositoryContext(ctx, predecessorStore, predecessor); err != nil {
-		return CompactRecord{}, fmt.Errorf("reconcile recovery predecessor effects: %w", err)
 	}
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
@@ -1577,20 +1563,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
-	if current != nil {
-		if err := reconcileCompactRepositoryContext(ctx, store, *current); err != nil {
-			return "", fmt.Errorf("reconcile compact predecessor effects: %w", err)
-		}
-	}
-	var carriedIntents []CompactEffectIntent
-	if current != nil {
-		// Intents are immutable for the lineage lifetime and carried verbatim,
-		// identity included: the committed effect binds the state that created
-		// it, and reconciliation verifies exactly that frozen identity
-		// (issue #1875).
-		carriedIntents = append(carriedIntents, current.EffectIntents...)
-	}
-	record, payload, err := makeCompactRecordWithIntents(next, carriedIntents)
+	record, payload, err := makeCompactRecord(next)
 	if err != nil {
 		return "", err
 	}
@@ -1869,74 +1842,17 @@ func reflectCompactReviewData(previous, next CompactState) bool {
 }
 
 func makeCompactRecord(state CompactState) (CompactRecord, []byte, error) {
-	return makeCompactRecordWithIntents(state, nil)
-}
-
-func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectIntent) (CompactRecord, []byte, error) {
 	if err := validateCompactRoleResultBounds(state.AdmittedRoleResults); err != nil {
 		return CompactRecord{}, nil, err
 	}
 	if err := validateCompactNonRoleStateBounds(state); err != nil {
 		return CompactRecord{}, nil, err
 	}
-	intents = append([]CompactEffectIntent(nil), intents...)
-	for _, intent := range intents {
-		if !validCompactEffectIntentFields(intent) {
-			return CompactRecord{}, nil, errors.New("invalid compact required effect intent") // refusal:by-design operator-knowledge: callers must supply a closed, persistable effect intent
-		}
-	}
-	sort.Slice(intents, func(i, j int) bool {
-		if intents[i].Class != intents[j].Class {
-			return intents[i].Class < intents[j].Class
-		}
-		if intents[i].Destination != intents[j].Destination {
-			return intents[i].Destination < intents[j].Destination
-		}
-		return intents[i].PayloadHash < intents[j].PayloadHash
-	})
-	for index := 1; index < len(intents); index++ {
-		if intents[index-1].Class == intents[index].Class && intents[index-1].Destination == intents[index].Destination {
-			return CompactRecord{}, nil, errors.New("duplicate compact required effect intent") // refusal:by-design operator-knowledge: callers must supply one immutable intent per class and destination
-		}
-	}
 	statePayload, err := json.Marshal(state)
 	if err != nil {
 		return CompactRecord{}, nil, err
 	}
-	bindingRevision := compactStateRevision(statePayload)
-	// The record revision is a pure function of state. Every re-deriver in the
-	// tree (CompactRevisionForState for provider role requests and FINALIZE
-	// planning, invalidation-evidence validation, recovery-chain composition)
-	// recomputes it from state alone, so folding intents into it makes a
-	// lineage with intents unverifiable the moment any of them runs — j90's
-	// captured_artifacts_unverifiable regression. Intents ride the record as
-	// carried data instead: BindingRevision freezes the state identity that
-	// created them and EventID must stay derivable from the visible fields.
-	revision := bindingRevision
-	if len(intents) > 0 {
-		for index := range intents {
-			if intents[index].BindingRevision == "" {
-				intents[index].BindingRevision = bindingRevision
-			} else if intents[index].EventID == "" && intents[index].BindingRevision != bindingRevision {
-				// Creation must bind the enclosing state. A carried intent
-				// (EventID already minted) keeps the binding of the state that
-				// created it: reconciliation verifies that frozen identity
-				// against the committed effect, so a rewritten binding lands
-				// on a blocked_conflict marker instead of a silent rebind.
-				return CompactRecord{}, nil, errors.New("invalid compact required effect binding") // refusal:by-design operator-knowledge: caller-supplied binding cannot override the enclosing state identity
-			}
-			eventPayload, _ := json.Marshal([]string{state.LineageID, intents[index].BindingRevision, intents[index].Class, intents[index].Destination, intents[index].PayloadHash})
-			eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
-			wantEventID := "sha256:" + hex.EncodeToString(eventSum[:])
-			if intents[index].EventID == "" {
-				intents[index].EventID = wantEventID
-			} else if intents[index].EventID != wantEventID {
-				// refusal:by-design operator-knowledge: caller-supplied immutable effect identity is inconsistent and cannot be repaired by an operator command
-				return CompactRecord{}, nil, errors.New("invalid compact required effect identity")
-			}
-		}
-	}
-	record := CompactRecord{Schema: compactRecordSchema, Revision: revision, State: state, EffectIntents: intents}
+	record := CompactRecord{Schema: compactRecordSchema, Revision: compactStateRevision(statePayload), State: state}
 	payload, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return CompactRecord{}, nil, err
@@ -2026,66 +1942,16 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
 			OutdatedIdentity: historical, PriorSchemaPredecessorLineageID: forensic.PredecessorLineageID}
 	}
-	if err := validateCompactEffectIntents(record); err != nil {
-		return CompactRecord{}, err
-	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
 	}
 	if !record.HistoricalCompat {
-		want, _, err := makeCompactRecordWithIntents(record.State, append([]CompactEffectIntent(nil), record.EffectIntents...))
+		want, _, err := makeCompactRecord(record.State)
 		if err != nil || want.Revision != record.Revision {
 			return CompactRecord{}, errors.New("compact review state checksum mismatch")
 		}
 	}
 	return record, nil
-}
-
-func validateCompactEffectIntents(record CompactRecord) error {
-	for index, intent := range record.EffectIntents {
-		if !validCompactEffectIntentFields(intent) {
-			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-			return errors.New("invalid compact required effect intent")
-		}
-		// A persisted intent must arrive with its complete minted identity and
-		// that identity must be self-consistent. Rewrites that keep the event
-		// self-consistent are then caught semantically by reconciliation,
-		// which verifies the frozen binding against the committed effect.
-		if !validSHA256(intent.BindingRevision) || !validSHA256(intent.EventID) {
-			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-			return errors.New("invalid compact required effect identity")
-		}
-		eventPayload, _ := json.Marshal([]string{record.State.LineageID, intent.BindingRevision, intent.Class, intent.Destination, intent.PayloadHash})
-		eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
-		if intent.EventID != "sha256:"+hex.EncodeToString(eventSum[:]) {
-			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-			return errors.New("invalid compact required effect identity")
-		}
-		if index > 0 {
-			previous := record.EffectIntents[index-1]
-			if previous.Class > intent.Class || (previous.Class == intent.Class && previous.Destination >= intent.Destination) {
-				// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-				return errors.New("compact required effect intents must be unique and canonically ordered")
-			}
-		}
-	}
-	if len(record.EffectIntents) == 0 {
-		return nil
-	}
-	want, _, err := makeCompactRecordWithIntents(record.State, append([]CompactEffectIntent(nil), record.EffectIntents...))
-	if err != nil {
-		return fmt.Errorf("invalid compact required effect identity: %w", err)
-	}
-	if want.Revision != record.Revision || !reflect.DeepEqual(want.EffectIntents, record.EffectIntents) {
-		// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-		return errors.New("invalid compact required effect identity")
-	}
-	return nil
-}
-
-func validCompactEffectIntentFields(intent CompactEffectIntent) bool {
-	return (intent.Class == CompactEffectClassRepositoryContext || intent.Class == compactEffectClassRequestedTrace) &&
-		strings.TrimSpace(intent.Destination) != "" && validSHA256(intent.PayloadHash)
 }
 
 func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {
@@ -2459,7 +2325,7 @@ func (store CompactStore) installTransportRecordLocked(ctx context.Context, reco
 	if err := validateCompactTransportDelivery(ctx, store.repo, record.State); err != nil {
 		return err
 	}
-	want, payload, err := makeCompactRecordWithIntents(record.State, record.EffectIntents)
+	want, payload, err := makeCompactRecord(record.State)
 	if err != nil || want.Revision != record.Revision {
 		return errors.New("imported compact record checksum changed")
 	}

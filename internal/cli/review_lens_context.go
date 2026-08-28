@@ -162,7 +162,6 @@ type reviewLensContextDeps struct {
 	prepare  func(reviewtransaction.SnapshotBuilder, context.Context, reviewtransaction.Snapshot) (reviewLensCandidateInspector, error)
 	inspect  func(context.Context, reviewLensCandidateInspector, string, int, string) ([]byte, error)
 	close    func(reviewLensCandidateInspector) error
-	record   func(string, reviewtransaction.LensContextEmission) error
 }
 
 type reviewLensCandidateInspector interface {
@@ -182,8 +181,7 @@ func reviewLensContextDependencies() reviewLensContextDeps {
 		inspect: func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
 			return inspector.Inspect(ctx, operation, pathIndex, side)
 		},
-		close:  func(inspector reviewLensCandidateInspector) error { return inspector.Close() },
-		record: reviewtransaction.PublishLensContextEmission,
+		close: func(inspector reviewLensCandidateInspector) error { return inspector.Close() },
 	}
 }
 
@@ -195,7 +193,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context")
 	lens := flags.String("lens", "", "exact selected lens")
 	delivery := flags.String("delivery", string(reviewtransaction.ReviewerContextLevelProviderCommand),
-		"how this context reaches the reviewer: provider_command when a caller relays it, runtime_interception when a runtime adapter injects it")
+		"deprecated compatibility option; reviewer context is ephemeral and never persisted")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return nil, err
 	}
@@ -205,9 +203,10 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	if flags.NArg() != 0 || strings.TrimSpace(*repositoryContext) == "" || strings.TrimSpace(*lens) == "" {
 		return nil, reviewPreflightError(errors.New("review lens-context requires the exact provider-issued repository context and lens carried by the collect transition; run `gentle-ai review lens-context --help` for the closed command form"))
 	}
+
 	level := reviewtransaction.ReviewerContextLevel(strings.TrimSpace(*delivery))
 	if level == reviewtransaction.ReviewerContextLevelProviderContract {
-		return nil, reviewPreflightError(errors.New("review lens-context delivery provider_contract is reserved for Go-owned provider execution and cannot be declared by callers")) // refusal:by-design world-action: only the live Go transport may record its provider contract provenance
+		return nil, reviewPreflightError(errors.New("review lens-context delivery provider_contract is reserved for Go-owned provider execution and cannot be declared by callers")) // refusal:by-design world-action: current context delivery has no durable provenance record
 	}
 	if !reviewtransaction.ReviewerContextLevelAccepted(level) {
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
@@ -227,27 +226,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	if expired := reviewLensContextDeadline(ctx, ctx.Err()); expired != nil {
 		return nil, expired
 	}
-	// Recorded only after the context really exists, and only for the slot it
-	// was produced for. This is an append-only audit note beside the captured
-	// reviewer results: it costs no authority revision, so the revision the
-	// caller is still holding for its capture stays valid.
-	if err := deps.record(authority.Store.Dir, reviewtransaction.LensContextEmission{
-		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: authority.Binding.Lineage,
-		TargetIdentity: authority.Binding.Target, AuthorityRevision: authority.Binding.Revision,
-		Lens: authority.Binding.Lens, SelectedOrder: authority.Binding.Order, SubjectHash: authority.Binding.SubjectHash, Level: level,
-	}); err != nil {
-		if errors.Is(err, reviewtransaction.ErrLensContextEmissionConflict) {
-			// Read back what the slot really holds so the refusal names the
-			// mechanism to re-run with. The record is bound to this exact
-			// revision, so a hit here is genuinely a mechanism conflict and not
-			// the stale-revision collision this slot key used to produce.
-			recorded, _ := reviewtransaction.ReadLensContextEmission(authority.Store.Dir, authority.Binding.Lineage,
-				authority.Binding.Target, authority.Binding.Revision, authority.Binding.Lens,
-				authority.Binding.Order, authority.Binding.SubjectHash)
-			return nil, reviewLensContextRefusal("lens_context_emission_conflict", reviewLensContextConflictActionFor(recorded.Level))
-		}
-		return nil, reviewLensContextRefusal("lens_context_emission_unavailable", reviewLensContextRefreshAction)
-	}
+	// Materialization is ephemeral and read-only: no context, readiness, or delivery record is persisted.
 	return block, nil
 }
 

@@ -28,7 +28,7 @@ func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.C
 	t.Helper()
 	repo, _, store, record = newArtifactReview(t, true)
 	lens = record.State.SelectedLenses[0]
-	contextHandle, err := reviewtransaction.PublishReviewRepositoryContext(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+	contextHandle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {

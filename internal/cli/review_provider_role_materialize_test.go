@@ -42,7 +42,7 @@ func piRefuterReview(t *testing.T) (string, reviewtransaction.CompactStore, revi
 		t.Fatal(loadErr)
 	}
 	record = updated
-	handle, err := reviewtransaction.PublishReviewRepositoryContext(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
@@ -77,6 +77,9 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
+	handle = rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
 	binding := piRefuterBinding(record, handle)
 
 	var first bytes.Buffer
@@ -543,7 +546,7 @@ func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := reviewtransaction.PublishTargetedValidationReviewRepositoryContext(t.Context(), repo, request)
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision})
 	if err != nil {
 		t.Fatal(err)
 	}

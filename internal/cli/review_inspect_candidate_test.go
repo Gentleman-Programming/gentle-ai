@@ -179,14 +179,13 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 
 func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, args, request, store, index := newTargetedCandidateInspectionReview(t)
+	_, args, request, store, index := newTargetedCandidateInspectionReview(t)
 	nonTerminal, err := store.Load()
 	if err != nil || nonTerminal.State.State != reviewtransaction.StateCorrectionRequired ||
 		nonTerminal.State.CapturePhaseRevision != request.ExpectedRevision || nonTerminal.State.CorrectionAttemptConsumed() {
 		t.Fatalf("corrected inspection must use current unconsumed correction authority: %#v, %v", nonTerminal, err)
 	}
 	before := readReviewOperationFile(t, store.StatePath())
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\ndrifted\n", 0o644)
 	t.Chdir(t.TempDir())
 	var output bytes.Buffer
 	if err := RunReviewInspectCandidate(append(args, "--operation", "object", "--path-index", fmt.Sprint(index), "--side", "candidate"), &output); err != nil {
@@ -202,7 +201,10 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 
 func TestReviewInspectCandidateDoesNotRequireRetiredVerificationEvidence(t *testing.T) {
 	reviewEnabledHome(t)
-	_, args, _, _, _ := newTargetedCandidateInspectionReview(t)
+	repo, args, request, _, _ := newTargetedCandidateInspectionReview(t)
+	args = replaceReviewContextArgument(t, args, rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	}))
 	var output bytes.Buffer
 	if err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), &output); err != nil {
 		t.Fatalf("frozen corrected inspection depends on retired verification evidence: %v", err)
@@ -276,7 +278,7 @@ func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, revie
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := reviewtransaction.PublishTargetedValidationReviewRepositoryContext(context.Background(), repo, request)
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision})
 	if err != nil {
 		t.Fatal(err)
 	}

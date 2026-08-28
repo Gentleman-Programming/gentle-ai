@@ -312,7 +312,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			reviewtransaction.ValidateReviewRepositoryContextHandle(result.RepositoryContext.Handle) != nil ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
-			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
 			result.Authority == nil ||
 			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
 				result.RepositoryContext.Revision != result.Authority.CapturePhaseRevision ||

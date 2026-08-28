@@ -507,124 +507,37 @@ func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
 // receipt will carry is observed from what the provider actually produced, not
 // declared by whoever closes the review. Absence stays absence when nothing produced a
 // context.
-func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
+func TestReviewLensContextIsEphemeralAndDoesNotPersistDeliveryState(t *testing.T) {
 	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	started := startHighRiskCLIReview(t, repo)
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := record.State
-	handle := deriveLensContextHandle(t, repo, record)
-	args := []string{
-		"--repository-context", handle,
-		"--expected-revision", state.CapturePhaseRevision,
-		"--lineage", started.LineageID, "--target", state.InitialSnapshot.Identity,
-		"--lens", started.SelectedLenses[0], "--order", "0",
-	}
-	subjects := make([]string, len(state.SelectedLenses))
-
-	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects); level != "" {
-		t.Fatalf("level recorded before any context was produced: %q", level)
-	}
-
-	for order, lens := range state.SelectedLenses {
-		block := lensContextBlock(t, handle, lens)
-		binding, _, _ := strings.Cut(strings.TrimPrefix(strings.SplitN(block, "\n", 2)[0], "GENTLE_AI_REVIEW_BINDING "), "\n")
-		var decoded map[string]any
-		if err := json.Unmarshal([]byte(binding), &decoded); err != nil {
-			t.Fatal(err)
-		}
-		subjects[order] = decoded["subject_hash"].(string)
-		// Re-emitting the identical context converges instead of conflicting.
-		lensContextBlock(t, handle, lens)
-	}
-
-	phase := state.CapturePhaseRevision
-	level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, phase, state.SelectedLenses, subjects)
-	if level != reviewtransaction.ReviewerContextLevelProviderCommand {
-		t.Fatalf("recorded level = %q, want %q", level, reviewtransaction.ReviewerContextLevelProviderCommand)
-	}
-
-	// One sibling capture advances only live Rn. The existing Pn-bound context
-	// remains valid for every remaining selected slot.
-	input := filepath.Join(t.TempDir(), "reviewer.json")
-	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, state.SelectedLenses[0], 0), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReviewCaptureResult(append(append([]string(nil), args...), "--input", input), io.Discard); err != nil {
-		t.Fatalf("capture sibling result: %v", err)
-	}
-	after, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.Revision == record.Revision || after.State.CapturePhaseRevision != phase {
-		t.Fatalf("sibling capture did not preserve Pn while advancing Rn: before=%#v after=%#v", record, after)
-	}
-	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, phase, state.SelectedLenses, subjects); level != reviewtransaction.ReviewerContextLevelProviderCommand {
-		t.Fatalf("Pn-bound provider emission did not survive an Rn advance: %q", level)
-	}
-	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, after.Revision, state.SelectedLenses, subjects); level != "" {
-		t.Fatalf("provider emission was rebound to live Rn: %q", level)
-	}
-
-	// A record is bound to its exact candidate: read it against another
-	// subject and it is absent, never reused.
-	wrong := append([]string(nil), subjects...)
-	wrong[0] = "sha256:" + strings.Repeat("0", 64)
-	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, phase, state.SelectedLenses, wrong); level != "" {
-		t.Fatalf("emission was reused for a different candidate: %q", level)
-	}
-}
-
-// TestReviewLensContextRefusesConflictingDeliveryForOneSlot proves the audit
-// record cannot be rewritten: one frozen lens slot records one mechanism.
-func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
-	reviewEnabledHome(t)
-	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
-	lensContextBlock(t, handle, lens)
-	var output bytes.Buffer
-	err := RunReview([]string{
-		"lens-context", "--repository-context", handle, "--lens", lens,
-		"--delivery", string(reviewtransaction.ReviewerContextLevelRuntimeInterception),
-	}, &output)
-	if err == nil || !strings.Contains(err.Error(), "lens_context_emission_conflict") {
-		t.Fatalf("conflicting delivery error = %v", err)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, record.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The exit has to name the mechanism the slot actually recorded: "use the
-	// same mechanism" is not runnable if the operator cannot tell which one
-	// that was (issue #2850).
-	for _, want := range []string{
-		string(reviewtransaction.ReviewerContextLevelProviderCommand),
-		"--delivery " + string(reviewtransaction.ReviewerContextLevelProviderCommand),
-	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("conflict refusal does not name a runnable exit (%q): %v", want, err)
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range []string{"provider_command", "runtime_interception"} {
+		var output bytes.Buffer
+		if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", delivery}, &output); err != nil {
+			t.Fatalf("ephemeral lens context for %s: %v", delivery, err)
+		}
+		if output.Len() == 0 {
+			t.Fatalf("ephemeral lens context for %s was empty", delivery)
 		}
 	}
-	if output.Len() != 0 {
-		t.Fatalf("conflicting delivery emitted %d bytes", output.Len())
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("lens context changed authority bytes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "lens-contexts")); !os.IsNotExist(err) {
+		t.Fatalf("lens context persisted retired delivery state: %v", err)
 	}
 }
 
-// TestReviewLensContextStandsAloneAsTheReviewerInstruction is the level-2
-// floor's load-bearing property: an orchestrator with no runtime adapter pastes
-// this block in front of a generic subagent and the reviewer knows who it is,
-// what it may look at, and exactly what to return. There is no runtime layer
-// behind this output to fill a gap in it.
 func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 	reviewEnabledHome(t)
 	_, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
@@ -791,7 +704,7 @@ func startCompactAuthorityWithoutFacadeChecks(t *testing.T, repo, lineage string
 // transition would have carried for an already-persisted record.
 func deriveLensContextHandle(t *testing.T, repo string, record reviewtransaction.CompactRecord) string {
 	t.Helper()
-	handle, err := reviewtransaction.PublishReviewRepositoryContext(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {

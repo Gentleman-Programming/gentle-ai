@@ -425,14 +425,6 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	if err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
 	}
-	if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
-		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: session.lensRequest.Binding.Lineage,
-		TargetIdentity: session.lensRequest.Binding.Target, AuthorityRevision: session.lensRequest.Binding.Revision,
-		Lens: session.lensRequest.Binding.Lens, SelectedOrder: session.lensRequest.Binding.Order, SubjectHash: captured.Subject.SubjectHash,
-		Level: reviewtransaction.ReviewerContextLevelProviderContract,
-	}); err != nil {
-		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_emission_unavailable")
-	}
 	currentRecord, currentErr := store.LoadContext(ctx)
 	if currentErr != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")

@@ -46,12 +46,10 @@ type ReviewIntegrationStartResult struct {
 // ReviewRepositoryContextReference is the path-free provider context that a
 // capture transition can carry across process cwd boundaries.
 type ReviewRepositoryContextReference struct {
-	Capability     string                                            `json:"capability"`
-	Handle         string                                            `json:"handle"`
-	Revision       string                                            `json:"revision"`
-	TargetIdentity string                                            `json:"target_identity"`
-	EventID        string                                            `json:"event_id,omitempty"`
-	Outcome        reviewtransaction.CompactRepositoryContextOutcome `json:"outcome,omitempty"`
+	Capability     string `json:"capability"`
+	Handle         string `json:"handle"`
+	Revision       string `json:"revision"`
+	TargetIdentity string `json:"target_identity"`
 }
 
 func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment reviewtransaction.RiskAssessment, targetMode reviewtransaction.TargetKind, frozenContext *reviewtransaction.FrozenCandidateContext, repositoryContext *ReviewRepositoryContextReference, contracts ...string) (ReviewIntegrationStartResult, error) {
@@ -244,9 +242,6 @@ func (result ReviewIntegrationStartResult) Validate() error {
 			result.TargetIdentity != "" && result.RepositoryContext.TargetIdentity != result.TargetIdentity {
 			return errors.New("negotiated START repository context is invalid")
 		}
-		if err := validateReviewRepositoryContextReference(*result.RepositoryContext); err != nil {
-			return fmt.Errorf("negotiated START repository context is invalid: %w", err)
-		}
 	}
 	if hasManifest {
 		if hasDiff {
@@ -280,25 +275,6 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		}
 	}
 	return nil
-}
-
-func validateReviewRepositoryContextReference(reference ReviewRepositoryContextReference) error {
-	if (reference.EventID == "") != (reference.Outcome == "") {
-		return errors.New("event identity and outcome must be present together") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
-	}
-	if reference.EventID == "" {
-		return nil
-	}
-	if !validReviewCapabilitySHA256(reference.EventID) {
-		return errors.New("event identity is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
-	}
-	switch reference.Outcome {
-	case reviewtransaction.CompactRepositoryContextApplied, reviewtransaction.CompactRepositoryContextPending,
-		reviewtransaction.CompactRepositoryContextBlocked, reviewtransaction.CompactRepositoryContextDurabilityLimited:
-		return nil
-	default:
-		return errors.New("event outcome is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
-	}
 }
 
 func reviewContractCorrectionBudgetValid(originalChangedLines, correctionBudget int) bool {

@@ -65,15 +65,19 @@ func TestTargetedValidationRequestBindsFrozenPolicyAndCausalEvidence(t *testing.
 	if state.FrozenPolicyContent == nil {
 		t.Fatal("fixture did not preserve the frozen policy content")
 	}
-	if request.PolicyContent != *state.FrozenPolicyContent || len(request.FixFindings) != len(state.FixFindingIDs) ||
-		len(request.FixClassifications) != len(state.FixFindingIDs) {
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.PolicyContent != *state.FrozenPolicyContent || len(request.FixFindings) != len(view.FixFindingIDs) ||
+		len(request.FixClassifications) != len(view.FixFindingIDs) {
 		t.Fatalf("targeted request semantic context = %#v", request)
 	}
-	for index, findingID := range state.FixFindingIDs {
+	for index, findingID := range view.FixFindingIDs {
 		if request.FixFindings[index].ID != findingID || request.FixClassifications[index].FindingID != findingID ||
-			!reflect.DeepEqual(request.FixFindings[index], state.Findings[index]) ||
-			!reflect.DeepEqual(request.FixClassifications[index], state.Classifications[findingID]) {
-			t.Fatalf("targeted request semantic context at %d = %#v / %#v, want finding %q and %#v", index, request.FixFindings[index], request.FixClassifications[index], findingID, state.Classifications[findingID])
+			!reflect.DeepEqual(request.FixFindings[index], view.Findings[index]) ||
+			!reflect.DeepEqual(request.FixClassifications[index], view.Classifications[findingID]) {
+			t.Fatalf("targeted request semantic context at %d = %#v / %#v, want finding %q and %#v", index, request.FixFindings[index], request.FixClassifications[index], findingID, view.Classifications[findingID])
 		}
 	}
 	policyDrift := request
@@ -91,6 +95,49 @@ func TestTargetedValidationRequestBindsFrozenPolicyAndCausalEvidence(t *testing.
 	findingDrift.FixFindings[0].Claim += " drift"
 	if targetedValidationRequestHash(findingDrift) == request.RequestHash {
 		t.Fatal("causal finding drift did not change the targeted validator request hash")
+	}
+}
+
+func TestTargetedValidationRequestUsesAdmittedCaptureOverDuplicateLegacyProjections(t *testing.T) {
+	repo, state, revision, _ := targetedValidationRequestFixture(t, "targeted-validation-admitted-capture", true)
+	fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, Projection: state.InitialSnapshot.Projection,
+		BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
+		LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := targetedValidationRequestForCorrection(state, revision, fix)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Retired projections cannot be reintroduced into CompactState; this request
+	// therefore reads only the canonical admitted capture.
+	got, err := targetedValidationRequestForCorrection(state, revision, fix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) || got.RequestHash != want.RequestHash {
+		t.Fatalf("targeted request from duplicate legacy projections = %#v, want admitted capture %#v", got, want)
+	}
+}
+
+func TestTargetedValidationRequestFailsClosedWhenAdmittedEvidenceMissesFixFinding(t *testing.T) {
+	repo, state, revision, _ := targetedValidationRequestFixture(t, "targeted-validation-missing-admitted-finding", true)
+	tampered := state
+	tampered.FixFindingIDs = []string{"R3-999"}
+	fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, Projection: tampered.InitialSnapshot.Projection,
+		BaseRef: tampered.CurrentSnapshot.CandidateTree, IntendedUntracked: tampered.InitialSnapshot.IntendedUntracked,
+		LedgerIDs: tampered.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := targetedValidationRequestForCorrection(tampered, revision, fix); err == nil {
+		t.Fatal("targeted request accepted a fix finding absent from admitted role evidence")
 	}
 }
 
@@ -297,9 +344,7 @@ func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 		if err := next.CompleteCorrectionVerification(correction, 2, validation); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.Replace(current.Revision, "review/complete-correction-verification", next); err != nil {
-			t.Fatal(err)
-		}
+		writeCompactFixtureRecord(t, store, next)
 		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
 			t.Fatalf("stale authority for %q resolved", repo)
 		}
@@ -330,10 +375,16 @@ func TestTargetedValidationRequestCountsOnlyPartialCorrectionAcrossIntendedUntra
 	}
 	finding := Finding{
 		ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:61", Severity: "CRITICAL",
-		Claim: "candidate values require a paired correction", ProofRefs: []string{"candidate-only differential failure"},
+		Claim: "candidate values require a paired correction", ProofRefs: []string{"changed hunk"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
 	}
+	result := captureAdmittedCorrectionFinding(t, store, state, finding)
+	record, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = record.State
 	if err := state.CompleteReview(CompactReviewInput{
-		LensResults:     []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed exact initial candidate"}}},
+		LensResults:     []LensResult{result},
 		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk"}},
 		RefuterOutcomes: []EvidenceResult{},
 	}); err != nil {
@@ -408,10 +459,16 @@ func targetedValidationRequestFixtureWithFrozenPolicy(t *testing.T, lineage stri
 	}
 	finding := Finding{
 		ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:2", Severity: "CRITICAL",
-		Claim: "wrong value", ProofRefs: []string{"candidate-only failure"},
+		Claim: "wrong value", ProofRefs: []string{"changed hunk causes failure"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
 	}
+	result := captureAdmittedCorrectionFinding(t, store, state, finding)
+	record, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = record.State
 	if err := state.CompleteReview(CompactReviewInput{
-		LensResults: []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed exact candidate"}}},
+		LensResults: []LensResult{result},
 		Classifications: []FindingEvidence{{
 			FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk causes failure",
 		}},
@@ -459,7 +516,9 @@ func correctedInspectionFixture(t *testing.T, lineage string, outcome any) (stri
 		t.Fatalf("correction identity = %s, want request target %s", correction.Identity, request.CorrectionTargetIdentity)
 	}
 	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: revision}
-	handle, err := PublishTargetedValidationReviewRepositoryContext(context.Background(), repo, request)
+	handle, err := DeriveReviewRepositoryContextHandle(context.Background(), repo, ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

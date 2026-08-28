@@ -64,7 +64,7 @@
       "required": ["capability", "handle", "revision", "target_identity"],
       "properties": {
         "capability": {"const": "review.opaque_repository_context"},
-        "handle": {"type": "string", "pattern": "^rctx1_[0-9a-f]{64}$"},
+        "handle": {"type": "string", "pattern": "^(?:rctx1_[0-9a-f]{64}|rctx2_[A-Za-z0-9_-]+)$"},
         "revision": {"$ref": "#/$defs/sha256"},
         "target_identity": {"$ref": "#/$defs/sha256"},
         "event_id": {"$ref": "#/$defs/sha256"},

@@ -152,7 +152,8 @@ func closeReviewOnLastCapturedLens(
 		}
 	}
 
-	state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
+	// Current lifecycle context is ephemeral; historical diagnostics remain read-only.
+	state.ReviewerContextLevel = ""
 	if err := state.CompleteReview(input); err != nil {
 		return nil, err
 	}
