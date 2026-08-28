@@ -83,7 +83,7 @@ jobs:
                   repo: context.repo.repo,
                   pull_number: context.payload.pull_request.number,
                   headers: {
-                    accept: 'application/vnd.github.text+json',
+                    accept: 'application/vnd.github.full+json',
                   },
                 }
               );

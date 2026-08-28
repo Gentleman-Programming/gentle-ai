@@ -57,7 +57,7 @@ test('the workflow binds and parses GitHub rendered text rather than the event b
   assert.match(workflow, /pull-requests: read/);
   assert.match(workflow, /issues: read/);
   assert.match(workflow, /GET \/repos\/\{owner\}\/\{repo\}\/pulls\/\{pull_number\}/);
-  assert.match(workflow, /accept:\s*'application\/vnd\.github\.text\+json'/);
+  assert.match(workflow, /accept:\s*'application\/vnd\.github\.full\+json'/);
   assert.match(workflow, /bindRenderedBody\(context\.payload\.pull_request, currentPR\)/);
   assert.match(workflow, /parseLinkedIssues\(bodyText\)/);
   assert.equal((workflow.match(/parseLinkedIssues\(/g) || []).length, 1);
