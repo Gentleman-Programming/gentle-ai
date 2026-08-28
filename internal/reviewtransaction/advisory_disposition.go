@@ -3,12 +3,12 @@ package reviewtransaction
 import "sort"
 
 // AdvisoryDisposition names, out loud, why one frozen finding on an approved
-// lineage did not block. The routing itself is not new: it is already recorded
-// in CompactState.Outcomes and CompactState.FixFindingIDs, and this vocabulary
-// changes none of it. What was missing is that a consumer reading an approved
-// receipt saw only the severity string and had to infer the consequence from
-// it -- the exact inference a field incident got wrong, "fixing" a WARNING on
-// an approved candidate and burning a second full review cycle on it.
+// lineage did not block. The routing itself is not new: CompactReviewView
+// derives it from admitted role values, and this vocabulary changes none of it.
+// What was missing is that a consumer reading an approved receipt saw only the
+// severity string and had to infer the consequence from it -- the exact inference
+// a field incident got wrong, "fixing" a WARNING on an approved candidate and
+// burning a second full review cycle on it.
 type AdvisoryDisposition string
 
 const (
@@ -54,20 +54,24 @@ type AdvisoryFindingSet struct {
 // approved lineage, sorted by finding ID for a deterministic payload.
 //
 // It is a pure read of already-decided state and decides nothing itself: a
-// finding listed in FixFindingIDs blocked and was corrected, so it is excluded
-// rather than relabelled, and a lineage that is not StateApproved yields
-// nothing at all because its dispositions are not yet settled.
+// finding listed in the admitted view's FixFindingIDs blocked and was corrected,
+// so it is excluded rather than relabelled, and a lineage that is not
+// StateApproved yields nothing at all because its dispositions are not settled.
 func AdvisoryFindings(state CompactState) []AdvisoryFinding {
 	if state.State != StateApproved {
 		return nil
 	}
-	corrected := stringSet(state.FixFindingIDs)
-	advisory := make([]AdvisoryFinding, 0, len(state.Findings))
-	for _, finding := range state.Findings {
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return nil
+	}
+	corrected := stringSet(view.FixFindingIDs)
+	advisory := make([]AdvisoryFinding, 0, len(view.Findings))
+	for _, finding := range view.Findings {
 		if _, blocked := corrected[finding.ID]; blocked {
 			continue
 		}
-		disposition, ok := advisoryDisposition(finding, state.Outcomes[finding.ID])
+		disposition, ok := advisoryDisposition(finding, view.Outcomes[finding.ID])
 		if !ok {
 			continue
 		}

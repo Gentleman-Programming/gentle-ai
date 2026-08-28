@@ -333,14 +333,14 @@ func seedHistoricalCapturedApprovalForLineage(t *testing.T, repo, lineage string
 	}
 	subjects := make([]string, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
-		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, lens, index, "")
+		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, state.CapturePhaseRevision, frozen, lens, index, "")
 		if subjectErr != nil {
 			t.Fatalf("derive historical captured reviewer subject: %v", subjectErr)
 		}
 		subjects[index] = subject.SubjectHash
 	}
 	state.ReviewerContextLevel = reviewtransaction.DiscoverReviewerContextLevel(
-		store.Dir, state.LineageID, state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects,
+		store.Dir, state.LineageID, state.InitialSnapshot.Identity, state.CapturePhaseRevision, state.SelectedLenses, subjects,
 	)
 	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
 		t.Fatalf("complete captured historical review: %v", err)
@@ -369,7 +369,7 @@ func seedHistoricalCorrectionApprovalForLineage(t *testing.T, repo, lineage stri
 	if err != nil {
 		t.Fatalf("build historical correction verification target: %v", err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, record.State, record.Revision, fix)
+	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, record.State, record.State.CapturePhaseRevision, fix)
 	if err != nil {
 		t.Fatalf("build historical correction validation request: %v", err)
 	}

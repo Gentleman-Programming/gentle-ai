@@ -509,12 +509,23 @@ func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
 // context.
 func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
-	state := record.State
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	repo := initReviewCLIRepo(t)
+	started := startHighRiskCLIReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := record.State
+	handle := deriveLensContextHandle(t, repo, record)
+	args := []string{
+		"--repository-context", handle,
+		"--expected-revision", state.CapturePhaseRevision,
+		"--lineage", started.LineageID, "--target", state.InitialSnapshot.Identity,
+		"--lens", started.SelectedLenses[0], "--order", "0",
 	}
 	subjects := make([]string, len(state.SelectedLenses))
 
@@ -535,10 +546,36 @@ func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
 		lensContextBlock(t, handle, lens)
 	}
 
+	phase := state.CapturePhaseRevision
 	level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects)
+		state.InitialSnapshot.Identity, phase, state.SelectedLenses, subjects)
 	if level != reviewtransaction.ReviewerContextLevelProviderCommand {
 		t.Fatalf("recorded level = %q, want %q", level, reviewtransaction.ReviewerContextLevelProviderCommand)
+	}
+
+	// One sibling capture advances only live Rn. The existing Pn-bound context
+	// remains valid for every remaining selected slot.
+	input := filepath.Join(t.TempDir(), "reviewer.json")
+	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, state.SelectedLenses[0], 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureResult(append(append([]string(nil), args...), "--input", input), io.Discard); err != nil {
+		t.Fatalf("capture sibling result: %v", err)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision == record.Revision || after.State.CapturePhaseRevision != phase {
+		t.Fatalf("sibling capture did not preserve Pn while advancing Rn: before=%#v after=%#v", record, after)
+	}
+	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
+		state.InitialSnapshot.Identity, phase, state.SelectedLenses, subjects); level != reviewtransaction.ReviewerContextLevelProviderCommand {
+		t.Fatalf("Pn-bound provider emission did not survive an Rn advance: %q", level)
+	}
+	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
+		state.InitialSnapshot.Identity, after.Revision, state.SelectedLenses, subjects); level != "" {
+		t.Fatalf("provider emission was rebound to live Rn: %q", level)
 	}
 
 	// A record is bound to its exact candidate: read it against another
@@ -546,7 +583,7 @@ func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
 	wrong := append([]string(nil), subjects...)
 	wrong[0] = "sha256:" + strings.Repeat("0", 64)
 	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, wrong); level != "" {
+		state.InitialSnapshot.Identity, phase, state.SelectedLenses, wrong); level != "" {
 		t.Fatalf("emission was reused for a different candidate: %q", level)
 	}
 }
@@ -755,7 +792,7 @@ func startCompactAuthorityWithoutFacadeChecks(t *testing.T, repo, lineage string
 func deriveLensContextHandle(t *testing.T, repo string, record reviewtransaction.CompactRecord) string {
 	t.Helper()
 	handle, err := reviewtransaction.PublishReviewRepositoryContext(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)

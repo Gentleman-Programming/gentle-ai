@@ -63,12 +63,10 @@ func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 		{verb: "capture-correction-plan", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--correction-lines", "1"}},
 		{verb: "capture-refuter", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--agent", "pi", "--execute"}},
 		{verb: "capture-validation", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--agent", "pi", "--execute"}},
-		{verb: "preserve-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
 		{verb: "repair", args: []string{"--contract", ReviewIntegrationContractV1}},
 		{verb: "invalidate", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest}},
 		{verb: "recover", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--disposition", "scope_changed"}},
 		{verb: "reclaim", args: []string{"--lineage", "review-disabled-sweep", "--reason", "reason", "--actor", "maintainer"}},
-		{verb: "dispose-result", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--lens", "review-risk", "--order", "0", "--artifact-digest", digest, "--class", "empty_result", "--diagnostic", "diagnostic", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "reopen-results", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 	} {
 		t.Run(testCase.verb, func(t *testing.T) {

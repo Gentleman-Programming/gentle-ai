@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -94,19 +95,13 @@ func TestPristineInvalidatedLineageRemainsAuditable(t *testing.T) {
 func approvedCompactFixture(t *testing.T, repo, lineage string) (CompactRecord, CompactStore) {
 	t.Helper()
 	state, store := startReviewingCompactAuthority(t, repo, newCompactTestState(t, repo, lineage))
-	started, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
 	results := make([]LensResult, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
 		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
 	}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +120,11 @@ func abandonFixtureRequest(record CompactRecord, summaries ...CompactDiscardedWo
 		LineageID: record.State.LineageID, ExpectedRevision: record.Revision,
 		Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	}
-	summary := CompactDiscardedWorkSummary{FindingsPresent: len(record.State.Findings) > 0}
+	view, err := record.State.CompactReviewView()
+	if err != nil {
+		panic(err)
+	}
+	summary := CompactDiscardedWorkSummary{FindingsPresent: len(view.Findings) > 0}
 	if len(summaries) == 1 {
 		summary = summaries[0]
 	}
@@ -317,24 +316,13 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := writeCompactFixtureRecord(t, store, state)
-		request := abandonFixtureRequest(record, CompactDiscardedWorkSummary{FindingsPresent: true})
-		if _, err := AbandonPristineCompactStore(context.Background(), repo, request); err != nil {
-			t.Fatalf("captured review data abandonment = %v", err)
-		}
-	})
-
-	t.Run("empty reviewer-results directory has no captured result", func(t *testing.T) {
-		writeSnapshotFile(t, repo, "tracked.txt", "base\ncaptured results change\n")
-		record, store := pristineReviewingFixture(t, repo, "abandon-captured-results")
-		if err := os.MkdirAll(filepath.Join(store.Dir, CompactReviewerResultsDir), 0o755); err != nil {
+		summary, err := compactDiscardedWorkSummary(t.Context(), store, record)
+		if err != nil {
 			t.Fatal(err)
 		}
-		committed, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record))
-		if err != nil {
-			t.Fatalf("empty reviewer-results abandonment = %v", err)
-		}
-		if got := committed.Abandonment.DiscardedWork.CapturedLensResults; len(got) != 0 {
-			t.Fatalf("empty reviewer-results directory counted as captured work: %v", got)
+		request := abandonFixtureRequest(record, summary)
+		if _, err := AbandonPristineCompactStore(context.Background(), repo, request); err != nil {
+			t.Fatalf("captured review data abandonment = %v", err)
 		}
 	})
 
@@ -453,8 +441,58 @@ func TestAbandonBindsActualAdmittedReviewerResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abandon admitted reviewer result: %v", err)
 	}
-	if got := committed.Abandonment.DiscardedWork.CapturedLensResults; len(got) != 1 || got[0] != filepath.Base(fixture.path) {
+	if got := committed.Abandonment.DiscardedWork.CapturedLensResults; len(got) != 1 || got[0] != "00-"+LensReliability {
 		t.Fatalf("discarded admitted reviewer result = %v", got)
+	}
+}
+
+// TestAbandonSummaryUsesAdmittedValuesInsteadOfDuplicateProjections proves the
+// maintainer binding preserves the captured inventory and findings semantics
+// when compatibility projections are forged.
+func TestAbandonSummaryUsesAdmittedValuesInsteadOfDuplicateProjections(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "abandon-tampered-projections")
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := compactDiscardedWorkSummary(t.Context(), fixture.store, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Retired projections cannot be assembled into CompactState; semantic reads
+	// must stay anchored to the admitted role value in the stored record.
+
+	summary, err := compactDiscardedWorkSummary(t.Context(), fixture.store, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(summary, baseline) {
+		t.Fatalf("discarded work from tampered projections = %#v, want admitted summary %#v", summary, baseline)
+	}
+	if got, want := RenderCompactAbandonAuthorization(record.State.LineageID, record.Revision, record.State.InitialSnapshot.Identity, "maintainer@example.com", CompactAbandonReasonOperatorDisposition, summary), RenderCompactAbandonAuthorization(record.State.LineageID, record.Revision, record.State.InitialSnapshot.Identity, "maintainer@example.com", CompactAbandonReasonOperatorDisposition, baseline); got != want {
+		t.Fatalf("tampered discarded-work binding = %q, want %q", got, want)
+	}
+}
+
+// TestAbandonSummaryFailsClosedOnMalformedAdmittedEvidence refuses an authority
+// value that cannot produce a valid CompactReviewView.
+func TestAbandonSummaryFailsClosedOnMalformedAdmittedEvidence(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "abandon-malformed-admitted")
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := record
+	tampered.State.AdmittedRoleResults = cloneCompactAdmittedRoleResults(record.State.AdmittedRoleResults)
+	tampered.State.AdmittedRoleResults[0].Value = json.RawMessage(`{"malformed":`)
+	if _, err := compactDiscardedWorkSummary(t.Context(), fixture.store, tampered); err == nil {
+		t.Fatal("malformed admitted evidence produced an abandon summary")
 	}
 }
 
@@ -575,17 +613,30 @@ func TestAbandonRefusesCorruptedNonPristineInvalidatedRecord(t *testing.T) {
 	// pristineness before the transition. FollowUps survive every structural
 	// validator that runs before the invalidated pristineness re-derivation,
 	// so this exercises exactly that class.
-	state.FollowUps = []FollowUp{{Observation: "captured review observation", ProofRefs: []string{"proof"}}}
-	state.State, state.InvalidationReason = StateInvalidated, "hand-crafted corruption"
-	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	state, store := startReviewingCompactAuthority(t, repo, state)
+	captureCompactLens(t, store, state, 0)
+	record, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := writeCompactFixtureRecord(t, store, state)
 	payload, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
 	}
+	record.State.State, record.State.InvalidationReason = StateInvalidated, "hand-crafted corruption"
+	statePayload, err := json.Marshal(record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Revision = compactStateRevision(statePayload)
+	corrupted, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), append(corrupted, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload = append(corrupted, '\n')
 
 	if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
 		!strings.Contains(err.Error(), "pristine reviewing authority") {

@@ -63,7 +63,11 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	}
 	var capturedArtifact reviewResultArtifact
 	decodeStrictReviewJSON(t, captured.Bytes(), &capturedArtifact)
-	capturedBytes, err := os.ReadFile(capturedArtifact.Path)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capturedBytes, err := readVerifiedReviewerArtifact(capturedArtifact, "", record.State)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,8 +157,8 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	if got, readErr := os.ReadFile(incident.Path); readErr != nil || !bytes.Equal(got, []byte(unreplayableReviewerOutput)) {
 		t.Fatalf("preserved incident artifact changed: %v", readErr)
 	}
-	if got, readErr := os.ReadFile(capturedArtifact.Path); readErr != nil || !bytes.Equal(got, capturedBytes) {
-		t.Fatalf("captured reviewer result changed: %v", readErr)
+	if got, readErr := readVerifiedReviewerArtifact(capturedArtifact, "", after.State); readErr != nil || !bytes.Equal(got, capturedBytes) {
+		t.Fatalf("captured canonical record value changed: %v", readErr)
 	}
 
 	// Requirement 5: the exact replay converges instead of double-applying.

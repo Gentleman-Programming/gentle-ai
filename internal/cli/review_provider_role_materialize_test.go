@@ -37,8 +37,13 @@ func piRefuterReview(t *testing.T) (string, reviewtransaction.CompactStore, revi
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
+	updated, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	record = updated
 	handle, err := reviewtransaction.PublishReviewRepositoryContext(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,13 +54,13 @@ func piRefuterReview(t *testing.T) (string, reviewtransaction.CompactStore, revi
 func piRefuterBinding(record reviewtransaction.CompactRecord, handle string) []string {
 	return []string{
 		"--repository-context", handle, "--lineage", record.State.LineageID,
-		"--target", record.State.InitialSnapshot.Identity, "--expected-revision", record.Revision,
+		"--target", record.State.InitialSnapshot.Identity, "--expected-revision", record.State.CapturePhaseRevision,
 	}
 }
 
 func piRefuterRawResult(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord) []byte {
 	t.Helper()
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.Revision)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +83,7 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--materialize=true"), &first); err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.Revision)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +97,9 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Fatal("repeated refuter materialization changed the provider task bytes")
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || slot.Occupied {
-		t.Fatalf("refuter materialize occupied the refuter result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatalf("refuter materialize mutated compact authority: %#v, %v", current, err)
 	}
 }
 
@@ -150,13 +155,16 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *test
 		terminal.LineageID != record.State.LineageID || terminal.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("refuter capture closure = %#v", terminal)
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("refuter submission did not occupy the refuter result slot: %#v, %v", slot, err)
-	}
 	final, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
+	}
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, captured := final.State.AdmittedRoleResult(reviewtransaction.CompactRoleRefuter, record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity, request.RequestHash); !captured {
+		t.Fatal("refuter submission did not merge an in-record role value")
 	}
 	if final.State.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("terminal state = %q, want corroborated blocking finding to require correction", final.State.State)
@@ -185,8 +193,9 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 	if err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("stalled pi deadline refusal = %v", err)
 	}
-	if slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir); err != nil || slot.Occupied {
-		t.Fatalf("stalled pi execution mutated the refuter slot: %#v, %v", slot, err)
+	current, loadErr := store.Load()
+	if loadErr != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatalf("stalled pi execution mutated compact authority: %#v, %v", current, loadErr)
 	}
 }
 
@@ -406,9 +415,16 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	if err := RunReview(execute, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("rendered execution did not occupy the refuter result slot: %#v, %v", slot, err)
+	final, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range final.State.AdmittedRoleResults {
+		found = found || entry.Role == reviewtransaction.CompactRoleRefuter
+	}
+	if !found {
+		t.Fatal("rendered execution did not merge an in-record refuter value")
 	}
 }
 
@@ -476,7 +492,7 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, err := reviewProviderNewTargetedValidatorRequest(t.Context(), repo, record.State, record.Revision, correction)
+	native, err := reviewProviderNewTargetedValidatorRequest(t.Context(), repo, record.State, record.State.CapturePhaseRevision, correction)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,9 +506,9 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Fatal("repeated validator materialization changed the provider task bytes")
 	}
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
-	if err != nil || slot.Occupied {
-		t.Fatalf("validator materialize occupied the result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleTargetedValidator) {
+		t.Fatalf("validator materialize mutated compact authority: %#v, %v", current, err)
 	}
 
 	// Execution: the rendered vector spawns the Go-owned pi transport and the
@@ -533,7 +549,7 @@ func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {
 	}
 	binding := []string{
 		"--repository-context", handle, "--lineage", lineage,
-		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.Revision,
+		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 	}
 	stale := append(slices.Clone(binding), "--request-hash", "sha256:"+strings.Repeat("0", 64),
 		"--agent", string(model.AgentPi), "--materialize=true")
@@ -593,4 +609,13 @@ func TestNegotiatedStatusOffersCurrentValidationCaptureForOtherRuntimes(t *testi
 		!strings.HasPrefix(task.Prompt, reviewProviderTaskBindingHeader+" ") {
 		t.Fatalf("OpenCode validation rendering changed: %#v", opencodeInput)
 	}
+}
+
+func recordHasAdmittedRole(state reviewtransaction.CompactState, role reviewtransaction.CompactRole) bool {
+	for _, entry := range state.AdmittedRoleResults {
+		if entry.Role == role {
+			return true
+		}
+	}
+	return false
 }

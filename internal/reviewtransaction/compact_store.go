@@ -21,6 +21,10 @@ const (
 	compactRecordSchema                 = "gentle-ai.review-state-record/v2"
 	CompactEffectClassRepositoryContext = "repository_context"
 	compactEffectClassRequestedTrace    = "requested_trace"
+
+	compactMaxAdmittedRoleResults = 6
+	compactNonRoleStateSizeLimit  = 7 << 20
+	compactRecordSizeLimit        = 32 << 20
 )
 
 // Compact store entry artifact names. Every file the compact store writes
@@ -30,8 +34,6 @@ const (
 	compactStateFileName           = "review-state.json"
 	compactReceiptFileName         = "review-receipt.json"
 	compactFinalizeJournalFileName = "finalize-attempt-journal.json"
-	// CompactReviewerResultsDir holds captured reviewer result artifacts.
-	CompactReviewerResultsDir = "reviewer-results"
 )
 const CompactTransportSchema = "gentle-ai.review-transport/v2"
 const LegacyReadOnlyErrorCode = "legacy_v1_read_only"
@@ -1364,6 +1366,14 @@ func (store CompactStore) CreateOrReplayAtomicStart(ctx context.Context, request
 	state := cloneCompactStateInitialAtomicStart(request.State)
 	binding := cloneCompactAtomicStartBinding(request.Binding)
 	state.InitialAtomicStart = &binding
+	// P0 must bind the frozen worktree identity that atomic START has already
+	// verified. Re-derive after attaching the binding so a provisional
+	// pre-record Pn from NewCompactState can never omit that identity.
+	phase, phaseErr := deriveCompactCapturePhaseRevision(state)
+	if phaseErr != nil {
+		return CompactAtomicStartResult{}, phaseErr
+	}
+	state.CapturePhaseRevision = phase
 	if err := state.Validate(); err != nil {
 		return CompactAtomicStartResult{}, fmt.Errorf("validate compact atomic START: %w", err)
 	}
@@ -1394,7 +1404,7 @@ func (store CompactStore) CreateOrReplayAtomicStart(ctx context.Context, request
 		return CompactAtomicStartResult{}, err
 	}
 
-	payload, err := os.ReadFile(store.StatePath())
+	payload, err := readCompactRecordPayload(store.StatePath())
 	if err == nil {
 		record, parseErr := parseCompactRecord(payload, store.lineageID)
 		if parseErr != nil {
@@ -1482,11 +1492,29 @@ func (store CompactStore) acquireReadMaintenance(ctx context.Context) (*Maintena
 // already hold the required maintenance/store coordination. It is also used by
 // batch reconciliation while its exclusive maintenance lease is held.
 func (store CompactStore) loadCompactRecordLocked() (CompactRecord, error) {
-	payload, err := os.ReadFile(store.StatePath())
+	payload, err := readCompactRecordPayload(store.StatePath())
 	if err != nil {
 		return CompactRecord{}, err
 	}
 	return parseCompactRecord(payload, store.lineageID)
+}
+
+// readCompactRecordPayload refuses after exactly one byte beyond the bounded
+// record limit. Authority reads must never allocate an unbounded JSON payload.
+func readCompactRecordPayload(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	payload, err := io.ReadAll(io.LimitReader(file, compactRecordSizeLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > compactRecordSizeLimit {
+		return nil, errors.New("compact review state record exceeds the 32 MiB limit") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	return payload, nil
 }
 
 func (store CompactStore) Replace(expectedRevision, operation string, next CompactState) (string, error) {
@@ -1500,14 +1528,6 @@ func (store CompactStore) ReplaceContext(ctx context.Context, expectedRevision, 
 // replaceContextGuarded commits exactly like ReplaceContext, but runs guard
 // inside the same critical section that publishes the successor, immediately
 // before the state file is written and after the revision CAS has passed.
-//
-// It exists because the revision CAS alone cannot see every relevant change:
-// CaptureReviewerResult publishes its artifact under the reviewer-results
-// directory while holding this same store lock and never bumps the authority
-// revision, so a precondition an operation derived from that directory before
-// taking the lock is stale by the time the CAS succeeds. A guard re-derives
-// such a precondition from the authoritative on-disk state while the lock is
-// held, which makes the check atomic with the commit.
 //
 // The guard runs with the store lock already held and must never acquire it
 // again — acquireStoreLock and acquireLocalStoreLock take an exclusive advisory
@@ -1544,7 +1564,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	defer lock.release()
 
 	var current *CompactRecord
-	payload, err := os.ReadFile(store.StatePath())
+	payload, err := readCompactRecordPayload(store.StatePath())
 	if err == nil {
 		loaded, parseErr := parseCompactRecord(payload, store.lineageID)
 		if parseErr != nil {
@@ -1708,13 +1728,11 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 		}
 		reopen := next.ResultReopens[len(next.ResultReopens)-1]
 		request := CompactResultReopenRequest{
-			LineageID:        current.State.LineageID,
-			ExpectedRevision: current.Revision,
-			TargetIdentity:   current.State.InitialSnapshot.Identity,
-			Reason:           reopen.Reason,
-			Actor:            reopen.Actor,
+			LineageID: current.State.LineageID, ExpectedRevision: current.Revision,
+			TargetIdentity: current.State.InitialSnapshot.Identity, Reason: reopen.Reason,
+			Actor: reopen.Actor, QuarantineLenses: []string{reopen.SelectedLens},
 		}
-		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, reopen.Quarantined, reopen.Retained, reopen.AuthorizedLenses) {
+		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, reopen.SelectedLens, reopen.Removed) {
 			return errors.New("reviewer result reopen does not carry the exact maintainer authorization")
 		}
 	}
@@ -1739,8 +1757,10 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 	}
 	switch operation {
 	case "review/invalidate":
-		expected := previous
-		if err := expected.Invalidate(next.InvalidationReason); err != nil || !compactStateEqual(expected, next) {
+		if previous.State != StateReviewing || next.State != StateInvalidated || !compactPristineReviewing(previous) ||
+			strings.TrimSpace(next.InvalidationReason) == "" || previous.CapturePhaseRevision != next.CapturePhaseRevision ||
+			previous.CapturePhaseEpoch != next.CapturePhaseEpoch || len(previous.AdmittedRoleResults) != len(next.AdmittedRoleResults) ||
+			len(previous.TargetedValidatorAttempts) != len(next.TargetedValidatorAttempts) {
 			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-review":
@@ -1758,10 +1778,12 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		if previous.State != StateCorrectionRequired || next.State != StateCorrectionRequired && next.State != StateEscalated || previous.ProposedCorrectionLines != nil || next.ProposedCorrectionLines == nil {
 			return fmt.Errorf("%w: invalid compact correction start", ErrInvalidSuccessor)
 		}
-		expected := previous
-		expected.State = next.State
-		expected.ProposedCorrectionLines = next.ProposedCorrectionLines
-		if !compactStateEqual(expected, next) {
+		if next.CapturePhaseRevision == previous.CapturePhaseRevision || next.CapturePhaseEpoch != previous.CapturePhaseEpoch+1 ||
+			len(next.TargetedValidatorAttempts) != 0 || len(previous.AdmittedRoleResults) != len(next.AdmittedRoleResults) ||
+			!reflectCompactReviewData(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) ||
+			previous.FixDeltaHash != next.FixDeltaHash || previous.ActualCorrectionLines != next.ActualCorrectionLines ||
+			previous.OriginalCriteria != next.OriginalCriteria || previous.CorrectionRegression != next.CorrectionRegression ||
+			!equalStrings(previous.FixFindingIDs, next.FixFindingIDs) || previous.EvidenceHash != next.EvidenceHash {
 			return fmt.Errorf("%w: compact correction start changed unrelated state", ErrInvalidSuccessor)
 		}
 	case "review/complete-fix":
@@ -1812,10 +1834,6 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: reviewer result disposition changed unrelated state", ErrInvalidSuccessor)
 		}
 	case CompactResultReopenOperation:
-		// Validating keeps its historical eligibility; correction-required is
-		// additionally eligible only while uncorrected — a completed
-		// correction attempt or actual correction accounting closes this door
-		// for good, because those prove candidate bytes moved under review.
 		reopenablePredecessor := previous.State == StateValidating ||
 			previous.State == StateCorrectionRequired && len(previous.CorrectionAttempts) == 0 && previous.ActualCorrectionLines == nil
 		if !reopenablePredecessor || next.State != StateReviewing ||
@@ -1827,20 +1845,10 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		if reopen.PreviousRevision != previousRevision || reopen.TargetIdentity != previous.InitialSnapshot.Identity {
 			return fmt.Errorf("%w: reviewer result reopen does not bind the exact predecessor authority", ErrInvalidSuccessor)
 		}
-		expected := previous
-		expected.State = StateReviewing
-		expected.LensResults = []LensResult{}
-		expected.Findings = []Finding{}
-		expected.Classifications = map[string]FindingEvidence{}
-		expected.Outcomes = map[string]EvidenceOutcome{}
-		expected.FixFindingIDs = []string{}
-		expected.FollowUps = []FollowUp{}
-		expected.ProposedCorrectionLines = nil
-		expected.ActualCorrectionLines = nil
-		expected.FixDeltaHash = EmptyFixDeltaHash
-		expected.OriginalCriteria = nil
-		expected.CorrectionRegression = nil
-		expected.EvidenceHash = ""
+		expected, removed, err := reopenCompactAdmittedRoleResults(previous, reopen.SelectedLens)
+		if err != nil || !equalCompactResultReopenReferences(compactResultReopenReferences(removed), reopen.Removed) {
+			return fmt.Errorf("%w: reviewer result reopen does not remove the selected lens and dependent refuter", ErrInvalidSuccessor)
+		}
 		expected.ResultReopens = next.ResultReopens
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: reviewer result reopen changed frozen scope, budget, or unrelated authority", ErrInvalidSuccessor)
@@ -1865,6 +1873,12 @@ func makeCompactRecord(state CompactState) (CompactRecord, []byte, error) {
 }
 
 func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectIntent) (CompactRecord, []byte, error) {
+	if err := validateCompactRoleResultBounds(state.AdmittedRoleResults); err != nil {
+		return CompactRecord{}, nil, err
+	}
+	if err := validateCompactNonRoleStateBounds(state); err != nil {
+		return CompactRecord{}, nil, err
+	}
 	intents = append([]CompactEffectIntent(nil), intents...)
 	for _, intent := range intents {
 		if !validCompactEffectIntentFields(intent) {
@@ -1927,7 +1941,43 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 	if err != nil {
 		return CompactRecord{}, nil, err
 	}
-	return record, append(payload, '\n'), nil
+	payload = append(payload, '\n')
+	if err := validateCompactRecordWritePayload(payload); err != nil {
+		return CompactRecord{}, nil, err
+	}
+	return record, payload, nil
+}
+
+func validateCompactRoleResultBounds(values []CompactAdmittedRoleResult) error {
+	if len(values) > compactMaxAdmittedRoleResults {
+		return errors.New("compact review state has more than six admitted role values") // refusal:by-design world-action: a record that exceeds the fixed authority capacity must be reduced before it can be persisted
+	}
+	for _, value := range values {
+		if len(value.Value) > compactReviewerResultSizeLimit {
+			return errors.New("compact admitted role value exceeds the four MiB limit") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+	}
+	return nil
+}
+
+func validateCompactNonRoleStateBounds(state CompactState) error {
+	nonRole := cloneCompactStateInitialAtomicStart(state)
+	nonRole.AdmittedRoleResults = nil
+	payload, err := json.Marshal(nonRole)
+	if err != nil {
+		return err
+	}
+	if len(payload) > compactNonRoleStateSizeLimit {
+		return errors.New("compact non-role state exceeds the seven MiB limit") // refusal:by-design world-action: bounded authority metadata must be reduced before it can be persisted
+	}
+	return nil
+}
+
+func validateCompactRecordWritePayload(payload []byte) error {
+	if len(payload) > compactRecordSizeLimit {
+		return errors.New("compact review state record exceeds the 32 MiB limit") // refusal:by-design world-action: the immutable record must be reduced before it can be persisted
+	}
+	return nil
 }
 
 func compactStateRevision(statePayload []byte) string {

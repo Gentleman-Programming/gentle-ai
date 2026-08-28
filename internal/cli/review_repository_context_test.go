@@ -266,7 +266,7 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc corrected() int { return 2 }\n", 0o644)
 	debugStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	debugRecord, _ := debugStore.Load()
-	if _, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, debugRecord.State, debugRecord.Revision); err != nil {
+	if _, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, debugRecord.State, debugRecord.State.CapturePhaseRevision); err != nil {
 		t.Fatalf("derive targeted validation request from corrected candidate: %v", err)
 	}
 	var statusOutput bytes.Buffer
@@ -313,7 +313,7 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 	}
 	request := status.ValidationRequest
 	if request.Schema != reviewtransaction.TargetedValidationRequestSchema ||
-		request.LineageID != started.LineageID || request.ExpectedRevision != status.Authority.Revision ||
+		request.LineageID != started.LineageID || request.ExpectedRevision != debugRecord.State.CapturePhaseRevision ||
 		request.TargetIdentity != started.RepositoryContext.TargetIdentity || len(request.FixFindingIDs) != 1 ||
 		request.CorrectionCandidateTree == "" || request.CorrectionTargetIdentity == "" ||
 		reviewtransaction.ValidateTargetedValidationRequest(*request) != nil {
@@ -475,15 +475,37 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	if status.RepositoryContext == nil || status.RepositoryContext.Handle != started.RepositoryContext.Handle {
 		t.Fatalf("status repository context = %#v", status.RepositoryContext)
 	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Authority == nil || status.RepositoryContext.Revision != record.State.CapturePhaseRevision {
+		t.Fatalf("STATUS repository context is not Pn-bound: status=%#v record=%#v", status, record)
+	}
+	// CapturePhaseRevision is deliberately an internal producer invariant, not a
+	// new v2 wire field. Restore it only for this in-memory tamper check.
+	status.Authority.CapturePhaseRevision = record.State.CapturePhaseRevision
+	wrongStatusRevision := status
+	wrongStatusContext := *status.RepositoryContext
+	wrongStatusContext.Revision = "sha256:" + strings.Repeat("e", 64)
+	wrongStatusRevision.RepositoryContext = &wrongStatusContext
+	if err := wrongStatusRevision.Validate(); err == nil {
+		t.Fatal("STATUS accepted repository context bound to a different capture phase")
+	}
 	if status.RepositoryContext.EventID != "" || status.RepositoryContext.Outcome != "" {
 		t.Fatalf("atomic START STATUS synthesized repository-context event data = %#v", status.RepositoryContext)
 	}
-	wrongRevision := status
-	wrongRevisionContext := *status.RepositoryContext
-	wrongRevisionContext.Revision = "sha256:" + strings.Repeat("f", 64)
-	wrongRevision.RepositoryContext = &wrongRevisionContext
-	if err := wrongRevision.Validate(); err == nil {
-		t.Fatal("STATUS accepted repository context bound to the wrong authority revision")
+	wrongCapturePhase := "sha256:" + strings.Repeat("f", 64)
+	if err := RunReviewCaptureResult([]string{
+		"--repository-context", status.RepositoryContext.Handle, "--lineage", status.Authority.LineageID,
+		"--target", status.RepositoryContext.TargetIdentity, "--expected-revision", wrongCapturePhase,
+		"--lens", started.SelectedLenses[0], "--order", "0", "--preflight",
+	}, io.Discard); err == nil {
+		t.Fatal("capture preflight accepted repository context bound to the wrong capture phase")
 	}
 	wrongTarget := status
 	wrongTargetContext := *status.RepositoryContext

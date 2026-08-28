@@ -182,7 +182,7 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 	repo, args, request, store, index := newTargetedCandidateInspectionReview(t)
 	nonTerminal, err := store.Load()
 	if err != nil || nonTerminal.State.State != reviewtransaction.StateCorrectionRequired ||
-		nonTerminal.Revision != request.ExpectedRevision || nonTerminal.State.CorrectionAttemptConsumed() {
+		nonTerminal.State.CapturePhaseRevision != request.ExpectedRevision || nonTerminal.State.CorrectionAttemptConsumed() {
 		t.Fatalf("corrected inspection must use current unconsumed correction authority: %#v, %v", nonTerminal, err)
 	}
 	before := readReviewOperationFile(t, store.StatePath())

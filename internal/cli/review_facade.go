@@ -935,15 +935,18 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							CorrectionBudget:       record.State.CorrectionBudget,
 							CorrectionBudgetPolicy: record.State.CorrectionBudgetPolicy,
 						}
+						if result.Authority != nil {
+							result.Authority.CapturePhaseRevision = record.State.CapturePhaseRevision
+						}
 						correctionForecasted = record.State.State == reviewtransaction.StateCorrectionRequired && record.State.ProposedCorrectionLines != nil
 						if record.State.State == reviewtransaction.StateCorrectionRequired && !record.State.CorrectionAttemptConsumed() {
-							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
+							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 							if requestErr == nil {
 								correctionRequest = &request
 							}
 						}
 						if correctionForecasted {
-							request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, root, record.State, record.Revision, liveSnapshot)
+							request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, root, record.State, record.State.CapturePhaseRevision, liveSnapshot)
 							if requestErr == nil {
 								validationRequest = &request
 								result.ValidationRequest = validationRequest
@@ -956,23 +959,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								repositoryContext, artifactErr = reviewtransaction.PublishTargetedValidationReviewRepositoryContext(ctx, root, *validationRequest)
 							} else {
 								repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-									LineageID: record.State.LineageID, TargetIdentity: contextTarget, Revision: record.Revision,
+									LineageID: record.State.LineageID, TargetIdentity: contextTarget, Revision: record.State.CapturePhaseRevision,
 								})
 							}
 							if artifactErr == nil {
 								result.RepositoryContext = &ReviewRepositoryContextReference{
 									Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
-									Revision: record.Revision, TargetIdentity: contextTarget,
+									Revision: record.State.CapturePhaseRevision, TargetIdentity: contextTarget,
 								}
 							}
 						}
 						if record.State.State == reviewtransaction.StateReviewing {
-							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
+							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
 							if artifactErr == nil && len(artifacts) != len(record.State.SelectedLenses) {
 								// Only the probe's deterministic verdict stops STATUS: an unproven
 								// probe says nothing about artifacts that just verified, so it must
 								// never become a terminal captured-artifact failure (issue #3367).
-								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
+								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
 								if hasRepositoryContextIntent(record.EffectIntents) {
@@ -982,18 +985,18 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 										repositoryContext = reconciled.Handle
 										result.RepositoryContext = &ReviewRepositoryContextReference{
 											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle,
-											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+											Revision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity,
 											EventID: reconciled.EventID, Outcome: reconciled.Outcome,
 										}
 									}
 								} else {
 									repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-										LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+										LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 									})
 									if artifactErr == nil && *contract == ReviewIntegrationContractV2 {
 										result.RepositoryContext = &ReviewRepositoryContextReference{
 											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
-											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+											Revision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity,
 										}
 									}
 								}
@@ -1007,12 +1010,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								if frozenErr != nil {
 									artifactErr = frozenErr
 								} else {
-									captureContext, artifactErr = newReviewCaptureContext(record.State, record.Revision, frozen)
+									captureContext, artifactErr = newReviewCaptureContext(record.State, record.State.CapturePhaseRevision, frozen)
 								}
 							}
 						}
 						if artifactErr == nil && record.State.State != reviewtransaction.StateReviewing {
-							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
+							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
 						}
 						if artifactErr == nil {
 							// OpenCode relays Go-issued role tasks through its live
@@ -1021,22 +1024,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							// Both discover pending roles identically here.
 							providerRoleHost := runtime == model.AgentOpenCode || reviewProviderHostRelayMaterializeRuntime(runtime) || reviewProviderCaptureRuntime(runtime)
 							if providerRoleHost && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
-								slot, slotErr := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-								if slotErr != nil {
-									artifactErr = slotErr
-								} else if !slot.Occupied {
-									_, requestErr := reviewProviderNewRefuterRequest(ctx, root, store.Dir, record.State, record.Revision)
-									switch {
-									case requestErr == nil:
+								request, requestErr := reviewProviderNewRefuterRequest(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
+								switch {
+								case requestErr == nil:
+									if _, captured := record.State.AdmittedRoleResult(reviewtransaction.CompactRoleRefuter, record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity, request.RequestHash); !captured {
 										providerRole = reviewerprovider.RoleRefuter
-									case errors.Is(requestErr, errReviewProviderRefuterNotRequired):
-									default:
-										artifactErr = requestErr
 									}
+								case errors.Is(requestErr, errReviewProviderRefuterNotRequired):
+								default:
+									artifactErr = requestErr
 								}
 							}
 							if validationRequest != nil {
-								_, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, record.State, record.Revision)
+								_, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
 								switch {
 								case readErr == nil:
 									capturedProviderTargetedValidator = true
@@ -1879,14 +1879,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return encodeReviewJSON(stdout, legacyResult)
 		}
 		repositoryContextHandle, contextErr := reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-			LineageID: record.State.LineageID, TargetIdentity: snapshot.Identity, Revision: record.Revision,
+			LineageID: record.State.LineageID, TargetIdentity: snapshot.Identity, Revision: record.State.CapturePhaseRevision,
 		})
 		if contextErr != nil {
 			return &reviewStartContextError{AuthoritySelected: true, LineageID: record.State.LineageID, StoreRevision: record.Revision, Cause: contextErr}
 		}
 		repositoryContext := &ReviewRepositoryContextReference{
 			Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContextHandle,
-			Revision: record.Revision, TargetIdentity: snapshot.Identity,
+			Revision: record.State.CapturePhaseRevision, TargetIdentity: snapshot.Identity,
 		}
 		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, repositoryContext, *contract)
 		if err != nil {

@@ -29,7 +29,7 @@ func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.C
 	repo, _, store, record = newArtifactReview(t, true)
 	lens = record.State.SelectedLenses[0]
 	contextHandle, err := reviewtransaction.PublishReviewRepositoryContext(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame(t *testing.T) 
 	repo, store, record, lens, contextHandle, subject := hostLensReviewFixture(t)
 	const injected = "You are the reliability reviewer. Inspect the frozen candidate trees and return one JSON object."
 	binding := hostLensBindingJSON(record.State.LineageID, record.State.InitialSnapshot.Identity, lens, `"0"`,
-		record.Revision, contextHandle, subject.SubjectHash)
+		record.State.CapturePhaseRevision, contextHandle, subject.SubjectHash)
 	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "start",
 		Prompt: reviewLensContextBindingHeader + " " + binding + "\n" + injected,
@@ -63,7 +63,7 @@ func TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame(t *testing.T) 
 	}
 	canonical, err := json.Marshal(reviewLensContextBinding{
 		Lineage: record.State.LineageID, Target: record.State.InitialSnapshot.Identity, Lens: lens, Order: 0,
-		Revision: record.Revision, RepositoryContext: contextHandle, SubjectHash: subject.SubjectHash,
+		Revision: record.State.CapturePhaseRevision, RepositoryContext: contextHandle, SubjectHash: subject.SubjectHash,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame(t *testing.T) 
 	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
 		t.Fatalf("transport artifact = %#v", artifact)
 	}
-	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision, record.State.InitialSnapshot.Identity,
+	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity,
 		mustFrozenContext(t, repo, record), subject); err != nil || !found {
 		t.Fatalf("captured host-frame result found=%v err=%v", found, err)
 	}
@@ -98,7 +98,7 @@ func TestOpenCodeReviewTransportAdmitsHostLensFrameWithNumericOrderAndShuffledKe
 	repo, _, record, lens, contextHandle, subject := hostLensReviewFixture(t)
 	binding := fmt.Sprintf(
 		`{"subject_hash": %q, "repository_context": %q, "revision": %q, "order": 0, "lens": %q, "target": %q, "lineage": %q}`,
-		subject.SubjectHash, contextHandle, record.Revision, lens, record.State.InitialSnapshot.Identity, record.State.LineageID,
+		subject.SubjectHash, contextHandle, record.State.CapturePhaseRevision, lens, record.State.InitialSnapshot.Identity, record.State.LineageID,
 	)
 	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "start",
@@ -123,7 +123,7 @@ func TestOpenCodeReviewTransportRefusesHostLensFrameValueTampering(t *testing.T)
 	valid := func() map[string]any {
 		return map[string]any{
 			"lineage": record.State.LineageID, "target": record.State.InitialSnapshot.Identity, "lens": lens,
-			"order": 0, "revision": record.Revision, "repository_context": contextHandle, "subject_hash": subject.SubjectHash,
+			"order": 0, "revision": record.State.CapturePhaseRevision, "repository_context": contextHandle, "subject_hash": subject.SubjectHash,
 		}
 	}
 	for _, test := range []struct {
@@ -138,7 +138,7 @@ func TestOpenCodeReviewTransportRefusesHostLensFrameValueTampering(t *testing.T)
 		{name: "non-numeric order", mutate: func(binding map[string]any) { binding["order"] = "first" }},
 		{name: "tampered lens", mutate: func(binding map[string]any) { binding["lens"] = "review-unselected" }},
 		{name: "tampered revision", mutate: func(binding map[string]any) {
-			binding["revision"] = differentOpenCodeTransportTestSHA(record.Revision)
+			binding["revision"] = differentOpenCodeTransportTestSHA(record.State.CapturePhaseRevision)
 		}},
 		{name: "tampered target", mutate: func(binding map[string]any) {
 			binding["target"] = differentOpenCodeTransportTestSHA(record.State.InitialSnapshot.Identity)

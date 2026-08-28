@@ -408,7 +408,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 	}
 	state := record.State
 	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity ||
-		record.Revision != binding.Revision {
+		state.CapturePhaseRevision != binding.Revision {
 		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
 	}
 	order, err := reviewLensContextSelectedOrder(state.SelectedLenses, lens)
@@ -422,7 +422,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 		return reviewLensAuthority{}, reviewLensContextInspectionFailure(ctx, err)
 	}
 	frozen := inspector.FrozenCandidateContext()
-	subject, err := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, state.SelectedLenses[order], order, "")
+	subject, err := reviewtransaction.NewArtifactSubject(state, state.CapturePhaseRevision, frozen, state.SelectedLenses[order], order, "")
 	if err != nil {
 		if cleanupErr := inspector.Close(); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)

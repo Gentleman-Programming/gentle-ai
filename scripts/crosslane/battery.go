@@ -43,11 +43,14 @@ type capturedEnvelope struct {
 // lineageScope is the Go-issued authority binding a lane received at START.
 // The lineage is immutable; revision and target advance only from native STATUS.
 type lineageScope struct {
-	Lineage       string
-	Revision      string
-	Target        string
-	BaseRef       string
-	CommittedOnly bool
+	Lineage string
+	// Revision is the live authority Rn used only by mutation/recovery checks.
+	Revision string
+	// CaptureRevision is stable Pn used by every capture/materialization binding.
+	CaptureRevision string
+	Target          string
+	BaseRef         string
+	CommittedOnly   bool
 }
 
 type battery struct {
@@ -216,9 +219,9 @@ func (b *battery) runTransitionExecution(source, repo string, env []string, exec
 
 func (b *battery) rememberStarted(repo, target string, start map[string]any) error {
 	context := getMap(start, "repository_context")
-	scope := lineageScope{Lineage: operationLineage(start), Revision: getString(context, "revision"), Target: getString(context, "target_identity")}
-	if scope.Lineage == "" || scope.Revision == "" || scope.Target == "" || scope.Target != target {
-		return fmt.Errorf("START omitted the exact authority lineage/revision/target")
+	scope := lineageScope{Lineage: operationLineage(start), CaptureRevision: getString(context, "revision"), Target: getString(context, "target_identity")}
+	if scope.Lineage == "" || scope.CaptureRevision == "" || scope.Target == "" || scope.Target != target {
+		return fmt.Errorf("START omitted the exact authority lineage/capture-phase/target")
 	}
 	b.lineages[repo] = scope
 	return nil
@@ -238,6 +241,9 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 		return fmt.Errorf("STATUS no longer matches the started authority lineage/revision/target")
 	}
 	scope.Revision, scope.Target = getString(authority, "revision"), target
+	if phase := getString(doc, "repository_context", "revision"); phase != "" {
+		scope.CaptureRevision = phase
+	}
 	b.lineages[repo] = scope
 	if input := collectInput(doc); input != nil {
 		args := argumentValues(input)
@@ -245,8 +251,12 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 		if correctionTarget := getString(doc, "validation_request", "correction_target_identity"); correctionTarget != "" {
 			expectedTarget = correctionTarget
 		}
-		if args["lineage"] != scope.Lineage || args["expected-revision"] != scope.Revision || args["target"] != expectedTarget {
-			return fmt.Errorf("collect slot does not match the started authority lineage/revision/target")
+		expectedRevision := scope.Revision
+		if strings.HasPrefix(getString(input, "capture_operation"), "review.capture") {
+			expectedRevision = scope.CaptureRevision
+		}
+		if args["lineage"] != scope.Lineage || args["expected-revision"] != expectedRevision || args["target"] != expectedTarget {
+			return fmt.Errorf("collect slot does not match the started authority lineage/Pn-or-Rn/target")
 		}
 	}
 	return nil

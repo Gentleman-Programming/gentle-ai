@@ -135,9 +135,7 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 			if err == nil {
 				t.Fatal("semantically invalid reviewer result was captured")
 			}
-			if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
-				t.Fatalf("semantic rejection consumed the immutable result slot: %v", statErr)
-			}
+			assertNoAdmittedReviewerResults(t, store)
 			assertArtifactRevision(t, store, record.Revision)
 		})
 	}
@@ -184,7 +182,11 @@ func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testi
 	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
 		t.Fatalf("external proof admission = %q", artifact.AdmissionDecision)
 	}
-	payload, err := os.ReadFile(artifact.Path)
+	current, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := readVerifiedReviewerArtifact(artifact, "", current.State)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,18 +200,17 @@ func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testi
 	if err := RunReviewCaptureResult(args, &replay); err != nil || replay.String() != first.String() {
 		t.Fatalf("exact external-proof replay changed: %v\nfirst=%s\nreplay=%s", err, first.String(), replay.String())
 	}
-	entries, err := os.ReadDir(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	jsonFiles := 0
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".json") {
-			jsonFiles++
+	captured := 0
+	for _, entry := range current.State.AdmittedRoleResults {
+		if entry.Role == reviewtransaction.CompactRoleLens {
+			captured++
+			if entry.ArtifactDigest != artifact.SHA256 || len(entry.Value) == 0 {
+				t.Fatalf("published result is not the canonical record entry: %#v", entry)
+			}
 		}
 	}
-	if jsonFiles != 1 {
-		t.Fatalf("captured reviewer JSON files = %d, want exactly one", jsonFiles)
+	if captured != 1 {
+		t.Fatalf("captured canonical lens entries = %d, want exactly one", captured)
 	}
 }
 
@@ -392,9 +393,6 @@ func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("authority changed while capture blocked: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(err) {
-		t.Fatalf("capture published while maintenance held: %v", err)
-	}
 	if err := held.Release(); err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +515,7 @@ func admittedReviewerResultForTest(t *testing.T, repo string, record reviewtrans
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, lens, order, "")
+	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, frozen, lens, order, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,43 +535,13 @@ func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 	tests := []struct {
 		name, wantKind, wantReason string
 		capture, high              bool
-		mutate                     func(*testing.T, string)
 	}{
-		{"clean pending", "collect", "reviewer_results_required", false, false, nil},
-		{"complete last event burns", "execute", "fresh_target_ready", true, false, nil},
-		{"missing payload", "stop", "captured_artifacts_unverifiable", true, true, func(t *testing.T, path string) {
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"missing digest sidecar", "stop", "captured_artifacts_unverifiable", true, true, func(t *testing.T, path string) {
-			if err := os.Remove(path + ".sha256"); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"alternate names ignored", "collect", "reviewer_results_required", false, false, func(t *testing.T, path string) {
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path+".alternate", []byte("unrelated\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"unrelated entries ignored", "collect", "reviewer_results_required", false, false, func(t *testing.T, path string) {
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			for index := 0; index < 33; index++ {
-				if err := os.WriteFile(filepath.Join(filepath.Dir(path), fmt.Sprintf("unrelated-%02d", index)), []byte("x"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}},
+		{"clean pending", "collect", "reviewer_results_required", false, false},
+		{"complete last event burns", "execute", "fresh_target_ready", true, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			repo, started, store, record := newArtifactReview(t, test.high)
-			path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("00-%s.json", record.State.SelectedLenses[0]))
+			repo, started, _, record := newArtifactReview(t, test.high)
 			if test.capture {
 				input := filepath.Join(t.TempDir(), "result.json")
 				if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
@@ -582,9 +550,6 @@ func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 				if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}, io.Discard); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if test.mutate != nil {
-				test.mutate(t, path)
 			}
 			var output bytes.Buffer
 			if err := RunReviewStatus([]string{"--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &output); err != nil {
@@ -596,6 +561,17 @@ func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 				t.Fatalf("slot status = %#v", status.NextTransition)
 			}
 		})
+	}
+}
+
+func assertNoAdmittedReviewerResults(t *testing.T, store reviewtransaction.CompactStore) {
+	t.Helper()
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.State.AdmittedRoleResults) != 0 {
+		t.Fatalf("rejected capture consumed canonical role results: %#v", after.State.AdmittedRoleResults)
 	}
 }
 

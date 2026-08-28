@@ -34,6 +34,11 @@ const (
 
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
+// ErrCompactTargetedValidatorAttemptsExhausted refuses a fourth distinct
+// non-verdict for one frozen targeted-validator request without changing the
+// active authority.
+var ErrCompactTargetedValidatorAttemptsExhausted = errors.New("targeted validator exhausted its three inconclusive attempts") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+
 // CompactSemanticStateError identifies a CompactState.Validate() failure with
 // its lineage and state, distinguishing a semantic-validation failure from a
 // structural one (JSON decode, schema mismatch, or checksum error). Only
@@ -141,6 +146,21 @@ type CompactState struct {
 	ResultDispositions        []CompactResultDisposition   `json:"result_dispositions,omitempty"`
 	ResultReopens             []CompactResultReopen        `json:"result_reopens,omitempty"`
 	ReviewerContextLevel      ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
+	// CapturePhaseRevision is the stable capture binding for the frozen review
+	// phase. Unlike CompactRecord.Revision, it does not advance when sibling
+	// captures merge their admitted values under the CAS lock.
+	CapturePhaseRevision string `json:"capture_phase_revision,omitempty"`
+	// CapturePhaseEpoch advances only at a lifecycle phase seam. It prevents a
+	// reopened reviewing authority from reissuing the invalidated phase binding.
+	CapturePhaseEpoch int `json:"capture_phase_epoch,omitempty"`
+	// AdmittedRoleResults is the canonical, ordered in-record home for admitted
+	// provider role values. The initial migration populates lens entries; later
+	// milestones move refuter and targeted-validator callers to the same owner.
+	AdmittedRoleResults []CompactAdmittedRoleResult `json:"admitted_role_results,omitempty"`
+	// TargetedValidatorAttempts is a fixed, hash-only retry ledger for the
+	// current correction phase. It intentionally excludes rejected output bytes,
+	// evidence bodies, artifact paths, and role values.
+	TargetedValidatorAttempts []CompactTargetedValidatorAttempt `json:"targeted_validator_attempts,omitempty"`
 	// InitialAtomicStart is the optional immutable binding written only by the
 	// exact worktree-bound atomic START API. Its absence keeps historical compact
 	// records readable, but makes them ineligible for atomic START replay.
@@ -150,6 +170,42 @@ type CompactState struct {
 // CompactAtomicStartBinding is the immutable compact-v2 START identity. It
 // binds one exact worktree and frozen snapshot to the policy, tier, lenses, and
 // bounded-correction inputs that created the authority.
+type CompactRole string
+
+const (
+	CompactRoleLens              CompactRole = "lens"
+	CompactRoleRefuter           CompactRole = "refuter"
+	CompactRoleTargetedValidator CompactRole = "targeted_validator"
+)
+
+// CompactAdmittedRoleResult binds one canonical admitted value to the frozen
+// tuple that authorized its capture. Value is canonical JSON; the persisted
+// artifact digest is derived from its exact role bytes, not a caller supplied
+// projection.
+type CompactAdmittedRoleResult struct {
+	Role                 CompactRole     `json:"role"`
+	Lens                 string          `json:"lens,omitempty"`
+	SelectedOrder        int             `json:"selected_order,omitempty"`
+	TargetIdentity       string          `json:"target_identity"`
+	CapturePhaseRevision string          `json:"capture_phase_revision"`
+	RequestHash          string          `json:"request_hash,omitempty"`
+	ArtifactDigest       string          `json:"artifact_digest"`
+	ResultHash           string          `json:"result_hash,omitempty"`
+	Value                json.RawMessage `json:"value"`
+}
+
+type CompactTargetedValidatorAttempt struct {
+	CapturePhaseRevision string `json:"capture_phase_revision"`
+	TargetIdentity       string `json:"target_identity"`
+	RequestHash          string `json:"request_hash"`
+	AttemptDigest        string `json:"attempt_digest"`
+	Outcome              string `json:"outcome"`
+}
+
+const compactTargetedValidatorAttemptInconclusive = "inconclusive"
+
+const maxCompactTargetedValidatorAttempts = 3
+
 type CompactAtomicStartBinding struct {
 	LineageID              string    `json:"lineage_id"`
 	WorktreeIdentity       string    `json:"worktree_identity"`
@@ -316,7 +372,110 @@ func cloneCompactStateInitialAtomicStart(state CompactState) CompactState {
 		binding := cloneCompactAtomicStartBinding(*state.InitialAtomicStart)
 		state.InitialAtomicStart = &binding
 	}
+	state.AdmittedRoleResults = cloneCompactAdmittedRoleResults(state.AdmittedRoleResults)
 	return state
+}
+
+func cloneCompactAdmittedRoleResults(values []CompactAdmittedRoleResult) []CompactAdmittedRoleResult {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]CompactAdmittedRoleResult, len(values))
+	copy(cloned, values)
+	for index := range cloned {
+		cloned[index].Value = append(json.RawMessage(nil), cloned[index].Value...)
+	}
+	return cloned
+}
+
+// deriveCompactCapturePhaseRevision creates the stable Pn binding before a
+// record exists. Its preimage is deliberately record-free: including a record
+// revision (or an admitted result) would make Pn advance with Rn and break
+// parallel capture admission.
+func deriveCompactCapturePhaseRevision(state CompactState) (string, error) {
+	preimage := struct {
+		Schema           string    `json:"schema"`
+		LineageID        string    `json:"lineage_id"`
+		Generation       int       `json:"generation"`
+		TargetIdentity   string    `json:"target_identity"`
+		BaseTree         string    `json:"base_tree"`
+		CandidateTree    string    `json:"candidate_tree"`
+		PathsDigest      string    `json:"paths_digest"`
+		PolicyHash       string    `json:"policy_hash"`
+		RiskLevel        RiskLevel `json:"risk_level"`
+		SelectedLenses   []string  `json:"selected_lenses"`
+		GenesisPaths     []string  `json:"genesis_paths"`
+		CorrectionBudget int       `json:"correction_budget"`
+		CorrectionPolicy string    `json:"correction_budget_policy"`
+		WorktreeIdentity string    `json:"worktree_identity,omitempty"`
+		PhaseState       State     `json:"phase_state"`
+		PhaseEpoch       int       `json:"phase_epoch"`
+		CurrentTarget    string    `json:"current_target"`
+		FixFindingIDs    []string  `json:"fix_finding_ids"`
+		ProposedLines    *int      `json:"proposed_correction_lines,omitempty"`
+		AdmittedDigests  []string  `json:"admitted_digests"`
+	}{
+		Schema:           state.Schema,
+		LineageID:        state.LineageID,
+		Generation:       state.Generation,
+		TargetIdentity:   state.InitialSnapshot.Identity,
+		BaseTree:         state.InitialSnapshot.BaseTree,
+		CandidateTree:    state.InitialSnapshot.CandidateTree,
+		PathsDigest:      state.InitialSnapshot.PathsDigest,
+		PolicyHash:       state.PolicyHash,
+		RiskLevel:        state.RiskLevel,
+		SelectedLenses:   append([]string(nil), state.SelectedLenses...),
+		GenesisPaths:     append([]string(nil), state.GenesisPaths...),
+		CorrectionBudget: state.CorrectionBudget,
+		CorrectionPolicy: state.CorrectionBudgetPolicy,
+		WorktreeIdentity: compactCapturePhaseWorktreeIdentity(state),
+		PhaseState:       state.State,
+		PhaseEpoch:       state.CapturePhaseEpoch,
+		CurrentTarget:    state.CurrentSnapshot.Identity,
+		FixFindingIDs:    append([]string(nil), state.FixFindingIDs...),
+		ProposedLines:    state.ProposedCorrectionLines,
+		AdmittedDigests:  compactCapturePhaseAdmittedDigests(state),
+	}
+	payload, err := json.Marshal(preimage)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-capture-phase/v1\x00"), payload...))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// compactCapturePhaseWorktreeIdentity includes the frozen worktree only once
+// atomic START has supplied it. NewCompactState remains usable by historical and
+// test-only callers; CreateOrReplayAtomicStart always derives P0 again after
+// attaching its validated immutable binding.
+func compactCapturePhaseWorktreeIdentity(state CompactState) string {
+	if state.InitialAtomicStart == nil {
+		return ""
+	}
+	return state.InitialAtomicStart.WorktreeIdentity
+}
+
+func compactCapturePhaseAdmittedDigests(state CompactState) []string {
+	if state.State == StateReviewing {
+		return []string{}
+	}
+	values := make([]string, 0, len(state.AdmittedRoleResults))
+	for _, entry := range state.AdmittedRoleResults {
+		if compactAdmittedRoleResultCanSatisfyActiveCapture(state, entry) {
+			values = append(values, string(entry.Role)+":"+entry.ArtifactDigest)
+		}
+	}
+	return values
+}
+
+func (state *CompactState) advanceCapturePhase() error {
+	state.CapturePhaseEpoch++
+	phase, err := deriveCompactCapturePhaseRevision(*state)
+	if err != nil {
+		return err
+	}
+	state.CapturePhaseRevision = phase
+	return nil
 }
 
 // CorrectionBudgetExceededError identifies a repository-derived correction
@@ -335,38 +494,18 @@ func IsCorrectionBudgetExceeded(err error) bool {
 	return errors.As(err, &budgetErr)
 }
 
-// CompactResultReopenSlot binds one selected lens artifact at the exact
-// validating revision from which results were reopened. Quarantined slots may
-// be historical unadmitted artifacts and therefore omit subject metadata;
-// retained slots must carry the admitted provider subject.
-type CompactResultReopenSlot struct {
-	Lens              string `json:"lens"`
-	SelectedOrder     int    `json:"selected_order"`
-	ArtifactDigest    string `json:"artifact_digest"`
-	ResultHash        string `json:"result_hash"`
-	SubjectHash       string `json:"subject_hash,omitempty"`
-	AuthorityRevision string `json:"authority_revision,omitempty"`
-}
-
-// CompactResultReopen is the durable audit record for one exact-revision
-// same-lineage reviewer-result repair back to reviewing. It preserves all
-// original scope and budget inputs while identifying the unusable slots and
-// every admitted slot retained. AuthorizedLenses names the admitted slots the
-// maintainer explicitly overrode: those results were structurally valid and
-// provider-admitted, and only this recorded authorization — never native
-// detection — moved them into quarantine. An observer therefore always sees
-// which quarantined results a maintainer discarded by decision rather than
-// which ones the store proved unusable.
+// CompactResultReopen is payload-free audit metadata for one lock-owned
+// selected-lens reopening. Removed references are not slots, paths, or a second
+// role-value source; they cannot be read back into active capture.
 type CompactResultReopen struct {
-	PreviousRevision        string                    `json:"previous_revision"`
-	TargetIdentity          string                    `json:"target_identity"`
-	Quarantined             []CompactResultReopenSlot `json:"quarantined"`
-	Retained                []CompactResultReopenSlot `json:"retained"`
-	AuthorizedLenses        []string                  `json:"authorized_lenses,omitempty"`
-	Reason                  string                    `json:"reason"`
-	Actor                   string                    `json:"actor"`
-	ReopenedAt              time.Time                 `json:"reopened_at"`
-	MaintainerAuthorization string                    `json:"maintainer_authorization"`
+	PreviousRevision        string                         `json:"previous_revision"`
+	TargetIdentity          string                         `json:"target_identity"`
+	SelectedLens            string                         `json:"selected_lens"`
+	Removed                 []CompactResultReopenReference `json:"removed"`
+	Reason                  string                         `json:"reason"`
+	Actor                   string                         `json:"actor"`
+	ReopenedAt              time.Time                      `json:"reopened_at"`
+	MaintainerAuthorization string                         `json:"maintainer_authorization"`
 }
 
 // ResultDispositionClass names which class of failure makes one preserved
@@ -469,21 +608,30 @@ type CompactRecoveryProvenance struct {
 	Evidence                   *CompactRecoveredEvidence `json:"evidence,omitempty"`
 }
 
-// CompactRecoveredEvidence is the self-contained provenance for the only
-// recovery that may reuse review/correction evidence: an accounting-only
-// escalated predecessor whose corrected bytes are exactly the successor
-// target. The source attempt remains byte-for-byte visible while
-// NativeCorrectionLines records the repository-derived correction size used by
-// the successor.
+// CompactRecoveredEvidence is accounting-only provenance for the one recovery
+// that may reuse predecessor review/correction evidence. It owns no role value,
+// correction attempt, request, successor target, or role-derived digest: ordered
+// references bind the exact canonical predecessor entries instead.
 type CompactRecoveredEvidence struct {
-	Schema                    string                    `json:"schema"`
-	Relation                  string                    `json:"relation"`
-	PathRelation              string                    `json:"path_relation"`
-	SuccessorTargetIdentity   string                    `json:"successor_target_identity"`
-	ReviewEvidenceHash        string                    `json:"review_evidence_hash"`
-	SourceCorrectionAttempt   CompactCorrectionAttempt  `json:"source_correction_attempt"`
-	NativeCorrectionLines     int                       `json:"native_correction_lines"`
-	TargetedValidationRequest TargetedValidationRequest `json:"targeted_validation_request"`
+	Schema                    string                              `json:"schema"`
+	Relation                  string                              `json:"relation"`
+	PathRelation              string                              `json:"path_relation"`
+	PredecessorTargetIdentity string                              `json:"predecessor_target_identity"`
+	NativeCorrectionLines     int                                 `json:"native_correction_lines"`
+	AdmittedRoleReferences    []CompactRecoveredEvidenceReference `json:"admitted_role_references"`
+}
+
+// CompactRecoveredEvidenceReference identifies exactly one canonical admitted
+// predecessor role value. It is intentionally payload-free and has only the
+// persisted artifact digest; a reference cannot become another result owner.
+type CompactRecoveredEvidenceReference struct {
+	Role                 CompactRole `json:"role"`
+	Lens                 string      `json:"lens,omitempty"`
+	SelectedOrder        int         `json:"selected_order,omitempty"`
+	TargetIdentity       string      `json:"target_identity"`
+	CapturePhaseRevision string      `json:"capture_phase_revision"`
+	RequestHash          string      `json:"request_hash,omitempty"`
+	ArtifactDigest       string      `json:"artifact_digest"`
 }
 
 type CompactReviewInput struct {
@@ -533,10 +681,15 @@ func NewCompactState(start Start) (CompactState, error) {
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...), PolicyHash: start.PolicyHash,
 		FrozenPolicyContent: frozenPolicy, RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
 		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
-		LensResults: []LensResult{}, Findings: []Finding{},
+		LensResults: []LensResult{}, Findings: []Finding{}, AdmittedRoleResults: []CompactAdmittedRoleResult{},
 		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
 		FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
+	phase, err := deriveCompactCapturePhaseRevision(state)
+	if err != nil {
+		return CompactState{}, err
+	}
+	state.CapturePhaseRevision = phase
 	return state, state.Validate()
 }
 
@@ -668,6 +821,22 @@ func (state CompactState) Validate() error {
 	if state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
 		return errors.New("compact correction budget does not match original changed lines")
 	}
+	// Pn is recomputed only when a new capture phase is created. Existing
+	// successor transitions deliberately retain the current Pn until the later
+	// correction/reopen/recovery seams advance it; re-deriving it from mutable
+	// lifecycle fields here would make a sibling capture stale when only Rn moved.
+	if state.CapturePhaseRevision != "" && !validSHA256(state.CapturePhaseRevision) {
+		return errors.New("compact capture phase revision is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	if state.CapturePhaseEpoch < 0 {
+		return errors.New("compact capture phase epoch is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	if err := validateCompactAdmittedRoleResults(state); err != nil {
+		return err
+	}
+	if err := validateCompactTargetedValidatorAttempts(state); err != nil {
+		return err
+	}
 	if state.InitialAtomicStart != nil {
 		if err := state.InitialAtomicStart.Validate(); err != nil {
 			return fmt.Errorf("compact initial atomic START binding: %w", err)
@@ -722,8 +891,10 @@ func (state CompactState) Validate() error {
 			return errors.New("correction-required compact state is incomplete")
 		}
 	case StateValidating:
-		if len(state.LensResults) != len(state.SelectedLenses) || state.EvidenceHash != "" {
-			return errors.New("validating compact state is incomplete")
+		if state.Recovery == nil || state.Recovery.Evidence == nil {
+			if len(state.LensResults) != len(state.SelectedLenses) || state.EvidenceHash != "" {
+				return errors.New("validating compact state is incomplete")
+			}
 		}
 	case StateApproved:
 		if len(state.CorrectionAttempts) == 0 && !validSHA256(state.EvidenceHash) {
@@ -737,6 +908,185 @@ func (state CompactState) Validate() error {
 		return fmt.Errorf("invalid compact review state %q", state.State)
 	}
 	return nil
+}
+
+func validateCompactTargetedValidatorAttempts(state CompactState) error {
+	if len(state.TargetedValidatorAttempts) > maxCompactTargetedValidatorAttempts {
+		return errors.New("compact targeted validator has more than three attempts") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	if len(state.TargetedValidatorAttempts) == 0 {
+		return nil
+	}
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil {
+		return errors.New("compact targeted validator attempts require an open correction phase") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	seen := make(map[string]bool, len(state.TargetedValidatorAttempts))
+	for _, attempt := range state.TargetedValidatorAttempts {
+		if attempt.CapturePhaseRevision != state.CapturePhaseRevision || !validSHA256(attempt.TargetIdentity) ||
+			!validSHA256(attempt.RequestHash) || !validSHA256(attempt.AttemptDigest) ||
+			attempt.Outcome != compactTargetedValidatorAttemptInconclusive {
+			return errors.New("compact targeted validator attempt is not bound to the current correction phase") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if seen[attempt.AttemptDigest] {
+			return errors.New("compact targeted validator attempt digest repeats") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		seen[attempt.AttemptDigest] = true
+	}
+	return nil
+}
+
+func validateCompactAdmittedRoleResults(state CompactState) error {
+	if err := validateCompactRoleResultBounds(state.AdmittedRoleResults); err != nil {
+		return err
+	}
+	previousRole, previousLensOrder := -1, -1
+	seenLensOrders := make(map[int]bool, len(state.AdmittedRoleResults))
+	seenTuples := make(map[string]bool, len(state.AdmittedRoleResults))
+	for _, entry := range state.AdmittedRoleResults {
+		roleOrder := -1
+		switch entry.Role {
+		case CompactRoleLens:
+			roleOrder = 0
+		case CompactRoleRefuter:
+			roleOrder = 1
+		case CompactRoleTargetedValidator:
+			roleOrder = 2
+		default:
+			return errors.New("compact admitted role result has an unsupported role") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if roleOrder < previousRole || roleOrder == previousRole && entry.Role == CompactRoleLens && entry.SelectedOrder <= previousLensOrder {
+			return errors.New("compact admitted role results are not canonically ordered") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		previousRole = roleOrder
+		if entry.Role == CompactRoleLens {
+			previousLensOrder = entry.SelectedOrder
+		}
+		if !validSHA256(entry.TargetIdentity) || !validSHA256(entry.CapturePhaseRevision) ||
+			!validSHA256(entry.ArtifactDigest) {
+			return errors.New("compact admitted role result has an invalid authority binding") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if entry.RequestHash != "" && !validSHA256(entry.RequestHash) {
+			return errors.New("compact admitted role result request hash is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if entry.ResultHash != "" && !validSHA256(entry.ResultHash) {
+			return errors.New("compact admitted role result hash is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		value, err := canonicalCompactRoleValue(entry.Value)
+		if err != nil || compactPreservedPayloadDigest(append(append([]byte(nil), value...), '\n')) != entry.ArtifactDigest {
+			return errors.New("compact admitted role result value does not match its artifact digest") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if compactAdmittedRoleResultIsAccountingOnly(state, entry) {
+			continue
+		}
+		switch entry.Role {
+		case CompactRoleLens:
+			if entry.TargetIdentity != state.InitialSnapshot.Identity || entry.RequestHash != "" || entry.ResultHash == "" || entry.SelectedOrder < 0 ||
+				entry.SelectedOrder >= len(state.SelectedLenses) || state.SelectedLenses[entry.SelectedOrder] != entry.Lens ||
+				seenLensOrders[entry.SelectedOrder] {
+				return errors.New("compact admitted lens result does not match a unique selected lens") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+			}
+			seenLensOrders[entry.SelectedOrder] = true
+		case CompactRoleRefuter:
+			if entry.TargetIdentity != state.InitialSnapshot.Identity || entry.Lens != "" || entry.SelectedOrder != 0 || entry.RequestHash == "" {
+				return errors.New("compact admitted refuter result has an invalid role tuple") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+			}
+		case CompactRoleTargetedValidator:
+			if entry.Lens != "" || entry.SelectedOrder != 0 || entry.RequestHash == "" {
+				return errors.New("compact admitted targeted validator result has an invalid role tuple") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+			}
+		}
+		tuple := string(entry.Role) + "\x00" + entry.Lens + "\x00" + strconv.Itoa(entry.SelectedOrder) + "\x00" + entry.TargetIdentity + "\x00" + entry.CapturePhaseRevision + "\x00" + entry.RequestHash
+		if seenTuples[tuple] {
+			return errors.New("compact admitted role result repeats its role request tuple") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		seenTuples[tuple] = true
+	}
+	return nil
+}
+
+// AdmittedRoleResult returns the canonical in-record value for one exact role
+// tuple. Callers must still decode and admit the returned bytes at their own
+// semantic boundary; this accessor never falls back to a role sidecar.
+func (state CompactState) AdmittedRoleResult(role CompactRole, phase, targetIdentity, requestHash string) (json.RawMessage, bool) {
+	for _, entry := range state.AdmittedRoleResults {
+		if compactAdmittedRoleResultCanSatisfyActiveCapture(state, entry) && entry.Role == role && entry.CapturePhaseRevision == phase && entry.TargetIdentity == targetIdentity && entry.RequestHash == requestHash {
+			return append(json.RawMessage(nil), entry.Value...), true
+		}
+	}
+	return nil, false
+}
+
+// reopenCompactAdmittedRoleResults removes exactly one active selected lens and
+// its dependent refuter from the canonical record values. It retains only digest
+// and tuple metadata for the caller's audit; no removed payload can be reused.
+func reopenCompactAdmittedRoleResults(state CompactState, lens string) (CompactState, []CompactAdmittedRoleResult, error) {
+	order := stringIndex(state.SelectedLenses, lens)
+	if order < 0 || state.State != StateValidating && state.State != StateCorrectionRequired {
+		return CompactState{}, nil, errors.New("review reopen-results requires an uncorrected authority and selected lens") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	target := state.InitialSnapshot.Identity
+	selectedPhase := ""
+	for _, entry := range state.AdmittedRoleResults {
+		if entry.Role == CompactRoleLens && entry.TargetIdentity == target && entry.SelectedOrder == order && entry.Lens == lens &&
+			!compactAdmittedRoleResultWasReopened(state, entry) {
+			if selectedPhase != "" {
+				return CompactState{}, nil, errors.New("review reopen-results selected lens has ambiguous active capture history") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+			}
+			selectedPhase = entry.CapturePhaseRevision
+		}
+	}
+	if selectedPhase == "" {
+		return CompactState{}, nil, errors.New("review reopen-results selected lens is not admitted in the active capture batch") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	removed := make([]CompactAdmittedRoleResult, 0, 2)
+	remaining := make([]CompactAdmittedRoleResult, 0, len(state.AdmittedRoleResults))
+	for _, entry := range state.AdmittedRoleResults {
+		remove := entry.CapturePhaseRevision == selectedPhase && entry.TargetIdentity == target &&
+			(entry.Role == CompactRoleLens && entry.SelectedOrder == order && entry.Lens == lens || entry.Role == CompactRoleRefuter) &&
+			!compactAdmittedRoleResultWasReopened(state, entry)
+		if !remove {
+			remaining = append(remaining, entry)
+			continue
+		}
+		entry.Value = nil
+		removed = append(removed, entry)
+	}
+	next := cloneCompactStateInitialAtomicStart(state)
+	next.State = StateReviewing
+	next.AdmittedRoleResults = remaining
+	next.LensResults = []LensResult{}
+	next.Findings = []Finding{}
+	next.Classifications = map[string]FindingEvidence{}
+	next.Outcomes = map[string]EvidenceOutcome{}
+	next.FixFindingIDs = []string{}
+	next.FollowUps = []FollowUp{}
+	next.ProposedCorrectionLines = nil
+	next.ActualCorrectionLines = nil
+	next.FixDeltaHash = EmptyFixDeltaHash
+	next.OriginalCriteria = nil
+	next.CorrectionRegression = nil
+	next.EvidenceHash = ""
+	next.TargetedValidatorAttempts = []CompactTargetedValidatorAttempt{}
+	if err := next.advanceCapturePhase(); err != nil {
+		return CompactState{}, nil, err
+	}
+	if err := next.Validate(); err != nil {
+		return CompactState{}, nil, err
+	}
+	return next, removed, nil
+}
+
+func compactAdmittedRoleResultWasReopened(state CompactState, entry CompactAdmittedRoleResult) bool {
+	for _, reopen := range state.ResultReopens {
+		for _, reference := range reopen.Removed {
+			if reference.Role == entry.Role && reference.Lens == entry.Lens && reference.SelectedOrder == entry.SelectedOrder &&
+				reference.TargetIdentity == entry.TargetIdentity && reference.CapturePhaseRevision == entry.CapturePhaseRevision &&
+				reference.RequestHash == entry.RequestHash && reference.ArtifactDigest == entry.ArtifactDigest && reference.ResultHash == entry.ResultHash {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // LedgerHash derives the canonical findings-ledger binding of the
@@ -795,7 +1145,7 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
 func validateCompactFindings(state CompactState) error {
-	if state.State == StateReviewing || state.State == StateInvalidated {
+	if state.State == StateReviewing || state.State == StateInvalidated || state.Recovery != nil && state.Recovery.Evidence != nil {
 		return nil
 	}
 	// A lineage terminally escalated by an audited reviewer-result disposition
@@ -1059,67 +1409,22 @@ func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) 
 func validateCompactRecoveredCorrection(state CompactState, evidence CompactRecoveredEvidence) error {
 	if evidence.Schema != CompactRecoveredEvidenceSchema ||
 		evidence.Relation != string(compactTargetChangedScope) || evidence.PathRelation != string(compactPathsSame) ||
-		evidence.SuccessorTargetIdentity != state.InitialSnapshot.Identity || !validSHA256(evidence.ReviewEvidenceHash) ||
-		evidence.NativeCorrectionLines <= 0 {
+		!validSHA256(evidence.PredecessorTargetIdentity) || evidence.NativeCorrectionLines <= 0 ||
+		len(evidence.AdmittedRoleReferences) == 0 {
 		return errors.New("recovered correction evidence binding is incomplete")
 	}
-	if state.State != StateValidating && state.State != StateApproved && state.State != StateEscalated ||
-		!snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) || len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 ||
-		state.ProposedCorrectionLines == nil || state.ActualCorrectionLines == nil ||
-		*state.ProposedCorrectionLines != evidence.SourceCorrectionAttempt.ProposedLines ||
-		*state.ActualCorrectionLines != evidence.NativeCorrectionLines || len(state.FixFindingIDs) == 0 {
-		return errors.New("recovered correction state does not preserve the imported evidence shape")
+	if err := validateCompactRecoveredEvidenceReferenceShape(state.SelectedLenses, evidence.AdmittedRoleReferences); err != nil {
+		return err
 	}
-	attempt := evidence.SourceCorrectionAttempt
-	if attempt.ProposedLines <= 0 || attempt.ActualLines <= evidence.NativeCorrectionLines ||
-		evidence.NativeCorrectionLines > attempt.ProposedLines || attempt.Snapshot.Kind != TargetFixDiff ||
-		attempt.Snapshot.CandidateTree != state.InitialSnapshot.CandidateTree ||
-		attempt.Snapshot.Projection != state.InitialSnapshot.Projection ||
-		!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) ||
-		// The imported attempt is measured the way every other attempt-facing
-		// check measures one (validateCompactCorrection, correctionTargetFrozen,
-		// targetedValidationRequestForCorrection): against the frozen genesis
-		// manifest THROUGH the correction admission, not against the delivery
-		// scope. The delivery scope is rolled back when a correction escalates,
-		// and an accounting-only escalation is exactly what this recovery
-		// imports, so measuring against it would refuse a companion test path
-		// the correction was entitled to add and leave the attempt with no way
-		// to be revalidated. Admission still refuses everything a correction
-		// could not have added, so nothing unreviewed enters here.
-		correctionScopeRefused(attempt.Snapshot.Paths, state.GenesisPaths) ||
-		attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) || state.FixDeltaHash != attempt.FixDeltaHash ||
-		state.OriginalCriteria == nil || state.CorrectionRegression == nil ||
-		*state.OriginalCriteria != attempt.OriginalCriteria || *state.CorrectionRegression != attempt.CorrectionRegression ||
-		!attempt.OriginalCriteria.Passed || !attempt.CorrectionRegression.Passed {
-		return errors.New("recovered correction does not match the accounting-only source attempt")
+	if err := validateCompactRecoveredEvidenceReferencesInSuccessor(state, evidence); err != nil {
+		return err
 	}
-	if err := validateCompactSnapshot(attempt.Snapshot); err != nil {
-		return fmt.Errorf("recovered correction snapshot: %w", err)
-	}
-	if err := validateCompactSnapshotMetadata(attempt.Snapshot); err != nil {
-		return fmt.Errorf("recovered correction snapshot: %w", err)
-	}
-	validation := ScopedValidationResult{
-		OriginalCriteria: attempt.OriginalCriteria, CorrectionRegression: attempt.CorrectionRegression,
-		TargetedValidationRequestHash: attempt.TargetedValidationRequestHash, CorrectionTargetIdentity: attempt.CorrectionTargetIdentity,
-	}
-	if err := validateTargetedValidation(validation, attempt.FixDeltaHash); err != nil ||
-		attempt.CorrectionTargetIdentity != "" && attempt.CorrectionTargetIdentity != attempt.Snapshot.Identity {
-		return errors.New("recovered source validator binding is invalid")
-	}
-	request := evidence.TargetedValidationRequest
-	if err := ValidateTargetedValidationRequest(request); err != nil ||
-		request.LineageID != state.Recovery.PredecessorLineageID || request.ExpectedRevision != state.Recovery.PredecessorRevision ||
-		request.CorrectionCandidateTree != attempt.Snapshot.CandidateTree || request.CorrectionTargetIdentity != attempt.Snapshot.Identity ||
-		!equalStrings(request.CorrectionPaths, attempt.Snapshot.Paths) || request.CorrectionPathsDigest != attempt.Snapshot.PathsDigest ||
-		!equalStrings(request.FixFindingIDs, state.FixFindingIDs) {
-		return errors.New("recovered targeted validation request does not bind the source correction")
-	}
-	if compactReviewEvidenceHash(state) != evidence.ReviewEvidenceHash {
-		return errors.New("recovered review evidence does not match the imported authority")
-	}
-	if state.EvidenceHash != "" && !validSHA256(state.EvidenceHash) {
-		return errors.New("recovered correction has an invalid review evidence hash") // refusal:by-design operator-knowledge: corrupted recovered authority must be preserved for maintainer inspection before any repair or delivery decision
+	if state.State != StateValidating || !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) ||
+		len(state.LensResults) != 0 || len(state.Findings) != 0 || len(state.Classifications) != 0 || len(state.Outcomes) != 0 || len(state.FollowUps) != 0 ||
+		len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 || state.ProposedCorrectionLines == nil ||
+		state.ActualCorrectionLines == nil || *state.ProposedCorrectionLines < evidence.NativeCorrectionLines ||
+		*state.ActualCorrectionLines != evidence.NativeCorrectionLines || len(state.FixFindingIDs) == 0 || state.EvidenceHash != "" {
+		return errors.New("recovered correction state does not preserve accounting-only evidence") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 	}
 	return nil
 }
@@ -1255,6 +1560,9 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 		state.State = StateEscalated
 	} else if len(state.FixFindingIDs) > 0 {
 		state.State = StateCorrectionRequired
+		if err := state.advanceCapturePhase(); err != nil {
+			return err
+		}
 	} else {
 		state.State = StateValidating
 	}
@@ -1466,57 +1774,34 @@ func validateCompactResultDispositions(state CompactState) error {
 func validateCompactResultReopens(state CompactState) error {
 	for _, reopen := range state.ResultReopens {
 		if !validSHA256(reopen.PreviousRevision) || reopen.TargetIdentity != state.InitialSnapshot.Identity ||
+			stringIndex(state.SelectedLenses, reopen.SelectedLens) < 0 ||
 			strings.TrimSpace(reopen.Reason) == "" || strings.TrimSpace(reopen.Actor) == "" ||
-			strings.TrimSpace(reopen.MaintainerAuthorization) == "" || reopen.ReopenedAt.IsZero() || len(reopen.Quarantined) == 0 {
+			strings.TrimSpace(reopen.MaintainerAuthorization) == "" || reopen.ReopenedAt.IsZero() || len(reopen.Removed) == 0 {
 			return errors.New("reviewer result reopen audit record is incomplete")
 		}
-		seen := make(map[int]struct{}, len(state.SelectedLenses))
-		validateSlots := func(slots []CompactResultReopenSlot, retained bool) error {
-			for _, slot := range slots {
-				if slot.SelectedOrder < 0 || slot.SelectedOrder >= len(state.SelectedLenses) ||
-					state.SelectedLenses[slot.SelectedOrder] != slot.Lens || !validSHA256(slot.ArtifactDigest) || !validSHA256(slot.ResultHash) {
-					return errors.New("reviewer result reopen slot does not bind the frozen selected lens")
+		selected, dependent := false, false
+		for _, reference := range reopen.Removed {
+			if !validSHA256(reference.TargetIdentity) || !validSHA256(reference.CapturePhaseRevision) ||
+				!validSHA256(reference.ArtifactDigest) || reference.TargetIdentity != reopen.TargetIdentity {
+				return errors.New("reviewer result reopen reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+			}
+			switch reference.Role {
+			case CompactRoleLens:
+				if reference.Lens != reopen.SelectedLens || reference.SelectedOrder != stringIndex(state.SelectedLenses, reopen.SelectedLens) || !validSHA256(reference.ResultHash) {
+					return errors.New("reviewer result reopen selected lens reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 				}
-				if _, duplicate := seen[slot.SelectedOrder]; duplicate {
-					return errors.New("reviewer result reopen slot is recorded twice")
+				selected = true
+			case CompactRoleRefuter:
+				if reference.Lens != "" || reference.SelectedOrder != 0 || !validSHA256(reference.RequestHash) {
+					return errors.New("reviewer result reopen refuter reference is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 				}
-				seen[slot.SelectedOrder] = struct{}{}
-				if retained {
-					if !validSHA256(slot.SubjectHash) || !validSHA256(slot.AuthorityRevision) {
-						return errors.New("retained reviewer result reopen slot lacks an admitted subject")
-					}
-				} else if (slot.SubjectHash == "") != (slot.AuthorityRevision == "") ||
-					slot.SubjectHash != "" && (!validSHA256(slot.SubjectHash) || !validSHA256(slot.AuthorityRevision)) {
-					return errors.New("quarantined reviewer result reopen slot has partial subject metadata")
-				}
+				dependent = true
+			default:
+				return errors.New("reviewer result reopen may only audit a lens and dependent refuter") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 			}
-			return nil
 		}
-		if err := validateSlots(reopen.Quarantined, false); err != nil {
-			return err
-		}
-		if err := validateSlots(reopen.Retained, true); err != nil {
-			return err
-		}
-		if len(seen) != len(state.SelectedLenses) {
-			return errors.New("reviewer result reopen audit record must classify every selected lens artifact")
-		}
-		authorized := make(map[string]struct{}, len(reopen.AuthorizedLenses))
-		for _, lens := range reopen.AuthorizedLenses {
-			if stringIndex(state.SelectedLenses, lens) < 0 {
-				return errors.New("reviewer result reopen authorization names a lens outside the frozen selection")
-			}
-			if _, duplicate := authorized[lens]; duplicate {
-				return errors.New("reviewer result reopen authorization names a lens twice")
-			}
-			authorized[lens] = struct{}{}
-			quarantinedLens := false
-			for _, slot := range reopen.Quarantined {
-				quarantinedLens = quarantinedLens || slot.Lens == lens
-			}
-			if !quarantinedLens {
-				return errors.New("reviewer result reopen authorization names a lens whose result was not quarantined")
-			}
+		if !selected || len(reopen.Removed) > 2 || dependent && len(reopen.Removed) != 2 {
+			return errors.New("reviewer result reopen audit has an invalid selected/dependent cardinality") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 	}
 	return nil
@@ -1587,6 +1872,10 @@ func (state *CompactState) BeginCorrection(proposed int) error {
 	}
 	value := proposed
 	state.ProposedCorrectionLines = &value
+	state.TargetedValidatorAttempts = []CompactTargetedValidatorAttempt{}
+	if err := state.advanceCapturePhase(); err != nil {
+		return err
+	}
 	return state.Validate()
 }
 
@@ -1640,6 +1929,7 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 		state.State = StateEscalated
 	} else {
 		state.State = StateValidating
+		state.TargetedValidatorAttempts = nil
 		if len(added) > 0 {
 			state.CorrectionAddedPaths = added
 		}
@@ -1798,5 +2088,14 @@ func normalizeCompactState(state *CompactState) {
 	}
 	if state.FollowUps == nil {
 		state.FollowUps = []FollowUp{}
+	}
+	if state.AdmittedRoleResults == nil {
+		state.AdmittedRoleResults = []CompactAdmittedRoleResult{}
+	}
+	if state.TargetedValidatorAttempts == nil {
+		state.TargetedValidatorAttempts = []CompactTargetedValidatorAttempt{}
+	}
+	if state.ResultReopens == nil {
+		state.ResultReopens = []CompactResultReopen{}
 	}
 }

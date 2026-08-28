@@ -141,7 +141,7 @@ func TestReviewRepositoryContextRejectsUnsafeStorageAndDoesNotTraverseAboveHome(
 	t.Setenv("USERPROFILE", home)
 	repo := initSnapshotRepo(t)
 	record, _ := pristineReviewingFixture(t, repo, "repository-context-private")
-	binding := ReviewRepositoryContextBinding{LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision}
+	binding := ReviewRepositoryContextBinding{LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision}
 	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
 	if err != nil {
 		t.Fatal(err)
@@ -476,6 +476,6 @@ func reviewRepositoryContextFixture(t *testing.T, lineage string) (string, Revie
 	writeSnapshotFile(t, repo, "tracked.txt", "base\nreviewed change\n")
 	record, _ := pristineReviewingFixture(t, repo, lineage)
 	return repo, ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	}
 }

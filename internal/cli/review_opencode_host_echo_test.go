@@ -67,7 +67,7 @@ func TestOpenCodeReviewTransportMaterializesHostEchoedLensFrame(t *testing.T) {
 	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted || artifact.Reference == "" {
 		t.Fatalf("host-echoed lens artifact = %#v, want a captured result", artifact)
 	}
-	if _, found, err := store.ResolveAdmittedReviewerResult(t.Context(), record.Revision, record.State.InitialSnapshot.Identity,
+	if _, found, err := store.ResolveAdmittedReviewerResult(t.Context(), record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity,
 		mustFrozenContext(t, repo, record), mustArtifactSubject(t, repo, record, lens, 0)); err != nil || !found {
 		t.Fatalf("host-echoed lens capture found=%v err=%v", found, err)
 	}

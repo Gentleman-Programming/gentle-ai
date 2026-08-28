@@ -27,9 +27,6 @@ func TestInventoryClassifiesIncompleteCompactStoreEntry(t *testing.T) {
 		{name: "orphan finalize journal", populate: func(t *testing.T, dir string) {
 			writeReclaimFixtureFile(t, filepath.Join(dir, "finalize-attempt-journal.json"), "{}\n")
 		}, status: AuthorityStatusInvalid},
-		{name: "orphan reviewer results", populate: func(t *testing.T, dir string) {
-			writeReclaimFixtureFile(t, filepath.Join(dir, "reviewer-results", "01-review-readability.json"), "{}\n")
-		}, status: AuthorityStatusInvalid},
 		{name: "interrupted atomic write", populate: func(t *testing.T, dir string) {
 			writeReclaimFixtureFile(t, filepath.Join(dir, ".atomic-partial"), "partial")
 		}, status: AuthorityStatusReset},
@@ -126,7 +123,6 @@ func TestReclaimRefusesAuthoritativeArtifactsAndInvalidRequests(t *testing.T) {
 		{name: "state file", artifact: "review-state.json"},
 		{name: "receipt", artifact: "review-receipt.json"},
 		{name: "finalize journal", artifact: "finalize-attempt-journal.json"},
-		{name: "reviewer results", artifact: filepath.Join("reviewer-results", "01-review-readability.json")},
 		{name: "interrupted atomic write", artifact: ".atomic-partial"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

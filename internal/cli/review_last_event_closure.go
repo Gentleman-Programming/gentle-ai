@@ -94,13 +94,7 @@ func closeReviewOnLastCapturedLens(
 	runtime model.AgentID,
 ) (*reviewLastEventClosureResult, error) {
 	state := record.State
-	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, store.Dir, state, record.Revision)
-	if errors.Is(err, reviewtransaction.ErrCompactRoleResultSlotPartiallyPublished) {
-		// A sibling capture is still publishing its immutable sidecar pair. This
-		// call already admitted its own lens result, so return its nonterminal
-		// acknowledgement and let the later stable capture elect the closer.
-		return nil, nil
-	}
+	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +102,7 @@ func closeReviewOnLastCapturedLens(
 		return nil, nil
 	}
 
-	results, err := readCapturedReviewerResults(ctx, repo, store.Dir, state, record.Revision)
+	results, err := readCapturedReviewerResults(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -123,22 +117,32 @@ func closeReviewOnLastCapturedLens(
 		return nil, err
 	}
 	if len(claims) > 0 {
-		slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-		if err != nil {
-			return nil, err
+		_, captured, readErr := func() (facadeRefuterResult, bool, error) {
+			refuter, err := readCapturedProviderRefuterResult(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
+			if errors.Is(err, errReviewProviderRefuterResultNotCaptured) {
+				return facadeRefuterResult{}, false, nil
+			}
+			return refuter, err == nil, err
+		}()
+		if readErr != nil {
+			return nil, readErr
 		}
-		if !slot.Occupied {
-			if reviewProviderCaptureRuntime(runtime) {
-				if _, captured, err := reviewProviderCaptureRefuter(ctx, repo, store, state, record.Revision, runtime); err != nil {
-					return nil, err
-				} else if !captured {
-					return nil, errors.New("compiled provider refuter was required but no result was captured; rerun `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` and follow its capture route")
-				}
-			} else {
+		if !captured {
+			if !reviewProviderCaptureRuntime(runtime) {
 				return nil, nil
 			}
+			if _, captured, err := reviewProviderCaptureRefuter(ctx, repo, store, state, state.CapturePhaseRevision, runtime); err != nil {
+				return nil, err
+			} else if !captured {
+				return nil, errors.New("compiled provider refuter was required but no result was captured; rerun `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` and follow its capture route")
+			}
+			current, err := store.LoadContext(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return closeReviewOnLastCapturedLens(ctx, repo, store, current, runtime)
 		}
-		refuter, err := readCapturedProviderRefuterResult(ctx, repo, store.Dir, state, record.Revision)
+		refuter, err := readCapturedProviderRefuterResult(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +152,7 @@ func closeReviewOnLastCapturedLens(
 		}
 	}
 
-	state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, repo, store.Dir, state, record.Revision)
+	state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, repo, store.Dir, state, state.CapturePhaseRevision)
 	if err := state.CompleteReview(input); err != nil {
 		return nil, err
 	}

@@ -146,11 +146,12 @@ const (
 )
 
 type ReviewTargetStatusAuthority struct {
-	Version    reviewtransaction.AuthorityVersion `json:"version"`
-	LineageID  string                             `json:"lineage_id"`
-	State      reviewtransaction.State            `json:"state"`
-	Generation int                                `json:"generation"`
-	Revision   string                             `json:"revision"`
+	Version              reviewtransaction.AuthorityVersion `json:"version"`
+	LineageID            string                             `json:"lineage_id"`
+	State                reviewtransaction.State            `json:"state"`
+	Generation           int                                `json:"generation"`
+	Revision             string                             `json:"revision"`
+	CapturePhaseRevision string                             `json:"-"`
 }
 
 type ReviewTargetStatusFrozen struct {
@@ -312,7 +313,9 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
 			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
-			result.Authority == nil || result.RepositoryContext.Revision != result.Authority.Revision ||
+			result.Authority == nil ||
+			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
+				result.RepositoryContext.Revision != result.Authority.CapturePhaseRevision ||
 			!correctionTerminalContext && result.RepositoryContext.TargetIdentity != expectedRepositoryContextTarget {
 			return errors.New("negotiated STATUS repository context is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
 		}
@@ -356,7 +359,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
 			if result.Authority == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
-				request.LineageID != result.Authority.LineageID || request.ExpectedRevision != result.Authority.Revision {
+				request.LineageID != result.Authority.LineageID || !validReviewCapabilitySHA256(request.ExpectedRevision) ||
+				result.Authority.CapturePhaseRevision != "" && request.ExpectedRevision != result.Authority.CapturePhaseRevision {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
 		}
@@ -459,7 +463,9 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	if result.ValidationRequest != nil {
 		if result.Authority == nil || result.Authority.State != reviewtransaction.StateCorrectionRequired ||
 			result.ValidationRequest.LineageID != result.Authority.LineageID ||
-			result.ValidationRequest.ExpectedRevision != result.Authority.Revision ||
+			!validReviewCapabilitySHA256(result.ValidationRequest.ExpectedRevision) ||
+			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
+				result.ValidationRequest.ExpectedRevision != result.Authority.CapturePhaseRevision ||
 			result.ValidationRequest.TargetIdentity != result.Projection.InitialSnapshotIdentity ||
 			result.ValidationRequest.Projection != result.Projection.Projection ||
 			result.ValidationRequest.CorrectionCandidateTree != result.Projection.CurrentCandidateTree ||
@@ -543,7 +549,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return err
 		}
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
-			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
+			LineageID: result.Authority.LineageID, Revision: transition.CorrectionRequest.ExpectedRevision,
 			TargetIdentity: result.TargetIdentity, RepositoryContext: context,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
@@ -575,7 +581,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			arguments, err := reviewTransitionArgumentMap(input.Arguments)
 			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
 				(!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) && !reviewProviderCaptureRuntime(model.AgentID(arguments["agent"]))) ||
-				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
 				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
 				arguments["request-hash"] != result.ValidationRequest.RequestHash {
 				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
@@ -648,7 +654,7 @@ func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInpu
 	if err := validateReviewProviderTaskInput(input, arguments); err != nil {
 		return err
 	}
-	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
 		arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
 	}

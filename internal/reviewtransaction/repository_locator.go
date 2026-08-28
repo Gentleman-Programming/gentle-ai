@@ -304,7 +304,7 @@ func resolveReviewRepositoryContext(ctx context.Context, handle string) (string,
 	if err := validateReviewRepositoryContextRecord(ctx, root, binding, record); err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
-	binding.Revision = record.Revision
+	binding.Revision = record.State.CapturePhaseRevision
 	return root, binding, nil
 }
 
@@ -432,14 +432,8 @@ func validateReviewRepositoryContextRecord(ctx context.Context, repo string, bin
 	if record.State.LineageID != binding.LineageID {
 		return errors.New("review repository context is stale or has no live matching authority")
 	}
-	if record.Revision != binding.Revision {
-		matched := false
-		for _, intent := range record.EffectIntents {
-			matched = matched || intent.Class == CompactEffectClassRepositoryContext && intent.BindingRevision == binding.Revision
-		}
-		if !matched {
-			return errors.New("review repository context is stale or has no live matching authority")
-		}
+	if record.State.CapturePhaseRevision != binding.Revision {
+		return errors.New("review repository context is stale or has no live matching authority")
 	}
 	switch record.State.State {
 	case StateReviewing:
@@ -457,7 +451,7 @@ func validateReviewRepositoryContextRecord(ctx context.Context, repo string, bin
 			}
 			return nil
 		}
-		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.Revision)
+		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.State.CapturePhaseRevision)
 		if err != nil {
 			return &reviewRepositoryContextTargetedValidationError{cause: err}
 		}

@@ -203,6 +203,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		bindingTarget = reviewAuthorityTargetIdentity(status)
 	}
 	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
+	captureBinding := binding
+	if status.Authority.CapturePhaseRevision != "" {
+		captureBinding.Revision = status.Authority.CapturePhaseRevision
+	}
 	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
@@ -225,10 +229,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
 		if len(artifacts) != len(selectedLenses) {
-			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
+			return reviewMissingCaptureTransition(captureBinding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
-			return reviewProviderRoleTransition("provider_refuter_required", binding, input.ProviderRole, input.RuntimeAgent, nil)
+			return reviewProviderRoleTransition("provider_refuter_required", captureBinding, input.ProviderRole, input.RuntimeAgent, nil)
 		}
 		return reviewStopTransition("manual_intervention_required")
 	case reviewtransaction.StateCorrectionRequired:
@@ -240,7 +244,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewRecoveryCollection(status, recoveryBinding, input)
 		}
 		if input.ValidationRequest != nil {
-			validationBinding := binding
+			validationBinding := captureBinding
 			validationBinding.TargetIdentity = input.ValidationRequest.CorrectionTargetIdentity
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
 				// Same Go-issued role task either way; only the reason differs,
@@ -270,8 +274,8 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: reviewCaptureCorrectionPlanOperation,
-			Arguments:  append(append(reviewBindingArguments(binding), ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext}), ReviewTransitionArgument{Name: "request-hash", Value: input.CorrectionRequest.RequestHash}),
-			Submission: reviewCorrectionPlanSubmission(input.Contract, binding, *input.CorrectionRequest),
+			Arguments:  append(append(reviewBindingArguments(captureBinding), ReviewTransitionArgument{Name: "repository-context", Value: captureBinding.RepositoryContext}), ReviewTransitionArgument{Name: "request-hash", Value: input.CorrectionRequest.RequestHash}),
+			Submission: reviewCorrectionPlanSubmission(input.Contract, captureBinding, *input.CorrectionRequest),
 		})
 		transition.CorrectionRequest = input.CorrectionRequest
 		return transition

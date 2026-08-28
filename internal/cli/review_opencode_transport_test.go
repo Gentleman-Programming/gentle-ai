@@ -84,13 +84,13 @@ func TestOpenCodeReviewTransportPublishesProvenanceOnlyAfterDurableCapture(t *te
 			beforeComplete: func(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, lens string) {
 				t.Helper()
 				raw := admittedReviewerPayloadForTest(t, repo, record, lens, 0)
-				admitted, err := reviewProviderAdmitRaw(t.Context(), repo, record.State, record.Revision,
+				admitted, err := reviewProviderAdmitRaw(t.Context(), repo, record.State, record.State.CapturePhaseRevision,
 					mustFrozenContext(t, repo, record), mustArtifactSubject(t, repo, record, lens, 0), append([]byte("transport prose\n"), raw...))
 				if err != nil {
 					t.Fatal(err)
 				}
 				if _, err := store.CaptureAdmittedReviewerResult(t.Context(), reviewtransaction.CompactAdmittedReviewerResultRequest{
-					ExpectedRevision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity, FrozenContext: admitted.Frozen,
+					ExpectedRevision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity, FrozenContext: admitted.Frozen,
 					ArtifactSubject: admitted.Subject, Inspection: admitted.Result.Inspection, Result: admitted.NativeResult,
 					CandidateCausalFindingIDs: admitted.CandidateCausalFindingIDs, RawPayload: append([]byte("transport prose\n"), raw...),
 				}); err != nil {
@@ -104,7 +104,7 @@ func TestOpenCodeReviewTransportPublishesProvenanceOnlyAfterDurableCapture(t *te
 				t.Helper()
 				if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
 					Schema: reviewtransaction.LensContextEmissionSchema, LineageID: record.State.LineageID,
-					TargetIdentity: record.State.InitialSnapshot.Identity, AuthorityRevision: record.Revision,
+					TargetIdentity: record.State.InitialSnapshot.Identity, AuthorityRevision: record.State.CapturePhaseRevision,
 					Lens: lens, SelectedOrder: 0, SubjectHash: mustArtifactSubject(t, repo, record, lens, 0).SubjectHash,
 					Level: reviewtransaction.ReviewerContextLevelProviderCommand,
 				}); err != nil {
@@ -131,12 +131,12 @@ func TestOpenCodeReviewTransportPublishesProvenanceOnlyAfterDurableCapture(t *te
 
 			subject := mustArtifactSubject(t, repo, record, lens, 0)
 			emission, found := reviewtransaction.ReadLensContextEmission(store.Dir, record.State.LineageID,
-				record.State.InitialSnapshot.Identity, record.Revision, lens, 0, subject.SubjectHash)
+				record.State.InitialSnapshot.Identity, record.State.CapturePhaseRevision, lens, 0, subject.SubjectHash)
 			if test.wantSlot {
 				if !found || emission.Level != reviewtransaction.ReviewerContextLevelProviderCommand {
 					t.Fatalf("provenance conflict was not preserved exactly: %#v found=%v", emission, found)
 				}
-				if _, resolved, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision,
+				if _, resolved, err := store.ResolveAdmittedReviewerResult(context.Background(), record.State.CapturePhaseRevision,
 					record.State.InitialSnapshot.Identity, mustFrozenContext(t, repo, record), subject); err != nil || !resolved {
 					t.Fatalf("durable capture did not survive provenance failure: resolved=%v err=%v", resolved, err)
 				}
@@ -148,7 +148,7 @@ func TestOpenCodeReviewTransportPublishesProvenanceOnlyAfterDurableCapture(t *te
 				}
 				return
 			}
-			if _, resolved, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision,
+			if _, resolved, err := store.ResolveAdmittedReviewerResult(context.Background(), record.State.CapturePhaseRevision,
 				record.State.InitialSnapshot.Identity, mustFrozenContext(t, repo, record), subject); err != nil || !resolved {
 				t.Fatalf("pre-existing conflicting slot was not preserved: resolved=%v err=%v", resolved, err)
 			}
@@ -172,10 +172,10 @@ func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutat
 	}
 	subject := mustArtifactSubject(t, repo, record, lens, 0)
 	if _, found := reviewtransaction.ReadLensContextEmission(store.Dir, record.State.LineageID, record.State.InitialSnapshot.Identity,
-		record.Revision, lens, 0, subject.SubjectHash); found {
+		record.State.CapturePhaseRevision, lens, 0, subject.SubjectHash); found {
 		t.Fatal("standalone completion recorded provider-contract provenance")
 	}
-	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision, record.State.InitialSnapshot.Identity,
+	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity,
 		mustFrozenContext(t, repo, record), subject); err != nil || found {
 		t.Fatalf("standalone completion captured a result: found=%v err=%v", found, err)
 	}
@@ -519,20 +519,25 @@ func TestOpenCodeReviewTransportRefuterClosesThroughSharedGoReducer(t *testing.T
 	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	updated, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = updated
 	contextHandle, err := reviewtransaction.PublishReviewRepositoryContext(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	task, err := newReviewProviderTask(reviewerprovider.RoleRefuter, ReviewTransitionBinding{
-		LineageID: record.State.LineageID, Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity, RepositoryContext: contextHandle,
+		LineageID: record.State.LineageID, Revision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity, RepositoryContext: contextHandle,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt})
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.Revision)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,9 +559,9 @@ func TestOpenCodeReviewTransportRefuterClosesThroughSharedGoReducer(t *testing.T
 	if terminal.Operation != reviewCaptureRefuterCaptureOperation || terminal.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("provider refuter terminal closure = %#v", terminal)
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("provider refuter slot = %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || !recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatalf("provider refuter was not retained in compact authority: %#v, %v", current, err)
 	}
 }
 
@@ -830,14 +835,14 @@ func (relay openCodeTransportRelay) closeWithoutCompletion() error {
 func openCodeLensTransportStart(t *testing.T, repo string, record reviewtransaction.CompactRecord, lens string) openCodeTransportEnvelope {
 	t.Helper()
 	contextHandle, err := reviewtransaction.PublishReviewRepositoryContext(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	binding, err := json.Marshal(reviewLensContextBinding{
 		Lineage: record.State.LineageID, Target: record.State.InitialSnapshot.Identity, Lens: lens, Order: 0,
-		Revision: record.Revision, RepositoryContext: contextHandle,
+		Revision: record.State.CapturePhaseRevision, RepositoryContext: contextHandle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -869,10 +874,10 @@ func assertOpenCodeRelayLensUncaptured(t *testing.T, repo string, store reviewtr
 	t.Helper()
 	subject := mustArtifactSubject(t, repo, record, lens, 0)
 	if _, found := reviewtransaction.ReadLensContextEmission(store.Dir, record.State.LineageID, record.State.InitialSnapshot.Identity,
-		record.Revision, lens, 0, subject.SubjectHash); found {
+		record.State.CapturePhaseRevision, lens, 0, subject.SubjectHash); found {
 		t.Fatal("failed relay recorded provider-contract provenance")
 	}
-	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.Revision, record.State.InitialSnapshot.Identity,
+	if _, found, err := store.ResolveAdmittedReviewerResult(context.Background(), record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity,
 		mustFrozenContext(t, repo, record), subject); err != nil || found {
 		t.Fatalf("failed relay captured a result: found=%v err=%v", found, err)
 	}
@@ -914,7 +919,7 @@ func mustFrozenContext(t *testing.T, repo string, record reviewtransaction.Compa
 
 func mustArtifactSubject(t *testing.T, repo string, record reviewtransaction.CompactRecord, lens string, order int) reviewtransaction.ArtifactSubject {
 	t.Helper()
-	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, mustFrozenContext(t, repo, record), lens, order, "")
+	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, mustFrozenContext(t, repo, record), lens, order, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -112,7 +112,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 		if err := json.Unmarshal(document["changed_path_manifest"], &manifest); err != nil {
 			t.Fatal(err)
 		}
-		if subject.LineageID != record.State.LineageID || subject.AuthorityRevision != record.Revision ||
+		if subject.LineageID != record.State.LineageID || subject.AuthorityRevision != record.State.CapturePhaseRevision ||
 			subject.TargetIdentity != record.State.InitialSnapshot.Identity || subject.Lens != record.State.SelectedLenses[order] ||
 			subject.SelectedOrder != order || subject.BaseTree != wantContext.BaseTree || subject.CandidateTree != wantContext.CandidateTree {
 			t.Fatalf("restart subject %d = %#v", order, subject)

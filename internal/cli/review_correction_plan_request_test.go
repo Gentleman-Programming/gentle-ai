@@ -111,8 +111,12 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("correction transition = %#v", transition)
 			}
 			request := transition.CorrectionRequest
-			classification := record.State.Classifications[record.State.FixFindingIDs[0]]
-			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.Revision ||
+			view, err := record.State.CompactReviewView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			classification := view.Classifications[record.State.FixFindingIDs[0]]
+			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.State.CapturePhaseRevision ||
 				request.TargetIdentity != record.State.CurrentSnapshot.Identity || request.CorrectionBudget != record.State.CorrectionBudget ||
 				!reflect.DeepEqual(request.FixFindingIDs, record.State.FixFindingIDs) || len(request.Findings) != 1 ||
 				request.Findings[0].ID != record.State.FixFindingIDs[0] || request.Findings[0].Location != tt.path+":1" ||

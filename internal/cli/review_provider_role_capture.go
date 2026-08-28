@@ -156,7 +156,7 @@ func (binding *reviewProviderRoleCaptureBinding) discover(ctx context.Context) (
 		}
 		return store, record, reviewPreflightError(fmt.Errorf("resolve review authority for lineage %q under repository %q: %w", binding.lineage, binding.root, err))
 	}
-	if record.State.LineageID != binding.lineage || record.Revision != binding.revision {
+	if record.State.LineageID != binding.lineage || record.State.CapturePhaseRevision != binding.revision {
 		return store, record, reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, fmt.Errorf("review %s binding does not match the current compact authority; refresh the binding with gentle-ai review status --cwd <repo> --contract %s --next-transition", binding.command, ReviewIntegrationContractV2))
 	}
 	return store, record, nil
@@ -182,7 +182,7 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.target {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("review capture-refuter requires the exact reviewing authority target; refresh the binding with gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"))
 	}
-	request, err := reviewProviderNewRefuterRequest(ctx, binding.root, store.Dir, state, record.Revision)
+	request, err := reviewProviderNewRefuterRequest(ctx, binding.root, store.Dir, state, state.CapturePhaseRevision)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -206,11 +206,15 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", err))
 	}
-	if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, record.Revision, raw); err != nil {
+	if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw); err != nil {
 		return reviewPreflightError(err)
 	}
-	closure, err := closeReviewOnLastCapturedLens(ctx, binding.root, store, record, binding.runtime)
-	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, record) {
+	currentRecord, currentErr := store.LoadContext(ctx)
+	if currentErr != nil {
+		return reviewPreflightError(currentErr)
+	}
+	closure, err := closeReviewOnLastCapturedLens(ctx, binding.root, store, currentRecord, binding.runtime)
+	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, currentRecord) {
 		return reviewPreflightError(err)
 	}
 	if closure != nil {
@@ -242,7 +246,7 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(err)
 	}
-	request, err := reviewProviderNewTargetedValidatorRequest(ctx, binding.root, state, record.Revision, correction)
+	request, err := reviewProviderNewTargetedValidatorRequest(ctx, binding.root, state, state.CapturePhaseRevision, correction)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -272,7 +276,7 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", err))
 	}
-	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, binding.root, store, state, record.Revision, raw)
+	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw)
 	if err != nil {
 		return reviewPreflightError(err)
 	}

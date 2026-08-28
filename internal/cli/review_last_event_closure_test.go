@@ -268,13 +268,13 @@ func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T) (string, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
+	plan, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewCaptureCorrectionPlan([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", plan.TargetIdentity,
-		"--expected-revision", record.Revision, "--request-hash", plan.RequestHash, "--correction-lines", "2",
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", plan.RequestHash, "--correction-lines", "2",
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T) (string, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.Revision)
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 		"--cwd", repo,
 		"--lineage", lineage,
 		"--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision,
+		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
 		"--execute=true",
@@ -330,10 +330,6 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 		t.Fatalf("capture targeted validator without repository verification evidence: %v\n%s", err, terminalOutput.String())
 	}
 	assertApprovedCompactAuthorityBurned(t, store, lineage)
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
-	if err != nil || slot.Occupied {
-		t.Fatalf("terminal validator capture stranded slot = %#v, %v", slot, err)
-	}
 }
 
 func TestStatusRoutesCompiledValidatorToTerminalCapture(t *testing.T) {
@@ -380,7 +376,7 @@ func TestCompiledTargetedValidatorCaptureClosesOnItsTerminalEvent(t *testing.T) 
 	var output bytes.Buffer
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--agent", string(model.AgentClaudeCode), "--execute=true",
 	}, &output); err != nil {
 		t.Fatalf("compiled capture-validation: %v\n%s", err, output.String())
@@ -437,7 +433,7 @@ func TestTargetedValidationCaptureClosesWithoutVerificationEvidence(t *testing.T
 	var terminalOutput bytes.Buffer
 	if err := RunReview([]string{
 		"capture-validation", "--cwd", repo, "--lineage", lineage,
-		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.Revision,
+		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash, "--agent", string(model.AgentPi), "--execute=true",
 	}, &terminalOutput); err != nil {
 		t.Fatalf("execute targeted validation capture: %v\n%s", err, terminalOutput.String())
@@ -471,7 +467,7 @@ func TestConcurrentAndReplayedTargetedValidatorCaptureHasOneCloser(t *testing.T)
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 	args := []string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi), "--execute=true",
 	}
 
@@ -537,7 +533,7 @@ func TestTargetedValidatorCaptureApprovesAndBurnsWithoutFinalize(t *testing.T) {
 		"--cwd", repo,
 		"--lineage", lineage,
 		"--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision,
+		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
 		"--execute=true",
@@ -597,7 +593,7 @@ func correctionRequiredForPlanCapture(t *testing.T) (string, ReviewFacadeStartRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
+	request, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +605,7 @@ func TestCaptureCorrectionPlanBindsExactRequestAndRefusesBudgetOverrun(t *testin
 	var output bytes.Buffer
 	if err := RunReview([]string{
 		"capture-correction-plan", "--cwd", repo, "--lineage", started.LineageID,
-		"--target", request.TargetIdentity, "--expected-revision", record.Revision,
+		"--target", request.TargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash, "--correction-lines", "1",
 	}, &output); err != nil {
 		t.Fatalf("capture exact correction plan: %v\n%s", err, output.String())
@@ -622,7 +618,7 @@ func TestCaptureCorrectionPlanBindsExactRequestAndRefusesBudgetOverrun(t *testin
 	repo, started, store, record, request = correctionRequiredForPlanCapture(t)
 	err = RunReview([]string{
 		"capture-correction-plan", "--cwd", repo, "--lineage", started.LineageID,
-		"--target", request.TargetIdentity, "--expected-revision", record.Revision,
+		"--target", request.TargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash, "--correction-lines", strconv.Itoa(request.CorrectionBudget + 1),
 	}, io.Discard)
 	if !reviewtransaction.IsCorrectionBudgetExceeded(err) {
@@ -752,7 +748,7 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		"--cwd", repo,
 		"--lineage", lineage,
 		"--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision,
+		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
 		"--execute=true",

@@ -158,7 +158,11 @@ func TestTargetedValidationRequestRejectsUnchangedAndStaleAuthority(t *testing.T
 	if err := next.CompleteCorrection(fix, 2, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Replace(staleRevision, "review/complete-fix", next); err != nil {
+	current, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(current.Revision, "review/complete-fix", next); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := BuildTargetedValidationRequest(context.Background(), repo, stale, staleRevision); err == nil {
@@ -358,7 +362,7 @@ func TestTargetedValidationRequestCountsOnlyPartialCorrectionAcrossIntendedUntra
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, state, revision, live)
+	request, err := BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, state, state.CapturePhaseRevision, live)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +433,8 @@ func targetedValidationRequestFixtureWithFrozenPolicy(t *testing.T, lineage stri
 	if correct {
 		writeSnapshotFile(t, repo, "tracked.txt", "base\nfixed\n")
 	}
-	return repo, state, revision, store
+	_ = revision // The fixture's public binding is stable Pn; callers that need a CAS revision load the record.
+	return repo, state, state.CapturePhaseRevision, store
 }
 
 func correctedInspectionFixture(t *testing.T, lineage string, outcome any) (string, TargetedValidationRequest, Snapshot, string, ReviewRepositoryContextBinding, CompactStore) {

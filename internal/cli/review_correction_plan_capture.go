@@ -73,11 +73,11 @@ func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 		}
 		return reviewPreflightError(err)
 	}
-	if record.Revision != strings.TrimSpace(*revision) || record.State.State != reviewtransaction.StateCorrectionRequired ||
+	if record.State.CapturePhaseRevision != strings.TrimSpace(*revision) || record.State.State != reviewtransaction.StateCorrectionRequired ||
 		record.State.CurrentSnapshot.Identity != strings.TrimSpace(*target) {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("correction-plan capture binding does not match the current correction authority; rerun `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying"))
 	}
-	request, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
+	request, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, err)
 	}

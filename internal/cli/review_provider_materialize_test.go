@@ -26,7 +26,7 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 	return []string{
 		"--repository-context", handle,
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--expected-revision", record.Revision, "--lens", lens, "--order", "0",
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens, "--order", "0",
 		"--subject-hash", subjectHash,
 	}
 }
@@ -64,9 +64,9 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || slot.Occupied {
-		t.Fatalf("materialize occupied the reviewer result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleLens) {
+		t.Fatalf("materialize mutated compact authority: %#v, %v", current, err)
 	}
 
 	stale := replaceInspectionArg(t, slices.Clone(binding), "--subject-hash", "sha256:"+strings.Repeat("0", 64))

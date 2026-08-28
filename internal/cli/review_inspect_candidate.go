@@ -136,7 +136,7 @@ func runReviewInspectCandidate(args []string, help io.Writer, deps reviewInspect
 			return nil, reviewPreflightError(&reviewInspectCandidateAuthorityError{cause: err})
 		}
 		state := record.State
-		if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != *target || record.Revision != *revision ||
+		if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != *target || state.CapturePhaseRevision != *revision ||
 			*order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
 			return nil, reviewPreflightError(errors.New("candidate inspection binding does not match the current reviewing authority; refresh the exact native next_transition before retrying `gentle-ai review inspect-candidate`"))
 		}
