@@ -8,6 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // boundedReviewRequiredClausesFor is agent-parameterized because two of these
@@ -468,7 +469,14 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					// identical wording and differ only in which process
 					// supplies the block, so the reviewer input contract no
 					// longer names a Claude-specific nature for the context.
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					//
+					// The marker followed the same collapse. A Claude-only
+					// GENTLE_AI_CLAUDE_REVIEW_CONTEXT made this definition
+					// require a block the one renderer never emits, so no
+					// relayed prompt was admissible and the Claude path could
+					// not reach a receipt at all (issue #2777). The name is now
+					// read from the canonical constant the renderer uses.
+					for _, want := range []string{reviewtransaction.ReviewerContextMarker, "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}
