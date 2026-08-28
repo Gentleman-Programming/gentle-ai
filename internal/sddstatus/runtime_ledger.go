@@ -940,10 +940,49 @@ func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active R
 		return ""
 	}
 	admission := ValidateVerifyReportAdmission(string(payload), specCounts)
-	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != request.EvidenceRevision {
+	// Derived through the same rule the emitter used, so both sides exclude the
+	// report itself. Comparing whole trees here could never succeed: the report
+	// is one of the tree's own entries.
+	settledDigest, err := canonicalCandidateDigest(ctx, store.Repo, store.Workspace, changeRoot, store.Change, candidateTree)
+	if err != nil {
+		return ""
+	}
+	if !finalVerifyReportAttests(admission, request.EvidenceRevision, settledDigest) {
 		return ""
 	}
 	return verifyReportDigest(payload)
+}
+
+// finalVerifyReportAttests reports whether an admitted report may stand as the
+// final verification attestation for the candidate being settled.
+//
+// A passing report proves what it executed, and the ledger already reads it
+// out of the settled candidate tree, so its verdict and evidence revision are
+// the whole question.
+//
+// A not-applicable report is different in kind. It asserts something about the
+// exact bytes it classified and nothing about any other bytes, so it attests
+// only when the content it names is the content being settled.
+//
+// The comparison is against a digest of the classified content rather than the
+// candidate's tree OID, and settledDigest must be computed with the report's
+// own path excluded. The report lives inside the tree it describes, so a tree
+// OID would name a hash fixed point and no honest emitter could ever satisfy
+// it. Excluding the report keeps both sides stable, and a report describing
+// content that has since drifted, or naming no content at all, attests
+// nothing.
+func finalVerifyReportAttests(admission VerifyReportAdmission, expectedRevision, settledDigest string) bool {
+	if !admission.Valid || admission.EvidenceRevision != expectedRevision {
+		return false
+	}
+	switch admission.Verdict {
+	case "pass":
+		return true
+	case VerifyVerdictNotApplicable:
+		return admission.CandidateDigest != "" && admission.CandidateDigest == settledDigest
+	default:
+		return false
+	}
 }
 
 func verifyReportDigest(payload []byte) string {
