@@ -18,9 +18,42 @@ func accountingOnlyEscalatedState(t *testing.T, repo, lineage string) CompactSta
 	}
 
 	state.State = StateEscalated
-	state.OriginalChangedLines = 1
-	state.CorrectionBudget = 1
-	state.CorrectionBudgetPolicy = ""
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Re-capture the historical legacy-policy role values through the canonical
+	// capture boundary. The old policy's phase differs from the current floor-two
+	// phase, so keeping the old entries would be an invalid synthetic authority.
+	legacy := state
+	legacy.State, legacy.CurrentSnapshot = StateReviewing, legacy.InitialSnapshot
+	legacy.OriginalChangedLines, legacy.CorrectionBudget, legacy.CorrectionBudgetPolicy = 1, 1, ""
+	legacy.FixFindingIDs = []string{}
+	legacy.ProposedCorrectionLines, legacy.ActualCorrectionLines = nil, nil
+	legacy.FixDeltaHash, legacy.OriginalCriteria, legacy.CorrectionRegression, legacy.EvidenceHash = EmptyFixDeltaHash, nil, nil, ""
+	legacy.CorrectionAttempts, legacy.CumulativeCorrectionLines = nil, 0
+	legacy.AdmittedRoleResults = []CompactAdmittedRoleResult{}
+	legacy.CapturePhaseEpoch = 0
+	phase, err := deriveCompactCapturePhaseRevision(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.CapturePhaseRevision = phase
+	store, err := CompactAuthoritativeStore(t.Context(), repo, legacy.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCompactFixtureRecord(t, store, legacy)
+	for order := range legacy.SelectedLenses {
+		captureCompactLens(t, store, legacy, order, view.LensResults[order].Findings...)
+	}
+	captured, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.OriginalChangedLines, state.CorrectionBudget, state.CorrectionBudgetPolicy = 1, 1, ""
+	state.AdmittedRoleResults = captured.State.AdmittedRoleResults
+	state.CapturePhaseRevision, state.CapturePhaseEpoch = captured.State.CapturePhaseRevision, captured.State.CapturePhaseEpoch
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)
 	}

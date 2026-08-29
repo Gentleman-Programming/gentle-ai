@@ -178,6 +178,21 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 	if err != nil || nativeLines <= 0 || nativeLines > predecessor.State.CorrectionBudget {
 		t.Fatalf("accounting-only correction lines = %d budget = %d err=%v", nativeLines, predecessor.State.CorrectionBudget, err)
 	}
+	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(
+		context.Background(), repo, predecessor.State, predecessor.State.CapturePhaseRevision, correction,
+	)
+	if err != nil {
+		t.Fatalf("build canonical targeted validation request: %v", err)
+	}
+	if err := store.CaptureAdmittedTargetedValidatorResult(context.Background(), reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
+		ExpectedRequest: request, Payload: []byte(`{"outcome":"passed"}`),
+	}); err != nil {
+		t.Fatalf("capture canonical targeted validation result: %v", err)
+	}
+	predecessor, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Seed the historical/legacy persisted overflow directly. Current correction
 	// completion rejects over-budget actuals before it mutates authority.
 	policyHash, policyContent := predecessor.State.PolicyHash, predecessor.State.FrozenPolicyContent
@@ -186,7 +201,7 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 		LedgerIDs: predecessor.State.FixFindingIDs, FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: []reviewtransaction.FollowUp{},
 		OriginalCriteria:              reviewtransaction.ValidationCheck{EvidenceHash: facadePayloadHash([]byte("historical acceptance")), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression:          reviewtransaction.ValidationCheck{EvidenceHash: facadePayloadHash([]byte("historical regression")), FixDeltaHash: fixHash, Passed: true},
-		TargetedValidationRequestHash: facadePayloadHash([]byte("historical targeted validation request")), CorrectionTargetIdentity: correction.Identity,
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: correction.Identity,
 	}
 	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
 	predecessor.State.CorrectionAttempts = []reviewtransaction.CompactCorrectionAttempt{{Snapshot: correction, ProposedLines: *predecessor.State.ProposedCorrectionLines, ActualLines: actual, FixDeltaHash: fixHash, OriginalCriteria: original, CorrectionRegression: regression, TargetedValidationRequestHash: validation.TargetedValidationRequestHash, CorrectionTargetIdentity: correction.Identity}}
@@ -248,6 +263,39 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 	decodeStrictReviewJSON(t, payload, &recovered)
 	if recovered.LineageID != successor || recovered.State != reviewtransaction.StateValidating || recovered.Recovery.Evidence == nil {
 		t.Fatalf("accounting-only recovery = %#v", recovered)
+	}
+	successorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorRecord, err := successorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(successorRecord.State.AdmittedRoleResults) != len(predecessor.State.AdmittedRoleResults) {
+		t.Fatalf("accounting-only successor did not retain the canonical role references: %#v", successorRecord.State)
+	}
+	for index, reference := range recovered.Recovery.Evidence.AdmittedRoleReferences {
+		admitted := successorRecord.State.AdmittedRoleResults[index]
+		if admitted.Role != reference.Role || admitted.Lens != reference.Lens || admitted.SelectedOrder != reference.SelectedOrder ||
+			admitted.TargetIdentity != reference.TargetIdentity || admitted.CapturePhaseRevision != reference.CapturePhaseRevision ||
+			admitted.RequestHash != reference.RequestHash || admitted.ArtifactDigest != reference.ArtifactDigest {
+			t.Fatalf("accounting-only reference %d does not resolve one canonical admitted entry: %#v", index, admitted)
+		}
+	}
+	beforeReplay, err := os.ReadFile(successorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayPayload := executeSelectorTransition(t, repo, status)
+	var replay ReviewRecoverResult
+	decodeStrictReviewJSON(t, replayPayload, &replay)
+	afterReplay, err := os.ReadFile(successorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.StoreRevision != recovered.StoreRevision || !bytes.Equal(beforeReplay, afterReplay) {
+		t.Fatalf("accounting-only recovery replay mutated authority: first=%#v replay=%#v", recovered, replay)
 	}
 }
 
@@ -365,7 +413,7 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 		state.Recovery == nil || state.Recovery.ConsumedCorrectionAttempts != 1 || state.Recovery.ConsumedCorrectionLines != 3 {
 		t.Fatalf("recovered correction accounting = %#v, predecessor = %#v", state, predecessor.State)
 	}
-	if len(state.LensResults) != 0 || len(state.Findings) != 0 || state.EvidenceHash != "" || state.ProposedCorrectionLines != nil ||
+	if len(state.AdmittedRoleResults) != 0 || state.EvidenceHash != "" || state.ProposedCorrectionLines != nil ||
 		state.ActualCorrectionLines != nil {
 		t.Fatalf("recovered successor inherited review or verification evidence: %#v", state)
 	}

@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -54,6 +55,26 @@ func startReviewingCompactAuthority(t *testing.T, repo string, state CompactStat
 		t.Fatal(err)
 	}
 	return started.Record.State, store
+}
+
+// startReviewingCompactFixture persists an ordinary test fixture without an
+// atomic worktree binding. It keeps cross-repository byte-comparison fixtures
+// deterministic while every review value still enters through admitted capture.
+func startReviewingCompactFixture(t *testing.T, repo string, state CompactState) (CompactState, CompactStore) {
+	t.Helper()
+	phase, err := deriveCompactCapturePhaseRevision(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.CapturePhaseRevision = phase
+	store, err := CompactAuthoritativeStore(t.Context(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+	return state, store
 }
 
 // newCompactFixtureStateForTarget builds a compact START state from the exact
@@ -98,6 +119,114 @@ func startReviewingFixtureLineage(t *testing.T, repo, lineage, content string) s
 	return lineage
 }
 
+// captureAndCompleteCompactReview constructs completed review semantics only
+// through canonical admitted captures. It is intentionally test-only: production
+// callers capture through their provider-owned boundaries, while fixtures need the
+// same immutable role values before exercising later lifecycle seams.
+func captureAndCompleteCompactReview(t *testing.T, store CompactStore, state CompactState, input CompactReviewInput) (CompactState, CompactRecord) {
+	t.Helper()
+	if state.State != StateReviewing || len(input.LensResults) != len(state.SelectedLenses) {
+		t.Fatalf("fixture review input does not match reviewing authority: state=%q results=%d lenses=%d", state.State, len(input.LensResults), len(state.SelectedLenses))
+	}
+	classifications := make(map[string]FindingEvidence, len(input.Classifications))
+	for _, classification := range input.Classifications {
+		if _, exists := classifications[classification.FindingID]; exists {
+			t.Fatalf("fixture repeats classification %q", classification.FindingID)
+		}
+		classifications[classification.FindingID] = classification
+	}
+	for order, result := range input.LensResults {
+		if result.Lens != state.SelectedLenses[order] {
+			t.Fatalf("fixture result %d lens = %q, want %q", order, result.Lens, state.SelectedLenses[order])
+		}
+		findings := append([]Finding(nil), result.Findings...)
+		for index := range findings {
+			if !isSevereSeverity(findings[index].Severity) {
+				continue
+			}
+			classification, found := classifications[findings[index].ID]
+			if !found {
+				t.Fatalf("fixture severe finding %q has no classification", findings[index].ID)
+			}
+			findings[index].EvidenceClass = classification.Class
+			findings[index].CausalDisposition = classification.Causality
+		}
+		captureCompactLens(t, store, state, order, findings...)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = record.State
+	if len(input.RefuterOutcomes) != 0 {
+		payload, err := json.Marshal(compactAdmittedRefuterValue{Results: input.RefuterOutcomes})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CaptureAdmittedRefuterResult(t.Context(), CompactAdmittedRefuterResultRequest{
+			ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+			RequestHash: hash("f"), Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		record, err = store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = record.State
+	}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults: view.LensResults, Classifications: compactReviewViewClassifications(view), RefuterOutcomes: view.RefuterOutcomes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return state, record
+}
+
+func compactReviewViewClassifications(view CompactReviewView) []FindingEvidence {
+	classifications := make([]FindingEvidence, 0, len(view.Findings))
+	for _, finding := range view.Findings {
+		if classification, found := view.Classifications[finding.ID]; found {
+			classifications = append(classifications, classification)
+		}
+	}
+	return classifications
+}
+
+func compactLensCaptureRequest(t *testing.T, store CompactStore, state CompactState, order int, findings ...Finding) CompactAdmittedReviewerResultRequest {
+	t.Helper()
+	frozen, err := (SnapshotBuilder{Repo: store.repo}).FrozenCandidateContext(t.Context(), state.InitialSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := state.SelectedLenses[order]
+	subject, err := NewArtifactSubject(state, state.CapturePhaseRevision, frozen, lens, order, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := LensResult{Lens: lens, Findings: append([]Finding{}, findings...), Evidence: []string{"inspected the complete frozen candidate scope"}}
+	candidateCausalFindingIDs := []string{}
+	for _, finding := range result.Findings {
+		if isSevereSeverity(finding.Severity) && (finding.CausalDisposition == CausalIntroduced || finding.CausalDisposition == CausalBehaviorActivated || finding.CausalDisposition == CausalWorsened) {
+			candidateCausalFindingIDs = append(candidateCausalFindingIDs, finding.ID)
+		}
+	}
+	inspection := ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: append([]string(nil), state.InitialSnapshot.Paths...)}
+	raw, err := json.Marshal(compactProviderReviewerResult{SubjectHash: subject.SubjectHash, Inspection: inspection, Lens: lens, Findings: result.Findings, Evidence: result.Evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CompactAdmittedReviewerResultRequest{
+		ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+		FrozenContext: frozen, ArtifactSubject: subject, Inspection: inspection, Result: result,
+		CandidateCausalFindingIDs: candidateCausalFindingIDs, RawPayload: append(raw, '\n'),
+	}
+}
+
 // persistSemanticallyInvalidCompactState changes only the reviewing state
 // marker, so the loader reaches semantic validation before its checksum check.
 // The invalidated state omits required invalidation evidence.
@@ -126,11 +255,7 @@ func correctionRequiredCompactAuthority(t *testing.T, repo, lineage string) (Com
 	if len(state.SelectedLenses) == 0 {
 		t.Fatal("correction fixture unexpectedly selected no lenses")
 	}
-	state, store := startReviewingCompactAuthority(t, repo, state)
-	started, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	state, store := startReviewingCompactFixture(t, repo, state)
 	results := make([]LensResult, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
 		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
@@ -140,15 +265,13 @@ func correctionRequiredCompactAuthority(t *testing.T, repo, lineage string) (Com
 		Claim: "wrong value", ProofRefs: []string{"candidate-only failure"},
 	}
 	results[0].Findings = []Finding{finding}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults: results,
 		Classifications: []FindingEvidence{{
 			FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk",
 		}},
 		RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if state.State != StateCorrectionRequired {
 		t.Fatalf("fixture state = %q, want %q", state.State, StateCorrectionRequired)
 	}
@@ -211,11 +334,7 @@ func escalatedCompactAuthorityFixture(t *testing.T, repo, lineage string) (Compa
 	if len(state.SelectedLenses) == 0 {
 		t.Fatal("escalated fixture unexpectedly selected no lenses")
 	}
-	state, store := startReviewingCompactAuthority(t, repo, state)
-	started, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	state, store := startReviewingCompactFixture(t, repo, state)
 	results := make([]LensResult, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
 		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
@@ -225,15 +344,13 @@ func escalatedCompactAuthorityFixture(t *testing.T, repo, lineage string) (Compa
 		Claim: "reviewer evidence remains inconclusive", ProofRefs: []string{"candidate inspection was inconclusive"},
 	}
 	results[0].Findings = []Finding{finding}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults: results,
 		Classifications: []FindingEvidence{{
 			FindingID: finding.ID, Class: EvidenceInsufficient, Causality: CausalUnknown, Proof: "insufficient evidence",
 		}},
 		RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if state.State != StateEscalated {
 		t.Fatalf("fixture state = %q, want %q", state.State, StateEscalated)
 	}
@@ -323,15 +440,14 @@ func preContractRecoveryFixture(t *testing.T, repo, authorization string, mutate
 func receiptFreeLastEventClosedCompactState(t *testing.T, repo, lineage string, intended []string) CompactState {
 	t.Helper()
 	state := newCompactTestStateWithIntended(t, repo, lineage, intended)
+	state, store := startReviewingCompactAuthority(t, repo, state)
 	results := make([]LensResult, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
 		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
 	}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatal(err)
 	}

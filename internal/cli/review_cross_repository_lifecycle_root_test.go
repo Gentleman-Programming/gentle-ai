@@ -222,8 +222,8 @@ func assertOpenCodeBContextAdmitsFromSessionA(t *testing.T, targetRoot string, s
 	}
 	lens := record.State.SelectedLenses[0]
 	subject := mustArtifactSubject(t, targetRoot, record, lens, 0)
-	binding := hostLensBindingJSON(record.State.LineageID, started.RepositoryContext.TargetIdentity, lens, "0", record.Revision, started.RepositoryContext.Handle, subject.SubjectHash)
-	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
+	binding := hostLensBindingJSON(record.State.LineageID, started.RepositoryContext.TargetIdentity, lens, "0", record.State.CapturePhaseRevision, started.RepositoryContext.Handle, subject.SubjectHash)
+	relay := startOpenCodeTransportRelay(t, targetRoot, openCodeTransportEnvelope{
 		Schema:    openCodeReviewTransportSchema,
 		Operation: "start",
 		Prompt:    reviewLensContextBindingHeader + " " + binding + "\nOpenCode host task.",

@@ -120,10 +120,10 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 	b.pass(openCodeLane, openCodeEchoStep,
 		"drifted host echo was rebuilt into Go-canonical bytes and captured; only the exact bytes stay a pass-through")
 	if operationState(manifest) != "approved" {
-		b.fail(openCodeLane, "host-echo lifecycle burned", fmt.Sprintf("terminal state = %q, want approved", operationState(manifest)))
+		b.fail(openCodeLane, "host-echo lifecycle acknowledged and burned", fmt.Sprintf("terminal state = %q, want approved", operationState(manifest)))
 		return
 	}
-	b.burnApproved(openCodeLane, "host-echo lifecycle burned", repo, "opencode", nil, manifest)
+	b.acknowledgeApproved(openCodeLane, "host-echo lifecycle acknowledged and burned", repo, "opencode", nil, manifest)
 }
 
 // hostEchoedMaterialization reproduces the drift a re-typed materialization

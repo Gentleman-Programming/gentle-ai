@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -223,5 +224,51 @@ func TestCaptureRefusalEmitFailurePreservesNativeRefusal(t *testing.T) {
 	}
 	if !strings.HasPrefix(err.Error(), typed.Error()) {
 		t.Fatalf("refusal is not the primary error: %q", err.Error())
+	}
+}
+
+// TestOverBudgetCorrectionPlanRefusalIsClassifiedAsNotStarted pins the envelope
+// an over-budget pre-edit forecast earns. The flag exists so an operator can
+// declare a size BEFORE editing, and the refusal is a pure precondition on
+// caller input: BeginCorrection returns before it records a proposal or
+// advances the capture phase, and the command returns before its store.Replace,
+// so nothing is written. Reporting that as operation_outcome_unknown with
+// retry_safe:false tells the operator the store may have moved when it provably
+// did not, and it routes them to recovery instead of to a smaller forecast.
+func TestOverBudgetCorrectionPlanRefusalIsClassifiedAsNotStarted(t *testing.T) {
+	repo, started, store, record, request := correctionRequiredForPlanCapture(t)
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = RunReview([]string{
+		"capture-correction-plan", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", request.TargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash, "--correction-lines", strconv.Itoa(request.CorrectionBudget + 1),
+	}, &output)
+
+	// Only an outcome that stays unknown after classification earns a defect
+	// report. An operator who forecast too many lines has not found a product
+	// defect, and should not be told to file one.
+	reports, _ := filepath.Glob(filepath.Join(filepath.Dir(reviewCLIAuthorityRoot(t, repo)), reviewDefectReportDirName, "*"))
+	if len(reports) != 0 {
+		t.Fatalf("over-budget forecast wrote %d defect report(s) for ordinary caller input", len(reports))
+	}
+
+	failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
+	if failure.Code == "operation_outcome_unknown" {
+		t.Fatalf("over-budget forecast reported an unknown outcome for a refusal that never started: %#v", failure)
+	}
+	if failure.Phase != "preflight" || failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
+		t.Fatalf("over-budget forecast envelope = %#v, want a retry-safe preflight refusal that never started", failure)
+	}
+	if !strings.Contains(failure.Cause, "exceeding the remaining budget") {
+		t.Fatalf("over-budget forecast envelope hides its cause: %#v", failure)
+	}
+	after, err := store.Load()
+	if err != nil || after.Revision != before.Revision || after.State.ProposedCorrectionLines != nil {
+		t.Fatalf("over-budget forecast mutated authority: %#v, %v", after, err)
 	}
 }

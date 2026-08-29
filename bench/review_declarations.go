@@ -115,6 +115,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j99-issue-2906-finalize-missing-contract":                                  reviewOptedIn,
 	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
 	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
+	"j119-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

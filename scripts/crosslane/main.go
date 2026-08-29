@@ -8,7 +8,7 @@
 //     through a fresh Node Task-hook process with HOST-assembled binding frames,
 //     against an immutable base tree and committed candidate. Covers the lens
 //     frame, correction closure re-entry, and validator role frame.
-//   - claude lane: one low-risk lifecycle ending in authority burn and five
+//   - claude lane: one low-risk lifecycle ending in exact acknowledgement then authority burn and five
 //     ordinary-policy gates, plus a committed medium candidate exercised by a
 //     local provider-shaped fixture through the real Claude process transport.
 //     This is deterministic process proof, not live model proof.

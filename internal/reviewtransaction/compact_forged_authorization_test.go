@@ -32,6 +32,11 @@ func forgedRecoveryPair(t *testing.T, repo, suffix, target string, mutate ...fun
 	writeSnapshotFile(t, repo, "tracked.txt", target)
 	successorState := newCompactTestState(t, repo, "forged-successor-"+suffix)
 	successorState.Generation = state.Generation + 1
+	successorStore, err := CompactAuthoritativeStore(context.Background(), repo, successorState.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorState, _ = startReviewingCompactFixture(t, repo, successorState)
 	successorState.Recovery = &CompactRecoveryProvenance{
 		PredecessorLineageID: state.LineageID, PredecessorRevision: predecessor.Revision,
 		Disposition: RecoveryEscalated, Reason: "retry terminal validator", Actor: "maintainer@example.com",
@@ -42,10 +47,6 @@ func forgedRecoveryPair(t *testing.T, repo, suffix, target string, mutate ...fun
 	}
 	for _, adjust := range mutate {
 		adjust(&successorState)
-	}
-	successorStore, err := CompactAuthoritativeStore(context.Background(), repo, successorState.LineageID)
-	if err != nil {
-		t.Fatal(err)
 	}
 	successor := writeCompactFixtureRecord(t, successorStore, successorState)
 	return predecessor, successor, successorStore
@@ -58,13 +59,25 @@ func TestForgedRecoveryAuthorizationOnNonTerminalSuccessorHasSanctionedAbandonEx
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
 	_, successor, successorStore := forgedRecoveryPair(t, repo, "captured", "forged captured target\n", func(state *CompactState) {
-		results := make([]LensResult, 0, len(state.SelectedLenses))
-		for _, lens := range state.SelectedLenses {
-			results = append(results, LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed once"}})
+		store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if err := state.CompleteReview(CompactReviewInput{
-			LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
-		}); err != nil {
+		for order := range state.SelectedLenses {
+			captureCompactLens(t, store, *state, order)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovery := state.Recovery
+		*state = record.State
+		state.Recovery = recovery
+		view, err := state.CompactReviewView()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.CompleteReview(CompactReviewInput{LensResults: view.LensResults, RefuterOutcomes: view.RefuterOutcomes}); err != nil {
 			t.Fatal(err)
 		}
 	})

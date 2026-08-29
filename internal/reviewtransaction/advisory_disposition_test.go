@@ -1,68 +1,79 @@
 package reviewtransaction
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
 
-// TestAdvisoryFindingsDeclareNonBlockingRouting pins the disposition every
-// non-blocking frozen finding already carries internally (Outcomes[id] and its
-// absence from FixFindingIDs) as an explicit, named value. The field incident
-// this covers: a consumer read a WARNING off an approved receipt, inferred
-// from the severity string alone that it had to act, and burned a review cycle
-// re-running an already-approved candidate.
+func admittedAdvisoryState(t *testing.T, lineage string, findings []Finding) CompactState {
+	t.Helper()
+	fixture := newCompactReviewerCaptureFixture(t, lineage)
+	request := fixture.request
+	request.Result = LensResult{
+		Lens: LensReliability, Findings: findings,
+		Evidence: []string{"inspected the complete frozen candidate scope"},
+	}
+	raw, err := json.Marshal(compactProviderReviewerResult{
+		SubjectHash: request.ArtifactSubject.SubjectHash, Inspection: request.Inspection,
+		Lens: request.Result.Lens, Findings: request.Result.Findings, Evidence: request.Result.Evidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.RawPayload = append(raw, '\n')
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := record.State
+	state.State = StateApproved
+	return state
+}
+
+// TestAdvisoryFindingsDeclareNonBlockingRouting reads both the informational
+// and separately actionable outcomes from the admitted reviewer value.
 func TestAdvisoryFindingsDeclareNonBlockingRouting(t *testing.T) {
-	state := CompactState{
-		State: StateApproved,
-		Findings: []Finding{
-			{ID: "R3-001", Lens: "reliability", Location: "feature.go:3", Severity: "WARNING", Claim: "no covering assertion"},
-			{ID: "R3-002", Lens: "reliability", Location: "feature.go:5", Severity: "SUGGESTION", Claim: "could reuse the helper"},
-			{ID: "R1-003", Lens: "risk", Location: "legacy.go:9", Severity: "CRITICAL", Claim: "pre-existing injection"},
-			{ID: "R1-004", Lens: "risk", Location: "feature.go:7", Severity: "BLOCKER", Claim: "inferential claim the refuter knocked down"},
-		},
-		Outcomes: map[string]EvidenceOutcome{
-			"R3-001": OutcomeInfo,
-			"R3-002": OutcomeInfo,
-			"R1-003": OutcomeInfo,
-			"R1-004": OutcomeRefuted,
-		},
-		FixFindingIDs: []string{},
-	}
+	state := admittedAdvisoryState(t, "advisory-disposition", []Finding{
+		{ID: "R3-001", Lens: LensReliability, Location: "internal/a.go:3", Severity: "WARNING", Claim: "no covering assertion", ProofRefs: []string{"inspection found no covering assertion"}},
+		{ID: "R3-003", Lens: LensReliability, Location: "internal/b.go:5", Severity: "CRITICAL", Claim: "pre-existing injection", ProofRefs: []string{"base and candidate share the behavior"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalPreExisting},
+	})
 	want := []AdvisoryFinding{
-		{ID: "R1-003", Lens: "risk", Location: "legacy.go:9", Severity: "CRITICAL", Disposition: AdvisoryFollowUp},
-		{ID: "R1-004", Lens: "risk", Location: "feature.go:7", Severity: "BLOCKER", Disposition: AdvisoryRefuted},
-		{ID: "R3-001", Lens: "reliability", Location: "feature.go:3", Severity: "WARNING", Disposition: AdvisoryInformational},
-		{ID: "R3-002", Lens: "reliability", Location: "feature.go:5", Severity: "SUGGESTION", Disposition: AdvisoryInformational},
+		{ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING", Disposition: AdvisoryInformational},
+		{ID: "R3-003", Lens: "reliability", Location: "internal/b.go:5", Severity: "CRITICAL", Disposition: AdvisoryFollowUp},
 	}
-	got := AdvisoryFindings(state)
-	if !reflect.DeepEqual(got, want) {
+	if got := AdvisoryFindings(state); !reflect.DeepEqual(got, want) {
 		t.Fatalf("AdvisoryFindings(approved) = %#v, want %#v", got, want)
 	}
 }
 
-// TestAdvisoryFindingsExcludeCorrectedAndUnapprovedLineages keeps the new
-// projection strictly descriptive: it never claims a corrected (blocking)
-// finding was advisory, and it says nothing at all about a lineage that is not
-// terminally approved.
-func TestAdvisoryFindingsExcludeCorrectedAndUnapprovedLineages(t *testing.T) {
-	corrected := CompactState{
-		State: StateApproved,
-		Findings: []Finding{
-			{ID: "R1-001", Lens: "risk", Location: "feature.go:3", Severity: "BLOCKER", Claim: "candidate-caused"},
-			{ID: "R3-002", Lens: "reliability", Location: "feature.go:5", Severity: "WARNING", Claim: "advisory only"},
-		},
-		Outcomes:      map[string]EvidenceOutcome{"R1-001": OutcomeCorroborated, "R3-002": OutcomeInfo},
-		FixFindingIDs: []string{"R1-001"},
+// TestAdvisoryFindingsUseAdmittedValuesInsteadOfTamperedProjections proves an
+// approved advisory payload cannot be redirected by compatibility projections.
+func TestAdvisoryFindingsUseAdmittedValuesInsteadOfTamperedProjections(t *testing.T) {
+	admitted := Finding{ID: "R3-admitted", Lens: LensReliability, Location: "internal/a.go:3", Severity: "WARNING", Claim: "admitted warning", ProofRefs: []string{"admitted reviewer evidence"}}
+	state := admittedAdvisoryState(t, "advisory-tampered-projection", []Finding{admitted})
+	// CompactState no longer permits retired projection values. Advisory semantics
+	// remain a pure read of the admitted capture.
+	want := []AdvisoryFinding{{ID: admitted.ID, Lens: "reliability", Location: admitted.Location, Severity: admitted.Severity, Disposition: AdvisoryInformational}}
+	if got := AdvisoryFindings(state); !reflect.DeepEqual(got, want) {
+		t.Fatalf("AdvisoryFindings(tampered projections) = %#v, want admitted values %#v", got, want)
 	}
-	got := AdvisoryFindings(corrected)
-	if len(got) != 1 || got[0].ID != "R3-002" || got[0].Disposition != AdvisoryInformational {
-		t.Fatalf("AdvisoryFindings(corrected approved) = %#v, want only the informational finding", got)
+}
+
+// TestAdvisoryFindingsRequireAdmittedEvidence keeps the projection descriptive:
+// persisted compatibility fields alone never announce an advisory outcome.
+func TestAdvisoryFindingsRequireAdmittedEvidence(t *testing.T) {
+	if got := AdvisoryFindings(CompactState{State: StateApproved}); len(got) != 0 {
+		t.Fatalf("AdvisoryFindings(without admitted evidence) = %#v, want none", got)
 	}
 
-	reviewing := corrected
+	reviewing := admittedAdvisoryState(t, "advisory-reviewing", []Finding{{ID: "R3-001", Lens: LensReliability, Location: "internal/a.go:3", Severity: "WARNING", Claim: "advisory only", ProofRefs: []string{"admitted reviewer evidence"}}})
 	reviewing.State = StateReviewing
 	if got := AdvisoryFindings(reviewing); len(got) != 0 {
-		t.Fatalf("AdvisoryFindings(reviewing) = %#v, want none: only a terminal approval settles disposition", got)
+		t.Fatalf("AdvisoryFindings(reviewing) = %#v, want none: only terminal approval settles disposition", got)
 	}
 }
 

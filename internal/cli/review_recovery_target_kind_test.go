@@ -230,7 +230,7 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, open.State, open.Revision)
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, open.State, open.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", open.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", open.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--agent", "pi", "--execute=true",
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)
@@ -307,7 +307,7 @@ func escalatedBaseDiffRecoveryFixture(t *testing.T, repo, lineage, baseRef strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, open.State, open.Revision)
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, open.State, open.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func escalatedBaseDiffRecoveryFixture(t *testing.T, repo, lineage, baseRef strin
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", open.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", open.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--agent", "pi", "--execute=true",
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)

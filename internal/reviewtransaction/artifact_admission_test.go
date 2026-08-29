@@ -518,7 +518,10 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _, err := referenceOutsideRepository(tt.value, lookup)
+			// No basename resolution in this unit: it pins the literal token
+			// grammar on its own, so a citation that misses stays outside.
+			noBasename := func(string) (string, bool, error) { return "", false, nil }
+			got, _, err := referenceOutsideRepository(tt.value, lookup, noBasename)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -527,4 +530,119 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 			}
 		})
 	}
+}
+
+// TestAdmitArtifactResolvesUnambiguousBasenameCitations covers the citation
+// shape a real reviewer produces (#3042): it names a file of the candidate by
+// its basename instead of its repository-relative path. The path IS in the
+// frozen candidate, so refusing it as "outside the frozen repository" is both
+// wrong and unrecoverable -- the reviewer is Go-owned, so no caller can correct
+// the citation, and every retry reproduces it.
+//
+// Ambiguity is the line: one candidate path may answer a basename, two may not,
+// because guessing which file a reviewer meant is how a finding gets attached
+// to code it never read.
+func TestAdmitArtifactResolvesUnambiguousBasenameCitations(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 1\n")
+	writeSnapshotFile(t, repo, "internal/deep/dup.go", "package deep\n")
+	writeSnapshotFile(t, repo, "other/dup.go", "package other\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	// Both dup.go files change too, so the ambiguity is real inside the frozen
+	// manifest rather than an accident of one of them being unchanged.
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 2\n")
+	writeSnapshotFile(t, repo, "internal/deep/dup.go", "package deep\n\nconst v = 1\n")
+	writeSnapshotFile(t, repo, "other/dup.go", "package other\n\nconst v = 1\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := CompactState{LineageID: "review-basename-citation", SelectedLenses: []string{LensReliability}, InitialSnapshot: snapshot}
+	subject, err := NewArtifactSubject(state, "sha256:"+strings.Repeat("3", 64), frozen, LensReliability, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRequest := func(evidence string) ArtifactAdmissionRequest {
+		return ArtifactAdmissionRequest{
+			ExpectedSubject:   subject,
+			FrozenContext:     frozen,
+			EchoedSubjectHash: subject.SubjectHash,
+			Inspection:        ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"internal/a.go", "internal/deep/dup.go", "other/dup.go"}},
+			Result: LensResult{
+				Lens:     LensReliability,
+				Findings: []Finding{},
+				Evidence: []string{evidence},
+			},
+			RawPayload:       []byte("review complete\n{\"subject_hash\":\"" + subject.SubjectHash + "\"}"),
+			CanonicalPayload: []byte("{\"findings\":[],\"evidence\":[\"inspection\"]}\n"),
+		}
+	}
+
+	t.Run("unambiguous basename is the candidate path it names", func(t *testing.T) {
+		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: a.go:3"))
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("basename citation admission = %q, %v; want completed", admission.Decision, err)
+		}
+	})
+	t.Run("ambiguous basename stays out of scope", func(t *testing.T) {
+		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: dup.go:1"))
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("ambiguous basename admission = %q, %v; want out of scope", admission.Decision, err)
+		}
+	})
+	t.Run("a finding location resolves the same way its evidence does", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("basename finding location admission = %q, %v; want completed", admission.Decision, err)
+		}
+	})
+	t.Run("an ambiguous finding location stays out of scope", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "dup.go:1", Severity: "WARNING",
+			Claim: "ambiguous", ProofRefs: []string{"diff: internal/a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("ambiguous finding location admission = %q, %v; want out of scope", admission.Decision, err)
+		}
+	})
+	t.Run("a proof reference resolves the same way evidence does", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("basename proof admission = %q, %v; want completed", admission.Decision, err)
+		}
+	})
+	t.Run("a citation carrying a directory prefix is not a basename", func(t *testing.T) {
+		// It said where it meant. Being wrong about that is not ambiguity to
+		// resolve, so it stays refused even though its last segment is unique.
+		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: wrong/a.go:3"))
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("prefixed citation admission = %q, %v; want out of scope", admission.Decision, err)
+		}
+	})
+	t.Run("unknown basename stays out of scope", func(t *testing.T) {
+		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: nowhere.go:1"))
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("unknown basename admission = %q, %v; want out of scope", admission.Decision, err)
+		}
+	})
 }

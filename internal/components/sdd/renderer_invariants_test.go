@@ -198,7 +198,7 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
 		"Only candidate-caused severe findings block",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
 	})
 	if profileName == "" {

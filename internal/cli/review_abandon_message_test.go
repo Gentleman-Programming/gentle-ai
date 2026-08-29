@@ -122,7 +122,7 @@ func reviewLookupValues(t *testing.T, message string, envelope map[string]any, e
 	captured := strings.Join(capturedLenses, ",")
 	expectedCapturedResults := make([]string, len(expectedCapturedLenses))
 	for index, lens := range expectedCapturedLenses {
-		expectedCapturedResults[index] = fmt.Sprintf("%02d-%s.json", index, lens)
+		expectedCapturedResults[index] = fmt.Sprintf("%02d-%s", index, lens)
 	}
 	if want := strings.Join(expectedCapturedResults, ","); captured != want {
 		t.Fatalf("discarded captured_lens_results = %q, want %q", captured, want)

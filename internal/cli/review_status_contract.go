@@ -146,11 +146,12 @@ const (
 )
 
 type ReviewTargetStatusAuthority struct {
-	Version    reviewtransaction.AuthorityVersion `json:"version"`
-	LineageID  string                             `json:"lineage_id"`
-	State      reviewtransaction.State            `json:"state"`
-	Generation int                                `json:"generation"`
-	Revision   string                             `json:"revision"`
+	Version              reviewtransaction.AuthorityVersion `json:"version"`
+	LineageID            string                             `json:"lineage_id"`
+	State                reviewtransaction.State            `json:"state"`
+	Generation           int                                `json:"generation"`
+	Revision             string                             `json:"revision"`
+	CapturePhaseRevision string                             `json:"-"`
 }
 
 type ReviewTargetStatusFrozen struct {
@@ -311,8 +312,9 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			reviewtransaction.ValidateReviewRepositoryContextHandle(result.RepositoryContext.Handle) != nil ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
-			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
-			result.Authority == nil || result.RepositoryContext.Revision != result.Authority.Revision ||
+			result.Authority == nil ||
+			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
+				result.RepositoryContext.Revision != result.Authority.CapturePhaseRevision ||
 			!correctionTerminalContext && result.RepositoryContext.TargetIdentity != expectedRepositoryContextTarget {
 			return errors.New("negotiated STATUS repository context is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
 		}
@@ -356,7 +358,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
 			if result.Authority == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
-				request.LineageID != result.Authority.LineageID || request.ExpectedRevision != result.Authority.Revision {
+				request.LineageID != result.Authority.LineageID || !validReviewCapabilitySHA256(request.ExpectedRevision) ||
+				result.Authority.CapturePhaseRevision != "" && request.ExpectedRevision != result.Authority.CapturePhaseRevision {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
 		}
@@ -459,7 +462,9 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	if result.ValidationRequest != nil {
 		if result.Authority == nil || result.Authority.State != reviewtransaction.StateCorrectionRequired ||
 			result.ValidationRequest.LineageID != result.Authority.LineageID ||
-			result.ValidationRequest.ExpectedRevision != result.Authority.Revision ||
+			!validReviewCapabilitySHA256(result.ValidationRequest.ExpectedRevision) ||
+			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
+				result.ValidationRequest.ExpectedRevision != result.Authority.CapturePhaseRevision ||
 			result.ValidationRequest.TargetIdentity != result.Projection.InitialSnapshotIdentity ||
 			result.ValidationRequest.Projection != result.Projection.Projection ||
 			result.ValidationRequest.CorrectionCandidateTree != result.Projection.CurrentCandidateTree ||
@@ -543,8 +548,8 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return err
 		}
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
-			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
-			TargetIdentity: result.TargetIdentity, RepositoryContext: context,
+			LineageID: result.Authority.LineageID, Revision: transition.CorrectionRequest.ExpectedRevision,
+			TargetIdentity: result.TargetIdentity, RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
@@ -575,7 +580,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			arguments, err := reviewTransitionArgumentMap(input.Arguments)
 			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
 				(!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) && !reviewProviderCaptureRuntime(model.AgentID(arguments["agent"]))) ||
-				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
 				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
 				arguments["request-hash"] != result.ValidationRequest.RequestHash {
 				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
@@ -648,7 +653,7 @@ func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInpu
 	if err := validateReviewProviderTaskInput(input, arguments); err != nil {
 		return err
 	}
-	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
 		arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
 	}
@@ -714,7 +719,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return result.validateStartNextTransition()
 	}
 	expectedExecutionTarget := result.TargetIdentity
-	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
+	if result.Authority != nil && (result.Authority.State == reviewtransaction.StateValidating || result.NextTransition.Execute != nil && result.NextTransition.Execute.Operation == "review.acknowledge-approved") {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
 	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
 		result.ValidationRequest != nil && (result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
@@ -1123,7 +1128,7 @@ func (transition ReviewNextTransition) Validate() error {
 		if transition.Collect != nil || transition.Execute == nil || transition.Execute.Arguments == nil || len(transition.Execute.Preconditions) == 0 || !validReviewCapabilitySHA256(transition.Execute.Binding.TargetIdentity) {
 			return errors.New("execution transition is incomplete")
 		}
-		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
+		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" && transition.Execute.Operation != "review.acknowledge-approved" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
 			return errors.New("execution transition operation or binding is invalid")
 		}
 		if transition.Execute.Binding.RepositoryContext != "" && reviewtransaction.ValidateReviewRepositoryContextHandle(transition.Execute.Binding.RepositoryContext) != nil {
@@ -1238,6 +1243,25 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation
 	return values, nil
 }
 
+func validateReviewApprovedAcknowledgementExecution(execution ReviewTransitionExecution) error {
+	transition := ReviewNextTransition{
+		Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: &execution,
+	}
+	return transition.Validate()
+}
+
+func validReviewAcknowledgementToken(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			return false
+		}
+	}
+	return true
+}
+
 func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
 	if execution.Command != reviewTransitionCommandLine(execution.Operation, execution.Arguments) {
 		return errors.New("execution transition command does not match its arguments") // refusal:by-design world-action: a producer must publish the exact command its executable arguments define
@@ -1260,6 +1284,18 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		return true
 	}
 	switch execution.Operation {
+	case "review.acknowledge-approved":
+		if !exact([]string{"cwd", "lineage", "target", "expected-revision", "token"}, nil) ||
+			arguments["lineage"] != execution.Binding.LineageID || arguments["target"] != execution.Binding.TargetIdentity ||
+			arguments["expected-revision"] != execution.Binding.Revision || !validReviewAcknowledgementToken(arguments["token"]) ||
+			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateApproved)}) {
+			return errors.New("approved acknowledgement transition binding is invalid") // refusal:by-design world-action: only the exact pending acknowledgement continuation can burn approved authority
+		}
+		for _, argument := range execution.Arguments {
+			if argument.Token != reviewTransitionArgumentToken(argument) {
+				return errors.New("approved acknowledgement transition token is invalid") // refusal:by-design world-action: the published acknowledgement command must execute exactly its bound arguments
+			}
+		}
 	case "review.validate":
 		gate := reviewtransaction.GateKind(arguments["gate"])
 		wantSelectors := []ReviewTransitionArgument{}

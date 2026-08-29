@@ -24,9 +24,10 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 	lens := record.State.SelectedLenses[0]
 	subjectHash := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
 	return []string{
+		"--cwd", repo,
 		"--repository-context", handle,
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--expected-revision", record.Revision, "--lens", lens, "--order", "0",
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens, "--order", "0",
 		"--subject-hash", subjectHash,
 	}
 }
@@ -47,7 +48,11 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 		t.Fatal("materialized provider task omits the frozen target identity")
 	}
 	var native bytes.Buffer
-	if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens}, &native); err != nil {
+	if err := RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", handle,
+		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens,
+	}, &native); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), native.Bytes()) {
@@ -64,9 +69,9 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || slot.Occupied {
-		t.Fatalf("materialize occupied the reviewer result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleLens) {
+		t.Fatalf("materialize mutated compact authority: %#v, %v", current, err)
 	}
 
 	stale := replaceInspectionArg(t, slices.Clone(binding), "--subject-hash", "sha256:"+strings.Repeat("0", 64))
