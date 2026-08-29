@@ -361,15 +361,7 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// exact-lineage STATUS is its only re-entry (#3647).
 		collectsUntrackedSelection := result.NextTransition.Kind == reviewNextTransitionCollect &&
 			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
-		// The exemption relaxes presence parity only. If the untracked-selection
-		// transition does carry a request, it is still two copies of the same
-		// thing and they still have to agree.
-		mismatchedPresence := (transitionRequest == nil) != (result.ValidationRequest == nil)
-		if collectsUntrackedSelection && transitionRequest == nil {
-			mismatchedPresence = false
-		}
-		if !providerTargetedValidation && (mismatchedPresence ||
-			transitionRequest != nil && result.ValidationRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
+		if !providerTargetedValidation && !reviewValidationRequestCopiesAgree(transitionRequest, result.ValidationRequest, collectsUntrackedSelection) {
 			return errors.New("negotiated status validation request copies differ")
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
@@ -975,6 +967,30 @@ func manifestPathsForStatus(entries []reviewtransaction.ChangedPathManifestEntry
 		paths[index] = entry.Path
 	}
 	return paths
+}
+
+// reviewValidationRequestCopiesAgree decides whether the transition's copy of
+// the targeted validation request and the status's copy are consistent.
+//
+// The invariant being enforced is that two copies of the same request must not
+// disagree. Presence parity is a stronger rule than that, and it is only right
+// while every transition that omits a request is asserting there is none. A
+// transition collecting something else first is not asserting anything about
+// it: an untracked file appearing mid-correction has to be declared before the
+// validator can run, and the pending request does not stop being true meanwhile
+// (#3647). That case relaxes presence parity and nothing else -- two copies that
+// both exist still have to agree.
+func reviewValidationRequestCopiesAgree(transitionRequest, statusRequest *reviewtransaction.TargetedValidationRequest, transitionCollectsSomethingElse bool) bool {
+	if transitionRequest == nil && statusRequest == nil {
+		return true
+	}
+	if transitionRequest == nil {
+		return transitionCollectsSomethingElse
+	}
+	if statusRequest == nil {
+		return false
+	}
+	return reflect.DeepEqual(*transitionRequest, *statusRequest)
 }
 
 func reviewTransitionValidationRequest(transition *ReviewNextTransition) *reviewtransaction.TargetedValidationRequest {

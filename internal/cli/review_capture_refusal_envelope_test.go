@@ -344,3 +344,34 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 		t.Fatalf("the untracked artifact changed the pending validation request: %#v vs %#v", status.ValidationRequest, beforeStatus.ValidationRequest)
 	}
 }
+
+// TestReviewValidationRequestCopiesAgree pins exactly how far the untracked
+// exemption reaches. It relaxes presence parity and nothing else, so a
+// transition that does carry a request is still held to matching the status
+// one, and a transition that carries one the status does not is still wrong
+// however it collects.
+func TestReviewValidationRequestCopiesAgree(t *testing.T) {
+	one := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("a", 64)}
+	other := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("b", 64)}
+	for _, tt := range []struct {
+		name                  string
+		transition, status    *reviewtransaction.TargetedValidationRequest
+		collectsSomethingElse bool
+		agree                 bool
+	}{
+		{name: "neither present", agree: true},
+		{name: "both present and equal", transition: &one, status: &one, agree: true},
+		{name: "both present and different", transition: &one, status: &other},
+		{name: "status only, ordinary transition", status: &one},
+		{name: "status only, transition collecting something else", status: &one, collectsSomethingElse: true, agree: true},
+		{name: "transition only", transition: &one},
+		{name: "transition only, collecting something else", transition: &one, collectsSomethingElse: true},
+		{name: "both present and different, collecting something else", transition: &one, status: &other, collectsSomethingElse: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewValidationRequestCopiesAgree(tt.transition, tt.status, tt.collectsSomethingElse); got != tt.agree {
+				t.Fatalf("reviewValidationRequestCopiesAgree() = %v, want %v", got, tt.agree)
+			}
+		})
+	}
+}
