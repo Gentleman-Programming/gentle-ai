@@ -35,8 +35,8 @@ func capturedProviderValidatorJourneys() []Journey {
 			}},
 			{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
 			{Name: "capture the Go-issued validator Task through the native relay protocol", Requires: capturedProviderValidatorStatusCapability, Composite: captureProviderValidatorSlot},
-			{Name: "the terminal validator capture burns the exact lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
-				return requireAtomicLineageBurned(r, capturedProviderValidatorLineage)
+			{Name: "the terminal validator capture exposes acknowledgement before the exact lineage burns", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				return requireAtomicLineageAcknowledged(r, capturedProviderValidatorLineage)
 			}},
 		},
 	}}
@@ -48,7 +48,7 @@ func captureProviderValidatorSlot(r *journeyRun) error {
 
 // captureProviderValidatorSlotFor relays the provider-owned validator request
 // that STATUS binds to one correction. The relay's successful completion is
-// the final event: it captures validation, approves, and burns the lineage.
+// the final event: it captures validation, approves, and exposes acknowledgement before the lineage burns.
 func captureProviderValidatorSlotFor(r *journeyRun, lineage string) error {
 	status, err := readProviderValidatorStatus(r, lineage, true)
 	if err != nil {
@@ -150,7 +150,7 @@ func finalizeCapturedProviderValidatorSlot(r *journeyRun) error {
 	if err != nil || result.State != "approved" || result.LineageID != capturedProviderValidatorLineage {
 		return fmt.Errorf("generic captured-provider finalize result = %+v, %v", result, err)
 	}
-	return requireAtomicLineageBurned(r, capturedProviderValidatorLineage)
+	return requireAtomicLineageAcknowledged(r, capturedProviderValidatorLineage)
 }
 
 func readCapturedProviderValidatorStatus(r *journeyRun, withOpenCodeTask bool) (waveCorrectionStatus, error) {
@@ -187,15 +187,17 @@ func capturedProviderSlotReported(stdout string) bool {
 			continue
 		}
 		var closure struct {
-			Schema    string `json:"schema"`
-			Operation string `json:"operation"`
-			State     string `json:"state"`
-			Action    string `json:"action"`
+			Schema          string `json:"schema"`
+			Operation       string `json:"operation"`
+			State           string `json:"state"`
+			Acknowledgement struct {
+				Operation string `json:"operation"`
+			} `json:"acknowledgement"`
 		}
 		if json.Unmarshal([]byte(frame.Output), &closure) == nil &&
 			closure.Schema == "gentle-ai.review-last-event-closure/v1" &&
 			closure.Operation == "review/capture-validation" && closure.State == "approved" &&
-			strings.Contains(closure.Action, "burned") {
+			closure.Acknowledgement.Operation == "review.acknowledge-approved" {
 			return true
 		}
 	}

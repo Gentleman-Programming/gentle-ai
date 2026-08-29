@@ -29,10 +29,9 @@ var gentleAIMarkerToken = regexp.MustCompile(`GENTLE_AI_[A-Z_]+`)
 // carry more structure than the agent names, but never less.
 func TestLensContextBlockCarriesEveryMarkerInstalledClaudeLensAgentsRequire(t *testing.T) {
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 
-	block := lensContextBlock(t, handle, lens)
+	block := lensContextBlock(t, args, lens)
 
 	installHome := t.TempDir()
 	if _, err := sdd.Inject(installHome, claude.NewAdapter(), ""); err != nil {

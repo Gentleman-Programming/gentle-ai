@@ -334,7 +334,7 @@ func (b *battery) runOpenCodeLane() {
 		b.fail(openCodeLane, "correction lifecycle approved", fmt.Sprintf("terminal state = %q, want approved", operationState(validationClosure)))
 		return
 	}
-	b.burnApproved(openCodeLane, "correction lifecycle burned", repo, "opencode", nil, validationClosure)
+	b.acknowledgeApproved(openCodeLane, "correction lifecycle acknowledged and burned", repo, "opencode", nil, validationClosure)
 }
 
 // driveCorrectionToValidation follows the final reviewer capture directly to

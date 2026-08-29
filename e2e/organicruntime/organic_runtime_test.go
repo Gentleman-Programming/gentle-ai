@@ -951,10 +951,10 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 		}
 	}
 	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
-	status := organicProviderStatus(t, harness, lineage, "opencode")
-	if status.NextTransition == nil || status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "fresh_target_ready" {
-		t.Fatalf("OpenCode terminal capture did not continue with an executable fresh target: %#v", status.NextTransition)
-	}
+	acknowledgement := organicApprovedAcknowledgementStatus(t, harness, lineage)
+	harness.assertReviewAcknowledgedAndBurned(lineage, organicFinalizeResult{
+		LineageID: lineage, State: organicStateApproved, Acknowledgement: acknowledgement,
+	})
 }
 
 // TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently exercises the real
@@ -1242,10 +1242,10 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 	if !issued || completed != len(wantLenses) {
 		t.Fatalf("grouped OpenCode 4R task state issued=%t completed=%d, want true/%d\n%s", issued, completed, len(wantLenses), result.output)
 	}
-	authority := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)
-	if _, err := os.Stat(authority); !os.IsNotExist(err) {
-		t.Fatalf("grouped OpenCode 4R terminal capture retained authority at %q: %v", authority, err)
-	}
+	acknowledgement := organicApprovedAcknowledgementStatus(t, harness, lineage)
+	harness.assertReviewAcknowledgedAndBurned(lineage, organicFinalizeResult{
+		LineageID: lineage, State: organicStateApproved, Acknowledgement: acknowledgement,
+	})
 }
 
 func writeOpenCodeChatTask(writer http.ResponseWriter, arguments map[string]string) {
@@ -1477,7 +1477,7 @@ func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
 			if terminal.Operation != "review/capture-result" || terminal.State != organicStateApproved {
 				t.Fatalf("provider capture did not close the clean review: %#v", terminal)
 			}
-			harness.assertReviewBurned(lineage, terminal)
+			harness.assertReviewAcknowledgedAndBurned(lineage, terminal)
 		})
 	}
 }
@@ -1537,6 +1537,7 @@ type organicProviderStatusResult struct {
 	Authority      struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
+		Revision  string `json:"revision"`
 	} `json:"authority"`
 	Projection struct {
 		BaseTree string `json:"base_tree"`
@@ -3049,17 +3050,37 @@ func (harness *organicHarness) startReview(lineage string, extra ...string) (org
 	if err := json.Unmarshal([]byte(stdout), &started); err != nil {
 		harness.t.Fatalf("decode review start: %v\n%s", err, stdout)
 	}
+	started.statusSelectors = organicStatusSelectorsFromStartArguments(extra)
 	return started, stderr
 }
 
+func organicStatusSelectorsFromStartArguments(arguments []string) []string {
+	selectors := make([]string, 0, len(arguments))
+	for index := 0; index < len(arguments); index++ {
+		switch arguments[index] {
+		case "--base-ref", "--projection":
+			if index+1 < len(arguments) {
+				selectors = append(selectors, arguments[index], arguments[index+1])
+				index++
+			}
+		case "--committed-only", "--workspace-overlay":
+			selectors = append(selectors, arguments[index])
+		}
+	}
+	return selectors
+}
+
 // approveReview runs the proportional plan the tier selected. The final
-// admitted reviewer event is terminal: it burns compact authority without a
-// receipt publication or FINALIZE replay.
+// admitted reviewer event leaves approved authority pending until the exact
+// v2 acknowledgement from the closure and a restarted STATUS burns it.
 func (harness *organicHarness) approveReview(lineage string, started organicStartResult) organicFinalizeResult {
 	harness.t.Helper()
 	if len(started.SelectedLenses) == 0 {
-		finalized := organicFinalizeResult{LineageID: lineage, State: started.State, Action: started.Action}
-		harness.assertReviewBurned(lineage, finalized)
+		finalized := organicFinalizeResult{
+			LineageID: lineage, State: started.State, Action: started.Action, Acknowledgement: started.Acknowledgement,
+			statusSelectors: organicAcknowledgementStatusSelectors(started),
+		}
+		harness.assertReviewAcknowledgedAndBurned(lineage, finalized)
 		return finalized
 	}
 	var finalized organicFinalizeResult
@@ -3078,14 +3099,96 @@ func (harness *organicHarness) approveReview(lineage string, started organicStar
 			}
 		}
 	}
-	harness.assertReviewBurned(lineage, finalized)
+	finalized.statusSelectors = organicAcknowledgementStatusSelectors(started)
+	harness.assertReviewAcknowledgedAndBurned(lineage, finalized)
 	return finalized
 }
 
-// assertReviewBurned pins the terminal ownership boundary: FINALIZE reports an
-// approved result, but leaves neither a receipt path nor on-disk authority for
-// later delivery, recovery, or SDD binding to reuse.
-func (harness *organicHarness) assertReviewBurned(lineage string, finalized organicFinalizeResult) {
+func organicAcknowledgementStatusSelectors(started organicStartResult) []string {
+	if len(started.statusSelectors) > 0 {
+		return append([]string(nil), started.statusSelectors...)
+	}
+	switch started.TargetMode {
+	case "base-diff":
+		if started.BaseTree != "" {
+			return []string{"--base-ref", started.BaseTree, "--committed-only"}
+		}
+	case "base-workspace-overlay":
+		if started.BaseTree != "" {
+			selectors := []string{"--base-ref", started.BaseTree, "--workspace-overlay"}
+			if started.Projection == "staged" {
+				selectors = append(selectors, "--projection", "staged")
+			}
+			return selectors
+		}
+	case "current-changes":
+		if started.Projection == "staged" {
+			return []string{"--projection", "staged"}
+		}
+	}
+	return nil
+}
+
+func organicApprovedAcknowledgementStatus(t *testing.T, harness *organicHarness, lineage string, selectors ...string) *organicProviderExecute {
+	t.Helper()
+	arguments := []string{
+		"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2",
+		"--lineage", lineage, "--next-transition",
+	}
+	arguments = append(arguments, selectors...)
+	payload := harness.gentle(arguments...)
+	var status organicProviderStatusResult
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatalf("decode approved acknowledgement STATUS: %v\n%s", err, payload)
+	}
+	if status.Authority.LineageID != lineage || status.Authority.State != organicStateApproved || status.Authority.Revision == "" ||
+		status.NextTransition == nil || status.NextTransition.Kind != "execute" ||
+		status.NextTransition.ReasonCode != "approved_acknowledgement_required" || status.NextTransition.Execute == nil {
+		t.Fatalf("approved acknowledgement STATUS = %#v", status)
+	}
+	return status.NextTransition.Execute
+}
+
+func organicAcknowledgementArguments(t *testing.T, execution *organicProviderExecute, repo, lineage string) []string {
+	t.Helper()
+	if execution == nil || execution.Operation != "review.acknowledge-approved" || len(execution.Arguments) != 5 {
+		t.Fatalf("acknowledgement execution = %#v, want exact v2 acknowledgement", execution)
+	}
+	wantNames := []string{"cwd", "lineage", "target", "expected-revision", "token"}
+	tokens := make([]string, len(wantNames))
+	for index, name := range wantNames {
+		argument := execution.Arguments[index]
+		if argument.Name != name || argument.Value == "" || argument.Token == "" {
+			t.Fatalf("acknowledgement argument %d = %#v, want named non-empty %q argument", index, argument, name)
+		}
+		tokens[index] = argument.Token
+	}
+	// Compared by directory identity, not by string: on Windows the harness
+	// holds the 8.3 short TEMP form while Go emits the canonical worktree root.
+	if !sameOrganicDirectory(execution.Arguments[0].Value, repo) || execution.Arguments[1].Value != lineage ||
+		len(execution.Arguments[4].Value) != 64 || !strings.HasPrefix(execution.Arguments[4].Token, "--token=") {
+		t.Fatalf("acknowledgement binding = %#v, want exact repo/lineage and canonical token", execution)
+	}
+	return tokens
+}
+
+func assertSameOrganicAcknowledgement(t *testing.T, want, got *organicProviderExecute) {
+	t.Helper()
+	if want == nil || got == nil || want.Operation != got.Operation || len(want.Arguments) != len(got.Arguments) {
+		t.Fatalf("acknowledgement restart = %#v, want %#v", got, want)
+	}
+	for index := range want.Arguments {
+		if want.Arguments[index] != got.Arguments[index] {
+			t.Fatalf("acknowledgement restart argument %d = %#v, want %#v", index, got.Arguments[index], want.Arguments[index])
+		}
+	}
+}
+
+// assertReviewAcknowledgedAndBurned pins the terminal ownership boundary. The
+// closure emits one pending acknowledgement; restarted STATUS replays the exact
+// operation, token, and live revision. Wrong and replayed invocations refuse;
+// only the exact invocation removes authority without a receipt or sidecar.
+func (harness *organicHarness) assertReviewAcknowledgedAndBurned(lineage string, finalized organicFinalizeResult) {
 	harness.t.Helper()
 	if finalized.State != organicStateApproved {
 		harness.t.Fatalf("review %q finalized as %q, want %q: %#v", lineage, finalized.State, organicStateApproved, finalized)
@@ -3093,9 +3196,33 @@ func (harness *organicHarness) assertReviewBurned(lineage string, finalized orga
 	if finalized.ReceiptPath != "" {
 		harness.t.Fatalf("approved review %q retained receipt path %q", lineage, finalized.ReceiptPath)
 	}
+	tokens := organicAcknowledgementArguments(harness.t, finalized.Acknowledgement, harness.repo.worktree, lineage)
+	restarted := organicApprovedAcknowledgementStatus(harness.t, harness, lineage, finalized.statusSelectors...)
+	organicAcknowledgementArguments(harness.t, restarted, harness.repo.worktree, lineage)
+	assertSameOrganicAcknowledgement(harness.t, finalized.Acknowledgement, restarted)
+
+	wrong := append([]string{"review", "acknowledge-approved"}, tokens...)
+	wrongToken := strings.Repeat("0", 64)
+	if wrongToken == finalized.Acknowledgement.Arguments[4].Value {
+		wrongToken = strings.Repeat("1", 64)
+	}
+	wrong[len(wrong)-1] = "--token=" + wrongToken
+	if _, _, err := harness.gentleAllowFailure(wrong...); err == nil {
+		harness.t.Fatal("wrong acknowledgement binding burned authority")
+	}
+	afterWrong := organicApprovedAcknowledgementStatus(harness.t, harness, lineage, finalized.statusSelectors...)
+	assertSameOrganicAcknowledgement(harness.t, finalized.Acknowledgement, afterWrong)
+
+	exact := append([]string{"review", "acknowledge-approved"}, tokens...)
+	if _, stderr, err := harness.gentleAllowFailure(exact...); err != nil {
+		harness.t.Fatalf("exact acknowledgement failed: %v\n%s", err, stderr)
+	}
+	if _, _, err := harness.gentleAllowFailure(exact...); err == nil {
+		harness.t.Fatal("replayed acknowledgement recreated or burned authority")
+	}
 	authority := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)
 	if _, err := os.Stat(authority); !os.IsNotExist(err) {
-		harness.t.Fatalf("approved review %q retained terminal authority at %q: %v", lineage, authority, err)
+		harness.t.Fatalf("approved review %q retained authority after acknowledgement at %q: %v", lineage, authority, err)
 	}
 }
 
@@ -3634,9 +3761,14 @@ type organicStartResult struct {
 	ChangedFiles     int      `json:"changed_files"`
 	ChangedLines     int      `json:"changed_lines"`
 	CorrectionBudget int      `json:"correction_budget"`
+	Projection       string   `json:"projection"`
+	TargetMode       string   `json:"target_mode,omitempty"`
 	TargetIdentity   string   `json:"target_identity"`
+	BaseTree         string   `json:"base_tree,omitempty"`
 
-	Repository *organicStartRepositoryContext `json:"repository_context,omitempty"`
+	Repository      *organicStartRepositoryContext `json:"repository_context,omitempty"`
+	Acknowledgement *organicProviderExecute        `json:"acknowledgement,omitempty"`
+	statusSelectors []string
 	// Hint is the informational recovery pointer an empty-candidate start
 	// carries; the re-enable journey follows it verbatim.
 	Hint string `json:"hint"`
@@ -3657,12 +3789,14 @@ func (result organicStartResult) targetIdentity() string {
 }
 
 type organicFinalizeResult struct {
-	Operation     string `json:"operation"`
-	LineageID     string `json:"lineage_id"`
-	State         string `json:"state"`
-	Action        string `json:"action"`
-	StoreRevision string `json:"store_revision"`
-	ReceiptPath   string `json:"receipt_path"`
+	Operation       string                  `json:"operation"`
+	LineageID       string                  `json:"lineage_id"`
+	State           string                  `json:"state"`
+	Action          string                  `json:"action"`
+	StoreRevision   string                  `json:"store_revision"`
+	ReceiptPath     string                  `json:"receipt_path"`
+	Acknowledgement *organicProviderExecute `json:"acknowledgement,omitempty"`
+	statusSelectors []string
 }
 
 type organicGateResult struct {

@@ -112,7 +112,7 @@ func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing
 	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
 
 	var output bytes.Buffer
-	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +127,7 @@ func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t
 	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
 
 	var output bytes.Buffer
-	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
 		t.Fatal(err)
 	}
 	var closure map[string]any

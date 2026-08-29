@@ -62,11 +62,11 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Never hand candidate bytes through `/tmp`",
 		"### Authority-First Terminal Procedure",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
-		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 		"### Cross-repository lifecycle root",
 		"explicit user authorization",
@@ -76,7 +76,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Never append, remove, or rebuild provider-issued command tokens",
 		"Opaque `repository_context` can capture or materialize from any process cwd",
 		"Go owns repository binding; adapters never parse authorization or roots",
-		"Approval burns B only; A remains untouched",
+		"Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
@@ -95,11 +95,11 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *test
 	for _, want := range []string{
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
-		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 	} {
 		if !strings.Contains(content, want) {
@@ -243,7 +243,7 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		"post-apply": {
 			"exact returned START",
 			"exact-lineage STATUS and collect",
-			"native readback, exact authority/artifact burn, then `approved`",
+			"native readback, approved authority, and one exact acknowledgement continuation",
 		},
 	}
 	for name, required := range controllers {
@@ -566,8 +566,9 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndAtomic(t *testing.T) {
 		{order: 1, operation: "canonical initial STATUS above", result: "exactly one current-worktree START preflight; no authority discovery"},
 		{order: 2, operation: "exact returned START", result: "one compact lineage/worktree/target binding; retain lineage, revision, and target"},
 		{order: 3, operation: "exact-lineage STATUS and collect", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
-		{order: 4, operation: "final admitted capture", result: "native readback, exact authority/artifact burn, then `approved`"},
-		{order: 5, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
+		{order: 4, operation: "final admitted capture", result: "native readback, approved authority, and one exact acknowledgement continuation"},
+		{order: 5, operation: "STATUS restart + exact acknowledgement", result: "replayed operation/token/revision; only exact acknowledgement burns authority"},
+		{order: 6, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("authority-first rows = %d, want %d", len(rows), len(want))
