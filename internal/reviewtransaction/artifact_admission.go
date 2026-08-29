@@ -396,7 +396,17 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 				findingAdmissionDiagnostic("invalid_finding_location", finding.ID, finding.Location, reason), locationErr)
 		}
 		if stringIndex(wantPaths, location.Path) < 0 {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			// The same citation shape reaches a finding's own location, and
+			// resolving it in evidence and proofs but not here would refuse the
+			// exact artifact the rest of this admission just accepted.
+			resolved, unique, resolveErr := resolveBasename(location.Path)
+			if resolveErr != nil {
+				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
+			}
+			if !unique || stringIndex(wantPaths, resolved) < 0 {
+				return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			}
+			location.Path = resolved
 		}
 		for _, proof := range finding.ProofRefs {
 			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains, resolveBasename)

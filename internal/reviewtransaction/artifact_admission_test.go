@@ -598,6 +598,47 @@ func TestAdmitArtifactResolvesUnambiguousBasenameCitations(t *testing.T) {
 			t.Fatalf("ambiguous basename admission = %q, %v; want out of scope", admission.Decision, err)
 		}
 	})
+	t.Run("a finding location resolves the same way its evidence does", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("basename finding location admission = %q, %v; want completed", admission.Decision, err)
+		}
+	})
+	t.Run("an ambiguous finding location stays out of scope", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "dup.go:1", Severity: "WARNING",
+			Claim: "ambiguous", ProofRefs: []string{"diff: internal/a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("ambiguous finding location admission = %q, %v; want out of scope", admission.Decision, err)
+		}
+	})
+	t.Run("a proof reference resolves the same way evidence does", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("basename proof admission = %q, %v; want completed", admission.Decision, err)
+		}
+	})
+	t.Run("a citation carrying a directory prefix is not a basename", func(t *testing.T) {
+		// It said where it meant. Being wrong about that is not ambiguity to
+		// resolve, so it stays refused even though its last segment is unique.
+		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: wrong/a.go:3"))
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("prefixed citation admission = %q, %v; want out of scope", admission.Decision, err)
+		}
+	})
 	t.Run("unknown basename stays out of scope", func(t *testing.T) {
 		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: nowhere.go:1"))
 		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
