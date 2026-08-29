@@ -355,6 +355,12 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
 		`github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
 		"-trimpath",
+		"go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2",
+		"id: release-provenance",
+		"gentle-ai-release-provenance-v1",
+		"src: .goreleaser-provenance/manifest.json",
+		"mode: 0644",
+		"mtime: \"1970-01-01T00:00:00Z\"",
 	} {
 		if !strings.Contains(config, required) {
 			t.Errorf("GoReleaser config is missing %q", required)
@@ -368,6 +374,23 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 	}
 	if strings.Contains(config, `.Env.MINISIGN_PUBLIC_KEYS }}`) {
 		t.Error("GoReleaser injects the unvalidated raw MINISIGN_PUBLIC_KEYS value")
+	}
+}
+
+func TestGoReleaserRecreatesCleanProvenanceStaging(t *testing.T) {
+	config := readRepositoryFile(t, ".goreleaser.yaml")
+	cleanup := "rm -rf .goreleaser-provenance"
+	mkdir := "mkdir -p .goreleaser-provenance"
+	generate := "go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2"
+
+	cleanupIndex := strings.Index(config, cleanup)
+	mkdirIndex := strings.Index(config, mkdir)
+	generateIndex := strings.Index(config, generate)
+	if cleanupIndex < 0 || mkdirIndex < 0 || generateIndex < 0 || !(cleanupIndex < mkdirIndex && mkdirIndex < generateIndex) {
+		t.Errorf("provenance staging hooks must run cleanup, mkdir, then generate; indexes = %d, %d, %d", cleanupIndex, mkdirIndex, generateIndex)
+	}
+	if !strings.Contains(readRepositoryFile(t, ".gitignore"), ".goreleaser-provenance/") {
+		t.Error(".gitignore does not ignore provenance staging")
 	}
 }
 

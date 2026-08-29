@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,6 +29,36 @@ type repositoryContextStatus struct {
 	RepositoryContext *repositoryContextReference `json:"repository_context"`
 }
 
+// assertOpaqueRepositoryContext proves the handle is what the capability name
+// claims. The declared capability is review.opaque_repository_context and the
+// handle is relayed on command lines and through host logs, so a reader holding
+// it must be able to learn nothing about the filesystem it names: it is a
+// fixed-width digest, it decodes to no structured payload, and it contains no
+// path fragment.
+func assertOpaqueRepositoryContext(handle string, secrets ...string) error {
+	const prefix = "rctx2_"
+	encoded, found := strings.CutPrefix(handle, prefix)
+	if !found {
+		return fmt.Errorf("repository context is not an rctx2 handle: %q", handle)
+	}
+	digest, err := hex.DecodeString(encoded)
+	if err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("rctx2 handle is not a bare sha256 digest: %q", handle)
+	}
+	if encoded != strings.ToLower(encoded) {
+		return fmt.Errorf("rctx2 handle is not canonical lowercase hex: %q", handle)
+	}
+	if json.Valid(digest) {
+		return fmt.Errorf("rctx2 handle decodes to structured data: %q", handle)
+	}
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(handle, secret) {
+			return fmt.Errorf("rctx2 handle is not opaque: %q leaks %q", handle, secret)
+		}
+	}
+	return nil
+}
+
 func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 	negotiated, err := readStatusForContract(r, reviewContractV2)
 	if err != nil {
@@ -51,8 +83,11 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 	}
 	want := start.RepositoryContext
 	if start.LineageID == "" || want.Capability != "review.opaque_repository_context" ||
-		!strings.HasPrefix(want.Handle, "rctx1_") || want.Revision == "" || want.TargetIdentity == "" {
+		!strings.HasPrefix(want.Handle, "rctx2_") || want.Revision == "" || want.TargetIdentity == "" {
 		return fmt.Errorf("START repository context = %+v, lineage=%q", want, start.LineageID)
+	}
+	if err := assertOpaqueRepositoryContext(want.Handle, r.sandbox.Repo, r.sandbox.Home); err != nil {
+		return err
 	}
 	if leaksRepositoryPath(started.Stdout, r.sandbox.Repo) {
 		return fmt.Errorf("START leaked repository path in its public envelope")
@@ -67,7 +102,7 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 			return err
 		}
 		if status.RepositoryContext == nil || *status.RepositoryContext != want ||
-			status.Authority.LineageID != start.LineageID || status.Authority.Revision != want.Revision ||
+			status.Authority.LineageID != start.LineageID || status.Authority.Revision == "" ||
 			status.TargetIdentity != want.TargetIdentity {
 			return fmt.Errorf("STATUS retry %d changed repository context: authority=%+v context=%+v", attempt, status.Authority, status.RepositoryContext)
 		}
@@ -79,11 +114,12 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 		}
 	}
 
-	foreign := "gairc_v1_" + strings.Repeat("0", 64)
+	foreign := "rctx2_" + strings.Repeat("A", 64)
 	if capture.NextTransition.Kind != "collect" || len(capture.NextTransition.Collect.Inputs) != 1 ||
 		capture.Authority.LineageID != start.LineageID || capture.TargetIdentity != want.TargetIdentity ||
 		capture.argument("lineage") != start.LineageID || capture.argument("target") != want.TargetIdentity ||
-		capture.argument("expected-revision") != want.Revision || capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash == "" {
+		capture.argument("expected-revision") != want.Revision || capture.argument("repository-context") != want.Handle ||
+		capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash == "" {
 		return fmt.Errorf("STATUS did not preserve target, repository/worktree context, and subject binding: %+v", capture)
 	}
 	payload, err := synthesizeReviewerResult(capture.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, capture.paths())
@@ -130,8 +166,8 @@ func repositoryContextJourneys() []Journey {
 	return []Journey{{
 		ID:     "j104-repository-context-survives-fresh-process",
 		Review: reviewOptedIn,
-		Title:  "#3417: repository context preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
-		Source: "issue #1875 under #3417: the current path-free repository context binds target, repository/worktree, and reviewer subject integrity; retired event/outcome placeholders do not exist",
+		Title:  "#3797: opaque rctx2 digest preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
+		Source: "issue #3797: active rctx2 is an opaque authority-derived digest across fresh processes, carrying no filesystem path; rctx1 locators remain historical read-only only",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged ordinary-code candidate", Fixture: stageOrdinaryCode},

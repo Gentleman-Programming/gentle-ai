@@ -46,7 +46,7 @@ func TestRuntimeLedgerRejectsMalformedPersistedInterruptedEvidence(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if _, err := store.Status(); err == nil || !strings.Contains(err.Error(), "invalid SDD runtime finish event") {
+	if _, err := store.Status(); !isRuntimeRecordRejection(err, "invalid_finish_event") {
 		t.Fatalf("malformed persisted interrupted evidence status error = %v, want fail-closed replay refusal", err)
 	}
 }

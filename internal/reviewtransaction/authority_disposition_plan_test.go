@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -226,6 +227,54 @@ func TestAuthorityDispositionPlanRequiresClosedClassification(t *testing.T) {
 			t.Fatalf("incomplete inspection derivation error = %v, want errAuthorityDispositionPlanNotDerivable", err)
 		}
 	})
+}
+
+func TestReleasedHistoricalCompactRecordRemainsForensicallyClassifiable(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "bench", "testdata", "issue2879", "released-v2.2.4-review-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record CompactRecord
+	if err := json.Unmarshal(payload, &record); err != nil {
+		t.Fatal(err)
+	}
+	want, _, err := makeCompactRecord(record.State)
+	if err != nil {
+		t.Fatalf("released record cannot be reconstructed: %v", err)
+	}
+	if want.Revision != record.Revision {
+		t.Fatalf("released record checksum = %q, reconstructed = %q", record.Revision, want.Revision)
+	}
+	if _, ok := forensicHistoricalCompactRecord(payload, "review-f8708016a901b4ff"); !ok {
+		t.Fatalf("released v2.2.4 record no longer classifies as outdated compact authority: %v", record.State.Validate())
+	}
+}
+
+func TestHistoricalAuthorityDispositionPlanRejectsAnyAdditionalDiagnostic(t *testing.T) {
+	const historicalLineage = "released-historical-authority"
+	report := CompactRecoveryInspectionReport{
+		EntryDiagnostics: []CompactRecoveryEntryDiagnostic{{LineageID: historicalLineage, Problem: compactInspectionEntryOutdated}},
+		historical: map[string]historicalCompactForensicRecord{
+			historicalLineage: {RawDigest: "sha256:" + strings.Repeat("a", 64)},
+		},
+	}
+	if _, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "", ""); err != nil {
+		t.Fatalf("sole historical diagnostic did not derive its quarantine plan: %v", err)
+	}
+	for _, problem := range []string{
+		compactInspectionEntryMalformed,
+		compactInspectionEntryUnreadable,
+		compactInspectionEntryMissing,
+	} {
+		t.Run(problem, func(t *testing.T) {
+			blocked := report
+			blocked.EntryDiagnostics = append([]CompactRecoveryEntryDiagnostic{}, report.EntryDiagnostics...)
+			blocked.EntryDiagnostics = append(blocked.EntryDiagnostics, CompactRecoveryEntryDiagnostic{LineageID: "unrelated-authority", Problem: problem})
+			if _, err := deriveAuthorityDispositionPlan(blocked, map[string]CompactRecord{}, "binding", "", ""); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
+				t.Fatalf("additional %s diagnostic derivation error = %v, want errAuthorityDispositionPlanNotDerivable", problem, err)
+			}
+		})
+	}
 }
 
 func TestAuthorityDispositionPlanScopesEntryDiagnosticsToClosure(t *testing.T) {

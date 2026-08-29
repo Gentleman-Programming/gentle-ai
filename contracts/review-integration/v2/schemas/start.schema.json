@@ -23,6 +23,14 @@
       },
       "then": {"required": ["repository_context"]},
       "else": {"not": {"required": ["repository_context"]}}
+    },
+    {
+      "if": {
+        "properties": {"action": {"const": "closed"}, "state": {"const": "approved"}},
+        "required": ["action", "state"]
+      },
+      "then": {"required": ["acknowledgement"]},
+      "else": {"not": {"required": ["acknowledgement"]}}
     }
   ],
   "required": [
@@ -59,12 +67,13 @@
     "risk_reasons": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/risk_reason"}},
     "artifact_subjects": {"type": "array", "maxItems": 4, "items": {"$ref": "artifact-subject.schema.json"}},
     "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/changed_path"}},
+    "acknowledgement": {"$ref": "transition-execution.schema.json#/$defs/approved_acknowledgement_execution"},
     "repository_context": {
       "type": "object", "additionalProperties": false,
       "required": ["capability", "handle", "revision", "target_identity"],
       "properties": {
         "capability": {"const": "review.opaque_repository_context"},
-        "handle": {"type": "string", "pattern": "^rctx1_[0-9a-f]{64}$"},
+        "handle": {"type": "string", "pattern": "^rctx[12]_[0-9a-f]{64}$"},
         "revision": {"$ref": "#/$defs/sha256"},
         "target_identity": {"$ref": "#/$defs/sha256"},
         "event_id": {"$ref": "#/$defs/sha256"},

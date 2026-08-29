@@ -86,6 +86,53 @@ func TestReviewModeDisableGlobalWinsOverEveryRepository(t *testing.T) {
 	}
 }
 
+func TestWriteGlobalRDDModeSerializesWithInstallStateAndPreservesFreshFields(t *testing.T) {
+	home := reviewModeHome(t)
+	lock, err := reviewtransaction.AcquireAuthorityFileLock(installStateLockPath(home))
+	if err != nil {
+		t.Fatalf("acquire install state lock: %v", err)
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			_ = lock.Release()
+		}
+	})
+
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
+		t.Fatalf("write concurrent install state: %v", err)
+	}
+	if err := writeGlobalRDDMode("enable"); !errors.Is(err, reviewtransaction.ErrStoreLockContended) {
+		t.Fatalf("writeGlobalRDDMode while install state lock was held error = %v, want lock contention", err)
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read state after contended global mode write: %v", err)
+	}
+	if persisted.RDDMode != "" || persisted.RDDModeRecordedAt != nil {
+		t.Fatalf("contended global mode write mutated state: %#v", persisted)
+	}
+
+	if err := lock.Release(); err != nil {
+		t.Fatalf("release install state lock: %v", err)
+	}
+	released = true
+	if err := writeGlobalRDDMode("enable"); err != nil {
+		t.Fatalf("writeGlobalRDDMode after lock release: %v", err)
+	}
+
+	persisted, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("read state after global mode write: %v", err)
+	}
+	if len(persisted.InstalledAgents) != 1 || persisted.InstalledAgents[0] != "opencode" {
+		t.Fatalf("global mode write lost fresh install state: %#v", persisted.InstalledAgents)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) || persisted.RDDModeRecordedAt == nil {
+		t.Fatalf("global mode write did not persist enable: %#v", persisted)
+	}
+}
+
 // TestReviewModeGlobalEnableSurvivesTheOptInDefault is the upgrade-safety
 // property behind making receipt-driven development opt-in. A user who
 // deliberately ran `review mode enable --scope global` before the flip must

@@ -41,8 +41,13 @@ var reviewProviderAdapterFor = func(contract reviewerprovider.Contract, agent mo
 	}
 }
 
+// reviewProviderCaptureRuntime reads the one canonical answer rather than
+// restating it. The installed orchestrator contract renders from the same
+// predicate, so the transport this dispatcher will execute and the transport
+// the contract tells a parent to use can never describe different runtimes
+// (issue #3825).
 func reviewProviderCaptureRuntime(agent model.AgentID) bool {
-	return agent == model.AgentClaudeCode || agent == model.AgentCodex
+	return reviewerprovider.CapturesInProcess(agent)
 }
 
 // reviewProviderHostRelayMaterializeRuntime reports whether the runtime's

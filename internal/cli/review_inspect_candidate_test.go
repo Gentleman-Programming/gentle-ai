@@ -98,7 +98,7 @@ func TestReviewInspectCandidateCarriesAggregateDeadlineAndCancels(t *testing.T) 
 
 func failingInspectionDeps(repo string, record reviewtransaction.CompactRecord, phase string) reviewInspectCandidateDeps {
 	deps := reviewInspectCandidateDependencies()
-	deps.resolve = func(context.Context, string, reviewtransaction.ReviewRepositoryContextBinding) (string, error) {
+	deps.resolve = func(context.Context, string, string, reviewtransaction.ReviewRepositoryContextBinding) (string, error) {
 		return repo, nil
 	}
 	deps.discover = func(context.Context, string, string, bool) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error) {
@@ -106,7 +106,7 @@ func failingInspectionDeps(repo string, record reviewtransaction.CompactRecord, 
 	}
 	switch phase {
 	case "resolver":
-		deps.resolve = func(ctx context.Context, _ string, _ reviewtransaction.ReviewRepositoryContextBinding) (string, error) {
+		deps.resolve = func(ctx context.Context, _, _ string, _ reviewtransaction.ReviewRepositoryContextBinding) (string, error) {
 			return "", inspectionContextError(ctx)
 		}
 	case "discovery":
@@ -179,14 +179,15 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 
 func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, args, request, store, index := newTargetedCandidateInspectionReview(t)
+	_, args, request, store, index := newTargetedCandidateInspectionReview(t)
 	nonTerminal, err := store.Load()
 	if err != nil || nonTerminal.State.State != reviewtransaction.StateCorrectionRequired ||
-		nonTerminal.Revision != request.ExpectedRevision || nonTerminal.State.CorrectionAttemptConsumed() {
+		nonTerminal.State.CapturePhaseRevision != request.ExpectedRevision || nonTerminal.State.CorrectionAttemptConsumed() {
 		t.Fatalf("corrected inspection must use current unconsumed correction authority: %#v, %v", nonTerminal, err)
 	}
 	before := readReviewOperationFile(t, store.StatePath())
-	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\ndrifted\n", 0o644)
+	// The process cwd stays unrelated: args already name the repository the
+	// provider-issued digest is verified against.
 	t.Chdir(t.TempDir())
 	var output bytes.Buffer
 	if err := RunReviewInspectCandidate(append(args, "--operation", "object", "--path-index", fmt.Sprint(index), "--side", "candidate"), &output); err != nil {
@@ -202,7 +203,10 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 
 func TestReviewInspectCandidateDoesNotRequireRetiredVerificationEvidence(t *testing.T) {
 	reviewEnabledHome(t)
-	_, args, _, _, _ := newTargetedCandidateInspectionReview(t)
+	repo, args, request, _, _ := newTargetedCandidateInspectionReview(t)
+	args = replaceReviewContextArgument(t, args, rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	}))
 	var output bytes.Buffer
 	if err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), &output); err != nil {
 		t.Fatalf("frozen corrected inspection depends on retired verification evidence: %v", err)
@@ -222,8 +226,12 @@ func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
 		{name: "missing context", argv: removeInspectionArg(targeted, "--repository-context"), want: "requires the exact provider-issued"},
 		{name: "forged context", argv: replaceInspectionArg(t, targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
 		{name: "original lens context", argv: replaceInspectionArg(t, targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "repository_context_"},
-		{name: "stale revision", argv: replaceInspectionArg(t, targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "context does not match binding"},
-		{name: "forged target", argv: replaceInspectionArg(t, targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "context does not match binding"},
+		// The provider-issued context is a digest over the exact repository and
+		// binding, so a decoy revision or target no longer reaches the authority
+		// comparison: it fails the digest first, which is the earlier and
+		// stricter refusal.
+		{name: "stale revision", argv: replaceInspectionArg(t, targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "forged target", argv: replaceInspectionArg(t, targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
 		{name: "forged request hash", argv: replaceInspectionArg(t, targeted, "--request-hash", "sha256:"+strings.Repeat("0", 64)), want: "request hash does not match authority"},
 		{name: "lens supplied", argv: append(slices.Clone(targeted), "--lens", "review-risk"), want: "does not accept --lens or --order"},
 		{name: "order supplied", argv: append(slices.Clone(targeted), "--order", "0"), want: "does not accept --lens or --order"},
@@ -256,6 +264,8 @@ func newCandidateInspectionReview(t *testing.T, tracked string, hostile bool) (s
 		t.Fatal(err)
 	}
 	args := []string{
+		"--cwd", repo,
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--expected-revision", started.RepositoryContext.Revision,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
@@ -276,7 +286,7 @@ func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, revie
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := reviewtransaction.PublishTargetedValidationReviewRepositoryContext(context.Background(), repo, request)
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +294,7 @@ func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, revie
 	if index < 0 {
 		t.Fatalf("corrected target manifest omits tracked.txt: %v", request.CorrectionPaths)
 	}
-	return repo, []string{"--repository-context", handle, "--expected-revision", request.ExpectedRevision,
+	return repo, []string{"--cwd", repo, "--repository-context", handle, "--expected-revision", request.ExpectedRevision,
 		"--lineage", request.LineageID, "--target", request.CorrectionTargetIdentity,
 		"--purpose", reviewTargetedValidationPurpose, "--request-hash", request.RequestHash}, request, store, index
 }

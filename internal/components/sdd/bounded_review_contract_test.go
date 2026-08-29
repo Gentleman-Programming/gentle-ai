@@ -8,14 +8,40 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // boundedReviewRequiredClausesFor is agent-parameterized because two of these
 // clauses state the runtime identity the negotiated route must carry. Pinning
 // them to a constant is what let issue #2440 ship: every runtime's generated
 // instructions claimed to be claude-code, and the test suite agreed.
-func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+// captureTransportClausesFor returns the capture clauses that belong to the
+// transport this runtime actually uses. A runtime whose compiled adapter
+// captures in process is never told to assemble a reviewer prompt, because
+// following that instruction would move the complete candidate onto the parent
+// for every lens to reach a result one returned command already produces
+// (issue #3825). Every other runtime keeps the relay wording: it is their only
+// capture path.
+func captureTransportClausesFor(agent model.AgentID) []string {
+	if reviewerprovider.CapturesInProcess(agent) {
+		return []string{
+			"with its argument tokens exactly as returned",
+			"This runtime captures in process",
+			"Never assemble a reviewer prompt",
+			"never add `--input` to a returned token list",
+		}
+	}
 	return []string{
+		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
+		"one-line JSON assembled only from that input",
+		"`revision` from `expected-revision`",
+		"`subject_hash` from `artifact_subject.subject_hash`",
+	}
+}
+
+func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+	return append(captureTransportClausesFor(agent), []string{
 		"Native Compact Review Orchestration",
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"Selectorless STATUS only preflights the current worktree candidate",
@@ -23,10 +49,6 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"exact captured lineage, revision, and target tokens",
 		"Route only from that transaction's returned `next_transition`",
 		"Forecast is informational; route only from `next_transition`",
-		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
-		"one-line JSON assembled only from that input",
-		"`revision` from `expected-revision`",
-		"`subject_hash` from `artifact_subject.subject_hash`",
 		"query the same exact-lineage STATUS",
 		"reoffers the same bound slot",
 		"repeated `--result-artifact-file <path>`",
@@ -40,11 +62,11 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Never hand candidate bytes through `/tmp`",
 		"### Authority-First Terminal Procedure",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
-		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 		"### Cross-repository lifecycle root",
 		"explicit user authorization",
@@ -54,7 +76,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Never append, remove, or rebuild provider-issued command tokens",
 		"Opaque `repository_context` can capture or materialize from any process cwd",
 		"Go owns repository binding; adapters never parse authorization or roots",
-		"Approval burns B only; A remains untouched",
+		"Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
@@ -65,7 +87,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"one lossless grouped prompt",
 		"persist the pending state before prompting",
 		"STOP without invoking `sdd-propose`",
-	}
+	}...)
 }
 
 func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *testing.T) {
@@ -73,11 +95,11 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *test
 	for _, want := range []string{
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
-		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 	} {
 		if !strings.Contains(content, want) {
@@ -221,7 +243,7 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		"post-apply": {
 			"exact returned START",
 			"exact-lineage STATUS and collect",
-			"native readback, exact authority/artifact burn, then `approved`",
+			"native readback, approved authority, and one exact acknowledgement continuation",
 		},
 	}
 	for name, required := range controllers {
@@ -468,7 +490,14 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					// identical wording and differ only in which process
 					// supplies the block, so the reviewer input contract no
 					// longer names a Claude-specific nature for the context.
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					//
+					// The marker followed the same collapse. A Claude-only
+					// GENTLE_AI_CLAUDE_REVIEW_CONTEXT made this definition
+					// require a block the one renderer never emits, so no
+					// relayed prompt was admissible and the Claude path could
+					// not reach a receipt at all (issue #2777). The name is now
+					// read from the canonical constant the renderer uses.
+					for _, want := range []string{reviewtransaction.ReviewerContextMarker, "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}
@@ -537,8 +566,9 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndAtomic(t *testing.T) {
 		{order: 1, operation: "canonical initial STATUS above", result: "exactly one current-worktree START preflight; no authority discovery"},
 		{order: 2, operation: "exact returned START", result: "one compact lineage/worktree/target binding; retain lineage, revision, and target"},
 		{order: 3, operation: "exact-lineage STATUS and collect", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
-		{order: 4, operation: "final admitted capture", result: "native readback, exact authority/artifact burn, then `approved`"},
-		{order: 5, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
+		{order: 4, operation: "final admitted capture", result: "native readback, approved authority, and one exact acknowledgement continuation"},
+		{order: 5, operation: "STATUS restart + exact acknowledgement", result: "replayed operation/token/revision; only exact acknowledgement burns authority"},
+		{order: 6, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("authority-first rows = %d, want %d", len(rows), len(want))

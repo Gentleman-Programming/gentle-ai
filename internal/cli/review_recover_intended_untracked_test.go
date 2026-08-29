@@ -84,7 +84,7 @@ func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeSt
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.Revision)
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeSt
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi), "--execute=true",
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)

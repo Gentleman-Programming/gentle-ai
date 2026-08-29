@@ -145,7 +145,33 @@ func TestFinalAtomicMigrationJourneysRatifyIssue3417(t *testing.T) {
 	}
 }
 
-func TestAtomicReviewJourneysRatifyIssue3417(t *testing.T) {
+func TestCurrentTerminalJourneysRequireAcknowledgementBeforeBurn(t *testing.T) {
+	journeys := map[string]Journey{}
+	for _, journey := range Journeys() {
+		journeys[journey.ID] = journey
+	}
+	for _, id := range []string{
+		"j105-compiled-provider-capture-retries-same-binding",
+		"j110-untracked-terminal-burn-and-unmanaged-staged-validation",
+		"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+		"j114-last-reviewer-capture-closes-and-burns",
+	} {
+		journey, ok := journeys[id]
+		if !ok {
+			t.Errorf("missing acknowledgement journey %q", id)
+			continue
+		}
+		declaration := strings.ToLower(journey.Source + " " + journey.Title)
+		for _, step := range journey.Steps {
+			declaration += " " + strings.ToLower(step.Name)
+		}
+		if !strings.Contains(declaration, "acknowledgement") {
+			t.Errorf("terminal journey %q omits the pending acknowledgement continuation: %s", id, declaration)
+		}
+	}
+}
+
+func TestAtomicReviewJourneysRatifyAcknowledgementContract(t *testing.T) {
 	journeys := map[string]Journey{}
 	for _, journey := range Journeys() {
 		journeys[journey.ID] = journey
@@ -159,16 +185,16 @@ func TestAtomicReviewJourneysRatifyIssue3417(t *testing.T) {
 			"#3587", "four lenses", "correction", "validator",
 		},
 		"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged": {
-			"#3587", "selectorless STATUS", "printed START", "new transaction",
+			"#3797", "selectorless STATUS", "printed START", "acknowledgement",
 		},
 		"j114-last-reviewer-capture-closes-and-burns": {
-			"#3587", "last admitted reviewer capture", "burns",
+			"#3797", "last admitted reviewer capture", "acknowledgement",
 		},
 		"j89-staged-validation-is-informational-and-unmanaged": {
 			"#3587", "staged", "informational", "unmanaged",
 		},
 		"j110-untracked-terminal-burn-and-unmanaged-staged-validation": {
-			"#3587", "untracked", "burn", "unmanaged",
+			"#3797", "untracked", "acknowledgement", "unmanaged",
 		},
 		"j113-correction-removes-candidate-only-path": {
 			"#3587", "correction", "terminal validator",
@@ -180,7 +206,7 @@ func TestAtomicReviewJourneysRatifyIssue3417(t *testing.T) {
 			continue
 		}
 		if journey.Review != reviewOptedIn {
-			t.Errorf("#3417 journey %q review mode = %q, want %q", id, journey.Review, reviewOptedIn)
+			t.Errorf("acknowledgement journey %q review mode = %q, want %q", id, journey.Review, reviewOptedIn)
 		}
 		declaration := journey.Source + " " + journey.Title
 		for _, step := range journey.Steps {
@@ -188,7 +214,7 @@ func TestAtomicReviewJourneysRatifyIssue3417(t *testing.T) {
 		}
 		for _, phrase := range required {
 			if !strings.Contains(strings.ToLower(declaration), strings.ToLower(phrase)) {
-				t.Errorf("#3417 journey %q declaration does not name %q: %s", id, phrase, declaration)
+				t.Errorf("acknowledgement journey %q declaration does not name %q: %s", id, phrase, declaration)
 			}
 		}
 	}

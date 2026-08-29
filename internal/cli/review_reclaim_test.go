@@ -112,6 +112,17 @@ func TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart(t *testing.T)
 	if _, err := os.Stat(filepath.Join(residue, "stray.tmp")); err != nil {
 		t.Fatalf("the start consumed or cleaned the residue it should have ignored: %v", err)
 	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Acknowledgement == nil {
+		t.Fatalf("zero-lens reclaim start omitted acknowledgement: %#v", started)
+	}
+	assertApprovedAcknowledgementTransition(t, started.Acknowledgement, repo, started.LineageID, started.TargetIdentity, started.Acknowledgement.Binding.Revision)
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 
 	if err := RunReview([]string{
 		"reclaim", "--cwd", repo, "--lineage", "reclaim-audit",

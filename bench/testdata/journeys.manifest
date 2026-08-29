@@ -15,6 +15,7 @@ j115-recovery-selector-is-collected-before-authorization
 j116-codex-committed-correction-runs-returned-status-continuation
 j117-doctor-dangling-managed-config
 j118-doctor-dangling-config-ancestor
+j119-global-review-mode-status-reports-persisted-source
 j12-rejected-capture-then-recapture
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
@@ -52,3 +53,4 @@ j92-released-compact-history-quarantines-without-compatibility
 j93-stale-managed-assets-start-is-not-unknown
 j96-sdd-same-parent-repository-edit-authority
 j98-sdd-flat-root-spec-is-discovered
+j99-sdd-attempt-born-during-untracked-lifecycle

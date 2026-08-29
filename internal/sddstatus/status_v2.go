@@ -203,7 +203,12 @@ func projectRelationshipsV2(value Relationships) relationshipsV2 {
 }
 
 func statusV2ArtifactStore(value ArtifactStore) bool {
-	return value == ArtifactStoreOpenSpec || value == ArtifactStoreEngram || value == ArtifactStoreNone
+	// #3636 asked for hybrid to reach the public document: a workspace that
+	// declares it was reported as openspec, so its file writes were invisible
+	// to a consumer that read the status as pure Engram. This is an additive
+	// v2 enum value; no existing value or field changes.
+	return value == ArtifactStoreOpenSpec || value == ArtifactStoreEngram ||
+		value == ArtifactStoreHybrid || value == ArtifactStoreNone
 }
 
 func statusV2ArtifactState(value ArtifactState) bool {
