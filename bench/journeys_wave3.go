@@ -468,7 +468,11 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 		status.argument("repository-context") == "" {
 		return fmt.Errorf("correction-plan binding = %+v", input)
 	}
-	arguments := []string{"review", "capture-correction-plan"}
+	// The rendered transition carries no filesystem path, so the caller names
+	// the repository the provider-issued context digest is verified against.
+	// Running from the sandbox root keeps proving the capability this journey
+	// exists for: capture reaches its authority from an unrelated process cwd.
+	arguments := []string{"review", "capture-correction-plan", "--cwd=" + r.sandbox.Repo}
 	for _, argument := range input.Arguments {
 		arguments = append(arguments, "--"+argument.Name+"="+argument.Value)
 	}

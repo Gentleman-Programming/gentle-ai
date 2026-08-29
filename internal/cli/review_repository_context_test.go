@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"os"
@@ -40,8 +39,13 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 	if err := os.WriteFile(resultPath, admittedReviewerPayloadForTest(t, repo, record, started.SelectedLenses[0], 0), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The process cwd stays unrelated on purpose: the capability is that a
+	// caller can capture from anywhere, and it now names the repository the
+	// provider-issued digest is verified against instead of reading a path out
+	// of the token.
 	t.Chdir(t.TempDir())
 	bindingArgs := []string{
+		"--cwd", repo,
 		"--repository-context", contextHandle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,
@@ -120,6 +124,7 @@ func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = RunReviewCaptureResult([]string{
+				"--cwd", repo,
 				"--repository-context", started.RepositoryContext.Handle,
 				"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 				"--expected-revision", started.RepositoryContext.Revision,
@@ -271,7 +276,7 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 		t.Fatalf("validation transition = %#v", status.NextTransition)
 	}
 
-	captureArgs := reviewTransitionInputTokens(t, status.NextTransition.Collect.Inputs[0])
+	captureArgs := reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0])
 	captureArgs = replaceReviewContextToken(t, captureArgs, rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: started.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
 	}))
@@ -396,7 +401,7 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	if bytes.Contains(first.Bytes(), []byte(repo)) || bytes.Contains(first.Bytes(), []byte(filepath.Join(repo, ".git"))) {
 		t.Fatalf("negotiated START leaked a repository path: %s", first.String())
 	}
-	root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
+	root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), repo, started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, Revision: started.RepositoryContext.Revision,
 	})
 	if err != nil || root != repo {
@@ -517,31 +522,20 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 	}
 }
 
+// rctx2ReviewRepositoryContextForTest issues the same provider-owned handle the
+// lifecycle issues. The handle is a digest, so a test cannot hand-assemble one:
+// deriving it here is what keeps these tests honest about what a host receives.
 func rctx2ReviewRepositoryContextForTest(t *testing.T, repo string, binding reviewtransaction.ReviewRepositoryContextBinding) string {
 	t.Helper()
-	lease, err := reviewtransaction.OpenRepositoryIdentityLease(t.Context(), repo)
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := lease.Identity()
-	payload, err := json.Marshal(struct {
-		Schema               string `json:"schema"`
-		RepositoryRoot       string `json:"repository_root"`
-		GitCommonDir         string `json:"git_common_dir"`
-		GitDir               string `json:"git_dir"`
-		RepositoryRef        string `json:"repository_ref"`
-		LineageID            string `json:"lineage_id"`
-		TargetIdentity       string `json:"target_identity"`
-		CapturePhaseRevision string `json:"capture_phase_revision"`
-	}{
-		Schema: "gentle-ai.review-repository-context/v2", RepositoryRoot: identity.RepositoryRoot,
-		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir, RepositoryRef: identity.RepositoryRef,
-		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, CapturePhaseRevision: binding.Revision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return "rctx2_" + base64.RawURLEncoding.EncodeToString(payload)
+	// Surfaces that take the handle without a --cwd flag -- the OpenCode relay
+	// the managed shim starts in place -- verify the digest against process
+	// cwd, so a test holding this handle stands where a real host stands.
+	t.Chdir(repo)
+	return handle
 }
 
 func replaceReviewContextArgument(t *testing.T, args []string, handle string) []string {

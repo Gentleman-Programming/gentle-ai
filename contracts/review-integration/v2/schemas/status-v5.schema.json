@@ -48,7 +48,7 @@
       "required": ["capability", "handle", "revision", "target_identity"],
       "properties": {
         "capability": {"const": "review.opaque_repository_context"},
-        "handle": {"type": "string", "pattern": "^(?:rctx1_[0-9a-f]{64}|rctx2_[A-Za-z0-9_-]+)$"},
+        "handle": {"type": "string", "pattern": "^rctx[12]_[0-9a-f]{64}$"},
         "revision": {"$ref": "#/$defs/sha256"},
         "target_identity": {"$ref": "#/$defs/sha256"},
         "event_id": {"$ref": "#/$defs/sha256"},
@@ -122,7 +122,7 @@
       "required": ["operation_token", "argument_tokens", "value"],
       "properties": {
         "operation_token": {"const": "capture-correction-plan"},
-        "argument_tokens": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [{"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=(?:rctx1_[0-9a-f]{64}|rctx2_[A-Za-z0-9_-]+)$"}, {"const": "--correction-lines={{value}}"}], "items": false},
+        "argument_tokens": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [{"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"}, {"const": "--correction-lines={{value}}"}], "items": false},
         "value": {"type": "object", "additionalProperties": false, "required": ["slot", "domain", "minimum", "maximum", "substitution_location"], "properties": {"slot": {"const": "correction_lines"}, "domain": {"const": "positive_correction_lines"}, "minimum": {"const": 1}, "maximum": {"type": "integer", "minimum": 1, "maximum": 200}, "substitution_location": {"const": 5}}}
       }
     },
@@ -131,7 +131,7 @@
       "required": ["operation_token", "argument_tokens", "value"],
       "properties": {
         "operation_token": {"const": "capture-result"},
-        "argument_tokens": {"type": "array", "minItems": 8, "maxItems": 8, "prefixItems": [{"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=(?:rctx1_[0-9a-f]{64}|rctx2_[A-Za-z0-9_-]+)$"}, {"pattern": "^--lens=\\S+$"}, {"pattern": "^--order=[0-9]+$"}, {"pattern": "^--subject-hash=sha256:[0-9a-f]{64}$"}, {"const": "--input={{value}}"}], "items": false},
+        "argument_tokens": {"type": "array", "minItems": 8, "maxItems": 8, "prefixItems": [{"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"}, {"pattern": "^--lens=\\S+$"}, {"pattern": "^--order=[0-9]+$"}, {"pattern": "^--subject-hash=sha256:[0-9a-f]{64}$"}, {"const": "--input={{value}}"}], "items": false},
         "value": {"$ref": "#/$defs/capture_result_submission_value"}
       }
     },

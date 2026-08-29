@@ -549,7 +549,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
 			LineageID: result.Authority.LineageID, Revision: transition.CorrectionRequest.ExpectedRevision,
-			TargetIdentity: result.TargetIdentity, RepositoryContext: context,
+			TargetIdentity: result.TargetIdentity, RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request

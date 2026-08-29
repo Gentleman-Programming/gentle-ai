@@ -135,10 +135,12 @@ const (
 	gitDieExitCode = 128
 )
 
-// resolveOpaqueReviewRepositoryRoot resolves one provider-issued repository
-// context and converts any failure into a typed, path-free operation failure.
-func resolveOpaqueReviewRepositoryRoot(ctx context.Context, handle string, binding reviewtransaction.ReviewRepositoryContextBinding) (string, error) {
-	root, err := reviewtransaction.ResolveReviewRepositoryContext(ctx, handle, binding)
+// resolveOpaqueReviewRepositoryRoot verifies one provider-issued repository
+// context against the repository the caller named, and converts any failure
+// into a typed, path-free operation failure. The handle commits to a digest, so
+// the repository has to come from the caller for the check to mean anything.
+func resolveOpaqueReviewRepositoryRoot(ctx context.Context, repo, handle string, binding reviewtransaction.ReviewRepositoryContextBinding) (string, error) {
+	root, err := reviewtransaction.ResolveReviewRepositoryContext(ctx, repo, handle, binding)
 	if err != nil {
 		return "", reviewRepositoryContextResolutionFailure(err)
 	}

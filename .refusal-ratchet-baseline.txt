@@ -23,7 +23,6 @@ internal/cli/review_artifact.go	"capture binding does not match the current revi
 internal/cli/review_artifact.go	"captured reviewer result does not contain the exact provider-owned subject"
 internal/cli/review_artifact.go	"captured reviewer result no longer satisfies its admission record"
 internal/cli/review_artifact.go	"input contains multiple JSON values"
-internal/cli/review_artifact.go	"review capture-result accepts either --repository-context or --cwd, not both"
 internal/cli/review_artifact.go	"review capture-result with --repository-context requires --expected-revision"
 internal/cli/review_capabilities.go	"Go build version is unavailable"
 internal/cli/review_capabilities.go	"capability build identity is invalid"

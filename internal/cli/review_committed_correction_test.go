@@ -181,6 +181,7 @@ func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertised
 				t.Cleanup(func() { reviewProviderAdapterFor = previous })
 				var output bytes.Buffer
 				if err := RunReviewCaptureResult([]string{
+					"--cwd", repo,
 					"--repository-context", started.RepositoryContext.Handle, "--lineage", lineage,
 					"--target", started.RepositoryContext.TargetIdentity, "--expected-revision", started.RepositoryContext.Revision,
 					"--lens", started.SelectedLenses[0], "--order", "0", "--agent", string(runtime),
@@ -189,7 +190,7 @@ func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertised
 				}
 				terminal = output.Bytes()
 			case model.AgentOpenCode:
-				relay := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, started.SelectedLenses[0]))
+				relay := startOpenCodeTransportRelay(t, repo, openCodeLensTransportStart(t, repo, record, started.SelectedLenses[0]))
 				hostOutput := string(payload)
 				completed, err := relay.complete(openCodeTransportEnvelope{
 					Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
@@ -333,7 +334,7 @@ func TestSelectorlessCommittedCorrectionClosesOnTargetedValidation(t *testing.T)
 			}
 			t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 			var terminalOutput bytes.Buffer
-			if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
+			if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
 				t.Fatalf("capture selector-less targeted validation: %v\n%s", err, terminalOutput.String())
 			}
 			var terminal reviewLastEventClosureResult
@@ -395,7 +396,7 @@ func TestStagedCorrectionClosesOnTargetedValidation(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	var terminalOutput bytes.Buffer
-	if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
+	if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
 		t.Fatalf("capture staged targeted validation: %v\n%s", err, terminalOutput.String())
 	}
 	var terminal reviewLastEventClosureResult

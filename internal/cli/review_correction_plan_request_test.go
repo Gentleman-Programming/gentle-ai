@@ -206,16 +206,21 @@ func captureCorrectionPlanFromCurrentStatus(t *testing.T, cwd, lineage string, c
 		transition.Collect.Inputs[0].CaptureOperation != reviewCaptureCorrectionPlanOperation {
 		t.Fatalf("correction-plan STATUS = %#v", transition)
 	}
-	captureArgs := reviewTransitionInputTokens(t, transition.Collect.Inputs[0])
+	captureArgs := reviewTransitionInputTokens(t, cwd, transition.Collect.Inputs[0])
 	captureArgs = append(captureArgs, "--correction-lines", strconv.Itoa(correctionLines))
 	if err := RunReviewCaptureCorrectionPlan(captureArgs, &bytes.Buffer{}); err != nil {
 		t.Fatalf("capture current correction plan: %v", err)
 	}
 }
 
-func reviewTransitionInputTokens(t *testing.T, input ReviewTransitionInput) []string {
+// reviewTransitionInputTokens replays one collect input exactly as a host does.
+// The rendered transition carries no filesystem path, so the host supplies the
+// repository the provider-issued context digest is verified against -- either
+// by running in it, or by naming it as this helper does.
+func reviewTransitionInputTokens(t *testing.T, repo string, input ReviewTransitionInput) []string {
 	t.Helper()
-	args := make([]string, 0, len(input.Arguments))
+	args := make([]string, 0, len(input.Arguments)+1)
+	args = append(args, "--cwd="+repo)
 	for _, argument := range input.Arguments {
 		if argument.Token == "" {
 			t.Fatalf("transition argument %q has no exact token", argument.Name)

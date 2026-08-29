@@ -250,11 +250,11 @@ func TestResolveCorrectedCandidateInspectionUsesFrozenRequestAfterLiveDrift(t *t
 
 	// The old context resolver reconstructs TargetFixDiff from this mutable file.
 	writeSnapshotFile(t, repo, "tracked.txt", "base\ndecoy drift\n")
-	if _, err := ResolveReviewRepositoryContext(ctx, handle, binding); err == nil {
+	if _, err := ResolveReviewRepositoryContext(ctx, repo, handle, binding); err == nil {
 		t.Fatal("live repository-context resolver accepted drifted correction")
 	}
 
-	resolved, err := ResolveCorrectedCandidateInspection(ctx, handle, request)
+	resolved, err := ResolveCorrectedCandidateInspection(ctx, repo, handle, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,56 +274,56 @@ func TestResolveCorrectedCandidateInspectionUsesFrozenRequestAfterLiveDrift(t *t
 func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 	passed := struct{}{}
 	t.Run("forged request hash", func(t *testing.T) {
-		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-forged-hash", &passed)
+		repo, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-forged-hash", &passed)
 		request.RequestHash = hash("forged-request")
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request); err == nil {
 			t.Fatal("forged request hash resolved")
 		}
 	})
 	t.Run("locator target mismatch", func(t *testing.T) {
-		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-target-mismatch", &passed)
+		repo, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-target-mismatch", &passed)
 		request.CorrectionTargetIdentity = hash("other-correction")
 		request.RequestHash = targetedValidationRequestHash(request)
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request); err == nil {
 			t.Fatal("locator target mismatch resolved")
 		}
 	})
 	t.Run("missing correction tree", func(t *testing.T) {
-		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-missing-tree", &passed)
+		repo, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-missing-tree", &passed)
 		request.CorrectionCandidateTree = strings.Repeat("a", 40)
 		request.RequestHash = targetedValidationRequestHash(request)
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request); err == nil {
 			t.Fatal("missing correction tree resolved")
 		}
 	})
 	t.Run("altered correction evidence tree", func(t *testing.T) {
-		_, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-tree", &passed)
+		repo, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-tree", &passed)
 		request.CorrectionCandidateTree = correction.BaseTree
 		request.RequestHash = targetedValidationRequestHash(request)
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request); err == nil {
 			t.Fatal("altered correction tree resolved")
 		}
 	})
 	t.Run("altered correction evidence path digest", func(t *testing.T) {
-		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-paths", &passed)
+		repo, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-paths", &passed)
 		request.CorrectionPathsDigest = hash("altered-paths")
 		request.RequestHash = targetedValidationRequestHash(request)
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request); err == nil {
 			t.Fatal("altered correction paths resolved")
 		}
 	})
 	t.Run("propagates authority load error", func(t *testing.T) {
-		_, request, _, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-load-error", &passed)
+		repo, request, _, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-load-error", &passed)
 		if err := os.Remove(store.StatePath()); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := ResolveCorrectedCandidateInspectionBinding(context.Background(), handle, binding, request.RequestHash); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := ResolveCorrectedCandidateInspectionBinding(context.Background(), repo, handle, binding, request.RequestHash); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("binding load error = %v, want %v", err, os.ErrNotExist)
 		}
 	})
 	t.Run("no verification evidence prerequisite", func(t *testing.T) {
-		_, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-no-evidence", nil)
-		resolved, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request)
+		repo, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-no-evidence", nil)
+		resolved, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request)
 		if err != nil || !snapshotsEqual(resolved, correction) {
 			t.Fatalf("targeted inspection without verification evidence = %#v, %v", resolved, err)
 		}
@@ -345,7 +345,7 @@ func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeCompactFixtureRecord(t, store, next)
-		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), repo, handle, request); err == nil {
 			t.Fatalf("stale authority for %q resolved", repo)
 		}
 	})

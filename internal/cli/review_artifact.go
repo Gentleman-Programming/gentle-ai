@@ -126,7 +126,7 @@ var syncReviewerArtifactDirectory = func(path string) error {
 func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-result", stdout, "Capture one strict reviewer result in native authority and emit its bound manifest.")
 	cwd := flags.String("cwd", ".", "repository path")
-	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and mutually exclusive with --cwd, pass one or the other and not both")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and verified against --cwd")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact frozen target identity")
 	lens := flags.String("lens", "", "exact selected lens")
@@ -164,9 +164,6 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return reviewPreflightError(errors.New("review capture-result --agent cannot be combined with --preflight")) // refusal:by-design world-action: a provider runtime identity belongs only to a real materialize, capture, or host-relay submission
 	}
 	contextHandle := strings.TrimSpace(*repositoryContext)
-	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
-		return reviewPreflightError(errors.New("review capture-result accepts either --repository-context or --cwd, not both"))
-	}
 	if contextHandle != "" && strings.TrimSpace(*revision) == "" {
 		return reviewPreflightError(errors.New("review capture-result with --repository-context requires --expected-revision"))
 	}
@@ -206,7 +203,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	var root string
 	var err error
 	if contextHandle != "" {
-		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+		root, err = resolveOpaqueReviewRepositoryRoot(ctx, *cwd, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
 		})
 		if err != nil {
@@ -279,7 +276,9 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	var rawPayload []byte
 	if providerExecution {
-		request, materializeErr := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), contextHandle, *lens)
+		request, materializeErr := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), root, contextHandle, *lens, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
+		})
 		if materializeErr != nil {
 			return reviewPreflightError(materializeErr)
 		}

@@ -64,7 +64,7 @@ type reviewProviderRoleCaptureBinding struct {
 func parseReviewProviderRoleCapture(command string, args []string, stdout io.Writer, withRequestHash bool) (*reviewProviderRoleCaptureBinding, error) {
 	flags := newReviewFlagSet("review "+command, stdout, "Materialize or capture one Go-issued non-lens provider role result bound to compact review authority.")
 	cwd := flags.String("cwd", ".", "repository path")
-	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and mutually exclusive with --cwd")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and verified against --cwd")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact provider-issued target identity for this role")
 	revision := flags.String("expected-revision", "", "exact compact authority revision")
@@ -105,9 +105,6 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if withRequestHash && binding.requestHash == "" {
 		return nil, reviewPreflightError(fmt.Errorf("review %s requires --request-hash binding the frozen targeted validation request", command)) // refusal:by-design operator-knowledge: the validator result applies only to one exact frozen correction request
 	}
-	if binding.repositoryContext != "" && reviewFlagWasProvided(flags, "cwd") {
-		return nil, reviewPreflightError(fmt.Errorf("review %s accepts either --repository-context or --cwd, not both", command)) // refusal:by-design operator-knowledge: only the caller knows whether the negotiated opaque context or a direct repository path names its authority
-	}
 	if binding.materialize && binding.repositoryContext == "" {
 		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize requires the provider-issued --repository-context", command)) // refusal:by-design operator-knowledge: materialization must use the negotiated opaque context
 	}
@@ -126,7 +123,7 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	ctx := context.Background()
 	var err error
 	if binding.repositoryContext != "" {
-		binding.root, err = resolveOpaqueReviewRepositoryRoot(ctx, binding.repositoryContext, reviewtransaction.ReviewRepositoryContextBinding{
+		binding.root, err = resolveOpaqueReviewRepositoryRoot(ctx, *cwd, binding.repositoryContext, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: binding.lineage, TargetIdentity: binding.target, Revision: binding.revision,
 		})
 		if err != nil {

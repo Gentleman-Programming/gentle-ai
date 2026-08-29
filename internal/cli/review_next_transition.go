@@ -118,6 +118,20 @@ type ReviewTransitionBinding struct {
 	Revision          string `json:"revision,omitempty"`
 	TargetIdentity    string `json:"target_identity"`
 	RepositoryContext string `json:"repository_context,omitempty"`
+	// RepositoryRoot is rendered as the --cwd token beside the repository
+	// context and never serialized into the binding object. The context handle
+	// is a digest over this repository and the binding above, so the capture
+	// command has to be told which repository to verify it against.
+	RepositoryRoot string `json:"-"`
+}
+
+// reviewRepositoryContextArguments renders only the opaque digest. The
+// repository it commits to is deliberately absent: a rendered transition
+// carries no filesystem path, and the caller already holds the repository it
+// asked STATUS about. A host runs these tokens in that repository, exactly as
+// the submission descriptors -- which refuse a --cwd token outright -- require.
+func reviewRepositoryContextArguments(binding ReviewTransitionBinding) []ReviewTransitionArgument {
+	return []ReviewTransitionArgument{{Name: "repository-context", Value: binding.RepositoryContext}}
 }
 
 // ReviewTransitionArtifact deliberately excludes the provider-owned path. The
@@ -203,7 +217,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		// correction target below.
 		bindingTarget = reviewAuthorityTargetIdentity(status)
 	}
-	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
+	binding := reviewTransitionBinding(status.Authority, bindingTarget, status.repositoryRoot, input.RepositoryContext)
 	captureBinding := binding
 	if status.Authority.CapturePhaseRevision != "" {
 		captureBinding.Revision = status.Authority.CapturePhaseRevision
@@ -282,7 +296,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: reviewCaptureCorrectionPlanOperation,
-			Arguments:  append(append(reviewBindingArguments(captureBinding), ReviewTransitionArgument{Name: "repository-context", Value: captureBinding.RepositoryContext}), ReviewTransitionArgument{Name: "request-hash", Value: input.CorrectionRequest.RequestHash}),
+			Arguments:  append(append(reviewBindingArguments(captureBinding), reviewRepositoryContextArguments(captureBinding)...), ReviewTransitionArgument{Name: "request-hash", Value: input.CorrectionRequest.RequestHash}),
 			Submission: reviewCorrectionPlanSubmission(input.Contract, captureBinding, *input.CorrectionRequest),
 		})
 		transition.CorrectionRequest = input.CorrectionRequest
@@ -350,7 +364,7 @@ func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding
 	return reviewCollectTransition(reason, ReviewTransitionInput{
 		Name: reviewProviderRoleInputName(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
 		Arguments: append(reviewBindingArguments(binding),
-			ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
+			reviewRepositoryContextArguments(binding)[0],
 			ReviewTransitionArgument{Name: "agent", Value: string(model.AgentOpenCode)},
 			ReviewTransitionArgument{Name: "role", Value: string(role)}),
 		ProviderTask: &task,
@@ -379,7 +393,7 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 		return ReviewTransitionInput{}, errors.New("provider role host-relay binding is incomplete") // refusal:by-design world-action: only a Go-issued STATUS transition may bind a host-relay provider role input
 	}
 	arguments := append(reviewBindingArguments(binding),
-		ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
+		reviewRepositoryContextArguments(binding)...)
 	input := ReviewTransitionInput{Name: reviewProviderRoleInputName(role)}
 	switch role {
 	case reviewerprovider.RoleRefuter:
@@ -464,7 +478,7 @@ func reviewCaptureResultCommandName() string {
 func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int, context *reviewCaptureContext, runtime ...model.AgentID) ReviewTransitionInput {
 	arguments := reviewBindingArguments(binding)
 	if binding.RepositoryContext != "" {
-		arguments = append(arguments, ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
+		arguments = append(arguments, reviewRepositoryContextArguments(binding)...)
 	}
 	input := ReviewTransitionInput{
 		Name: "reviewer_result", Schema: reviewReviewerSchemaID, CaptureOperation: reviewCaptureResultCaptureOperation,
@@ -854,12 +868,15 @@ func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionA
 // capture operation and submission descriptor.
 const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
 
-func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target string, repositoryContext ...string) ReviewTransitionBinding {
+func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target, repositoryRoot string, repositoryContext ...string) ReviewTransitionBinding {
 	contextHandle := ""
 	if len(repositoryContext) > 0 {
 		contextHandle = repositoryContext[0]
 	}
-	return ReviewTransitionBinding{LineageID: authority.LineageID, Revision: authority.Revision, TargetIdentity: target, RepositoryContext: contextHandle}
+	return ReviewTransitionBinding{
+		LineageID: authority.LineageID, Revision: authority.Revision, TargetIdentity: target,
+		RepositoryContext: contextHandle, RepositoryRoot: repositoryRoot,
+	}
 }
 
 // reviewTokenizedTransitionArguments renders the literal argv token for every

@@ -34,7 +34,12 @@ func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.C
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repo, store, record, lens, contextHandle, mustArtifactSubject(t, repo, record, lens, 0)
+	subject = mustArtifactSubject(t, repo, record, lens, 0)
+	// The managed shim starts this relay inside the repository it reviews, and
+	// the transport takes no flags, so process cwd is the repository the
+	// provider-issued context digest is verified against.
+	t.Chdir(repo)
+	return repo, store, record, lens, contextHandle, subject
 }
 
 // TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame is the live
@@ -50,7 +55,7 @@ func TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame(t *testing.T) 
 	const injected = "You are the reliability reviewer. Inspect the frozen candidate trees and return one JSON object."
 	binding := hostLensBindingJSON(record.State.LineageID, record.State.InitialSnapshot.Identity, lens, `"0"`,
 		record.State.CapturePhaseRevision, contextHandle, subject.SubjectHash)
-	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
+	relay := startOpenCodeTransportRelay(t, repo, openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "start",
 		Prompt: reviewLensContextBindingHeader + " " + binding + "\n" + injected,
 	})
@@ -100,7 +105,7 @@ func TestOpenCodeReviewTransportAdmitsHostLensFrameWithNumericOrderAndShuffledKe
 		`{"subject_hash": %q, "repository_context": %q, "revision": %q, "order": 0, "lens": %q, "target": %q, "lineage": %q}`,
 		subject.SubjectHash, contextHandle, record.State.CapturePhaseRevision, lens, record.State.InitialSnapshot.Identity, record.State.LineageID,
 	)
-	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
+	relay := startOpenCodeTransportRelay(t, repo, openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "start",
 		Prompt: reviewLensContextBindingHeader + " " + binding + "\nReviewer instructions follow.",
 	})
@@ -187,7 +192,7 @@ func TestOpenCodeReviewTransportAdmitsHostExpandedProviderRoleTask(t *testing.T)
 	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
 	const injected = "Input:\nmaterialized validator payload"
-	relay := startOpenCodeTransportRelay(t, openCodeTransportEnvelope{
+	relay := startOpenCodeTransportRelay(t, repo, openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt + "\n\n" + injected,
 	})
 	if strings.Contains(relay.prompt.Prompt, injected) {

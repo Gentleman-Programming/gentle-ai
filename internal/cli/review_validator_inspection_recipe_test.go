@@ -171,6 +171,9 @@ func TestTargetedValidatorInspectionRecipeExecutes(t *testing.T) {
 		"--request-hash", request.ValidationRequest.RequestHash,
 		"--repository-context", request.RepositoryContext,
 	}
+	// Go launches the targeted validator with the repository as its cwd, so a
+	// recipe derived from the prompt alone runs there too.
+	t.Chdir(repo)
 	for _, operation := range [][]string{
 		{"--operation", "name-status"},
 		{"--operation", "numstat"},

@@ -143,6 +143,7 @@ func startedOpaqueCaptureBinding(t *testing.T, lineage string) ([]string, string
 	}
 	t.Chdir(t.TempDir())
 	return []string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

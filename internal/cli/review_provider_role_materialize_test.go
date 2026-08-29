@@ -51,8 +51,9 @@ func piRefuterReview(t *testing.T) (string, reviewtransaction.CompactStore, revi
 	return repo, store, record, handle
 }
 
-func piRefuterBinding(record reviewtransaction.CompactRecord, handle string) []string {
+func piRefuterBinding(repo string, record reviewtransaction.CompactRecord, handle string) []string {
 	return []string{
+		"--cwd", repo,
 		"--repository-context", handle, "--lineage", record.State.LineageID,
 		"--target", record.State.InitialSnapshot.Identity, "--expected-revision", record.State.CapturePhaseRevision,
 	}
@@ -80,7 +81,7 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 	handle = rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
-	binding := piRefuterBinding(record, handle)
+	binding := piRefuterBinding(repo, record, handle)
 
 	var first bytes.Buffer
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--materialize=true"), &first); err != nil {
@@ -141,7 +142,7 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *test
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
-	binding := piRefuterBinding(record, handle)
+	binding := piRefuterBinding(repo, record, handle)
 	// An execution without the identified host-relay runtime is refused; the
 	// gate is symmetric with the materialize form.
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--execute=true"), io.Discard); err == nil || !strings.Contains(err.Error(), "requires --agent") {
@@ -183,7 +184,7 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 		t.Skip("the stalled fake pi is a POSIX shell script")
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	_, store, record, handle := piRefuterReview(t)
+	repo, store, record, handle := piRefuterReview(t)
 	previous := reviewProviderRoleCaptureTimeout
 	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
 	reviewProviderRoleCaptureTimeout = 100 * time.Millisecond
@@ -192,7 +193,7 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 		t.Fatal(err)
 	}
 	overrideProviderRoleHostAdapter(t, &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }})
-	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
+	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("stalled pi deadline refusal = %v", err)
 	}
@@ -411,7 +412,7 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	// The rendered transition is executable exactly as issued: the vector
 	// itself materializes, spawns the Go-owned pi process, and admits.
 	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
-	execute := []string{"capture-refuter"}
+	execute := []string{"capture-refuter", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		execute = append(execute, argument.Token)
 	}
@@ -479,7 +480,7 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 
 	// Materialize form of the same rendered binding: idempotent,
 	// byte-identical to the Go-materialized validator request, slot-free.
-	prelude := []string{"capture-validation"}
+	prelude := []string{"capture-validation", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		if argument.Name == "execute" {
 			continue
@@ -517,7 +518,7 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 	// Execution: the rendered vector spawns the Go-owned pi transport and the
 	// raw bytes close the bounded correction on their terminal capture.
 	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: providerTargetedValidationPayload(t, request)})
-	execute := []string{"capture-validation"}
+	execute := []string{"capture-validation", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		execute = append(execute, argument.Token)
 	}
@@ -551,6 +552,7 @@ func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := []string{
+		"--cwd", repo,
 		"--repository-context", handle, "--lineage", lineage,
 		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 	}

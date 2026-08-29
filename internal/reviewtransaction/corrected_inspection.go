@@ -19,15 +19,16 @@ func (err *CorrectedCandidateInspectionRepositoryContextError) Unwrap() error { 
 // ResolveCorrectedCandidateInspection resolves the immutable correction snapshot
 // for a captured targeted-validation request without rebuilding live workspace
 // content. The returned snapshot can be passed to SnapshotBuilder.InspectCandidate.
-func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextHandle string, request TargetedValidationRequest) (Snapshot, error) {
+func ResolveCorrectedCandidateInspection(ctx context.Context, repo string, repositoryContextHandle string, request TargetedValidationRequest) (Snapshot, error) {
 	if err := ValidateTargetedValidationRequest(request); err != nil {
 		return Snapshot{}, errors.New("corrected candidate inspection request is invalid") // refusal:by-design operator-knowledge: only a fresh native transition can provide an exact provider-issued request
 	}
-	var repo string
 	var binding ReviewRepositoryContextBinding
 	var err error
 	if strings.HasPrefix(repositoryContextHandle, reviewRepositoryContextV2HandlePrefix) {
-		repo, binding, err = resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx, repositoryContextHandle)
+		repo, binding, err = resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx, repo, repositoryContextHandle, ReviewRepositoryContextBinding{
+			LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+		})
 	} else {
 		repo, binding, err = resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
 	}
@@ -109,8 +110,8 @@ func frozenCorrectedCandidateInspectionRequest(ctx context.Context, repo string,
 }
 
 // ResolveCorrectedCandidateInspectionBinding verifies a provider-issued targeted inspection binding.
-func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryContextHandle string, binding ReviewRepositoryContextBinding, requestHash string) (SnapshotBuilder, Snapshot, error) {
-	repo, contextBinding, frozen, err := resolveTargetedValidationReviewRepositoryContext(ctx, repositoryContextHandle)
+func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repo string, repositoryContextHandle string, binding ReviewRepositoryContextBinding, requestHash string) (SnapshotBuilder, Snapshot, error) {
+	repo, contextBinding, frozen, err := resolveTargetedValidationReviewRepositoryContext(ctx, repo, repositoryContextHandle, binding)
 	if err != nil {
 		return SnapshotBuilder{}, Snapshot{}, &CorrectedCandidateInspectionRepositoryContextError{cause: err}
 	}
@@ -139,7 +140,7 @@ func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryC
 	// The frozen correction tree belongs to this exact provider context. The
 	// canonical resolver revalidates it without rebuilding the live correction
 	// candidate after the validator was issued.
-	snapshot, err := ResolveCorrectedCandidateInspection(ctx, repositoryContextHandle, request)
+	snapshot, err := ResolveCorrectedCandidateInspection(ctx, repo, repositoryContextHandle, request)
 	if err != nil {
 		return SnapshotBuilder{}, Snapshot{}, err
 	}

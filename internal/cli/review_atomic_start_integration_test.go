@@ -357,7 +357,7 @@ func assertAtomicStartRepositoryContext(t *testing.T, wantRoot string, started R
 		t.Fatalf("atomic negotiated START schema/context = %#v", started)
 	}
 	writeAtomicStartCorruptSibling(t, wantRoot, "v3", started.LineageID)
-	resolved, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
+	resolved, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), wantRoot, started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, Revision: started.RepositoryContext.Revision,
 	})
 	if err != nil {

@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -28,31 +29,34 @@ type repositoryContextStatus struct {
 	RepositoryContext *repositoryContextReference `json:"repository_context"`
 }
 
-type selfContainedRepositoryContext struct {
-	Schema               string `json:"schema"`
-	RepositoryRoot       string `json:"repository_root"`
-	GitCommonDir         string `json:"git_common_dir"`
-	GitDir               string `json:"git_dir"`
-	RepositoryRef        string `json:"repository_ref"`
-	LineageID            string `json:"lineage_id"`
-	TargetIdentity       string `json:"target_identity"`
-	CapturePhaseRevision string `json:"capture_phase_revision"`
-}
-
-func decodeSelfContainedRepositoryContext(handle string) (selfContainedRepositoryContext, error) {
+// assertOpaqueRepositoryContext proves the handle is what the capability name
+// claims. The declared capability is review.opaque_repository_context and the
+// handle is relayed on command lines and through host logs, so a reader holding
+// it must be able to learn nothing about the filesystem it names: it is a
+// fixed-width digest, it decodes to no structured payload, and it contains no
+// path fragment.
+func assertOpaqueRepositoryContext(handle string, secrets ...string) error {
 	const prefix = "rctx2_"
-	if !strings.HasPrefix(handle, prefix) {
-		return selfContainedRepositoryContext{}, fmt.Errorf("repository context is not self-contained rctx2: %q", handle)
+	encoded, found := strings.CutPrefix(handle, prefix)
+	if !found {
+		return fmt.Errorf("repository context is not an rctx2 handle: %q", handle)
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(handle, prefix))
-	if err != nil {
-		return selfContainedRepositoryContext{}, fmt.Errorf("decode rctx2 payload: %w", err)
+	digest, err := hex.DecodeString(encoded)
+	if err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("rctx2 handle is not a bare sha256 digest: %q", handle)
 	}
-	var context selfContainedRepositoryContext
-	if err := json.Unmarshal(payload, &context); err != nil {
-		return selfContainedRepositoryContext{}, fmt.Errorf("decode rctx2 JSON: %w", err)
+	if encoded != strings.ToLower(encoded) {
+		return fmt.Errorf("rctx2 handle is not canonical lowercase hex: %q", handle)
 	}
-	return context, nil
+	if json.Valid(digest) {
+		return fmt.Errorf("rctx2 handle decodes to structured data: %q", handle)
+	}
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(handle, secret) {
+			return fmt.Errorf("rctx2 handle is not opaque: %q leaks %q", handle, secret)
+		}
+	}
+	return nil
 }
 
 func driveRepositoryContextFreshProcesses(r *journeyRun) error {
@@ -82,15 +86,8 @@ func driveRepositoryContextFreshProcesses(r *journeyRun) error {
 		!strings.HasPrefix(want.Handle, "rctx2_") || want.Revision == "" || want.TargetIdentity == "" {
 		return fmt.Errorf("START repository context = %+v, lineage=%q", want, start.LineageID)
 	}
-	context, err := decodeSelfContainedRepositoryContext(want.Handle)
-	if err != nil {
+	if err := assertOpaqueRepositoryContext(want.Handle, r.sandbox.Repo, r.sandbox.Home); err != nil {
 		return err
-	}
-	if context.Schema != "gentle-ai.review-repository-context/v2" || context.RepositoryRoot != r.sandbox.Repo ||
-		context.GitCommonDir == "" || context.GitDir == "" || context.RepositoryRef == "" ||
-		context.LineageID != start.LineageID || context.TargetIdentity != want.TargetIdentity ||
-		context.CapturePhaseRevision != want.Revision {
-		return fmt.Errorf("START self-contained rctx2 context = %+v, reference=%+v", context, want)
 	}
 	if leaksRepositoryPath(started.Stdout, r.sandbox.Repo) {
 		return fmt.Errorf("START leaked repository path in its public envelope")
@@ -169,8 +166,8 @@ func repositoryContextJourneys() []Journey {
 	return []Journey{{
 		ID:     "j104-repository-context-survives-fresh-process",
 		Review: reviewOptedIn,
-		Title:  "#3797: self-contained rctx2 preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
-		Source: "issue #3797: active rctx2 is self-contained and authority-derived across fresh processes; rctx1 locators remain historical read-only only",
+		Title:  "#3797: opaque rctx2 digest preserves target, repository/worktree, and subject integrity across fresh START and STATUS processes",
+		Source: "issue #3797: active rctx2 is an opaque authority-derived digest across fresh processes, carrying no filesystem path; rctx1 locators remain historical read-only only",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged ordinary-code candidate", Fixture: stageOrdinaryCode},

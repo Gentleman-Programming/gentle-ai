@@ -24,6 +24,7 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 	lens := record.State.SelectedLenses[0]
 	subjectHash := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
 	return []string{
+		"--cwd", repo,
 		"--repository-context", handle,
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
 		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens, "--order", "0",
@@ -47,7 +48,11 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 		t.Fatal("materialized provider task omits the frozen target identity")
 	}
 	var native bytes.Buffer
-	if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens}, &native); err != nil {
+	if err := RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", handle,
+		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens,
+	}, &native); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), native.Bytes()) {

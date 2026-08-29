@@ -123,8 +123,8 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
-		"schemas/start.schema.json":     "7af7367de6e881335e1479a28f4d33083f73b2a105b655830c78dcc144039dd8",
-		"schemas/status-v5.schema.json": "6ad19a9188bff1bfb8ee0965d1a10116635475154a14ab8ffb20c8e48f0a7491",
+		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
+		"schemas/status-v5.schema.json": "997bd9628ea59871640e4a17b46d61f8590c93f64e9344f24d809eb6b7cbcf6c",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
