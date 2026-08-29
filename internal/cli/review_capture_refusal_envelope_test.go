@@ -347,9 +347,15 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 	// Routing is only half of it. The lineage was stranded because nothing could
 	// drive it forward, so declaring the artifact has to put the review back
 	// where it was: waiting on the same validation.
+	if status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("untracked selection offered no single collect input: %#v", status.NextTransition.Collect)
+	}
 	inventory := ""
 	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
 		if argument.Name == "expected_untracked_inventory" {
+			if inventory != "" {
+				t.Fatalf("untracked selection repeated its inventory argument: %#v", status.NextTransition.Collect.Inputs[0].Arguments)
+			}
 			inventory = argument.Value
 		}
 	}
@@ -395,6 +401,9 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 // however it collects.
 func TestReviewValidationRequestCopiesAgree(t *testing.T) {
 	one := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("a", 64)}
+	// A separate value that equals `one`. Passing the same pointer twice would
+	// make the equal cases hold on identity and prove nothing about comparison.
+	sameAsOne := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("a", 64)}
 	other := reviewtransaction.TargetedValidationRequest{LineageID: "review-copies", RequestHash: "sha256:" + strings.Repeat("b", 64)}
 	for _, tt := range []struct {
 		name                  string
@@ -403,14 +412,14 @@ func TestReviewValidationRequestCopiesAgree(t *testing.T) {
 		agree                 bool
 	}{
 		{name: "neither present", agree: true},
-		{name: "both present and equal", transition: &one, status: &one, agree: true},
+		{name: "both present and equal", transition: &one, status: &sameAsOne, agree: true},
 		{name: "both present and different", transition: &one, status: &other},
 		{name: "status only, ordinary transition", status: &one},
 		{name: "status only, transition collecting something else", status: &one, collectsSomethingElse: true, agree: true},
 		{name: "transition only", transition: &one},
 		{name: "transition only, collecting something else", transition: &one, collectsSomethingElse: true},
 		{name: "both present and different, collecting something else", transition: &one, status: &other, collectsSomethingElse: true},
-		{name: "both present and equal, collecting something else", transition: &one, status: &one, collectsSomethingElse: true, agree: true},
+		{name: "both present and equal, collecting something else", transition: &one, status: &sameAsOne, collectsSomethingElse: true, agree: true},
 		{name: "neither present, collecting something else", collectsSomethingElse: true, agree: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
