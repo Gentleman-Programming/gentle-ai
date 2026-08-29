@@ -2280,7 +2280,7 @@ func recordCompactTrace(path string, entry CompactTraceEntry) {
 }
 
 func appendCompactTrace(path string, entry CompactTraceEntry) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirAllSync(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)

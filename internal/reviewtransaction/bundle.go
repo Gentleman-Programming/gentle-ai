@@ -249,7 +249,7 @@ func (store Store) installBundle(chain ValidatedChain, events []ChainBundleEvent
 		}
 		defer maintenance.Release()
 	}
-	if err := os.MkdirAll(filepath.Join(store.Dir, "events"), 0o755); err != nil {
+	if err := mkdirAllSync(filepath.Join(store.Dir, "events"), 0o755); err != nil {
 		return ValidatedChain{}, err
 	}
 	lock, err := acquireLocalStoreLock(filepath.Join(store.Dir, "LOCK"))
@@ -276,6 +276,9 @@ func (store Store) installBundle(chain ValidatedChain, events []ChainBundleEvent
 		if err := installContentAddressedFile(path, event.Payload); err != nil {
 			return ValidatedChain{}, err
 		}
+	}
+	if err := SyncReviewDirectory(filepath.Join(store.Dir, "events")); err != nil {
+		return ValidatedChain{}, &directorySyncError{path: filepath.Join(store.Dir, "events"), cause: err}
 	}
 	if err := writeAtomic(filepath.Join(store.Dir, "HEAD"), []byte(chain.HeadRevision+"\n"), 0o644); err != nil {
 		return ValidatedChain{}, err

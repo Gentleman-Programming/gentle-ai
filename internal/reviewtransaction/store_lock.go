@@ -179,7 +179,7 @@ func acquireStoreLock(path string) (*storeLock, error) {
 }
 
 func acquireLocalStoreLock(path string) (*storeLock, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirAllSync(filepath.Dir(path), 0o755); err != nil {
 		return nil, &StoreLockPreAcquisitionError{Err: err}
 	}
 	file, err := secureOpenLocalStoreLock(path)
