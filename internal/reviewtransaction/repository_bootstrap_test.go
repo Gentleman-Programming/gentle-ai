@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
 )
 
 func TestPrepareReviewRepositoryRootInitializesOnlyGenuinelyUnversionedWorkspace(t *testing.T) {
@@ -21,7 +23,9 @@ func TestPrepareReviewRepositoryRootInitializesOnlyGenuinelyUnversionedWorkspace
 		if err != nil {
 			t.Fatalf("prepare local Git repository: %v", err)
 		}
-		if root != repo {
+		// Identity, not string equality: on Windows the runner's TEMP is an
+		// 8.3 short name that Git reports back in its long spelling.
+		if !pathidentity.SameDirectory(root, repo) {
 			t.Fatalf("prepared root = %q, want %q", root, repo)
 		}
 		if info, statErr := os.Stat(filepath.Join(repo, ".git")); statErr != nil || !info.IsDir() {
@@ -43,7 +47,7 @@ func TestPrepareReviewRepositoryRootInitializesOnlyGenuinelyUnversionedWorkspace
 		if err != nil {
 			t.Fatalf("prepare containing repository: %v", err)
 		}
-		if root != repo {
+		if !pathidentity.SameDirectory(root, repo) {
 			t.Fatalf("prepared root = %q, want containing root %q", root, repo)
 		}
 		if _, statErr := os.Lstat(filepath.Join(nested, ".git")); !errors.Is(statErr, os.ErrNotExist) {

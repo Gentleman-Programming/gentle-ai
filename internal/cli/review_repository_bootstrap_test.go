@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
 )
 
 func TestReviewLifecycleBootstrapsGenuinelyUnversionedWorkspace(t *testing.T) {
@@ -78,7 +80,9 @@ func TestReviewStatusReusesContainingWorktreeWithoutNestedMetadata(t *testing.T)
 	if _, err := os.Lstat(filepath.Join(nested, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("nested workspace metadata = %v, want no nested .git", err)
 	}
-	if root := strings.TrimSpace(runReviewCLIGit(t, nested, "rev-parse", "--show-toplevel")); root != repo {
+	// Identity, not string equality: on Windows the runner's TEMP is an 8.3
+	// short name that Git reports back in its long spelling.
+	if root := strings.TrimSpace(runReviewCLIGit(t, nested, "rev-parse", "--show-toplevel")); !pathidentity.SameDirectory(root, repo) {
 		t.Fatalf("nested workspace root = %q, want %q", root, repo)
 	}
 }
