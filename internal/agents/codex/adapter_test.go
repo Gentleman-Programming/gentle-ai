@@ -147,6 +147,10 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".codex", "AGENTS.md") {
 		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".codex", "AGENTS.md"))
 	}
+	workspace := filepath.Join(home, "repo")
+	if got := a.WorkspaceSystemPromptFile(workspace); got != filepath.Join(workspace, "AGENTS.md") {
+		t.Fatalf("WorkspaceSystemPromptFile() = %q, want %q", got, filepath.Join(workspace, "AGENTS.md"))
+	}
 
 	// Codex has no settings path.
 	if got := a.SettingsPath(home); got != "" {

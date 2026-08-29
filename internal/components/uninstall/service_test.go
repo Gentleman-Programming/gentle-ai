@@ -1207,6 +1207,31 @@ func TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoO
 	}
 }
 
+func TestComponentOperationsSDD_CodexKeepsGlobalAGENTSRoute(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentCodex)
+	if !ok {
+		t.Fatal("codex adapter not found in registry")
+	}
+
+	_, targets, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	global := filepath.Join(homeDir, ".codex", "AGENTS.md")
+	if !slices.Contains(targets, global) {
+		t.Fatalf("componentOperations() targets missing global Codex route %q; got %v", global, targets)
+	}
+	if slices.Contains(targets, filepath.Join(workspaceDir, "AGENTS.md")) || slices.Contains(targets, filepath.Join(workspaceDir, ".codex", "AGENTS.md")) {
+		t.Fatalf("global uninstall unexpectedly targeted workspace Codex route: %v", targets)
+	}
+}
+
 func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

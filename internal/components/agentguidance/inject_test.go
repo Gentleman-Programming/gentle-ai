@@ -194,6 +194,31 @@ func TestInjectRoutingPreservesUnmanagedUserContent(t *testing.T) {
 	}
 }
 
+func TestInjectRoutingForWorkspaceUsesRootAGENTSAndPreservesContent(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	const userContent = "# Workspace rules\n\nKeep this content.\n"
+	path := filepath.Join(workspace, "AGENTS.md")
+	if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	result, err := InjectRoutingForWorkspace(workspace, model.AgentCodex)
+	if err != nil {
+		t.Fatalf("InjectRoutingForWorkspace() error = %v", err)
+	}
+	if len(result.Files) != 1 || result.Files[0] != path {
+		t.Fatalf("InjectRoutingForWorkspace() files = %v, want [%q]", result.Files, path)
+	}
+	if got := readFile(t, path); !strings.Contains(got, userContent) {
+		t.Fatalf("workspace user content was not preserved:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".codex", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("workspace routing created .codex/AGENTS.md; stat err = %v", err)
+	}
+}
+
 func TestInjectRoutingRejectsUnregisteredAgent(t *testing.T) {
 	t.Parallel()
 

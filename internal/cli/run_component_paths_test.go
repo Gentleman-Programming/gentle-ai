@@ -1007,6 +1007,25 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	}
 }
 
+func TestBackupTargetsWorkspaceCodexUsesRootAGENTS(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents}
+
+	targets, err := backupTargets(home, workspace, ScopeWorkspace, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	want := filepath.Join(workspace, "AGENTS.md")
+	if !containsPath(targets, want) {
+		t.Fatalf("backupTargets missing workspace Codex route %q; targets=%v", want, targets)
+	}
+	if containsPath(targets, filepath.Join(workspace, ".codex", "AGENTS.md")) {
+		t.Fatal("backupTargets included the undiscoverable workspace Codex route")
+	}
+}
+
 func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}

@@ -93,6 +93,12 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 	return filepath.Join(homeDir, ".codex", "AGENTS.md")
 }
 
+// WorkspaceSystemPromptFile returns the workspace-level AGENTS.md discovered
+// by Codex. Unlike the global file, it is rooted directly in the workspace.
+func (a *Adapter) WorkspaceSystemPromptFile(workspaceDir string) string {
+	return filepath.Join(workspaceDir, "AGENTS.md")
+}
+
 func (a *Adapter) SkillsDir(homeDir string) string {
 	return filepath.Join(homeDir, ".codex", "skills")
 }

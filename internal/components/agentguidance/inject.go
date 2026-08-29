@@ -65,6 +65,17 @@ type templateBootstrapper interface {
 // Only the marked section is owned by Gentle AI: everything a user wrote around
 // it is preserved verbatim, and a second identical injection is a no-op.
 func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
+	return injectRouting(targetDir, agent, false)
+}
+
+// InjectRoutingForWorkspace installs routing guidance in the workspace-level
+// instruction file when an adapter exposes one. Global routing remains the
+// default path used by InjectRouting.
+func InjectRoutingForWorkspace(targetDir string, agent model.AgentID) (Result, error) {
+	return injectRouting(targetDir, agent, true)
+}
+
+func injectRouting(targetDir string, agent model.AgentID, workspace bool) (Result, error) {
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
 	rendered, err := RenderRouting(agent)
@@ -72,7 +83,7 @@ func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
 		return Result{}, err
 	}
 
-	delivery, err := resolveRoutingDelivery(targetDir, agent)
+	delivery, err := resolveRoutingDelivery(targetDir, agent, workspace)
 	if err != nil {
 		return Result{}, err
 	}
@@ -97,7 +108,16 @@ func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
 // same delivery resolution, so the backup contract cannot drift away from what
 // the injector actually writes.
 func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
-	delivery, err := resolveRoutingDelivery(targetDir, agent)
+	return routingPaths(targetDir, agent, false)
+}
+
+// RoutingPathsForWorkspace reports the workspace-level routing target.
+func RoutingPathsForWorkspace(targetDir string, agent model.AgentID) ([]string, error) {
+	return routingPaths(targetDir, agent, true)
+}
+
+func routingPaths(targetDir string, agent model.AgentID, workspace bool) ([]string, error) {
+	delivery, err := resolveRoutingDelivery(targetDir, agent, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +154,11 @@ type routingDelivery struct {
 // an unreachable target is exactly the failure this component exists to
 // prevent — and reporting a path the injector cannot write is the same defect
 // seen from the backup side.
-func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDelivery, error) {
+type workspacePromptAdapter interface {
+	WorkspaceSystemPromptFile(string) string
+}
+
+func resolveRoutingDelivery(targetDir string, agent model.AgentID, workspace bool) (routingDelivery, error) {
 	if strings.TrimSpace(targetDir) == "" {
 		return routingDelivery{}, fmt.Errorf("%w: %q", ErrInvalidTarget, targetDir)
 	}
@@ -170,6 +194,11 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDeliv
 
 	default:
 		promptPath := adapter.SystemPromptFile(targetDir)
+		if workspace {
+			if workspaceAdapter, ok := adapter.(workspacePromptAdapter); ok {
+				promptPath = workspaceAdapter.WorkspaceSystemPromptFile(targetDir)
+			}
+		}
 		if strings.TrimSpace(promptPath) == "" {
 			return routingDelivery{}, fmt.Errorf("%w: adapter %q exposes no system prompt file", ErrInvalidTarget, agent)
 		}
