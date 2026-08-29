@@ -406,7 +406,10 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 			if !unique || stringIndex(wantPaths, resolved) < 0 {
 				return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 			}
-			location.Path = resolved
+			// The citation is left as the reviewer wrote it. Normalizing it here
+			// would rewrite the reviewer's own text for no consumer: nothing
+			// downstream reads this location, and an unobserved rewrite is a
+			// claim no test can hold.
 		}
 		for _, proof := range finding.ProofRefs {
 			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains, resolveBasename)
