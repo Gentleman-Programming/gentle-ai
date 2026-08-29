@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 )
 
 const (
@@ -169,6 +170,16 @@ func readReleaseConfiguration(configPath string) ([]byte, error) {
 	return config, nil
 }
 
+// manifestPerm is what a just-written 0o644 manifest reads back as. Windows
+// has no POSIX permission bits: Go projects the read-only attribute onto the
+// mode, so a writable regular file always reports 0o666 there.
+func manifestPerm() os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
+	}
+	return 0o644
+}
+
 func writeManifestOnce(output string, payload []byte) error {
 	parent, err := os.Stat(filepath.Dir(output))
 	if err != nil || !parent.IsDir() {
@@ -190,7 +201,7 @@ func writeManifestOnce(output string, payload []byte) error {
 		return errors.New("release provenance output cannot be closed")
 	}
 	info, err := os.Lstat(output)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != manifestPerm() {
 		return errors.New("release provenance output is invalid")
 	}
 	readback, err := os.ReadFile(output)

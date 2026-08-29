@@ -1200,6 +1200,12 @@ func writeReviewStartCandidate(t *testing.T, repo, path, contents string, mode o
 	}
 	if !tracked {
 		runReviewCLIGit(t, repo, "add", "--", path)
+		if mode&0o111 != 0 {
+			// Windows has no executable bit, so record the fixture's intent in
+			// the index: the candidate then carries the same 100755 mode git
+			// snapshots on POSIX, and risk classification stays identical.
+			runReviewCLIGit(t, repo, "update-index", "--chmod=+x", "--", path)
+		}
 	}
 }
 

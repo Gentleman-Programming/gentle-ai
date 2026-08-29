@@ -109,7 +109,7 @@ func TestAtomicStartPlainRouteAlwaysCreatesCompact(t *testing.T) {
 func TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	linked := filepath.Join(t.TempDir(), "linked")
+	linked := filepath.Join(canonicalReviewCLITempDir(t), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")
 	for _, root := range []string{repo, linked} {
 		if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("same overlapping candidate\n"), 0o644); err != nil {
@@ -167,7 +167,7 @@ func TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly(t *testing.T) 
 func TestAtomicStartBurnRecreateAndCrossWorktreeConflictStayScoped(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	linked := filepath.Join(t.TempDir(), "linked")
+	linked := filepath.Join(canonicalReviewCLITempDir(t), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")
 	for _, root := range []string{repo, linked} {
 		writeAtomicStartDocumentationCandidate(t, root)

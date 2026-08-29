@@ -55,6 +55,13 @@ func TestResolvePackageBinForms(t *testing.T) {
 			}
 			root := t.TempDir()
 			want := writeTarget(t, root, tc.target, 0o755)
+			// ResolvePackageBin returns the canonical executable, so the
+			// expectation must be canonical too: on the Windows runners
+			// t.TempDir() is an 8.3 short name that resolves to its long
+			// spelling.
+			canonicalWant, err := filepath.EvalSymlinks(want)
+			must(t, err)
+			want = canonicalWant
 			if tc.link != "" {
 				bin := filepath.Join(root, "bin", "gentle-pi-models")
 				must(t, os.MkdirAll(filepath.Dir(bin), 0o755))

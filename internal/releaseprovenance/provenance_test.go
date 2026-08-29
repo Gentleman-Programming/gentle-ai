@@ -61,7 +61,7 @@ func TestWriteCreatesCanonicalFileOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Lstat(output)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != manifestPerm() {
 		t.Fatalf("output metadata = %#v, %v", info, err)
 	}
 	if err := Write(output, config, validInput()); err == nil {

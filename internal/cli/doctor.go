@@ -490,7 +490,14 @@ func danglingAncestor(homeDir, path string) (string, error) {
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
-			return "", nil // nearest existing ancestor is real; path is genuinely missing
+			if info.IsDir() {
+				return "", nil // nearest existing ancestor is real; path is genuinely missing
+			}
+			// A non-directory ancestor blocks both inspection and restoration:
+			// sync cannot mkdir below a regular file. POSIX surfaces this as
+			// ENOTDIR at the final lstat, but Windows reports it as not-exist,
+			// which is how the walk gets here.
+			return "", fmt.Errorf("ancestor %s is not a directory", ancestor)
 		}
 		if _, err := os.Stat(ancestor); os.IsNotExist(err) {
 			return ancestor, nil
