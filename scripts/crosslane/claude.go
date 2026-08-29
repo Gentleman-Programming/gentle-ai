@@ -55,7 +55,7 @@ func (b *battery) runClaudeLowLifecycle() {
 		b.fail(claudeLane, "low lifecycle: start", fmt.Sprintf("action = %q, want closed", getString(startDoc, "action")))
 		return
 	}
-	b.pass(claudeLane, "low lifecycle burned", "zero-lens START closed and burned its review without FINALIZE")
+	b.pass(claudeLane, "low lifecycle acknowledged and burned", "zero-lens START returned exact acknowledgement before burn without FINALIZE")
 }
 
 func (b *battery) runClaudeMediumConsent() {

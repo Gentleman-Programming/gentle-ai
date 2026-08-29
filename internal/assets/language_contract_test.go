@@ -82,7 +82,7 @@ func TestSDDOrchestratorAssetsEnforceLanguageContract(t *testing.T) {
 
 	for _, path := range assetPaths {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 
 			for _, required := range sddOrchestratorLanguageContractRequired {
 				if !strings.Contains(content, required) {
@@ -107,7 +107,7 @@ func TestSDDOrchestratorAssetsEnforceLanguageContract(t *testing.T) {
 func TestSDDPhaseSkillsEnforceLanguageContract(t *testing.T) {
 	for _, path := range allSDDPhaseSkillAssetPaths(t) {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			for _, required := range sddArtifactLanguageContractRequired {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing language contract wording %q", path, required)
@@ -147,7 +147,7 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.agent, func(t *testing.T) {
-			content := MustRead(tc.path)
+			content := resolveSharedOrchestratorSections(MustRead(tc.path))
 			for _, required := range sddOrchestratorLanguageContractRequired {
 				if !strings.Contains(content, required) {
 					t.Fatalf("agent %s asset %s missing language contract wording %q", tc.agent, tc.path, required)
@@ -187,7 +187,7 @@ func TestSDDOrchestratorAssetsUseCanonicalResearchGate(t *testing.T) {
 
 	for _, path := range assetPaths {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			if path == "claude/sdd-orchestrator.md" {
 				content = MustRead("claude/sdd-orchestrator-workflow.md")
 			}
@@ -208,7 +208,7 @@ func TestSDDProposeAssetsRequireConfirmedHandoffWithoutInterview(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			for _, required := range []string{"confirmed pre-proposal handoff", "MUST NOT interview"} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing confirmed-handoff wording %q", path, required)
@@ -303,7 +303,7 @@ func TestNeutralPersonaAssetsProvideMentorParityWithoutRegionalVoice(t *testing.
 		"hermes/persona-neutral.md",
 	} {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			for _, required := range []string{
 				"Response-length contract",
 				"minimum useful response",
@@ -339,7 +339,7 @@ func TestNeutralOutputStyleAssetsProvideMeaningfulContract(t *testing.T) {
 		"kimi/output-style-neutral.md",
 	} {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			if strings.TrimSpace(content) == "" {
 				t.Fatalf("%s is empty", path)
 			}
@@ -457,7 +457,7 @@ func TestPersonaChannelsCarryPreWriteArtifactSelfCheck(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			if !strings.Contains(content, preWriteArtifactSelfCheckRequired) {
 				t.Fatalf("%s: missing pre-write artifact self-check sentence", path)
 			}
@@ -474,7 +474,7 @@ func TestNeutralChannelsExtendAntiDriftToToneAndDialect(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
+			content := resolveSharedOrchestratorSections(MustRead(path))
 			if !strings.Contains(content, neutralToneDialectAntiDriftRequired) {
 				t.Fatalf("%s: missing tone/dialect anti-drift sentence", path)
 			}

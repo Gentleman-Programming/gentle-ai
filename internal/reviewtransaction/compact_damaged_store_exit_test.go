@@ -140,13 +140,25 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 	t.Run("successor holding review metadata names abandonment", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, successor, _ := forgedRecoveryPair(t, repo, "reclaim-captured", "forged captured reclaim target\n", func(state *CompactState) {
-			results := make([]LensResult, 0, len(state.SelectedLenses))
-			for _, lens := range state.SelectedLenses {
-				results = append(results, LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed once"}})
+			store, err := CompactAuthoritativeStore(t.Context(), repo, state.LineageID)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if err := state.CompleteReview(CompactReviewInput{
-				LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
-			}); err != nil {
+			for order := range state.SelectedLenses {
+				captureCompactLens(t, store, *state, order)
+			}
+			record, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovery := state.Recovery
+			*state = record.State
+			state.Recovery = recovery
+			view, err := state.CompactReviewView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := state.CompleteReview(CompactReviewInput{LensResults: view.LensResults, RefuterOutcomes: view.RefuterOutcomes}); err != nil {
 				t.Fatal(err)
 			}
 		})

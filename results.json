@@ -1,0 +1,378 @@
+{
+  "schema": "gentle-ai-bench.results/v1",
+  "mode": "driven",
+  "binary": "/tmp/claude-1000/-home-gentleman-work-gentle-ai/1ae2fe2e-8ac6-4ab6-ae89-fb010eab12d7/scratchpad/ga",
+  "binary_version": "gentle-ai dev",
+  "journeys": [
+    {
+      "id": "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+      "title": "#3587: explicit active lineage keeps its exact four lenses through correction and validator flow",
+      "source": "#3587: active compact authority continues only through its bound four-lens correction plan and terminal validator capture",
+      "status": "failed",
+      "failure_reason": "step \"capture the status-bound bounded correction plan\": capture correction plan: Error: repository_context_unavailable: provider-issued review repository context operation failed; cause: invalid rctx2 repository context: git rev-parse --show-toplevel failed with exit code 128: fatal: not a git repository (or any of the ",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 12,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 7,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 5,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 576,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "START the compact high-risk transaction",
+          "args": [
+            "review",
+            "start",
+            "--lineage",
+            "atomic-four-lens-correction",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1058,
+          "prompts": 1,
+          "git_calls": 0
+        },
+        {
+          "sequence": 2,
+          "step": "explicit active STATUS exposes exactly four compact lenses",
+          "args": [
+            "review",
+            "status",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--next-transition",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 15438,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "{"
+        },
+        {
+          "sequence": 3,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "status",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--next-transition",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 15438,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "{"
+        },
+        {
+          "sequence": 4,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction",
+            "--target",
+            "sha256:e48ee9d21543e4a2423bc0fd61cb59c10fe87d9e037f56e714e0eaf4cbba2007",
+            "--expected-revision",
+            "sha256:283971e7bcd41096f7505940bc27113036b34f0b8752525eec887d0b950d621c",
+            "--lens",
+            "review-risk",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/atomic-reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 600,
+          "model_run": true,
+          "git_calls": 0
+        },
+        {
+          "sequence": 5,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "status",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--next-transition",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 12303,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "{"
+        },
+        {
+          "sequence": 6,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction",
+            "--target",
+            "sha256:e48ee9d21543e4a2423bc0fd61cb59c10fe87d9e037f56e714e0eaf4cbba2007",
+            "--expected-revision",
+            "sha256:283971e7bcd41096f7505940bc27113036b34f0b8752525eec887d0b950d621c",
+            "--lens",
+            "review-resilience",
+            "--order",
+            "1",
+            "--input",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/atomic-reviewer-1.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 606,
+          "model_run": true,
+          "git_calls": 0
+        },
+        {
+          "sequence": 7,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "status",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--next-transition",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 9150,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "{"
+        },
+        {
+          "sequence": 8,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction",
+            "--target",
+            "sha256:e48ee9d21543e4a2423bc0fd61cb59c10fe87d9e037f56e714e0eaf4cbba2007",
+            "--expected-revision",
+            "sha256:283971e7bcd41096f7505940bc27113036b34f0b8752525eec887d0b950d621c",
+            "--lens",
+            "review-readability",
+            "--order",
+            "2",
+            "--input",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/atomic-reviewer-2.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 607,
+          "model_run": true,
+          "git_calls": 0
+        },
+        {
+          "sequence": 9,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "status",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--next-transition",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5994,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "{"
+        },
+        {
+          "sequence": 10,
+          "step": "capture a correction finding and every remaining compact lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction",
+            "--target",
+            "sha256:e48ee9d21543e4a2423bc0fd61cb59c10fe87d9e037f56e714e0eaf4cbba2007",
+            "--expected-revision",
+            "sha256:283971e7bcd41096f7505940bc27113036b34f0b8752525eec887d0b950d621c",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "3",
+            "--input",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/atomic-reviewer-3.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1828,
+          "model_run": true,
+          "git_calls": 0
+        },
+        {
+          "sequence": 11,
+          "step": "capture the status-bound bounded correction plan",
+          "args": [
+            "review",
+            "status",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--next-transition",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow-906768933/home/demo",
+            "--lineage",
+            "atomic-four-lens-correction"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 6285,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "{"
+        },
+        {
+          "sequence": 12,
+          "step": "capture the status-bound bounded correction plan",
+          "args": [
+            "review",
+            "capture-correction-plan",
+            "--lineage=atomic-four-lens-correction",
+            "--expected-revision=sha256:56ff97435f6800009eb1b0e0cbc841ee5060cd10ee9108296b7c182054904e7b",
+            "--target=sha256:e48ee9d21543e4a2423bc0fd61cb59c10fe87d9e037f56e714e0eaf4cbba2007",
+            "--repository-context=rctx2_764e6460ecbbc9d84b612b490dbadcdfa1c2fa4af89dc6593babb5c8ef077431",
+            "--request-hash=sha256:d9c4cdc155d8dfc4bf4a1d068a253c1cab9101133cd9af6da5d0e4a3f2c79691",
+            "--correction-lines=2"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 359,
+          "stdout_bytes": 865,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "Error: repository_context_unavailable: provider-issued review repository context operation failed; cause: invalid rctx2 repository context: git rev-parse --show-toplevel failed with exit code 128: fatal: not a git repository (or any of the "
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "human_prompts": {
+      "value": 0,
+      "derivation": "measured"
+    },
+    "manual_tokens": {
+      "value": 0,
+      "derivation": "measured"
+    },
+    "commands_to_completion": {
+      "value": 0,
+      "derivation": "measured"
+    },
+    "blocks": {
+      "self_recovered": 0,
+      "in_band": 0,
+      "out_of_band": 0,
+      "by_design": 0,
+      "dead_end": 0
+    },
+    "blocks_derivation": "measured",
+    "recovery_round_trips": {
+      "value": 0,
+      "derivation": "measured"
+    },
+    "model_runs": {
+      "value": 0,
+      "derivation": "measured"
+    },
+    "human_surface_bytes": {
+      "value": 0,
+      "derivation": "measured"
+    },
+    "git_subprocesses": {
+      "value": 0,
+      "derivation": "measured"
+    }
+  },
+  "journeys_counted": 0,
+  "journeys_unsupported": 0,
+  "journeys_failed": 1,
+  "core_journeys": 1,
+  "notes": [
+    "Driven mode: every journey ran in a fresh temp dir with its own HOME, XDG_*, throwaway git repo and local bare remote.",
+    "That HOME is a fresh install, so receipt-driven development starts off. Every journey declares its own precondition: one that reviews opted in first through `gentle-ai review mode enable --scope global`, uncounted; one whose subject is the switch touched it not at all.",
+    "Reviewer results were synthesized from the binary's own collect envelope. No model was called.",
+    "No wall-clock timing is measured or reported.",
+    "by_design is a carve-out from out_of_band, not a subtraction from it: those blocks are still blocks and still in the total. Every one is listed with its declared shape and the verified quote of the product's own next-action text."
+  ]
+}

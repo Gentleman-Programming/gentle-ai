@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestRuntimeIntendedUntrackedRejectsInvalidPaths(t *testing.T) {
@@ -270,5 +272,253 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 		if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || countRuntimeRecords(t, store.Dir) != beforeRecords {
 			t.Fatalf("legacy rejected continuation = %#v, err=%v records=%d", result, err, countRuntimeRecords(t, store.Dir))
 		}
+	}
+}
+
+// The three tests below are one argument in three parts, about files an
+// attempt creates while it runs (#3806). The declaration an attempt makes at
+// begin/acquire is a decision about what already existed then; it cannot cover
+// what the attempt itself produces, and producing files is the ordinary case
+// for a work unit rather than the exotic one.
+
+func TestRuntimeFinishRefusesUntrackedBornDuringTheAttempt(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-refuses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "born-during-begin", WorkUnit: "born during", EvidenceGoal: "account what the attempt creates",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "born-during-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "settling must not record the attempt's own file as nothing",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+	})
+	if err == nil {
+		t.Fatal("settled a candidate that omits the file this attempt created")
+	}
+	if !strings.Contains(err.Error(), "born.txt") {
+		t.Fatalf("refusal does not name the omitted path: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--untracked-scope=select") || !strings.Contains(err.Error(), "--untracked-scope=exclude") {
+		t.Fatalf("refusal does not name both exits: %v", err)
+	}
+	if !strings.Contains(err.Error(), currentUntrackedInventoryDigest(t, repo)) {
+		t.Fatalf("refusal does not name the inventory to declare against: %v", err)
+	}
+	// State-preserving: the caller decides, and the attempt is still theirs to
+	// close once they have.
+	status, err := store.Status()
+	if err != nil || status.Revision != started.Revision || status.ActiveAttempt == nil ||
+		status.ActiveAttempt.Outcome != AttemptRunning {
+		t.Fatalf("refusal mutated authority: status=%#v err=%v", status, err)
+	}
+}
+
+func TestRuntimeFinishAccountsBornDuringWorkOnceStaged(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-staged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "staged-begin", WorkUnit: "born during", EvidenceGoal: "account what the attempt creates",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Staging remains the ordinary way to make new work candidate bytes: it
+	// leaves nothing eligible to decide, so the settlement asks nothing.
+	runRuntimeLedgerGit(t, repo, "add", "born.txt")
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "staged-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "staged born-during work is candidate bytes",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finished.Attempts) != 1 || finished.Attempts[0].ChangedLines != 3 {
+		t.Fatalf("staged born-during work was not charged: %#v", finished.Attempts)
+	}
+	if finished.Attempts[0].FinishCandidateTree == finished.Attempts[0].BeginCandidateTree {
+		t.Fatalf("staged born-during work left the candidate identity unchanged: %#v", finished.Attempts[0])
+	}
+}
+
+func TestRuntimeFinishAllowsDeclaredAndIgnoredUntrackedPaths(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "selected.txt"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("debris/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runRuntimeLedgerGit(t, repo, "add", ".gitignore")
+	runRuntimeLedgerGit(t, repo, "commit", "-qm", "ignore debris")
+	store, err := OpenRuntimeStore(context.Background(), repo, "declared-and-ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "declared-begin", WorkUnit: "declared scope", EvidenceGoal: "declared paths stay candidate bytes",
+		MaxAttempts: 2, MaxChangedLines: 20, IntendedUntracked: []string{"selected.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A declared path stays untracked for the whole attempt, and an ignored
+	// path is not eligible at all. Neither is undeclared work, so neither may
+	// refuse: over-refusing here would make the guard unusable.
+	if err := os.WriteFile(filepath.Join(repo, "selected.txt"), []byte("initial\ncorrected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "debris"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "debris", "scratch.log"), []byte("noise\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "declared-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('c'), Diagnosis: "declared and ignored paths never block settlement",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finished.Attempts) != 1 || finished.Attempts[0].ChangedLines != 1 {
+		t.Fatalf("declared untracked accounting = %#v", finished.Attempts)
+	}
+}
+
+func currentUntrackedInventoryDigest(t *testing.T, repo string) string {
+	t.Helper()
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
+func TestRuntimeFinishSelectsBornDuringWorkIntoTheCandidate(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "select-begin", WorkUnit: "born during", EvidenceGoal: "account what the attempt creates",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selection := []string{"born.txt"}
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "select-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "selected born-during work is candidate bytes",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: currentUntrackedInventoryDigest(t, repo),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := finished.Attempts[0]
+	if settled.ChangedLines != 3 || settled.FinishCandidateTree == settled.BeginCandidateTree {
+		t.Fatalf("selected born-during work was not accounted: %#v", settled)
+	}
+	// The settled attempt reports the selection it settled with, which is what
+	// a rescope successor inherits.
+	if len(settled.IntendedUntracked) != 1 || settled.IntendedUntracked[0] != "born.txt" {
+		t.Fatalf("settlement selection is not recorded provenance: %#v", settled)
+	}
+}
+
+func TestRuntimeFinishExcludesBornDuringWorkOnTheRecord(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-excluded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "exclude-begin", WorkUnit: "born during", EvidenceGoal: "leave bookkeeping out of the candidate",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "exclude-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('f'), Diagnosis: "the file is not this work unit's product",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &[]string{}, ExpectedUntrackedInventory: currentUntrackedInventoryDigest(t, repo),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := finished.Attempts[0]
+	// Excluding produces the same zero-change settlement the defect produced
+	// silently. The difference is the whole point: this one was decided.
+	if settled.ChangedLines != 0 || settled.FinishCandidateTree != settled.BeginCandidateTree {
+		t.Fatalf("exclusion changed the candidate: %#v", settled)
+	}
+}
+
+func TestRuntimeFinishRefusesADeclarationAgainstAStaleInventory(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "stale-begin", WorkUnit: "born during", EvidenceGoal: "a declaration binds the inventory it saw",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale := currentUntrackedInventoryDigest(t, repo)
+	// A second file appears between reading the inventory and settling against it.
+	if err := os.WriteFile(filepath.Join(repo, "later.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selection := []string{"born.txt"}
+	_, err = store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "stale-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "stale declarations must not settle",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: stale,
+	})
+	if err == nil {
+		t.Fatal("settled a declaration made against an inventory that no longer holds")
+	}
+	if !strings.Contains(err.Error(), currentUntrackedInventoryDigest(t, repo)) {
+		t.Fatalf("refusal does not name the inventory that now holds: %v", err)
+	}
+	status, err := store.Status()
+	if err != nil || status.Revision != started.Revision || status.ActiveAttempt == nil {
+		t.Fatalf("stale declaration mutated authority: status=%#v err=%v", status, err)
 	}
 }

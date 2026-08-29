@@ -426,11 +426,12 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 	if err != nil {
 		return err
 	}
-	if after.Authority.LineageID != "" || after.Authority.State != "" || after.NextTransition.Kind != "execute" ||
-		after.NextTransition.Execute.Operation != "review.start" {
-		return fmt.Errorf("clean full selected lens set did not close and burn: authority=%+v transition=%+v", after.Authority, after.NextTransition)
+	if after.Authority.LineageID != lineageID || after.Authority.State != "approved" || after.NextTransition.Kind != "execute" ||
+		after.NextTransition.ReasonCode != "approved_acknowledgement_required" || after.NextTransition.Execute.Operation != "review.acknowledge-approved" {
+		return fmt.Errorf("clean full selected lens set did not expose pending acknowledgement: authority=%+v transition=%+v", after.Authority, after.NextTransition)
 	}
-	return nil
+	_, err = atomicAcknowledgementTokens(after, lineageID)
+	return err
 }
 
 // captureCorrectionPlanFor follows the correction-plan input STATUS published
@@ -467,7 +468,11 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 		status.argument("repository-context") == "" {
 		return fmt.Errorf("correction-plan binding = %+v", input)
 	}
-	arguments := []string{"review", "capture-correction-plan"}
+	// The rendered transition carries no filesystem path, so the caller names
+	// the repository the provider-issued context digest is verified against.
+	// Running from the sandbox root keeps proving the capability this journey
+	// exists for: capture reaches its authority from an unrelated process cwd.
+	arguments := []string{"review", "capture-correction-plan", "--cwd=" + r.sandbox.Repo}
 	for _, argument := range input.Arguments {
 		arguments = append(arguments, "--"+argument.Name+"="+argument.Value)
 	}
@@ -497,15 +502,105 @@ func captureCorrectionPlanFor(r *journeyRun, lineageID string, correctionLines i
 	return nil
 }
 
-func requireAtomicLineageBurned(r *journeyRun, lineageID string) error {
+func requireAtomicLineageAcknowledged(r *journeyRun, lineageID string, selectors ...string) error {
+	status, err := readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+	if err != nil {
+		return err
+	}
+	if status.Authority.LineageID != lineageID || status.Authority.State != "approved" || status.Authority.Revision == "" ||
+		status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "approved_acknowledgement_required" ||
+		status.NextTransition.Execute.Operation != "review.acknowledge-approved" {
+		return fmt.Errorf("pending approved STATUS = authority=%+v transition=%+v", status.Authority, status.NextTransition)
+	}
+	acknowledgementTokens, err := atomicAcknowledgementTokens(status, lineageID)
+	if err != nil {
+		return err
+	}
+
+	restarted, err := readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+	if err != nil {
+		return err
+	}
+	if err := sameAtomicAcknowledgement(status, restarted); err != nil {
+		return err
+	}
+
+	wrong := append([]string{"review", "acknowledge-approved"}, acknowledgementTokens...)
+	wrongToken := strings.Repeat("0", 64)
+	if wrongToken == status.executeArgument("token") {
+		wrongToken = strings.Repeat("1", 64)
+	}
+	wrong[len(wrong)-1] = "--token=" + wrongToken
+	if refused := r.run(wrong, false); refused.ExitCode == 0 {
+		return fmt.Errorf("wrong acknowledgement binding unexpectedly succeeded: %s", refused.Stdout)
+	}
+	afterWrong, err := readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+	if err != nil {
+		return err
+	}
+	if err := sameAtomicAcknowledgement(status, afterWrong); err != nil {
+		return fmt.Errorf("wrong acknowledgement mutated the pending continuation: %w", err)
+	}
+
+	acknowledged, err := runPrintedTransition(r, restarted)
+	if err != nil {
+		return err
+	}
+	if acknowledged.ExitCode != 0 {
+		return fmt.Errorf("exact acknowledgement failed: %s", firstLine(acknowledged.Stderr))
+	}
+	replayed, err := runPrintedTransition(r, restarted)
+	if err != nil {
+		return err
+	}
+	if replayed.ExitCode == 0 {
+		return fmt.Errorf("replayed acknowledgement unexpectedly succeeded: %s", replayed.Stdout)
+	}
+
 	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
 	var head authorityHead
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
-		return fmt.Errorf("parse burned lineage inventory: %w", err)
+		return fmt.Errorf("parse acknowledged lineage inventory: %w", err)
 	}
 	for _, entry := range head.Entries {
 		if entry.LineageID == lineageID {
-			return fmt.Errorf("terminal #3417 lineage %q remained durable: %+v", lineageID, entry)
+			return fmt.Errorf("acknowledged lineage %q remained durable: %+v", lineageID, entry)
+		}
+	}
+	return nil
+}
+
+func atomicAcknowledgementTokens(status statusEnvelope, lineageID string) ([]string, error) {
+	arguments := status.NextTransition.Execute.Arguments
+	if len(arguments) != 5 {
+		return nil, fmt.Errorf("acknowledgement arguments = %v, want five ordered values", arguments)
+	}
+	wantNames := []string{"cwd", "lineage", "target", "expected-revision", "token"}
+	tokens := make([]string, len(wantNames))
+	for index, name := range wantNames {
+		argument := arguments[index]
+		if argument.Name != name || argument.Value == "" || argument.Token == "" {
+			return nil, fmt.Errorf("acknowledgement argument %d = %+v, want %q", index, argument, name)
+		}
+		tokens[index] = argument.Token
+	}
+	if status.executeArgument("lineage") != lineageID || status.executeArgument("target") != status.TargetIdentity ||
+		status.executeArgument("expected-revision") != status.Authority.Revision || len(status.executeArgument("token")) != 64 {
+		return nil, fmt.Errorf("acknowledgement binding does not match pending authority: authority=%+v target=%q execute=%+v", status.Authority, status.TargetIdentity, status.NextTransition.Execute)
+	}
+	return tokens, nil
+}
+
+func sameAtomicAcknowledgement(want, got statusEnvelope) error {
+	if got.Authority.LineageID != want.Authority.LineageID || got.Authority.State != want.Authority.State ||
+		got.Authority.Revision != want.Authority.Revision || got.NextTransition.Kind != want.NextTransition.Kind ||
+		got.NextTransition.ReasonCode != want.NextTransition.ReasonCode || got.NextTransition.Execute.Operation != want.NextTransition.Execute.Operation ||
+		got.NextTransition.Execute.Command != want.NextTransition.Execute.Command || len(got.NextTransition.Execute.Arguments) != len(want.NextTransition.Execute.Arguments) {
+		return fmt.Errorf("restarted acknowledgement = authority=%+v transition=%+v, want authority=%+v transition=%+v", got.Authority, got.NextTransition, want.Authority, want.NextTransition)
+	}
+	for index := range want.NextTransition.Execute.Arguments {
+		if want.NextTransition.Execute.Arguments[index] != got.NextTransition.Execute.Arguments[index] {
+			return fmt.Errorf("restarted acknowledgement argument %d = %+v, want %+v", index, got.NextTransition.Execute.Arguments[index], want.NextTransition.Execute.Arguments[index])
 		}
 	}
 	return nil
@@ -543,11 +638,11 @@ func waveThreeJourneys() []Journey {
 					return captureCorrectionPlanFor(r, atomicCorrectionLineage, 2)
 				}},
 				{Name: "fixture: correct only the reviewed candidate", Fixture: writeCorrectedCandidate},
-				{Name: "capture the Go-issued targeted validator that closes and burns", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+				{Name: "capture the Go-issued targeted validator that closes with pending acknowledgement", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
 					return captureProviderValidatorSlotFor(r, atomicCorrectionLineage)
 				}},
-				{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability, Composite: func(r *journeyRun) error {
-					return requireAtomicLineageBurned(r, atomicCorrectionLineage)
+				{Name: "no correction authority survives the exact acknowledgement", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, atomicCorrectionLineage)
 				}},
 			},
 		},

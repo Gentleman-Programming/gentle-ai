@@ -46,7 +46,7 @@ func injectCLIRetiredCompactStateField(t *testing.T, statePath, field string, va
 	}
 }
 
-func TestReviewFacadeStartResumesHistoricalCandidateArtifactRequiredWithoutRewrite(t *testing.T) {
+func TestReviewFacadeStartRefusesHistoricalCandidateArtifactRequiredWithoutRewrite(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -72,15 +72,8 @@ func TestReviewFacadeStartResumesHistoricalCandidateArtifactRequiredWithoutRewri
 	}
 
 	var resumedOutput bytes.Buffer
-	if err := runLegacyFacadeStartForTest(t, args, &resumedOutput); err != nil {
-		t.Fatalf("review start with historical candidate_artifact_required authority: %v", err)
-	}
-	var resumed ReviewFacadeStartResult
-	if err := json.Unmarshal(resumedOutput.Bytes(), &resumed); err != nil {
-		t.Fatal(err)
-	}
-	if resumed.Action != "replayed" || resumed.LineageID != created.LineageID || resumed.TargetIdentity != created.TargetIdentity {
-		t.Fatalf("resumed review = %#v, want exact historical authority", resumed)
+	if err := runLegacyFacadeStartForTest(t, args, &resumedOutput); !errors.Is(err, reviewtransaction.ErrHistoricalCompatReadOnly) {
+		t.Fatalf("historical authority START error = %v, want read-only refusal", err)
 	}
 	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("review start rewrote historical authority bytes: %v", err)

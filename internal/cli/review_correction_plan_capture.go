@@ -28,7 +28,7 @@ type reviewCorrectionPlanCaptureResult struct {
 func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-correction-plan", stdout, "Capture the exact bounded correction forecast for one correction-required review.")
 	cwd := flags.String("cwd", ".", "repository path")
-	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and mutually exclusive with --cwd")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and verified against --cwd")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact provider-issued review target identity")
 	revision := flags.String("expected-revision", "", "exact compact authority revision")
@@ -45,14 +45,11 @@ func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 		return reviewPreflightError(errors.New("review capture-correction-plan requires --lineage, --target, --expected-revision, --request-hash, and positive --correction-lines")) // refusal:by-design operator-knowledge: STATUS provides the exact correction-plan binding and the user supplies a positive forecast
 	}
 	contextHandle := strings.TrimSpace(*repositoryContext)
-	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
-		return reviewPreflightError(errors.New("review capture-correction-plan accepts either --repository-context or --cwd, not both")) // refusal:by-design operator-knowledge: the native transition selects one exact repository resolver
-	}
 	ctx := context.Background()
 	var root string
 	var err error
 	if contextHandle != "" {
-		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+		root, err = resolveOpaqueReviewRepositoryRoot(ctx, *cwd, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: strings.TrimSpace(*lineage), TargetIdentity: strings.TrimSpace(*target), Revision: strings.TrimSpace(*revision),
 		})
 	} else {
@@ -73,11 +70,11 @@ func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 		}
 		return reviewPreflightError(err)
 	}
-	if record.Revision != strings.TrimSpace(*revision) || record.State.State != reviewtransaction.StateCorrectionRequired ||
+	if record.State.CapturePhaseRevision != strings.TrimSpace(*revision) || record.State.State != reviewtransaction.StateCorrectionRequired ||
 		record.State.CurrentSnapshot.Identity != strings.TrimSpace(*target) {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("correction-plan capture binding does not match the current correction authority; rerun `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying"))
 	}
-	request, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
+	request, err := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, err)
 	}
@@ -86,7 +83,22 @@ func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 	}
 	state := record.State
 	if err := state.BeginCorrection(*correctionLines); err != nil {
-		return err
+		// The forecast is pre-edit caller input, and BeginCorrection refuses it
+		// before recording a proposal or advancing the capture phase, so the
+		// store is provably untouched here. Falling through untyped would earn
+		// the generic operation_outcome_unknown envelope: a false claim that the
+		// outcome is unknown, which sends the operator to recovery instead of to
+		// a smaller forecast.
+		//
+		// The budget overrun is the only refusal that reaches this line. Every
+		// other BeginCorrection precondition is already excluded above: a
+		// non-positive forecast by the flag check, a wrong state, revision or
+		// target by the binding check, and a proposal already recorded by the
+		// revision it advanced. The typing is still written for the branch
+		// rather than for the one error, because all of them describe the same
+		// fact -- the command returns before store.Replace, so none of them
+		// started.
+		return reviewPreflightError(err)
 	}
 	nextRevision, err := store.Replace(record.Revision, "review/begin-fix", state)
 	if err != nil {

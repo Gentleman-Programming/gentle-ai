@@ -113,7 +113,7 @@ func captureAtomicBurnReviewerSlots(r *journeyRun) error {
 	return captureAtomicReviewerSlots(r, lineage, false)
 }
 
-func requireBurnedApproval(lineage string) func(*Sandbox, Observation) error {
+func requirePendingApproval(lineage string) func(*Sandbox, Observation) error {
 	return func(_ *Sandbox, observation Observation) error {
 		var finalized struct {
 			Action      string `json:"action"`
@@ -197,15 +197,15 @@ func requireExplicitAtomicFourLensStatusFor(r *journeyRun, lineage string) error
 func atomicReviewJourneys() []Journey {
 	return []Journey{{
 		ID:     "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-		Title:  "#3587: selectorless STATUS renders a printed START, the last lens burns it, and repeat START creates a new transaction",
-		Source: "#3587: selectorless STATUS owns compact binding; the terminal reviewer capture leaves no receipt or evidence, and delivery gates remain informational",
+		Title:  "#3797: selectorless STATUS renders a printed START, the last lens emits acknowledgement, and repeat START follows the exact burn",
+		Source: "#3797: selectorless STATUS owns compact binding; terminal approval awaits exact acknowledgement, leaves no receipt or sidecar, and delivery gates remain informational",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: high-risk candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
 			{Name: "selectorless STATUS renders and executes the initial printed START", Requires: atomicReviewStatusCapability, Composite: startAtomicBurnFromSelectorlessStatus},
-			{Name: "capture every exact four-lens result; the last capture burns the transaction", Requires: captureResultCapability, Composite: captureAtomicBurnReviewerSlots},
-			{Name: "the terminal capture leaves no reusable authority, receipt, or evidence", Requires: statusCapability, Composite: func(r *journeyRun) error {
-				return requireAtomicLineageBurned(r, r.sandbox.Lineage)
+			{Name: "capture every exact four-lens result; the last capture emits acknowledgement before the exact burn", Requires: captureResultCapability, Composite: captureAtomicBurnReviewerSlots},
+			{Name: "the exact acknowledgement leaves no reusable authority, receipt, or evidence", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage)
 			}},
 			{Name: "all shipped gates are informational, non-deciding, and unmanaged", Requires: validateCapability, Composite: requireAllUnmanagedShippedGates},
 			{Name: "repeat the selectorless STATUS request and execute its printed START as a new transaction", Requires: atomicReviewStatusCapability, Composite: requireAtomicBurnStartsNewTransaction},

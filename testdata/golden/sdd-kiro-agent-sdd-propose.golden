@@ -25,7 +25,7 @@ Also read shared conventions from the same skills root:
 - Windows: `%USERPROFILE%\\.kiro\\skills\\_shared\\sdd-phase-common.md`
 
 Execute all steps from the skill directly in this context window:
-1. Read exploration artifact if available: `mem_search("sdd/{change-name}/explore")` → `mem_get_observation`
+1. Read exploration artifact if available: read the `explore` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Draft the proposal: intent, scope, approach, rollback plan, affected modules
 3. Persist to active backend (engram, openspec, or hybrid)
 
