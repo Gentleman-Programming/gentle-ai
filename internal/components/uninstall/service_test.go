@@ -1332,3 +1332,72 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }
+
+func TestUninstallPersonaCodexPreservesUserContentAndRemovesMarkerSection(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentCodex)
+	if !ok {
+		t.Fatal("Codex adapter not found in registry")
+	}
+
+	promptPath := adapter.SystemPromptFile(homeDir)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	initial := `# Custom Codex Instructions
+
+Always respond in concise markdown.
+
+<!-- gentle-ai:persona -->
+## Personality
+Senior Architect persona content.
+<!-- /gentle-ai:persona -->
+
+## Project Specific Rules
+Follow repository guidelines.
+`
+	if err := os.WriteFile(promptPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentPersona)
+	if err != nil {
+		t.Fatalf("componentOperations(persona) error = %v", err)
+	}
+	if !slices.Contains(targets, promptPath) {
+		t.Fatalf("targets missing %q: %v", promptPath, targets)
+	}
+
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+
+	raw, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+
+	if strings.Contains(text, "<!-- gentle-ai:persona -->") || strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatalf("persona markers were not removed:\n%s", text)
+	}
+	if strings.Contains(text, "Senior Architect") {
+		t.Fatalf("persona body was not removed:\n%s", text)
+	}
+	if !strings.Contains(text, "# Custom Codex Instructions") || !strings.Contains(text, "Always respond in concise markdown.") {
+		t.Fatalf("user content before marker was lost:\n%s", text)
+	}
+	if !strings.Contains(text, "## Project Specific Rules") || !strings.Contains(text, "Follow repository guidelines.") {
+		t.Fatalf("user content after marker was lost:\n%s", text)
+	}
+}

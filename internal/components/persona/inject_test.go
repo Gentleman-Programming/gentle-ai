@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
@@ -22,6 +23,7 @@ import (
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func codexAdapter() agents.Adapter       { return codex.NewAdapter() }
 func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
 func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
 func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
@@ -3097,5 +3099,205 @@ func TestHermesPersonaAssetsContainIdentitySection(t *testing.T) {
 				t.Fatalf("%s ## Identity section must mention \"Hermes\"", path)
 			}
 		})
+	}
+}
+
+func TestInjectCodexGentlemanWritesMarkedPersonaSection(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false")
+	}
+
+	path := filepath.Join(home, ".codex", "AGENTS.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing <!-- gentle-ai:persona --> open marker")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing <!-- /gentle-ai:persona --> close marker")
+	}
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("AGENTS.md missing Gentleman persona content")
+	}
+}
+
+func TestInjectCodexPreservesUserContentInsteadOfOverwriting(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	userContent := "# My Custom Codex Rules\n\nDo not overwrite this file.\n"
+	if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Do not overwrite this file.") {
+		t.Fatal("AGENTS.md user content was overwritten")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona section after inject")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing managed persona close marker after inject")
+	}
+}
+
+func TestInjectCodexNeutralWritesMarkedPersonaSection(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codexAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false")
+	}
+
+	path := filepath.Join(home, ".codex", "AGENTS.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing persona open marker")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing persona close marker")
+	}
+	if !strings.Contains(text, "without regional slang or dialect-specific grammar") {
+		t.Fatal("AGENTS.md missing neutral persona guidelines")
+	}
+}
+
+func TestInjectCustomCodexDoesNothing(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codexAdapter(), model.PersonaCustom)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if result.Changed {
+		t.Fatal("Custom persona (Codex) should NOT change anything")
+	}
+	if len(result.Files) != 0 {
+		t.Fatalf("Custom persona (Codex) should return no files, got %v", result.Files)
+	}
+
+	// AGENTS.md should NOT be created.
+	agentsMD := filepath.Join(home, ".codex", "AGENTS.md")
+	if _, err := os.Stat(agentsMD); !os.IsNotExist(err) {
+		t.Fatal("Custom persona (Codex) should NOT create AGENTS.md")
+	}
+}
+
+func TestInjectCodexSwitchPersonaUpdatesSectionInPlace(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	userHeader := "# Custom User Section\n\nPreserve this.\n"
+	if err := os.WriteFile(path, []byte(userHeader), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// First inject Gentleman
+	_, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+
+	// Then switch to Neutral
+	res, err := Inject(home, codexAdapter(), model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("Inject(neutral) error = %v", err)
+	}
+	if !res.Changed {
+		t.Fatal("Inject(neutral) changed = false, want true")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "# Custom User Section") || !strings.Contains(text, "Preserve this.") {
+		t.Fatal("user header was clobbered during persona switch")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") || !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("persona markers missing after persona switch")
+	}
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("duplicate persona sections found: %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if !strings.Contains(text, "without regional slang or dialect-specific grammar") {
+		t.Fatal("neutral persona content missing after switch")
+	}
+}
+
+func TestInjectCodexHealsUnmanagedLegacyPersonaAsset(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	legacyAsset := assets.MustRead("generic/persona-gentleman.md")
+	if err := os.WriteFile(path, []byte(legacyAsset), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing persona open marker after healing")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+		t.Fatal("AGENTS.md missing persona close marker after healing")
+	}
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("AGENTS.md has %d persona markers, want 1", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if strings.Count(text, "Senior Architect") != 1 {
+		t.Fatalf("AGENTS.md has duplicated persona content: %d instances of 'Senior Architect'", strings.Count(text, "Senior Architect"))
 	}
 }
