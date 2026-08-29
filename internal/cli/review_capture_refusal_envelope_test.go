@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -333,5 +334,13 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 	}
 	if status.NextTransition.ReasonCode != "intended_untracked_selection_required" {
 		t.Fatalf("correction STATUS reason = %q, want the untracked selection the new file requires", status.NextTransition.ReasonCode)
+	}
+	// The point of the exemption: the pending validation is still true while the
+	// operator declares the file, so the status must keep reporting it.
+	if status.ValidationRequest == nil {
+		t.Fatal("correction STATUS dropped the pending validation request the review is still waiting on")
+	}
+	if !reflect.DeepEqual(*status.ValidationRequest, *beforeStatus.ValidationRequest) {
+		t.Fatalf("the untracked artifact changed the pending validation request: %#v vs %#v", status.ValidationRequest, beforeStatus.ValidationRequest)
 	}
 }

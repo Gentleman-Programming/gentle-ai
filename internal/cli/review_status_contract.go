@@ -361,8 +361,15 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// exact-lineage STATUS is its only re-entry (#3647).
 		collectsUntrackedSelection := result.NextTransition.Kind == reviewNextTransitionCollect &&
 			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
-		if !providerTargetedValidation && !collectsUntrackedSelection && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
-			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
+		// The exemption relaxes presence parity only. If the untracked-selection
+		// transition does carry a request, it is still two copies of the same
+		// thing and they still have to agree.
+		mismatchedPresence := (transitionRequest == nil) != (result.ValidationRequest == nil)
+		if collectsUntrackedSelection && transitionRequest == nil {
+			mismatchedPresence = false
+		}
+		if !providerTargetedValidation && (mismatchedPresence ||
+			transitionRequest != nil && result.ValidationRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
