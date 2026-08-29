@@ -552,6 +552,69 @@ func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
 	}
 }
 
+// installedCommandFrontmatter extracts the raw YAML frontmatter block of a
+// command file materialized under an injected OpenCode configuration.
+func installedCommandFrontmatter(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+
+	trimmed := strings.TrimLeft(string(data), "\n")
+	const open = "---\n"
+	if !strings.HasPrefix(trimmed, open) {
+		t.Fatalf("%s: installed without YAML frontmatter", path)
+	}
+	rest := trimmed[len(open):]
+	end := strings.Index(rest, "\n---")
+	if end == -1 {
+		t.Fatalf("%s: no closing frontmatter delimiter", path)
+	}
+	return rest[:end]
+}
+
+// TestInjectOpenCodeSDDCommandsRemainParentOwned is the #2939 installation
+// ratchet: after Inject materializes the OpenCode command set, every SDD
+// command that routes through the primary `gentle-orchestrator` agent must
+// be installed WITHOUT `subtask: true` in its frontmatter. With that field,
+// OpenCode forces even a primary-mode agent into a sub-agent invocation, so
+// the command would spawn an orchestrator child that must delegate again to
+// the hidden phase worker — one avoidable model hop and a nested path that
+// can be refused at the default subagent depth.
+//
+// The agent binding itself must survive the fix: removing `subtask: true`
+// must only keep the command in the primary orchestrator session, never
+// detach it from `gentle-orchestrator`. The source-asset twin of this guard
+// is TestNoSubtaskOnSDDOpenCodeCommands in internal/components.
+func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), ""); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	for _, name := range []string{
+		"sdd-init.md",
+		"sdd-explore.md",
+		"sdd-apply.md",
+		"sdd-verify.md",
+		"sdd-archive.md",
+		"sdd-onboard.md",
+	} {
+		path := filepath.Join(home, ".config", "opencode", "commands", name)
+		fm := installedCommandFrontmatter(t, path)
+		if !strings.Contains(fm, "agent: gentle-orchestrator") {
+			t.Errorf("installed %s lost `agent: gentle-orchestrator` routing; the fix must remove only `subtask: true`", name)
+		}
+		if strings.Contains(fm, "subtask: true") {
+			t.Errorf("installed %s declares `subtask: true`; OpenCode forces gentle-orchestrator into a sub-agent invocation — remove the field so the command stays in the primary orchestrator session", name)
+		}
+	}
+}
+
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
