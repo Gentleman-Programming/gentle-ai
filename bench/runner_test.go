@@ -1,10 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/charmbracelet/x/xpty"
 )
 
 // fakeBinary writes an executable that answers a fixed argv with a fixed
@@ -25,9 +34,257 @@ func fakeBinary(t *testing.T, script string) *Sandbox {
 	return sandbox
 }
 
+// TestTTYHelperProcess is run as a child through a real PTY.
+// as the Welcome journey on every platform that supports xpty.
+func TestTTYHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_TTY_HELPER") != "1" {
+		return
+	}
+	switch os.Getenv("GO_TTY_HELPER_MODE") {
+	case "hang":
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "exit":
+		fmt.Fprint(os.Stdout, "ready\n")
+	case "burst", "quit":
+		fmt.Fprint(os.Stdout, "ready\n")
+		var input [1]byte
+		_, _ = os.Stdin.Read(input[:])
+		if os.Getenv("GO_TTY_HELPER_MODE") == "burst" {
+			fmt.Fprint(os.Stdout, strings.Repeat("x", 128*1024)+"done\n")
+		}
+	default:
+		t.Fatalf("unknown TTY helper mode %q", os.Getenv("GO_TTY_HELPER_MODE"))
+	}
+}
+
+func startTTYHelper(t *testing.T, mode string) (*exec.Cmd, io.ReadWriteCloser) {
+	t.Helper()
+	terminal, err := xpty.NewPty(80, 24)
+	if err != nil {
+		t.Fatalf("new PTY: %v", err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestTTYHelperProcess")
+	cmd.Env = append(os.Environ(), "GO_WANT_TTY_HELPER=1", "GO_TTY_HELPER_MODE="+mode)
+	if err := terminal.Start(cmd); err != nil {
+		_ = terminal.Close()
+		t.Fatalf("start TTY helper: %v", err)
+	}
+	return cmd, terminal
+}
+
+type closeReleasesExchangeTTY struct {
+	closed       chan struct{}
+	exchangeDone <-chan struct{}
+	read         bool
+}
+
+func (terminal *closeReleasesExchangeTTY) Read(p []byte) (int, error) {
+	<-terminal.closed
+	if terminal.read {
+		return 0, io.EOF
+	}
+	terminal.read = true
+	return copy(p, "ready\n"), nil
+}
+
+func (*closeReleasesExchangeTTY) Write(p []byte) (int, error) { return len(p), nil }
+
+func (terminal *closeReleasesExchangeTTY) Close() error {
+	close(terminal.closed)
+	<-terminal.exchangeDone
+	return nil
+}
+
+func TestRunTTYRegainsExchangeOwnershipAfterClosingTheTerminal(t *testing.T) {
+	exchangeDone := make(chan struct{})
+	terminal := &closeReleasesExchangeTTY{closed: make(chan struct{}), exchangeDone: exchangeDone}
+	_, err := runTTYWithTimeout(&exec.Cmd{}, terminal, []string{"welcome"}, func(reader *bufio.Reader, _ io.WriteCloser) error {
+		defer close(exchangeDone)
+		_, err := reader.ReadString('\n')
+		return err
+	}, time.Second, func(context.Context, *exec.Cmd) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runTTY error after Close joined the exchange = %v", err)
+	}
+}
+
+type delayedDrainTTY struct {
+	closed       chan struct{}
+	drainStarted chan struct{}
+	releaseDrain chan struct{}
+}
+
+func (terminal *delayedDrainTTY) Read([]byte) (int, error) {
+	<-terminal.closed
+	close(terminal.drainStarted)
+	<-terminal.releaseDrain
+	return 0, io.EOF
+}
+
+func (*delayedDrainTTY) Write(p []byte) (int, error) { return len(p), nil }
+func (terminal *delayedDrainTTY) Close() error {
+	close(terminal.closed)
+	return nil
+}
+
+func TestRunTTYJoinsTranscriptDrainAfterClosingTheTerminal(t *testing.T) {
+	terminal := &delayedDrainTTY{
+		closed:       make(chan struct{}),
+		drainStarted: make(chan struct{}),
+		releaseDrain: make(chan struct{}),
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := runTTYWithTimeout(&exec.Cmd{}, terminal, []string{"welcome"}, func(*bufio.Reader, io.WriteCloser) error {
+			return nil
+		}, time.Second, func(context.Context, *exec.Cmd) error {
+			return nil
+		})
+		result <- err
+	}()
+	<-terminal.drainStarted
+	select {
+	case err := <-result:
+		close(terminal.releaseDrain)
+		t.Fatalf("runTTY returned before transcript drain ownership was regained: %v", err)
+	case <-time.After(ttyCleanupGrace + 100*time.Millisecond):
+	}
+	close(terminal.releaseDrain)
+	if err := <-result; err != nil {
+		t.Fatalf("runTTY error after joining the drain = %v", err)
+	}
+}
+
+func TestRunTTYTimeoutKillsAndReapsTheHelper(t *testing.T) {
+	cmd, terminal := startTTYHelper(t, "hang")
+	waitCalls := 0
+	started := time.Now()
+	observation, err := runTTYWithTimeout(cmd, terminal, []string{"welcome"}, func(*bufio.Reader, io.WriteCloser) error {
+		return nil
+	}, 100*time.Millisecond, func(ctx context.Context, cmd *exec.Cmd) error {
+		waitCalls++
+		if _, ok := ctx.Deadline(); ok {
+			return errors.New("WaitProcess context has a deadline")
+		}
+		return xpty.WaitProcess(ctx, cmd)
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runTTY timeout error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("runTTY timeout took %v, want bounded cleanup", elapsed)
+	}
+	if waitCalls != 1 {
+		t.Fatalf("WaitProcess calls = %d, want 1", waitCalls)
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("helper process was not reaped")
+	}
+	if observation.ExitCode != -1 {
+		t.Fatalf("timeout exit code = %d, want -1", observation.ExitCode)
+	}
+}
+
+func TestRunTTYContinuesDrainingAfterTheExchange(t *testing.T) {
+	cmd, terminal := startTTYHelper(t, "burst")
+	observation, err := runTTYWithTimeout(cmd, terminal, []string{"welcome"}, func(reader *bufio.Reader, writer io.WriteCloser) error {
+		if line, err := reader.ReadString('\n'); err != nil || line != "ready\r\n" {
+			return fmt.Errorf("prompt = %q, %v; want ready", line, err)
+		}
+		_, err := io.WriteString(writer, "q\n")
+		return err
+	}, 5*time.Second, xpty.WaitProcess)
+	if err != nil {
+		t.Fatalf("runTTY drain error = %v", err)
+	}
+	if !strings.Contains(observation.Stdout, "done") || len(observation.Stdout) < 128*1024 {
+		t.Fatalf("transcript was not drained after the exchange: %d bytes", len(observation.Stdout))
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("helper process was not reaped")
+	}
+}
+
+func TestRunTTYCleansUpAfterARealExchangeFailure(t *testing.T) {
+	cmd, terminal := startTTYHelper(t, "hang")
+	exchangeFailure := errors.New("exchange failed")
+	waitCalls := 0
+	_, err := runTTYWithTimeout(cmd, terminal, []string{"welcome"}, func(*bufio.Reader, io.WriteCloser) error {
+		return exchangeFailure
+	}, time.Second, func(ctx context.Context, cmd *exec.Cmd) error {
+		waitCalls++
+		return xpty.WaitProcess(ctx, cmd)
+	})
+	if !errors.Is(err, exchangeFailure) {
+		t.Fatalf("runTTY error = %v, want exchange failure", err)
+	}
+	if waitCalls != 1 {
+		t.Fatalf("WaitProcess calls = %d, want 1", waitCalls)
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("helper process was not reaped")
+	}
+}
+
+func TestInvokeTTYReportsPromptStartFailure(t *testing.T) {
+	sandbox := fakeBinary(t, "")
+	sandbox.Binary = filepath.Join(t.TempDir(), "missing-gentle-ai")
+	observation, err := sandbox.invokeTTY(sandbox.Repo, []string{"welcome"}, func(*bufio.Reader, io.WriteCloser) error { return nil })
+	if err == nil {
+		t.Fatal("invokeTTY error = nil, want prompt start failure")
+	}
+	if observation.ExitCode != -1 || !strings.Contains(observation.Stderr, "bench:") {
+		t.Fatalf("start observation = %+v, want failed bench observation", observation)
+	}
+}
+
+type closeErrorTTY struct {
+	io.ReadWriteCloser
+	closeCalls int
+	err        error
+}
+
+func (tty *closeErrorTTY) Close() error {
+	tty.closeCalls++
+	_ = tty.ReadWriteCloser.Close()
+	return tty.err
+}
+
+func TestRunTTYJoinsCloseAndDeterministicWaitErrors(t *testing.T) {
+	cmd, pty := startTTYHelper(t, "hang")
+	waitFailure := errors.New("wait failed")
+	closeFailure := errors.New("close failed")
+	terminal := &closeErrorTTY{ReadWriteCloser: pty, err: closeFailure}
+	waitCalls := 0
+	observation, err := runTTYWithTimeout(cmd, terminal, []string{"welcome"}, func(*bufio.Reader, io.WriteCloser) error {
+		return errors.New("exchange failed")
+	}, time.Second, func(ctx context.Context, cmd *exec.Cmd) error {
+		waitCalls++
+		_ = xpty.WaitProcess(ctx, cmd)
+		return waitFailure
+	})
+	if !errors.Is(err, waitFailure) || !errors.Is(err, closeFailure) {
+		t.Fatalf("runTTY error = %v, want joined wait and close failures", err)
+	}
+	if observation.ExitCode != -1 || !strings.Contains(observation.Stderr, "wait failed") {
+		t.Fatalf("wait observation = %+v, want failed bench observation", observation)
+	}
+	if waitCalls != 1 || terminal.closeCalls != 1 {
+		t.Fatalf("WaitProcess/Close calls = %d/%d, want 1/1", waitCalls, terminal.closeCalls)
+	}
+	if cmd.ProcessState == nil {
+		t.Fatal("helper process was not reaped")
+	}
+}
+
 // A build that HAS the flag fails on state, not on shape. The probe must read
 // that as supported: "sdd-attempt requires --cwd" is the repository's answer,
 // not the CLI's.
+
 func TestProbeCapabilityAcceptsAStateFailure(t *testing.T) {
 	sandbox := fakeBinary(t, `echo "Error: sdd-attempt requires --cwd" >&2; exit 1`)
 	capability := &Capability{
