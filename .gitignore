@@ -28,6 +28,7 @@ cmd/gentle-ai/main
 cmd/gentle-ai/gentle-ai
 dist/
 .goreleaser-provider-contract/
+.goreleaser-provenance/
 
 # Agent tooling metadata (generated per-user, not product code)
 .atl/

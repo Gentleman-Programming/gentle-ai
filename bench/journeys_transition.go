@@ -246,10 +246,10 @@ func transitionJourneys() []Journey {
 		{
 			ID:     "tr10-scope-change-after-the-review-is-bound",
 			Review: reviewOptedIn,
-			Title:  "Complete and burn a review, then move the SDD objective",
-			Source: "#3417 terminal burn: SDD scope remains movable without durable review authority or binding",
-			// Approval ends and burns the exact review transaction. No receipt,
-			// authority, or SDD binding survives for a later rescope to reconcile.
+			Title:  "Acknowledge a review, then move the SDD objective",
+			Source: "#3797 exact acknowledgement: SDD scope remains movable without durable review authority or binding",
+			// Approval awaits one exact acknowledgement. No receipt, authority, or
+			// SDD binding survives after that acknowledgement burns the transaction.
 			// The cross-surface invariant is structural absence before rescope
 			// creates a new objective generation.
 			//
@@ -261,11 +261,11 @@ func transitionJourneys() []Journey {
 				{Name: "fixture: the bounded correction moves the candidate", Fixture: sddBoundedCorrection},
 				{Name: "review start on the corrected zero-lens candidate closes without creating an SDD binding", Requires: startCapability,
 					Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "prove the terminal START left no authority or binding",
-					Composite: transitionProveReviewBurnedAndUnbound},
+				{Name: "acknowledge the terminal START and prove no authority or binding survives",
+					Composite: transitionProveReviewAcknowledgedAndUnbound},
 				{Name: "now move the unbound objective",
 					Requires:  sddAttemptRescopeCapability,
-					Composite: transitionRescope("bench-rescope-after-burn", "narrower after review burn")},
+					Composite: transitionRescope("bench-rescope-after-acknowledgement", "narrower after review acknowledgement")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 				{Name: "and so does review status", Requires: statusCapability,
 					Args: productArgs("review", "status")},
@@ -478,16 +478,19 @@ func transitionBeginAgain(r *journeyRun) error {
 	return nil
 }
 
-// transitionProveReviewBurnedAndUnbound proves #3417's cross-surface boundary:
-// terminal review completion leaves neither review authority nor an SDD binding.
+// transitionProveReviewAcknowledgedAndUnbound proves #3797's cross-surface
+// boundary: exact acknowledgement removes review authority without an SDD binding.
 // The SDD attempt stays active and may be rescoped under ordinary ledger policy.
-func transitionProveReviewBurnedAndUnbound(r *journeyRun) error {
+func transitionProveReviewAcknowledgedAndUnbound(r *journeyRun) error {
+	if err := requireAtomicLineageAcknowledged(r, r.sandbox.Lineage); err != nil {
+		return fmt.Errorf("terminal review acknowledgement: %w", err)
+	}
 	head, err := proveAuthorities(r.sandbox)
 	if err != nil {
 		return err
 	}
 	if len(head.Entries) != 0 {
-		return fmt.Errorf("terminal review burn left durable authority: %+v", head.Entries)
+		return fmt.Errorf("acknowledged terminal review left durable authority: %+v", head.Entries)
 	}
 	status, err := proveRuntime(r.sandbox)
 	if err != nil {

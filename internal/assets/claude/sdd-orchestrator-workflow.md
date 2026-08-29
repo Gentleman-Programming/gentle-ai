@@ -29,10 +29,10 @@ Meta-commands are handled by the orchestrator directly and do not appear in auto
 
 ### Native SDD Dispatcher Guard
 
-Before routing, continuing, applying, verifying, or archiving an SDD change, first determine this session's artifact store. The native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`) reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes.
+Before routing, continuing, applying, verifying, or archiving an SDD change, invoke the native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`). It resolves the artifact store the workspace declares and reports it in `artifactStore`.
 
-- For `engram`, do NOT invoke the dispatcher. Resolve status from Engram topic keys with `mem_search` followed by `mem_get_observation`.
-- For `openspec` or `hybrid`, use the dispatcher when available and treat its JSON as authoritative over prompt inference.
+- Do NOT determine the artifact store yourself, and do NOT branch on it. The dispatcher already did, and it returns the locators for the store it resolved.
+- Use the dispatcher for every store and treat its JSON as authoritative over prompt inference.
 - Route only by structured `nextRecommended`, dependency states, and `blockedReasons`; never infer from free text.
 - If blocked, stop and report the blocker. Do not proceed to apply, archive, or terminal work.
 

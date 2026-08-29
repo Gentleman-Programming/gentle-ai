@@ -72,9 +72,6 @@ func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
 		{name: "capture-result-preflight", run: func(t *testing.T, args []string, _ string) error {
 			return RunReviewCaptureResult(append(append([]string{}, args...), "--preflight"), io.Discard)
 		}},
-		{name: "preserve-result", run: func(t *testing.T, args []string, input string) error {
-			return RunReviewPreserveResult(append(append([]string{}, args...), "--input", input), io.Discard)
-		}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
 			args, input, repo := startedOpaqueCaptureBinding(t, "git-trust-"+operation.name)
@@ -146,6 +143,7 @@ func startedOpaqueCaptureBinding(t *testing.T, lineage string) ([]string, string
 	}
 	t.Chdir(t.TempDir())
 	return []string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -313,19 +312,47 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
-	root, contextBinding, err := reviewtransaction.ResolveReviewRepositoryContextBinding(ctx, binding.RepositoryContext)
+	// The transport runs inside the repository it reviews, and it takes no
+	// flags, so the process cwd is the independent source the provider-issued
+	// context digest is checked against.
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: "."}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 	}
-	store, record, err := discoverCompactFacadeReview(ctx, root, contextBinding.LineageID, false)
+	store, record, err := discoverCompactFacadeReview(ctx, root, binding.LineageID, false)
 	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
+		// A host frame naming a lineage this repository does not hold is a
+		// tampered binding, not an unavailable materialization.
+		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lineage does not match live compact review authority")
+	}
+	requested := reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+	}
+	contextBinding, contextErr := requested, error(nil)
+	if _, resolved, err := reviewtransaction.ResolveReviewRepositoryContextBinding(ctx, root, binding.RepositoryContext, requested); err == nil {
+		contextBinding = resolved
+	} else {
+		// The digest commits to one exact repository and binding, so a mismatch
+		// is a tampered frame. Let the binding validator below name the field
+		// the live authority disagrees with instead of collapsing every tamper
+		// into one generic materialization failure.
+		contextErr = err
+		contextBinding = reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity,
+			Revision: record.State.CapturePhaseRevision,
+		}
+		if record.State.State != reviewtransaction.StateReviewing {
+			contextBinding.TargetIdentity = record.State.CurrentSnapshot.Identity
+		}
 	}
 	if err := validateReviewProviderTaskAuthorityBinding(ReviewTransitionBinding{
 		LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
 		RepositoryContext: binding.RepositoryContext,
 	}, contextBinding, record); err != nil {
 		return openCodeTransportSession{}, err
+	}
+	if contextErr != nil {
+		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
 	}
 	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 		return openCodeTransportSession{}, openCodeTransportAuthorityUnavailable(err)
@@ -339,7 +366,7 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 	session := openCodeTransportSession{binding: binding, root: root, store: store, record: record, taskPrompt: taskPrompt}
 	if binding.Role != "" {
 		session.taskPrompt = binding.canonicalTaskPrompt
-		invocation, err := reviewProviderRoleTaskRequest(ctx, root, store.Dir, record.State, record.Revision, binding.Role)
+		invocation, err := reviewProviderRoleTaskRequest(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision, binding.Role)
 		if err != nil {
 			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 		}
@@ -348,8 +375,10 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 		if !slices.Contains(record.State.SelectedLenses, binding.Lens) {
 			return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lens is not a provider-selected lens for this review")
 		}
-		request, err := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), binding.RepositoryContext, binding.Lens)
-		if err != nil || request.Binding.Revision != record.Revision || request.Binding.Lineage != record.State.LineageID {
+		request, err := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), root, binding.RepositoryContext, binding.Lens, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+		})
+		if err != nil || request.Binding.Revision != record.State.CapturePhaseRevision || request.Binding.Lineage != record.State.LineageID {
 			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 		}
 		if binding.Order.provided && binding.Order.value != request.Binding.Order {
@@ -392,7 +421,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		return openCodeTransportEnvelope{}, openCodeTransportAuthorityUnavailable(err)
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, session.root, session.record.State.LineageID, false)
-	if err != nil || store.Dir != session.store.Dir || record.Revision != session.record.Revision {
+	if err != nil || store.Dir != session.store.Dir || record.State.CapturePhaseRevision != session.record.State.CapturePhaseRevision {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_completion_unavailable")
 	}
 	if session.binding.Role != "" {
@@ -414,32 +443,24 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		output := openCodeProviderRoleResultEnvelope(session.binding.Role)
 		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 	}
-	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, record.Revision, session.lensRequest.Frozen, session.lensRequest.Subject, hostOutput)
+	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, record.State.CapturePhaseRevision, session.lensRequest.Frozen, session.lensRequest.Subject, hostOutput)
 	if err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_reviewer_result_refused")
 	}
-	path := filepath.Join(store.Dir, reviewResultArtifactPath(session.lensRequest.Binding.Order, session.lensRequest.Binding.Lens))
 	captured, err := store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
-		ExpectedRevision: record.Revision, TargetIdentity: session.lensRequest.Binding.Target, FrozenContext: admitted.Frozen,
+		ExpectedRevision: record.State.CapturePhaseRevision, TargetIdentity: session.lensRequest.Binding.Target, FrozenContext: admitted.Frozen,
 		ArtifactSubject: admitted.Subject, Inspection: admitted.Result.Inspection, Result: admitted.NativeResult,
 		CandidateCausalFindingIDs: admitted.CandidateCausalFindingIDs, RawPayload: hostOutput,
-		PreparePublication: func(current reviewtransaction.CompactState) error {
-			return archiveQuarantinedReviewerArtifact(session.lensRequest.Store.Dir, current, session.lensRequest.Binding.Order, path)
-		},
 	})
 	if err != nil {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
 	}
-	if err := reviewtransaction.PublishLensContextEmission(store.Dir, reviewtransaction.LensContextEmission{
-		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: session.lensRequest.Binding.Lineage,
-		TargetIdentity: session.lensRequest.Binding.Target, AuthorityRevision: session.lensRequest.Binding.Revision,
-		Lens: session.lensRequest.Binding.Lens, SelectedOrder: session.lensRequest.Binding.Order, SubjectHash: captured.Subject.SubjectHash,
-		Level: reviewtransaction.ReviewerContextLevelProviderContract,
-	}); err != nil {
-		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_emission_unavailable")
+	currentRecord, currentErr := store.LoadContext(ctx)
+	if currentErr != nil {
+		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
 	}
-	closure, err := closeReviewOnLastCapturedLens(ctx, session.root, store, record, model.AgentOpenCode)
-	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, record) {
+	closure, err := closeReviewOnLastCapturedLens(ctx, session.root, store, currentRecord, model.AgentOpenCode)
+	if err != nil && !reviewLastCapturedLensClosureSuperseded(store, currentRecord) {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_capture_failed")
 	}
 	if closure != nil {
@@ -538,7 +559,7 @@ func validateReviewProviderTaskAuthorityBinding(binding ReviewTransitionBinding,
 	// against compact state. Requiring the same lineage and revision on the
 	// freshly discovered record prevents a stale locator from selecting another
 	// authority before any provider prompt can be materialized.
-	if record.State.LineageID != binding.LineageID || record.Revision != binding.Revision {
+	if record.State.LineageID != binding.LineageID || record.State.CapturePhaseRevision != binding.Revision {
 		return openCodeTransportBindingInvalid("Task binding does not match live compact review authority")
 	}
 	return nil
@@ -577,12 +598,16 @@ func decodeOpenCodeTransportMaterialization(prompt string) (taskPrompt string, r
 func openCodeTransportCaptureRole(ctx context.Context, root string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, role reviewProviderRole, raw []byte) (*reviewLastEventClosureResult, error) {
 	switch role {
 	case reviewerprovider.RoleRefuter:
-		if _, err := reviewProviderCaptureRefuterRaw(ctx, root, store, record.State, record.Revision, raw); err != nil {
+		if _, err := reviewProviderCaptureRefuterRaw(ctx, root, store, record.State, record.State.CapturePhaseRevision, raw); err != nil {
 			return nil, err
 		}
-		return closeReviewOnLastCapturedLens(ctx, root, store, record, model.AgentOpenCode)
+		current, err := store.LoadContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return closeReviewOnLastCapturedLens(ctx, root, store, current, model.AgentOpenCode)
 	case reviewerprovider.RoleTargetedValidator:
-		_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, root, store, record.State, record.Revision, raw)
+		_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, root, store, record.State, record.State.CapturePhaseRevision, raw)
 		return closure, err
 	default:
 		return nil, fmt.Errorf("unsupported provider role task %q", role) // refusal:by-design world-action: the relay session role is fixed by the Go-issued Task binding
@@ -648,10 +673,6 @@ func boundedOpenCodeTaskPayload(payload []byte) ([]byte, error) {
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_truncated"}
 	}
 	return payload, nil
-}
-
-func reviewResultArtifactPath(order int, lens string) string {
-	return fmt.Sprintf("%s/%02d-%s.json", reviewtransaction.CompactReviewerResultsDir, order, lens)
 }
 
 func openCodeTransportFailure(code string) error {

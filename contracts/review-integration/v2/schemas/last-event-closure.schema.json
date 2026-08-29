@@ -26,6 +26,11 @@
         }
       },
       "else": {"not": {"required": ["status_continuation"]}}
+    },
+    {
+      "if": {"properties": {"state": {"const": "approved"}}, "required": ["state"]},
+      "then": {"required": ["acknowledgement"]},
+      "else": {"not": {"required": ["acknowledgement"]}}
     }
   ],
   "properties": {
@@ -37,7 +42,8 @@
     "correction_lines": {"type": "integer", "minimum": 1},
     "state": {"enum": ["approved", "correction_required", "escalated"]},
     "action": {"type": "string", "minLength": 1},
-    "status_continuation": {"$ref": "../../v1/schemas/transition-execution.schema.json"},
+    "status_continuation": {"$ref": "transition-execution.schema.json#/$defs/last_event_status_execution"},
+    "acknowledgement": {"$ref": "transition-execution.schema.json#/$defs/approved_acknowledgement_execution"},
     "store_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "advisory_findings": {
       "type": "object",

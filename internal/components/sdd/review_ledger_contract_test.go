@@ -25,12 +25,12 @@ const requiredOrchestratorMergeModeClause = "Native Compact Review Orchestration
 func TestBoundedReviewContractLeavesAtomicLifecycleToNativeGo(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
-		"Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation",
+		"Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, targeted validation, and approved closure",
 		"Only candidate-caused severe findings block",
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Compiled capability is authoritative",
 		"Reviewers inspect only the provider-bound immutable trees",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("orchestrator contract missing %q", want)
@@ -57,7 +57,7 @@ func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousCaptureReplay
 			rendered := renderBoundedReviewAsset(runtime.agent, runtime.path)
 			for _, clause := range []string{
 				"The final reviewer, refuter, or targeted-validator capture owns closure.",
-				"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+				"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 			} {
 				if !strings.Contains(rendered, clause) {
 					t.Fatalf("%s rendered contract is missing %q", runtime.name, clause)
@@ -467,7 +467,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// sdd-research collection permissions, so the baseline is rederived here.
 	// Merged with main's #3563 causal-failure precedence and #3168 empty
 	// CodeGraph tool-grant changes, so the combined baseline is rederived.
-	const want = "673ed8caf9d34e0b88eeb6a1d1b479762189532a8e35b9e6e082a91be86e7938"
+	// #3814 replaces the dispatcher guard's store-branching prose across every
+	// runtime orchestrator: the native surface resolves the declared store, so
+	// the actor no longer determines or branches on it. Kilo renders through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "45b63ab97aad4a5f31b20bf834a43d1df25a5521db2e8008473cb99ebaaa593f"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -690,8 +694,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3748 adds the public status_continuation execution rule (+339 rendered
 		// characters in each row), so the pins move from 14,657/27,002 to
 		// 14,996/27,341 after deterministic fixture measurement.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_996, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_341, maxCharacters: 30_063},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_489, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_834, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

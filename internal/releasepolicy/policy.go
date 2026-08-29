@@ -309,7 +309,7 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 	if err := requireJSONEOF(decoder); err != nil {
 		return err
 	}
-	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 5, "Checksum": 1, "Homebrew Formula": 1}
+	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 6, "Checksum": 1, "Homebrew Formula": 1}
 	byType := make(map[string][]artifact)
 	counts := make(map[string]int)
 	paths := make(map[string]struct{})
@@ -356,8 +356,15 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 
 	seenArchives := make(map[string]struct{})
 	snapshotVersion := ""
-	providerArchive := false
+	providerArchive, provenanceArchive := false, false
 	for _, item := range byType["Archive"] {
+		if item.Name == "gentle-ai-release-provenance-v1.tar.gz" {
+			if item.Path != "dist/"+item.Name || item.GOOS != "" || item.GOARCH != "" || item.Target != "" || extraString(item.Extra, "Format") != "tar.gz" || extraString(item.Extra, "ID") != "release-provenance" || !reflect.DeepEqual(extraStrings(item.Extra, "Binaries"), []string{}) || provenanceArchive {
+				return errors.New("resolved release provenance archive identity changed")
+			}
+			provenanceArchive = true
+			continue
+		}
 		if strings.HasPrefix(item.Name, "gentle-ai-review-provider-contract-") {
 			artifactSemver := strings.TrimSuffix(strings.TrimPrefix(item.Name, "gentle-ai-review-provider-contract-"), ".tar.gz")
 			if artifactSemver != contractSemver || item.Path != "dist/"+item.Name || item.GOOS != "" || item.GOARCH != "" || item.Target != "" || extraString(item.Extra, "Format") != "tar.gz" || extraString(item.Extra, "ID") != "review-provider-contract" || !reflect.DeepEqual(extraStrings(item.Extra, "Binaries"), []string{}) || providerArchive {
@@ -394,6 +401,9 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 	}
 	if !providerArchive {
 		return errors.New("resolved provider contract archive is missing")
+	}
+	if !provenanceArchive {
+		return errors.New("resolved release provenance archive is missing")
 	}
 
 	if item := byType["Checksum"][0]; item.Name != "checksums.txt" || item.Path != "dist/checksums.txt" {
@@ -544,6 +554,9 @@ project_name: gentle-ai
 before:
   hooks:
     - go run ./internal/providercontractbundlecmd generate --out .goreleaser-provider-contract
+    - rm -rf .goreleaser-provenance
+    - mkdir -p .goreleaser-provenance
+    - go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2
 builds:
   - main: ./cmd/gentle-ai
     binary: gentle-ai
@@ -599,6 +612,17 @@ archives:
           mtime: "1970-01-01T00:00:00Z"
       - src: .goreleaser-provider-contract/vectors/*.json
         dst: vectors
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+  - id: release-provenance
+    meta: true
+    formats:
+      - tar.gz
+    name_template: "gentle-ai-release-provenance-v1"
+    files:
+      - src: .goreleaser-provenance/manifest.json
         strip_parent: true
         info:
           mode: 0644

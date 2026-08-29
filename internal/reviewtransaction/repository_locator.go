@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,16 @@ const (
 
 	reviewRepositoryContextHandlePrefix = "rctx1_"
 	reviewRepositoryLocatorMaxBytes     = 64 << 10
+
+	reviewRepositoryContextV2Schema          = "gentle-ai.review-repository-context/v2"
+	reviewRepositoryContextV2HandlePrefix    = "rctx2_"
+	reviewRepositoryContextV2MaxDecodedBytes = 64 << 10
+	// The v2 handle is a fixed-width digest, not a transported payload. Its
+	// preimage names the repository identity and the capture binding; the
+	// caller supplies both again at resolution, so the token never has to
+	// carry a filesystem path to stay self-contained.
+	reviewRepositoryContextV2DigestBytes     = 64
+	reviewRepositoryContextV2MaxEncodedBytes = len(reviewRepositoryContextV2HandlePrefix) + reviewRepositoryContextV2DigestBytes
 )
 
 // ErrRepositoryIdentityChanged reports that a live repository no longer
@@ -97,6 +108,38 @@ type reviewRepositoryContextFile struct {
 	TargetedValidation *reviewTargetedValidationContext `json:"targeted_validation,omitempty"`
 }
 
+// reviewRepositoryContextV2Token is the canonical digest preimage for one v2
+// handle. It is never transported: only its digest crosses a process boundary,
+// so the paths below stay inside this package and out of every command line,
+// log, and relayed host payload.
+type reviewRepositoryContextV2Token struct {
+	Schema               string `json:"schema"`
+	RepositoryRoot       string `json:"repository_root"`
+	GitCommonDir         string `json:"git_common_dir"`
+	GitDir               string `json:"git_dir"`
+	RepositoryRef        string `json:"repository_ref"`
+	LineageID            string `json:"lineage_id"`
+	TargetIdentity       string `json:"target_identity"`
+	CapturePhaseRevision string `json:"capture_phase_revision"`
+}
+
+var errInvalidReviewRepositoryContextV2 = errors.New("invalid rctx2 repository context") // refusal:by-design operator-knowledge: callers must refresh the provider-issued repository context instead of attempting to repair an untrusted token
+
+type reviewRepositoryContextV2ResolutionError struct{ cause error }
+
+func (err *reviewRepositoryContextV2ResolutionError) Error() string {
+	return errInvalidReviewRepositoryContextV2.Error()
+}
+
+func (err *reviewRepositoryContextV2ResolutionError) Unwrap() error { return err.cause }
+
+func invalidReviewRepositoryContextV2Resolution(cause error) error {
+	if cause == nil {
+		return errInvalidReviewRepositoryContextV2
+	}
+	return &reviewRepositoryContextV2ResolutionError{cause: cause}
+}
+
 // OpenRepositoryIdentityLease resolves and captures one exact Git worktree
 // without creating repository or authority storage.
 func OpenRepositoryIdentityLease(ctx context.Context, repo string) (*RepositoryIdentityLease, error) {
@@ -156,111 +199,210 @@ func (lease *RepositoryIdentityLease) Validate(ctx context.Context) error {
 	return nil
 }
 
-// DeriveReviewRepositoryContextHandle derives the path-free handle that START
-// will publish after compact authority creation. It performs no filesystem
-// publication and does not treat the handle as authorization.
+// DeriveReviewRepositoryContextHandle derives the self-contained rctx2 handle
+// that current lifecycle routes render from the active compact authority. It has
+// no locator publication, readiness, or caller-owned replay side effect.
 func DeriveReviewRepositoryContextHandle(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
+	return deriveReviewRepositoryContextV2Token(ctx, repo, binding)
+}
+
+// deriveReviewRepositoryContextV2Token creates the self-contained rctx2 core
+// without publishing a locator or wiring a public consumer. Its explicit
+// authority check keeps token creation bounded to the currently active compact
+// record; its resolver repeats the same check before returning any identity.
+func deriveReviewRepositoryContextV2Token(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
+	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
+		return "", errInvalidReviewRepositoryContextV2
 	}
-	if err := validateReviewRepositoryContextBinding(binding); err != nil {
-		return "", err
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil || lease.Validate(ctx) != nil {
+		return "", errInvalidReviewRepositoryContextV2
 	}
-	identity, err := reviewRepositoryIdentity(ctx, repo)
+	identity := lease.Identity()
+	// Derivation is pure so START can use the same canonical token while it
+	// proves reviewer-context capacity before its first CAS write. Every active
+	// resolver below revalidates the token against Compact authority before it
+	// returns a repository root or allows a caller to continue.
+	return encodeReviewRepositoryContextV2Token(reviewRepositoryContextV2Token{
+		Schema:               reviewRepositoryContextV2Schema,
+		RepositoryRoot:       identity.RepositoryRoot,
+		GitCommonDir:         identity.GitCommonDir,
+		GitDir:               identity.GitDir,
+		RepositoryRef:        identity.RepositoryRef,
+		LineageID:            binding.LineageID,
+		TargetIdentity:       binding.TargetIdentity,
+		CapturePhaseRevision: binding.Revision,
+	})
+}
+
+// resolveReviewRepositoryContextV2Token decodes a self-contained rctx2 token
+// and confirms its frozen facts against the active compact authority. It is
+// intentionally read-only and normalizes every refusal to one path-free error.
+func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
-		return "", err
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
-	return reviewRepositoryContextHandle(binding, identity), nil
+	if err := lease.Validate(ctx); err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	identity := lease.Identity()
+	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	store, err := CompactAuthoritativeStore(ctx, identity.RepositoryRoot, binding.LineageID)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	if err := validateReviewRepositoryContextRecord(ctx, identity.RepositoryRoot, binding, record); err != nil {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	if err := lease.Validate(ctx); err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	return identity.RepositoryRoot, binding, nil
+}
+
+// resolveReviewRepositoryContextV2TokenForCorrectedInspection validates every
+// token and authority fact that is available before the provider-owned targeted
+// request is decoded. The request then proves the correction target/tree/hash;
+// this preserves immutable inspection after later workspace drift without adding
+// a locator-backed request sidecar.
+func resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	if err := lease.Validate(ctx); err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	identity := lease.Identity()
+	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	store, err := CompactAuthoritativeStore(ctx, identity.RepositoryRoot, binding.LineageID)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	if record.State.LineageID != binding.LineageID || record.State.CapturePhaseRevision != binding.Revision ||
+		record.State.State != StateCorrectionRequired || record.State.ProposedCorrectionLines == nil || record.State.CorrectionAttemptConsumed() {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	if err := lease.Validate(ctx); err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+	return identity.RepositoryRoot, binding, nil
+}
+
+func encodeReviewRepositoryContextV2Token(token reviewRepositoryContextV2Token) (string, error) {
+	payload, err := canonicalReviewRepositoryContextV2Payload(token)
+	if err != nil {
+		return "", errInvalidReviewRepositoryContextV2
+	}
+	return reviewRepositoryContextV2HandlePrefix + identityHash(string(payload)), nil
+}
+
+// validReviewRepositoryContextV2Handle validates only the opaque transport
+// shape: the v2 prefix followed by a lowercase hex digest of fixed width.
+func validReviewRepositoryContextV2Handle(handle string) bool {
+	if !strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix) || len(handle) != reviewRepositoryContextV2MaxEncodedBytes {
+		return false
+	}
+	suffix := strings.TrimPrefix(handle, reviewRepositoryContextV2HandlePrefix)
+	if suffix != strings.ToLower(suffix) {
+		return false
+	}
+	_, err := hex.DecodeString(suffix)
+	return err == nil
+}
+
+// matchReviewRepositoryContextV2Handle re-derives the handle from the live
+// repository identity and the caller-supplied binding, then compares it to the
+// handle the caller presented. The repository root arrives from the caller
+// rather than from the token, so this is a real check: a handle that names a
+// different repository, lineage, target, or revision cannot be made to match by
+// pointing the resolver somewhere else.
+func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIdentity, binding ReviewRepositoryContextBinding) error {
+	if !validReviewRepositoryContextV2Handle(handle) {
+		return errInvalidReviewRepositoryContextV2
+	}
+	derived, err := encodeReviewRepositoryContextV2Token(reviewRepositoryContextV2Token{
+		Schema:               reviewRepositoryContextV2Schema,
+		RepositoryRoot:       identity.RepositoryRoot,
+		GitCommonDir:         identity.GitCommonDir,
+		GitDir:               identity.GitDir,
+		RepositoryRef:        identity.RepositoryRef,
+		LineageID:            binding.LineageID,
+		TargetIdentity:       binding.TargetIdentity,
+		CapturePhaseRevision: binding.Revision,
+	})
+	if err != nil {
+		return errInvalidReviewRepositoryContextV2
+	}
+	if subtle.ConstantTimeCompare([]byte(derived), []byte(handle)) != 1 {
+		return errInvalidReviewRepositoryContextV2
+	}
+	return nil
+}
+
+func canonicalReviewRepositoryContextV2Payload(token reviewRepositoryContextV2Token) ([]byte, error) {
+	if token.Schema != reviewRepositoryContextV2Schema || !validReviewRepositoryContextV2Path(token.RepositoryRoot) ||
+		!validReviewRepositoryContextV2Path(token.GitCommonDir) || !validReviewRepositoryContextV2Path(token.GitDir) ||
+		!validSHA256(token.RepositoryRef) || validateReviewRepositoryContextBinding(ReviewRepositoryContextBinding{
+		LineageID: token.LineageID, TargetIdentity: token.TargetIdentity, Revision: token.CapturePhaseRevision,
+	}) != nil {
+		return nil, errInvalidReviewRepositoryContextV2
+	}
+	identity := reviewRepositoryIdentityRecord{
+		RepositoryRoot: token.RepositoryRoot, GitCommonDir: token.GitCommonDir, GitDir: token.GitDir,
+	}
+	if token.RepositoryRef != reviewRepositoryIdentityHash(identity) {
+		return nil, errInvalidReviewRepositoryContextV2
+	}
+	payload, err := json.Marshal(token)
+	if err != nil || len(payload) > reviewRepositoryContextV2MaxDecodedBytes {
+		return nil, errInvalidReviewRepositoryContextV2
+	}
+	return payload, nil
+}
+
+func validReviewRepositoryContextV2Path(path string) bool {
+	return path != "" && !strings.ContainsRune(path, 0) && filepath.IsAbs(path) && filepath.Clean(path) == path
 }
 
 // ValidateReviewRepositoryContextHandle validates only the opaque transport
 // shape. Resolution still performs repository and authority validation.
 func ValidateReviewRepositoryContextHandle(handle string) error {
-	if !validReviewRepositoryContextHandle(handle) {
-		return errors.New("invalid review repository context handle")
+	if validReviewRepositoryContextHandle(handle) {
+		return nil
 	}
-	return nil
-}
-
-// PublishReviewRepositoryContext publishes a private immutable locator and
-// returns its opaque, deterministic handle. The record contains paths only in
-// provider-private storage and is not authority.
-func PublishReviewRepositoryContext(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
-	return publishReviewRepositoryContextForBinding(ctx, repo, binding, nil)
-}
-
-// PublishTargetedValidationReviewRepositoryContext freezes the exact targeted
-// validation request that issued an inspection context. It is request metadata,
-// not terminal evidence or review authority; the resolver still validates the
-// current open correction authority before exposing its immutable trees.
-func PublishTargetedValidationReviewRepositoryContext(ctx context.Context, repo string, request TargetedValidationRequest) (string, error) {
-	if err := ValidateTargetedValidationRequest(request); err != nil {
-		return "", err
+	if validReviewRepositoryContextV2Handle(handle) {
+		return nil
 	}
-	return publishReviewRepositoryContextForBinding(ctx, repo, ReviewRepositoryContextBinding{
-		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
-	}, &reviewTargetedValidationContext{RequestHash: request.RequestHash, CorrectionCandidateTree: request.CorrectionCandidateTree})
-}
-
-func publishReviewRepositoryContextForBinding(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, targeted *reviewTargetedValidationContext) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := validateReviewRepositoryContextBinding(binding); err != nil {
-		return "", err
-	}
-	if targeted != nil && (!validSHA256(targeted.RequestHash) || !validGitTree(targeted.CorrectionCandidateTree)) {
-		return "", errors.New("targeted validation repository context is incomplete") // refusal:by-design world-action: immutable inspection context must carry the exact provider-issued correction binding
-	}
-	identity, err := reviewRepositoryIdentity(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	if err := validateLiveReviewRepositoryContext(ctx, identity.RepositoryRoot, binding); err != nil {
-		return "", err
-	}
-	handle := reviewRepositoryContextHandle(binding, identity)
-	path, err := reviewRepositoryContextPath(handle)
-	if err != nil {
-		return "", err
-	}
-	home, err := reviewRepositoryContextHome()
-	if err != nil {
-		return "", err
-	}
-	storageRoot, err := ensureReviewRepositoryContextStorageRoot(home, true)
-	if err != nil {
-		return "", err
-	}
-	if err := ensurePrivateLocatorDirectory(storageRoot, filepath.Dir(path)); err != nil {
-		return "", err
-	}
-	record := reviewRepositoryContextFile{
-		Schema: ReviewRepositoryContextSchema, Handle: handle,
-		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
-		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
-		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir, TargetedValidation: targeted,
-	}
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := publishReviewRepositoryContext(path, append(payload, '\n')); err != nil {
-		return "", err
-	}
-	return handle, nil
+	return errors.New("invalid review repository context handle")
 }
 
 // ResolveReviewRepositoryContext resolves one provider-issued handle from any
 // process cwd, then revalidates its repository and current compact authority.
-func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding ReviewRepositoryContextBinding) (string, error) {
+func ResolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, error) {
 	if err := validateReviewRepositoryContextBinding(binding); err != nil {
 		return "", err
 	}
-	root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, handle)
+	root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, repo, handle, binding)
 	if err != nil {
 		return "", err
 	}
@@ -270,42 +412,38 @@ func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding 
 	return root, nil
 }
 
-// ResolveReviewRepositoryContextBinding resolves one provider-issued handle and
-// returns both the repository root and the binding the handle itself commits
-// to. The handle is a digest over the schema, lineage, target identity,
-// revision, and repository identity (reviewRepositoryContextHandle), and the
-// stored record is only accepted when it re-derives that exact handle. A caller
-// therefore cannot influence which lineage, target, or revision it receives by
-// supplying different fields: there are no fields to supply. That is what lets
-// a reviewer-facing surface take one opaque token instead of six values a
-// relaying orchestrator could mistype.
-func ResolveReviewRepositoryContextBinding(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
-	root, binding, err := resolveReviewRepositoryContext(ctx, handle)
+// ResolveReviewRepositoryContextBinding resolves one provider-issued handle
+// against a caller-supplied repository and binding, and returns the canonical
+// repository root. The handle is a digest over the schema, lineage, target
+// identity, revision, and repository identity, so it commits to exactly one
+// tuple and proves nothing on its own: the caller must present the same
+// repository and the same binding for it to match. A mistyped lineage, target,
+// or revision fails the digest instead of silently resolving something else,
+// which is the tamper evidence a self-describing token cannot give.
+func ResolveReviewRepositoryContextBinding(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	root, resolved, err := resolveReviewRepositoryContext(ctx, repo, handle, binding)
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
-	return root, binding, nil
+	return root, resolved, nil
 }
 
-func resolveReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
-	root, binding, err := resolveOpaqueReviewRepositoryContext(ctx, handle)
-	if err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
+func resolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	if !strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix) {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
 	}
-	store, err := CompactAuthoritativeStore(ctx, root, binding.LineageID)
-	if err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
+	return resolveReviewRepositoryContextV2Token(ctx, repo, handle, binding)
+}
+
+// ResolveHistoricalReviewRepositoryContextBinding retains a read-only decoder for
+// archived rctx1 locators. Current lifecycle operations intentionally use the
+// rctx2-only resolver above, so an old handle cannot activate replacement
+// authority or authorize mutation.
+func ResolveHistoricalReviewRepositoryContextBinding(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
+	if !validReviewRepositoryContextHandle(handle) {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
 	}
-	record, err := store.LoadContext(ctx)
-	if err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
-	}
-	resolveReviewRepositoryContextLoadedHook()
-	if err := validateReviewRepositoryContextRecord(ctx, root, binding, record); err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
-	}
-	binding.Revision = record.Revision
-	return root, binding, nil
+	return resolveOpaqueReviewRepositoryContext(ctx, handle)
 }
 
 // resolveReviewRepositoryContextLoadedHook is a test-only observation hook for
@@ -325,16 +463,26 @@ func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (s
 	}, nil
 }
 
-func resolveTargetedValidationReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, reviewTargetedValidationContext, error) {
-	root, record, err := resolveOpaqueReviewRepositoryContextRecord(ctx, handle)
+func resolveTargetedValidationReviewRepositoryContext(ctx context.Context, repo, handle string, requested ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, reviewTargetedValidationContext, error) {
+	root, binding, err := resolveReviewRepositoryContextV2Token(ctx, repo, handle, requested)
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, err
 	}
-	if record.TargetedValidation == nil {
-		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errors.New("review repository context does not carry a frozen targeted validation request") // refusal:by-design operator-knowledge: a targeted inspector must use the exact context emitted with its provider request
+	store, err := CompactAuthoritativeStore(ctx, root, binding.LineageID)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errInvalidReviewRepositoryContextV2
 	}
-	binding := ReviewRepositoryContextBinding{LineageID: record.LineageID, TargetIdentity: record.TargetIdentity, Revision: record.Revision}
-	return root, binding, *record.TargetedValidation, nil
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errInvalidReviewRepositoryContextV2
+	}
+	request, err := BuildTargetedValidationRequest(ctx, root, record.State, binding.Revision)
+	if err != nil || request.CorrectionTargetIdentity != binding.TargetIdentity {
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errInvalidReviewRepositoryContextV2
+	}
+	return root, binding, reviewTargetedValidationContext{
+		RequestHash: request.RequestHash, CorrectionCandidateTree: request.CorrectionCandidateTree,
+	}, nil
 }
 
 func resolveOpaqueReviewRepositoryContextRecord(ctx context.Context, handle string) (string, reviewRepositoryContextFile, error) {
@@ -353,7 +501,7 @@ func resolveOpaqueReviewRepositoryContextRecord(ctx context.Context, handle stri
 	if err != nil {
 		return "", empty, err
 	}
-	storageRoot, err := ensureReviewRepositoryContextStorageRoot(home, false)
+	storageRoot, err := ensureReviewRepositoryContextStorageRoot(home)
 	if err != nil {
 		return "", empty, err
 	}
@@ -416,30 +564,12 @@ func (err *reviewRepositoryContextIdentityError) Error() string {
 
 func (err *reviewRepositoryContextIdentityError) Unwrap() error { return err.cause }
 
-func validateLiveReviewRepositoryContext(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) error {
-	store, err := CompactAuthoritativeStore(ctx, repo, binding.LineageID)
-	if err != nil {
-		return err
-	}
-	record, err := store.Load()
-	if err != nil {
-		return err
-	}
-	return validateReviewRepositoryContextRecord(ctx, repo, binding, record)
-}
-
 func validateReviewRepositoryContextRecord(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, record CompactRecord) error {
 	if record.State.LineageID != binding.LineageID {
 		return errors.New("review repository context is stale or has no live matching authority")
 	}
-	if record.Revision != binding.Revision {
-		matched := false
-		for _, intent := range record.EffectIntents {
-			matched = matched || intent.Class == CompactEffectClassRepositoryContext && intent.BindingRevision == binding.Revision
-		}
-		if !matched {
-			return errors.New("review repository context is stale or has no live matching authority")
-		}
+	if record.State.CapturePhaseRevision != binding.Revision {
+		return errors.New("review repository context is stale or has no live matching authority")
 	}
 	switch record.State.State {
 	case StateReviewing:
@@ -457,7 +587,7 @@ func validateReviewRepositoryContextRecord(ctx context.Context, repo string, bin
 			}
 			return nil
 		}
-		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.Revision)
+		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.State.CapturePhaseRevision)
 		if err != nil {
 			return &reviewRepositoryContextTargetedValidationError{cause: err}
 		}
@@ -516,8 +646,8 @@ func validReviewRepositoryContextHandle(handle string) bool {
 }
 
 func reviewRepositoryContextPath(handle string) (string, error) {
-	if err := ValidateReviewRepositoryContextHandle(handle); err != nil {
-		return "", err
+	if !validReviewRepositoryContextHandle(handle) {
+		return "", errors.New("invalid historical review repository context handle") // refusal:by-design operator-knowledge: only archived provider-issued rctx1 handles can be read through this compatibility path
 	}
 	home, err := reviewRepositoryContextHome()
 	if err != nil {
@@ -534,73 +664,16 @@ func reviewRepositoryContextHome() (string, error) {
 	return canonicalLocatorDirectory(home)
 }
 
-func ensureReviewRepositoryContextStorageRoot(home string, create bool) (string, error) {
+func ensureReviewRepositoryContextStorageRoot(home string) (string, error) {
 	root := filepath.Join(home, ".gentle-ai")
 	if !locatorPathWithin(home, root) {
 		return "", errors.New("review repository context storage root escapes HOME")
 	}
 	info, err := os.Lstat(root)
-	if os.IsNotExist(err) && create {
-		if err := os.Mkdir(root, 0o700); err != nil && !os.IsExist(err) {
-			return "", err
-		}
-		info, err = os.Lstat(root)
-	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return "", errors.New("review repository context storage root is unsafe")
-	}
-	if create {
-		if err := SyncReviewDirectory(home); err != nil {
-			return "", err
-		}
+		return "", errors.New("review repository context storage root is unavailable") // refusal:by-design world-action: restore the archived private locator root before using the read-only compatibility decoder
 	}
 	return root, nil
-}
-
-func publishReviewRepositoryContext(path string, payload []byte) error {
-	existing, err := readReviewRepositoryContext(path)
-	if err == nil {
-		if !reviewRepositoryContextPayloadEqual(existing, payload) {
-			return &RARAuthorityConflictError{Slot: path}
-		}
-		return SyncReviewDirectory(filepath.Dir(path))
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".repository-context-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temp.Name())
-	if err = temp.Chmod(0o600); err == nil {
-		_, err = temp.Write(payload)
-	}
-	if err == nil {
-		err = temp.Sync()
-	}
-	if closeErr := temp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err = PublishFileNoReplace(temp.Name(), path); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	existing, err = readReviewRepositoryContext(path)
-	if err != nil {
-		return err
-	}
-	if !reviewRepositoryContextPayloadEqual(existing, payload) {
-		return &RARAuthorityConflictError{Slot: path}
-	}
-	return SyncReviewDirectory(filepath.Dir(path))
-}
-
-func reviewRepositoryContextPayloadEqual(left, right []byte) bool {
-	leftHash, rightHash := sha256.Sum256(left), sha256.Sum256(right)
-	return leftHash == rightHash && bytes.Equal(left, right)
 }
 
 func readReviewRepositoryContext(path string) ([]byte, error) {
@@ -967,15 +1040,7 @@ func canonicalLocatorDirectory(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func ensurePrivateLocatorDirectory(base, dir string) error {
-	return walkPrivateLocatorDirectory(base, dir, true)
-}
-
 func validatePrivateLocatorDirectory(base, dir string) error {
-	return walkPrivateLocatorDirectory(base, dir, false)
-}
-
-func walkPrivateLocatorDirectory(base, dir string, create bool) error {
 	baseAbs, err := filepath.Abs(base)
 	if err != nil {
 		return err
@@ -1000,22 +1065,10 @@ func walkPrivateLocatorDirectory(base, dir string, create bool) error {
 		if part == "" || part == "." || part == ".." {
 			return errors.New("review repository context directory is invalid")
 		}
-		parent := current
 		current = filepath.Join(current, part)
 		info, statErr := os.Lstat(current)
-		if os.IsNotExist(statErr) && create {
-			if err := os.Mkdir(current, 0o700); err != nil && !os.IsExist(err) {
-				return err
-			}
-			info, statErr = os.Lstat(current)
-		}
 		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !privateLocatorDirectoryModeSafe(info.Mode()) {
 			return errors.New("review repository context directory is unsafe")
-		}
-		if create {
-			if err := SyncReviewDirectory(parent); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
