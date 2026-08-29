@@ -45,7 +45,7 @@ func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t 
 		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
 		t.Fatalf("transport terminal closure = %#v", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, record.State.LineageID)
 }
 
 func TestOpenCodeReviewTransportLensMaterializationCarriesOnlyGoIssuedBytes(t *testing.T) {
@@ -523,7 +523,7 @@ func TestOpenCodeReviewTransportValidatorClosesThroughSharedGoReducer(t *testing
 		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
 		t.Fatalf("provider targeted-validator terminal closure = %#v", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, record.State.LineageID)
 }
 
 func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testing.T) {
@@ -589,7 +589,7 @@ func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testin
 			if finalErr != nil || final.Output == nil || !strings.Contains(*final.Output, `"operation":"review/capture-validation"`) {
 				t.Fatalf("mixed relay terminal output = %#v, %v", final, finalErr)
 			}
-			assertApprovedCompactAuthorityBurned(t, store, lineage)
+			assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 		})
 	}
 }

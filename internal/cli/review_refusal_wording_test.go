@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -59,9 +60,9 @@ func TestReviewValidateRequiresGateNamesValidGates(t *testing.T) {
 	}
 }
 
-// TestReviewValidateDoesNotConsultAnActiveLineage pins that delivery remains
-// non-deciding even while an active review lifecycle exists.
-func TestReviewValidateDoesNotConsultAnActiveLineage(t *testing.T) {
+// TestReviewValidateRefusesPendingAcknowledgement pins that an explicit compact
+// lineage is managed but cannot govern delivery before approval acknowledgement.
+func TestReviewValidateRefusesPendingAcknowledgement(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := "receipt-not-available-before-closure"
@@ -71,9 +72,15 @@ func TestReviewValidateDoesNotConsultAnActiveLineage(t *testing.T) {
 	}
 	var output bytes.Buffer
 	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", lineage, "--gate", "pre-commit"}, &output); err != nil {
-		t.Fatalf("delivery with active lineage: %v\n%s", err, output.String())
+		t.Fatalf("delivery with pending acknowledgement: %v\n%s", err, output.String())
 	}
-	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePreCommit)
+	var result ReviewValidateResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode pending acknowledgement gate: %v\n%s", err, output.String())
+	}
+	if result.Allowed || result.Result != reviewtransaction.GateInvalidated || result.Context.LineageID != lineage || result.Delivery != "" {
+		t.Fatalf("pending acknowledgement gate = %#v, want managed denial", result)
+	}
 }
 
 // TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand pins that

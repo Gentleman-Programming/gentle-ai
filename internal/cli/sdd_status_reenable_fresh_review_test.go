@@ -130,7 +130,7 @@ func TestSDDStatusArchiveNeverTreatsAnEmptyCandidateReviewAsCoverage(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 
 	status := resolveSDDStatusJSON(t, root)
 	requireEnabledOrdinaryArchive(t, status, "burned empty-candidate review")

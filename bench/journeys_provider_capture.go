@@ -29,7 +29,7 @@ func providerCaptureRetryJourneys() []Journey {
 			{Name: "fixture: stage candidate", Fixture: stageWaveCandidate},
 			{Name: "negotiate and start the Claude provider review", Requires: providerCaptureRetryStatusCapability, Composite: startProviderCaptureRetry},
 			{Name: "failed provider capture preserves the exact pending binding and its retry closes", Requires: providerCaptureRetryCapability, Composite: retryProviderCapture},
-			{Name: "the final provider capture awaits exact acknowledgement before it burns the completed lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
+			{Name: "the final provider capture awaits exact acknowledgement before retaining the completed approved lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
 				return requireAtomicLineageAcknowledged(r, providerCaptureRetryLineage, "--agent", "claude-code")
 			}},
 		},

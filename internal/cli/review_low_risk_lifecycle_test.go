@@ -42,22 +42,13 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
-	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
-		t.Fatalf("zero-lens START retained compact authority state: %v", err)
-	}
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 
 	var rawStartOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", started.LineageID}, &rawStartOutput); err != nil {
-		t.Fatal(err)
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", started.LineageID}, &rawStartOutput); err == nil {
+		t.Fatalf("zero-lens raw START replaced acknowledged authority: %s", rawStartOutput.String())
 	}
-	var rawStarted ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, rawStartOutput.Bytes(), &rawStarted)
-	if rawStarted.State != reviewtransaction.StateApproved || rawStarted.Action != "closed" ||
-		!reflect.DeepEqual(rawStarted.SelectedLenses, []string{}) || !bytes.Contains(rawStartOutput.Bytes(), []byte(`"selected_lenses": []`)) {
-		t.Fatalf("zero-lens raw START did not close and encode zero lenses: %s", rawStartOutput.String())
-	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 // TestActiveMDXRequiresReviewerCapture pins the content-classified boundary for
@@ -172,8 +163,5 @@ func TestMediumReviewClosesOnCapturedEvidence(t *testing.T) {
 	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{result}); err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
-	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
-		t.Fatalf("captured medium evidence retained compact authority state: %v", err)
-	}
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }

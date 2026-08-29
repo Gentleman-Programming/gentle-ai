@@ -60,7 +60,7 @@ func TestHelpDescribesCurrentReviewAuthorityAndCompatibilitySyntax(t *testing.T)
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 	for _, want := range []string{
-		"the final capture closes and burns its review",
+		"the final capture closes and awaits acknowledgement",
 		"Read-only legacy v1 surface; rejects new v1 authority",
 		"Read-only legacy v1 surface; rejects mutation",
 		"Read shipped v1 authority without mutation",

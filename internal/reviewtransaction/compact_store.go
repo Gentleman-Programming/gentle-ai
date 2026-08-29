@@ -310,8 +310,8 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
 	}
-	// Approved compact authorities burn on their terminal capture, so only an
-	// in-flight correction can require a staged-scope successor.
+	// Approved compact authorities remain terminal after acknowledgement, so only
+	// an in-flight correction can require a staged-scope successor.
 	correctionStagedScopeRecovery := request.Disposition == RecoveryScopeChanged &&
 		compactCorrectionRequiredStagedScopeRecoveryShape(predecessor.State, request.Successor.InitialSnapshot)
 	stagedScopeRecovery := correctionStagedScopeRecovery
@@ -1685,6 +1685,13 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		cleanApproval := viewErr == nil && next.State == StateApproved && next.EvidenceHash == compactReviewEvidenceHash(nextView)
 		if !equalCompactAdmittedReviewAuthority(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval {
 			return fmt.Errorf("%w: compact review completion changed correction or delivery state", ErrInvalidSuccessor)
+		}
+	case "review/acknowledge-approved":
+		acknowledged := previous
+		acknowledged.ApprovedAckToken = ""
+		if previous.State != StateApproved || !validCompactAcknowledgementToken(previous.ApprovedAckToken) ||
+			next.State != StateApproved || !compactStateEqual(acknowledged, next) {
+			return fmt.Errorf("%w: approved acknowledgement may only consume the pending token", ErrInvalidSuccessor)
 		}
 	case "review/begin-fix":
 		if previous.CorrectionAttemptConsumed() {

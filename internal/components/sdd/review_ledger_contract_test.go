@@ -30,7 +30,7 @@ func TestBoundedReviewContractLeavesAtomicLifecycleToNativeGo(t *testing.T) {
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Compiled capability is authoritative",
 		"Reviewers inspect only the provider-bound immutable trees",
-		"Only that exact invocation burns authority and artifacts",
+		"Only that exact invocation consumes the token while retaining the approved compact authority",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("orchestrator contract missing %q", want)
@@ -694,8 +694,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3748 adds the public status_continuation execution rule (+339 rendered
 		// characters in each row), so the pins move from 14,657/27,002 to
 		// 14,996/27,341 after deterministic fixture measurement.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_489, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_834, maxCharacters: 30_063},
+		// #3867 adds the local-Git exact pre-commit boundary while preserving the
+		// standard renderer's existing hard ceiling (+335 characters per row).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_824, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_169, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

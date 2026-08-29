@@ -248,9 +248,9 @@ func transitionJourneys() []Journey {
 			Review: reviewOptedIn,
 			Title:  "Acknowledge a review, then move the SDD objective",
 			Source: "#3797 exact acknowledgement: SDD scope remains movable without durable review authority or binding",
-			// Approval awaits one exact acknowledgement. No receipt, authority, or
-			// SDD binding survives after that acknowledgement burns the transaction.
-			// The cross-surface invariant is structural absence before rescope
+			// Approval awaits one exact acknowledgement. No receipt mirror or SDD
+			// binding is created; compact approval remains local to review delivery.
+			// The cross-surface invariant is binding absence before rescope
 			// creates a new objective generation.
 			//
 			// Whether the rescope succeeds is still secondary to #2830's safety
@@ -497,7 +497,7 @@ func transitionProveReviewAcknowledgedAndUnbound(r *journeyRun) error {
 		return err
 	}
 	if status.Binding != nil || status.BindingRevision != "" {
-		return fmt.Errorf("terminal review burn invented an SDD binding: binding=%+v revision=%q", status.Binding, status.BindingRevision)
+		return fmt.Errorf("terminal review acknowledgement invented an SDD binding: binding=%+v revision=%q", status.Binding, status.BindingRevision)
 	}
 	return nil
 }

@@ -2,7 +2,7 @@
 
 ← [Back to README](../README.md)
 
-`gentle-ai.review-integration/v2` coordinates one immutable review transaction at a time. Go owns the candidate snapshot, review admission, correction boundary, terminal burn, and all provider-facing bindings. Claude Code, OpenCode, Codex, and Pi transport provider-issued work; no runtime adapter decides review or delivery.
+`gentle-ai.review-integration/v2` coordinates one immutable review transaction at a time. Go owns the candidate snapshot, review admission, correction boundary, acknowledgement, retained approval, and all provider-facing bindings. Claude Code, OpenCode, Codex, and Pi transport provider-issued work; no runtime adapter decides review or delivery.
 
 ## RDD starts off
 
@@ -13,7 +13,7 @@ RDD is opt-in. Until a user enables it with `gentle-ai review mode enable --scop
 1. Preflight only the current worktree with selectorless negotiated STATUS.
 2. Execute its exact START, then retain the returned lineage, revision, and target tokens.
 3. Use those exact tokens for every STATUS and capture call; after approval, run only the exact acknowledgement transition STATUS or the terminal response owns.
-4. Follow ordinary repository policy for commit, push, PR, release, and archive.
+4. For pre-commit, validate the unchanged staged candidate with the acknowledged lineage; follow ordinary repository policy for every other delivery action.
 
 ```bash
 gentle-ai review status \
@@ -29,11 +29,11 @@ A session in repository A may review a nested target in unrelated repository B o
 
 | Rule | Contract |
 | --- | --- |
-| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, targeted validation, and burn. A is never a fallback. |
+| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, targeted validation, acknowledgement, and exact pre-commit validation. A is never a fallback. |
 | Commands | Run provider-issued tokens unchanged. If a command omits `--cwd`, run it with process cwd B. |
 | Opaque capture | `repository_context` can materialize or capture from another process cwd, but remains B-bound. |
-| Isolation | Equal lineage text in A and B names independent transactions. Approval burns B only; A remains untouched. |
-| Delivery | Ordinary repository policy and any explicit delivery authorization name B. Approval never authorizes delivery. |
+| Isolation | Equal lineage text in A and B names independent transactions. Acknowledgement retains B's approval only; A remains untouched. |
+| Delivery | An acknowledged B lineage may validate only its exact staged pre-commit candidate. Other delivery and authorization remain ordinary repository policy. |
 
 This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes fail before repository or authority mutation.
 
@@ -47,7 +47,7 @@ Selectorless STATUS evaluates only the current worktree candidate and renders on
 
 START freezes the candidate in one compact transaction, explicitly bound to its lineage, worktree, and target. It selects risk and lenses natively. Capture the returned lineage, revision, and target tokens.
 
-An exact replay of an active START can return `replayed`. A genuinely new START is independent. Do not reuse a burned lineage.
+An exact replay of an active START can return `replayed`. A genuinely new START is independent. Do not restart an acknowledged terminal lineage.
 
 ### 3. Bound calls drive the transaction
 
@@ -61,20 +61,20 @@ Every later STATUS and bound capture call for this transaction carries the exact
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
 
-### 4. Approved authority awaits acknowledgement, then burns
+### 4. Approved authority survives acknowledgement
 
 Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. A successful final capture or zero-lens START first records `approved` with one exact acknowledgement transition. The terminal closure and approved authority remain replayable until that acknowledgement succeeds.
 
 | Moment | Consumer action | Native behavior |
 | --- | --- | --- |
-| Approval response | Retain the provider-owned acknowledgement operation, ordered arguments, binding, and token exactly as returned. | START or the terminal closure returns `approved` without burning the authority. |
+| Approval response | Retain the provider-owned acknowledgement operation, ordered arguments, binding, and token exactly as returned. | START or the terminal closure returns `approved` with a pending token. |
 | Retry before acknowledgement | Re-query bound STATUS; do not reconstruct or substitute an acknowledgement. | STATUS reoffers the same exact acknowledgement transition while the approved authority remains current. |
 | Wrong, stale, or mismatched acknowledgement | Treat the error as non-mutating, retain the original binding, then re-query bound STATUS. | Validation fails before mutation; the authority and pending acknowledgement remain replayable. |
-| Exact acknowledgement | Run the returned command once. If its outcome is uncertain, re-query bound STATUS instead of guessing or replaying an invented command. | Under the existing lock, Go validates the complete binding and token, then burns the exact lineage and artifacts. |
+| Exact acknowledgement | Run the returned command once. If its outcome is uncertain, re-query bound STATUS instead of guessing or replaying an invented command. | Under the existing lock, Go validates the complete binding and token, advances the compact revision, clears the token, and retains the approved lineage and artifacts. |
 
-The acknowledgement transition is an execution detail of `gentle-ai.review-integration/v2`; it does not authorize delivery. Escalated and other non-approved terminal paths retain their existing response and STATUS behavior and do not gain an acknowledgement transition. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
+The acknowledgement transition is an execution detail of `gentle-ai.review-integration/v2`; it does not authorize delivery by itself. Escalated and other non-approved terminal paths retain their existing response and STATUS behavior and do not gain an acknowledgement transition. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
 
-After a successful burn, no terminal receipt, tombstone, witness, mirror, or delivery authority survives. Other lineages and worktrees are unaffected.
+After successful acknowledgement, the compact approved authority remains the sole owner; no receipt, tombstone, witness, mirror, or sidecar is created. Other lineages and worktrees are unaffected.
 
 ## Reviewer transport
 
@@ -92,24 +92,27 @@ Medium and high-risk START may return the typed `gentle-ai.review-integration.co
 
 ## Delivery remains human-owned
 
-`gentle-ai review validate` and named gates (`post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`) are compatibility/informational commands. They never discover authority or decide delivery:
+RDD uses the local Git worktree and common directory; it does not require `origin`, an upstream, or network access. Gate behavior is intentionally narrow:
 
-| Mode | Informational result |
+| Request | Result |
 | --- | --- |
-| RDD enabled | `invalidated/unmanaged` |
 | RDD disabled | `disabled/unmanaged` |
+| Enabled without an exact lineage, or any gate other than `pre-commit` | `invalidated/unmanaged` |
+| Enabled `pre-commit` with an approved lineage still awaiting acknowledgement | managed denial |
+| Enabled `pre-commit` with an acknowledged lineage and exact staged base/tree/path binding | `allow` |
+| Enabled `pre-commit` after staged drift | `scope-changed` denial |
 
-They never allow, approve, block, commit, push, or open a pull request. Delivery follows ordinary repository policy.
+A gate allow authorizes only that pre-commit continuation. It never commits, pushes, opens a pull request, merges, or releases; those remain human-owned repository actions.
 
 Terminal review state is informational and never authorizes a commit. Commit, push, PR, release, and archive follow ordinary repository policy and require their own explicit authorization. For a selected repository B, any authorized delivery action runs in B only.
 
 ## Compatibility
 
-The v1 contract and historical artifacts remain published compatibility surfaces. They may be inspected with explicit, manual compatibility operations, but they are not an ordinary v2 lifecycle, cannot resurrect a burned transaction, and do not authorize delivery.
+The v1 contract and historical artifacts remain published compatibility surfaces. They may be inspected with explicit, manual compatibility operations, but they are not an ordinary v2 lifecycle, cannot replace retained compact authority, and do not authorize delivery.
 
 ### Continue after a stop reason code
 
-A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage continuation exists; it never authorizes delivery. For every clone-scoped exit, gates remain unmanaged and ordinary repository policy decides delivery.
+A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage lifecycle continuation exists; it never authorizes delivery by itself. Clone-scoped exits remain unmanaged; only exact acknowledged pre-commit validation can produce a managed gate result.
 
 | Reason code | Continuation |
 | --- | --- |
@@ -133,7 +136,7 @@ The published v1 directory contains 23 strict JSON Schemas and 24 deterministic 
 - `legacy_v1_read_only` failures retain `mutation_outcome` values `not_started`, `unknown`, and `committed`; Legacy-v1 never reports `publication_pending`, with retry and replay disabled where its historical operation requires a new compact lineage.
 - Historical `ordinary_4r` legacy status omits `frozen`. START, BIND-SDD, invalidation, and direct append are compatibility names only and never re-enter the atomic lifecycle.
 - Published vocabulary remains readable: `native_frozen_candidate_context`, `base_tree`, `candidate_tree`, `changed_path_manifest`, `opaque_repository_context`, `provider_targeted_validation_request`, `provider_artifact_admission`, `validating_result_reopen`, and `recovered_correction_evidence`.
-- Artifact compatibility names remain `artifact_subjects`, `subject_hash`, and `admission_decision: completed`; low-risk compatibility names remain `native_low_risk_verification`, `selected_lenses: []`, and `receipt_scope_changed`. They describe historical data only and do not restore a receipt after an atomic approval burn.
+- Artifact compatibility names remain `artifact_subjects`, `subject_hash`, and `admission_decision: completed`; low-risk compatibility names remain `native_low_risk_verification`, `selected_lenses: []`, and `receipt_scope_changed`. They describe historical data only and do not create a receipt mirror beside retained compact approval.
 - Operational bounds remain a 25-second aggregate budget, 120-second budget, 180-second budget, and one-second wait delay. Persistent compact `LOCK` JSON is advisory diagnostics. `context.scope_change` and `review.recover` are explicit compatibility/recovery vocabulary, not ambient lifecycle discovery.
 
 ## Checklist

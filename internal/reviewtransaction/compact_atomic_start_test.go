@@ -407,8 +407,8 @@ func TestCompactStoreCreateOrReplayAtomicStartConvergesConcurrentExactRequests(t
 	}
 }
 
-func TestCompactStoreCreateOrReplayAtomicStartRecreatesAfterApprovedAuthorityBurn(t *testing.T) {
-	const lineage = "compact-atomic-start-recreate-after-burn"
+func TestCompactStoreCreateOrReplayAtomicStartPreservesAcknowledgedApprovedAuthority(t *testing.T) {
+	const lineage = "compact-atomic-start-retained-approval"
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	store := compactAtomicStartStore(t, repo, lineage)
@@ -440,29 +440,25 @@ func TestCompactStoreCreateOrReplayAtomicStartRecreatesAfterApprovedAuthorityBur
 	if err != nil {
 		t.Fatal(err)
 	}
-	approvedRevision := acknowledgement.ExpectedRevision
-	beforeBurn, err := os.ReadFile(store.StatePath())
+	if err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage, acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token); err != nil {
+		t.Fatal(err)
+	}
+	acknowledged, err := store.Load()
+	if err != nil || acknowledged.State.State != StateApproved || acknowledged.State.ApprovedAckToken != "" {
+		t.Fatalf("acknowledged approval = %#v, %v", acknowledged, err)
+	}
+	beforeReplay, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	_, err = store.CreateOrReplayAtomicStart(context.Background(), request)
 	var conflict *CompactAtomicStartConflictError
 	if !errors.As(err, &conflict) || conflict.Field != "state" {
-		t.Fatalf("CreateOrReplayAtomicStart(terminal authority) error = %T %v, want state conflict", err, err)
+		t.Fatalf("CreateOrReplayAtomicStart(acknowledged authority) error = %T %v, want state conflict", err, err)
 	}
-	afterTerminalReplay, err := os.ReadFile(store.StatePath())
-	if err != nil || !bytes.Equal(beforeBurn, afterTerminalReplay) {
-		t.Fatalf("terminal atomic START replay changed authority: %v", err)
-	}
-	if err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage, acknowledgement.TargetIdentity, approvedRevision, acknowledgement.Token); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(store.StatePath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("burn left exact compact authority state: %v", err)
-	}
-
-	recreated, err := store.CreateOrReplayAtomicStart(context.Background(), request)
-	if err != nil || recreated.Replayed {
-		t.Fatalf("CreateOrReplayAtomicStart(after burn) = %#v, %v", recreated, err)
+	afterReplay, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(beforeReplay, afterReplay) {
+		t.Fatalf("atomic START replay changed acknowledged authority: %v", err)
 	}
 }

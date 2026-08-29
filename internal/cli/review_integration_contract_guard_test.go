@@ -454,8 +454,8 @@ func reviewIntegrationNegotiationCallSites(t *testing.T) []string {
 //     start`), so the fix is an additive hint field naming the exact
 //     negotiated rerun.
 var reviewIntegrationModeCompletenessClassification = map[string]string{
-	"runReviewFacadeStart":               "hinted",
-	"runReviewFacadeValidateNonDeciding": "vacuous",
+	"runReviewFacadeStart":    "hinted",
+	"runReviewFacadeValidate": "vacuous",
 }
 
 // TestReviewIntegrationDualModeCommandsAreClassified is Guard C's enumeration
@@ -497,7 +497,7 @@ var reviewIntegrationEncodeOperationCallRegexp = regexp.MustCompile(`encodeRevie
 // be revisited (most likely to "hinted" or "explicit-refusal").
 func TestReviewIntegrationVacuousModeClassificationIsProvenBySource(t *testing.T) {
 	operationToFunc := map[string]string{
-		"ReviewIntegrationOperationValidate": "runReviewFacadeValidateNonDeciding",
+		"ReviewIntegrationOperationValidate": "runReviewFacadeValidate",
 	}
 	vacuousByOperation := map[string]bool{}
 	sawOperation := map[string]bool{}

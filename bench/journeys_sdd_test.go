@@ -8,7 +8,7 @@ import (
 var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j59-current-status-and-start-ignore-sibling-worktree-transaction",
 	"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
-	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j111-approved-acknowledgement-preserves-staged-precommit-authority",
 	"j80-rescope-authorized-evidence-only-retry",
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
@@ -41,7 +41,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// #3417 retired the former durable-receipt and delivery-gate authority
 	// fixtures because a completed transaction no longer remains discoverable.
 	// The three atomic journeys above preserve the executable proof surface:
-	// selected-worktree isolation, explicit active continuation, and terminal burn.
+	// selected-worktree isolation, explicit active continuation, and retained approval.
 	for id, found := range want {
 		if !found {
 			t.Errorf("required SDD authority journey %q is not registered", id)

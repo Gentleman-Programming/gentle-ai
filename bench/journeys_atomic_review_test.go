@@ -145,16 +145,16 @@ func TestFinalAtomicMigrationJourneysRatifyIssue3417(t *testing.T) {
 	}
 }
 
-func TestCurrentTerminalJourneysRequireAcknowledgementBeforeBurn(t *testing.T) {
+func TestCurrentTerminalJourneysRequireAcknowledgement(t *testing.T) {
 	journeys := map[string]Journey{}
 	for _, journey := range Journeys() {
 		journeys[journey.ID] = journey
 	}
 	for _, id := range []string{
 		"j105-compiled-provider-capture-retries-same-binding",
-		"j110-untracked-terminal-burn-and-unmanaged-staged-validation",
-		"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-		"j114-last-reviewer-capture-closes-and-burns",
+		"j110-untracked-acknowledgement-retains-authority-and-selectorless-validation-is-unmanaged",
+		"j111-approved-acknowledgement-preserves-staged-precommit-authority",
+		"j114-last-reviewer-capture-closes-and-retains-approved-authority",
 	} {
 		journey, ok := journeys[id]
 		if !ok {
@@ -184,17 +184,17 @@ func TestAtomicReviewJourneysRatifyAcknowledgementContract(t *testing.T) {
 		"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow": {
 			"#3587", "four lenses", "correction", "validator",
 		},
-		"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged": {
-			"#3797", "selectorless STATUS", "printed START", "acknowledgement",
+		"j111-approved-acknowledgement-preserves-staged-precommit-authority": {
+			"#3867", "acknowledgement", "staged", "pre-commit", "approved authority",
 		},
-		"j114-last-reviewer-capture-closes-and-burns": {
+		"j114-last-reviewer-capture-closes-and-retains-approved-authority": {
 			"#3797", "last admitted reviewer capture", "acknowledgement",
 		},
 		"j89-staged-validation-is-informational-and-unmanaged": {
-			"#3587", "staged", "informational", "unmanaged",
+			"#3867", "staged", "unmanaged", "retained approval",
 		},
-		"j110-untracked-terminal-burn-and-unmanaged-staged-validation": {
-			"#3797", "untracked", "acknowledgement", "unmanaged",
+		"j110-untracked-acknowledgement-retains-authority-and-selectorless-validation-is-unmanaged": {
+			"#3867", "untracked", "acknowledgement", "retains", "unmanaged",
 		},
 		"j113-correction-removes-candidate-only-path": {
 			"#3587", "correction", "terminal validator",

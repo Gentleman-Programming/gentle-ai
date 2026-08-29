@@ -126,7 +126,7 @@ func TestLastCleanReviewerCaptureNeverStrandsARefuterSlot(t *testing.T) {
 	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
 		t.Fatalf("clean terminal capture = %#v", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 // overrideProviderRoleHostAdapter substitutes the Go-owned pi spawn seam with
@@ -532,7 +532,7 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 		closure.LineageID != lineage || closure.State != reviewtransaction.StateApproved {
 		t.Fatalf("validator terminal capture = %#v", closure)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {

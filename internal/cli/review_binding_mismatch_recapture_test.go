@@ -108,5 +108,5 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 		t.Fatalf("binding_mismatch recapture terminal result = %#v", terminal)
 	}
 	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }

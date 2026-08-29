@@ -77,7 +77,7 @@ func TestOrdinaryCompactLifecycleIgnoresHistoricalSiblings(t *testing.T) {
 		t.Fatalf("ordinary final capture beside historical siblings = %#v", terminal)
 	}
 	store := atomicCompactStartStore(t, repo, started.LineageID)
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 func TestAtomicStartPlainRouteAlwaysCreatesCompact(t *testing.T) {
@@ -164,7 +164,7 @@ func TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly(t *testing.T) 
 	}
 }
 
-func TestAtomicStartBurnRecreateAndCrossWorktreeConflictStayScoped(t *testing.T) {
+func TestAtomicStartAcknowledgedApprovalAndCrossWorktreeConflictStayScoped(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	linked := filepath.Join(t.TempDir(), "linked")
@@ -197,16 +197,19 @@ func TestAtomicStartBurnRecreateAndCrossWorktreeConflictStayScoped(t *testing.T)
 			t.Fatalf("first linked-worktree final capture = %#v", terminal)
 		}
 	}
-	assertApprovedCompactAuthorityBurned(t, firstStore, first.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, firstStore, first.LineageID)
 	if record, err := secondStore.Load(); err != nil || record.State.State != reviewtransaction.StateReviewing {
-		t.Fatalf("burning first authority changed sibling authority: %#v, %v", record.State, err)
+		t.Fatalf("acknowledging first authority changed sibling authority: %#v, %v", record.State, err)
 	}
-	recreated := atomicStartV2(t, repo, first.LineageID)
-	if recreated.Action != "created" || recreated.LineageID != first.LineageID {
-		t.Fatalf("START after burn = %#v, want a fresh compact authority", recreated)
+	var retainedOutput bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", first.LineageID,
+	}), &retainedOutput)
+	if err == nil {
+		t.Fatalf("START replaced acknowledged approved authority:\n%s", retainedOutput.String())
 	}
-	if _, err := firstStore.Load(); err != nil {
-		t.Fatalf("recreated compact authority: %v", err)
+	if record, loadErr := firstStore.Load(); loadErr != nil || record.State.State != reviewtransaction.StateApproved || record.State.ApprovedAckToken != "" {
+		t.Fatalf("acknowledged authority after START conflict = %#v, %v", record.State, loadErr)
 	}
 
 	before, err := os.ReadFile(secondStore.StatePath())

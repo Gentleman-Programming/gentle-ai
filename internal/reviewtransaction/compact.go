@@ -165,7 +165,8 @@ type CompactState struct {
 	// evidence bodies, artifact paths, and role values.
 	TargetedValidatorAttempts []CompactTargetedValidatorAttempt `json:"targeted_validator_attempts,omitempty"`
 	// ApprovedAckToken is the one bounded opaque 256-bit acknowledgement token.
-	// It is present only on an active approved authority and is cleared by burn.
+	// It is present only on an approved authority awaiting acknowledgement and is
+	// cleared without deleting that authority.
 	ApprovedAckToken string `json:"approved_ack_token,omitempty"`
 	// InitialAtomicStart is the optional immutable binding written only by the
 	// exact worktree-bound atomic START API. Its absence keeps historical compact

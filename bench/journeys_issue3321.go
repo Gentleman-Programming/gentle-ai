@@ -16,7 +16,7 @@ func issue3321Journeys() []Journey {
 		ID:     "j113-correction-removes-candidate-only-path",
 		Review: reviewOptedIn,
 		Title:  "A bounded correction may remove a candidate-only file and continue through STATUS",
-		Source: "issue #3321 under #3587 and #3797: correction paths are frozen-to-current deltas, and the terminal validator capture exposes acknowledgement before the corrected lineage burns",
+		Source: "issue #3321 under #3587 and #3797: correction paths are frozen-to-current deltas, and the terminal validator capture exposes acknowledgement before retaining the corrected lineage",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: candidate-only defect and unchanged reviewed companion", Fixture: stageIssue3321Candidate},
@@ -27,9 +27,9 @@ func issue3321Journeys() []Journey {
 			{Name: "capture the three-line deletion plan from STATUS", Requires: captureCorrectionPlanCapability,
 				Composite: func(r *journeyRun) error { return captureCorrectionPlanFor(r, issue3321Lineage, 3) }},
 			{Name: "fixture: remove the candidate-only file exactly back to base", Fixture: removeIssue3321CandidateOnlyPath},
-			{Name: "targeted validator approves and exposes acknowledgement before the corrected lineage burns", Requires: capturedProviderValidatorStatusCapability,
+			{Name: "targeted validator approves and exposes acknowledgement before retaining the corrected lineage", Requires: capturedProviderValidatorStatusCapability,
 				Composite: func(r *journeyRun) error { return captureProviderValidatorSlotFor(r, issue3321Lineage) }},
-			{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability,
+			{Name: "terminal validator acknowledgement retains the approved correction authority", Requires: statusCapability,
 				Composite: func(r *journeyRun) error { return requireAtomicLineageAcknowledged(r, issue3321Lineage) }},
 		},
 	}}

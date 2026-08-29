@@ -15,7 +15,7 @@ func reviewContextEntrypointForTest(command reviewContextCommandForTest) func([]
 
 var (
 	RunReviewFacadeStart    = reviewContextEntrypointForTest(runReviewFacadeStart)
-	RunReviewFacadeValidate = reviewContextEntrypointForTest(runReviewFacadeValidateNonDeciding)
+	RunReviewFacadeValidate = reviewContextEntrypointForTest(runReviewFacadeValidate)
 	RunReviewStatus         = reviewContextEntrypointForTest(runReviewStatus)
 	RunReviewRepair         = reviewContextEntrypointForTest(runReviewRepair)
 )

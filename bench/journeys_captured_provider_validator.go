@@ -35,7 +35,7 @@ func capturedProviderValidatorJourneys() []Journey {
 			}},
 			{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
 			{Name: "capture the Go-issued validator Task through the native relay protocol", Requires: capturedProviderValidatorStatusCapability, Composite: captureProviderValidatorSlot},
-			{Name: "the terminal validator capture exposes acknowledgement before the exact lineage burns", Requires: statusCapability, Composite: func(r *journeyRun) error {
+			{Name: "the terminal validator capture exposes acknowledgement before retaining the exact approved lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
 				return requireAtomicLineageAcknowledged(r, capturedProviderValidatorLineage)
 			}},
 		},
@@ -48,7 +48,7 @@ func captureProviderValidatorSlot(r *journeyRun) error {
 
 // captureProviderValidatorSlotFor relays the provider-owned validator request
 // that STATUS binds to one correction. The relay's successful completion is
-// the final event: it captures validation, approves, and exposes acknowledgement before the lineage burns.
+// the final event: it captures validation, approves, and exposes acknowledgement before retaining the lineage.
 func captureProviderValidatorSlotFor(r *journeyRun, lineage string) error {
 	status, err := readProviderValidatorStatus(r, lineage, true)
 	if err != nil {

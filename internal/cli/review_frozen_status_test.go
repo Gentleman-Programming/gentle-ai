@@ -155,7 +155,7 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 		if result.Operation != "review/capture-result" || result.LineageID != record.State.LineageID || result.State != reviewtransaction.StateApproved {
 			t.Fatalf("final frozen capture = %#v", result)
 		}
-		assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
+		assertApprovedCompactAuthorityAcknowledged(t, store, record.State.LineageID)
 	})
 
 	t.Run("explicit compact lineage ignores stale v1 and v3 siblings", func(t *testing.T) {

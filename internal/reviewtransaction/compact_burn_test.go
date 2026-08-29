@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func approvedCompactBurnFixture(t *testing.T, lineage string) (string, string, CompactStore, CompactRecord) {
+func approvedCompactFixtureBeforeAcknowledgement(t *testing.T, lineage string) (string, string, CompactStore, CompactRecord) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
 	base, _, err := reviewAuthorityRoot(context.Background(), repo)
@@ -103,7 +103,35 @@ func TestAcknowledgeApprovedCompactAuthorityRefusesInvalidBindingsWithoutMutatio
 	}
 }
 
-func TestAcknowledgeApprovedCompactAuthorityBurnsOnceUnderConcurrentReplay(t *testing.T) {
+func TestAcknowledgeApprovedCompactAuthorityRetainsApprovedAuthorityWithoutPendingToken(t *testing.T) {
+	const lineage = "acknowledged-approved-authority"
+	repo, _, store, acknowledgement := approvedCompactAcknowledgementFixture(t, lineage)
+
+	if err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage,
+		acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token); err != nil {
+		t.Fatalf("acknowledge approved authority: %v", err)
+	}
+
+	after, err := store.Load()
+	if err != nil {
+		t.Fatalf("load acknowledged approved authority: %v", err)
+	}
+	if after.State.State != StateApproved || after.State.LineageID != lineage ||
+		after.State.CurrentSnapshot.Identity != acknowledgement.TargetIdentity {
+		t.Fatalf("acknowledged authority lost its approved candidate binding: %#v", after.State)
+	}
+	if after.State.ApprovedAckToken != "" {
+		t.Fatalf("acknowledged authority retained its transient token: %q", after.State.ApprovedAckToken)
+	}
+	if after.Revision == acknowledgement.ExpectedRevision {
+		t.Fatal("acknowledgement did not advance the compact authority revision")
+	}
+	if _, pending := PendingApprovedCompactAcknowledgement(after); pending {
+		t.Fatal("acknowledged authority still reports a pending acknowledgement")
+	}
+}
+
+func TestAcknowledgeApprovedCompactAuthoritySucceedsOnceUnderConcurrentReplay(t *testing.T) {
 	const lineage = "pending-acknowledgement-concurrent"
 	repo, _, store, acknowledgement := approvedCompactAcknowledgementFixture(t, lineage)
 
@@ -131,35 +159,15 @@ func TestAcknowledgeApprovedCompactAuthorityBurnsOnceUnderConcurrentReplay(t *te
 	if successes != 1 {
 		t.Fatalf("concurrent acknowledgement successes = %d, want 1", successes)
 	}
-	if _, err := os.Stat(store.StatePath()); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("successful acknowledgement left authority: %v", err)
-	}
-}
-
-func TestAcknowledgeApprovedCompactAuthorityFailureKeepsPendingAuthority(t *testing.T) {
-	const lineage = "pending-acknowledgement-burn-failure"
-	repo, _, store, acknowledgement := approvedCompactAcknowledgementFixture(t, lineage)
-	stubStoreResetRemoveTree(t, func(path string) error {
-		if path == store.Dir {
-			return errors.New("injected authority delete failure")
-		}
-		return os.RemoveAll(path)
-	})
-
-	err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage, acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token)
-	var incomplete *ReviewAuthorityBurnIncompleteError
-	if !errors.As(err, &incomplete) {
-		t.Fatalf("acknowledgement deletion failure = %v, want incomplete burn", err)
-	}
 	after, err := store.Load()
-	if err != nil || after.Revision != acknowledgement.ExpectedRevision || after.State.ApprovedAckToken != acknowledgement.Token {
-		t.Fatalf("failed acknowledgement did not leave the exact pending authority replayable: %#v, %v", after, err)
+	if err != nil || after.State.State != StateApproved || after.State.ApprovedAckToken != "" {
+		t.Fatalf("concurrent acknowledgement lost durable approved authority: %#v, %v", after, err)
 	}
 }
 
 func TestCommitApprovedCompactAcknowledgementFailureBeforeCommitLeavesNoPendingState(t *testing.T) {
 	const lineage = "pending-acknowledgement-random-failure"
-	_, _, store, record := approvedCompactBurnFixture(t, lineage)
+	_, _, store, record := approvedCompactFixtureBeforeAcknowledgement(t, lineage)
 	before, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
@@ -209,12 +217,9 @@ func TestApprovedCompactAcknowledgementTokenDoesNotLeakOutsideAuthorityOrReturnV
 }
 
 // TestAcknowledgeApprovedCompactAuthorityReplayRefusesWithoutLeakingAPath pins
-// the refusal shape every other check on this surface already uses. A replayed
-// acknowledgement is an ordinary, expected outcome: the authority it names was
-// burned by the caller's own previous call. Surfacing the raw *os.PathError
-// from the missing state file both leaks the repository layout to whoever reads
-// the error and describes the condition as a filesystem problem rather than as
-// the already-burned authority it is.
+// the refusal shape for a replay against the retained terminal authority. The
+// stale acknowledgement revision must fail as a CAS conflict without exposing
+// repository storage paths.
 func TestAcknowledgeApprovedCompactAuthorityReplayRefusesWithoutLeakingAPath(t *testing.T) {
 	const lineage = "pending-acknowledgement-replay-refusal"
 	repo, base, store, acknowledgement := approvedCompactAcknowledgementFixture(t, lineage)
@@ -223,14 +228,11 @@ func TestAcknowledgeApprovedCompactAuthorityReplayRefusesWithoutLeakingAPath(t *
 		acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token); err != nil {
 		t.Fatalf("first acknowledgement: %v", err)
 	}
-	if _, err := os.Stat(store.Dir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("acknowledgement left authority behind: %v", err)
-	}
 
 	err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage,
 		acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token)
 	if err == nil {
-		t.Fatal("replayed acknowledgement succeeded against burned authority")
+		t.Fatal("replayed acknowledgement succeeded against acknowledged authority")
 	}
 	for _, secret := range []string{repo, base, store.Dir, store.StatePath()} {
 		if strings.Contains(err.Error(), secret) {
@@ -240,7 +242,8 @@ func TestAcknowledgeApprovedCompactAuthorityReplayRefusesWithoutLeakingAPath(t *
 	if strings.Contains(err.Error(), "no such file or directory") {
 		t.Fatalf("replayed acknowledgement refusal surfaced a raw filesystem error: %v", err)
 	}
-	if !errors.Is(err, ErrApprovedAcknowledgementAuthorityAbsent) {
-		t.Fatalf("replayed acknowledgement refusal = %v, want the typed absent-authority refusal", err)
+	var conflict *CompactRevisionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("replayed acknowledgement refusal = %v, want revision conflict", err)
 	}
 }

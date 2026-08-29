@@ -107,7 +107,7 @@ func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, record.State.LineageID)
 }
 
 func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {

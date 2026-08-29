@@ -632,7 +632,7 @@ func completeCorrectedReview(r *journeyRun) error {
 	return completeCorrectedReviewForContract(r, correctedDeliveryLineage, reviewContractV2)
 }
 
-func completeBurnedCorrectedReview(r *journeyRun) error {
+func completeAcknowledgedCorrectedReview(r *journeyRun) error {
 	if err := completeCorrectedReview(r); err != nil {
 		return err
 	}
@@ -1484,7 +1484,7 @@ func waveOneJourneys() []Journey {
 				{Name: "post-correction exact active-lineage validator capture emits acknowledgement on completion", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
 					return captureProviderValidatorSlotFor(r, correctedDeliveryLineage)
 				}},
-				{Name: "no correction authority survives exact acknowledgement", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				{Name: "exact acknowledgement retains the approved correction authority", Requires: statusCapability, Composite: func(r *journeyRun) error {
 					return requireAtomicLineageAcknowledged(r, correctedDeliveryLineage)
 				}},
 			},

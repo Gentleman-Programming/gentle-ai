@@ -8,10 +8,10 @@ import (
 const issue3587Lineage = "issue-3587-last-event-closure"
 
 // issue3587Journeys proves the final admitted reviewer event owns reduction and
-// burn. A clean 4R lifecycle has no separate FINALIZE or final-evidence round.
+// acknowledgement. A clean 4R lifecycle has no separate FINALIZE or final-evidence round.
 func issue3587Journeys() []Journey {
 	return []Journey{{
-		ID:     "j114-last-reviewer-capture-closes-and-burns",
+		ID:     "j114-last-reviewer-capture-closes-and-retains-approved-authority",
 		Review: reviewOptedIn,
 		Title:  "The last admitted reviewer capture closes a clean 4R review with pending acknowledgement",
 		Source: "issue #3797: FINALIZE is not a public phase; exact acknowledgement is the only approved terminal continuation",
@@ -22,7 +22,7 @@ func issue3587Journeys() []Journey {
 				Args: productArgs("review", "start", "--lineage", issue3587Lineage)},
 			{Name: "capture every lens; the final capture reduces and emits acknowledgement", Requires: captureResultCapability,
 				Composite: captureIssue3587LensesAndClose},
-			{Name: "no review authority survives the exact acknowledgement", Requires: statusCapability,
+			{Name: "exact acknowledgement retains the approved review authority", Requires: statusCapability,
 				Composite: func(r *journeyRun) error { return requireAtomicLineageAcknowledged(r, issue3587Lineage) }},
 		},
 	}}

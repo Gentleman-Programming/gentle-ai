@@ -30,7 +30,7 @@ func captureEvidenceDescriptorJourneys() []Journey {
 			ID:     "j66-v5-capture-evidence-descriptors-execute",
 			Review: reviewOptedIn,
 			Title:  "#3417: a normal STATUS v5 evidence descriptor captures the full selected lens set for its exact active lineage",
-			Source: "issue #2248 under #3417: provider-owned capture-evidence advances normal verification, then finalization burns the exact transaction",
+			Source: "issue #2248 under #3867: provider-owned capture-evidence advances normal verification, then acknowledgement retains the exact approved transaction",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage normal code candidate", Fixture: stageWaveCandidate},
@@ -43,7 +43,7 @@ func captureEvidenceDescriptorJourneys() []Journey {
 					Args:  productArgs("review", "finalize", "--lineage", captureEvidenceDescriptorNormalLineage, "--captured-results=true"),
 					After: requireReviewState("validating", captureEvidenceDescriptorNormalLineage)},
 				{Name: "execute the exact active-lineage normal STATUS v5 capture-evidence descriptor", Requires: captureEvidenceDescriptorCapability, Composite: captureV5NormalEvidenceDescriptor},
-				{Name: "final evidence burns the advanced normal transaction", Requires: finalizeEvidenceCapability, Composite: finalizeV5NormalReview},
+				{Name: "final evidence acknowledges and retains the advanced approved transaction", Requires: finalizeEvidenceCapability, Composite: finalizeV5NormalReview},
 			},
 		},
 		{
@@ -235,14 +235,14 @@ func captureEvidenceDescriptorArguments(status waveCorrectionStatus, outcome, in
 }
 
 func completeV5DescriptorCorrection(r *journeyRun) error {
-	return completeBurnedV5DescriptorCorrectionFor(r, captureEvidenceDescriptorCorrectionLineage)
+	return completeAcknowledgedV5DescriptorCorrectionFor(r, captureEvidenceDescriptorCorrectionLineage)
 }
 
 func completeJ95Correction(r *journeyRun) error {
-	return completeBurnedV5DescriptorCorrectionFor(r, targetedInspectionLineage)
+	return completeAcknowledgedV5DescriptorCorrectionFor(r, targetedInspectionLineage)
 }
 
-func completeBurnedV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {
+func completeAcknowledgedV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {
 	if err := completeV5DescriptorCorrectionFor(r, lineage); err != nil {
 		return err
 	}

@@ -245,14 +245,14 @@ func intendedUntrackedJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j110-untracked-terminal-burn-and-unmanaged-staged-validation",
+			ID:     "j110-untracked-acknowledgement-retains-authority-and-selectorless-validation-is-unmanaged",
 			Review: reviewOptedIn,
-			Title:  "#3797: an untracked intended candidate awaits acknowledgement before burn and staged validation stays unmanaged",
-			Source: "#3797 preserves explicit intended-untracked START selection while requiring exact acknowledgement before terminal burn",
+			Title:  "#3867: an intended-untracked approval survives acknowledgement while selectorless staged validation stays unmanaged",
+			Source: "#3867 preserves explicit intended-untracked START selection and retains approved authority without creating a receipt mirror",
 			Steps: []Step{
 				{Name: "fixture: unborn repository with one all-untracked candidate", Fixture: unbornIntendedDeliveryCandidate},
 				{Name: "select every untracked path and execute printed zero-lens START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
-				{Name: "the zero-lens terminal event emits acknowledgement before burning the unborn transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				{Name: "the zero-lens terminal event emits acknowledgement before retaining the approved unborn transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
 					return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage,
 						"--agent", "opencode", "--untracked-scope=select",
 						"--expected-untracked-inventory="+r.sandbox.Scratch["unborn-intended-inventory"],

@@ -1149,28 +1149,26 @@ func sddApprovedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 	}
 }
 
-// sddBurnedAuthoritySteps is the #3417 counterpart for the three SDD journeys
-// that used to depend on a durable approved lineage. It keeps their real review
-// exercise but proves the terminal transaction is gone before SDD continues under
-// ordinary policy.
-func sddBurnedAuthoritySteps(fixture func(*Sandbox) error) []Step {
+// sddAcknowledgedAuthoritySteps keeps the real review exercise for SDD journeys
+// and proves retained compact approval does not become an SDD archive gate.
+func sddAcknowledgedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 	return []Step{
 		{Name: "fixture: exact active-lineage compact transaction", Fixture: fixture},
 		{Name: "capture every selected lens for the exact active lineage", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
 		{Name: "finalize exact active-lineage reviewer results", Requires: selectedFinalizeResultsCapability,
 			Args: selectedReviewArgs("review", "finalize", "--captured-results=true")},
 		{Name: "capture final evidence for the exact active lineage", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
-		{Name: "#3417 final evidence burns the exact active-lineage transaction", Requires: selectedFinalizeEvidenceCapability,
+		{Name: "#3867 final evidence emits acknowledgement for the exact active lineage", Requires: selectedFinalizeEvidenceCapability,
 			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true"), After: func(sandbox *Sandbox, observation Observation) error {
 				return requirePendingApproval(sandbox.Lineage)(sandbox, observation)
 			}},
-		{Name: "prove the terminal burn leaves no durable authority or receipt", Composite: sddProveSelectedBurned},
+		{Name: "prove the terminal acknowledgement retains durable approved authority without a receipt mirror", Composite: sddProveSelectedAcknowledged},
 	}
 }
 
-func sddProveSelectedBurned(r *journeyRun) error {
+func sddProveSelectedAcknowledged(r *journeyRun) error {
 	if r.sandbox.Lineage == "" {
-		return errors.New("#3417 SDD fixture has no exact lineage to prove burned")
+		return errors.New("#3867 SDD fixture has no exact lineage to prove acknowledged")
 	}
 	return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage)
 }

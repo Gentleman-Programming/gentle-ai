@@ -10,7 +10,6 @@ import (
 
 const (
 	atomicSiblingBindingKey = "atomic-sibling-binding"
-	atomicBurnInitialKey    = "atomic-burn-initial-binding"
 	atomicCorrectionLineage = "atomic-four-lens-correction"
 )
 
@@ -557,15 +556,16 @@ func requireAtomicLineageAcknowledged(r *journeyRun, lineageID string, selectors
 		return fmt.Errorf("replayed acknowledgement unexpectedly succeeded: %s", replayed.Stdout)
 	}
 
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
-	var head authorityHead
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
-		return fmt.Errorf("parse acknowledged lineage inventory: %w", err)
+	retained, err := readAtomicReviewStatusAt(r, r.sandbox.Repo, lineageID, selectors...)
+	if err != nil {
+		return err
 	}
-	for _, entry := range head.Entries {
-		if entry.LineageID == lineageID {
-			return fmt.Errorf("acknowledged lineage %q remained durable: %+v", lineageID, entry)
-		}
+	if retained.Authority.LineageID != lineageID || retained.Authority.State != "approved" || retained.Authority.Revision == "" ||
+		retained.Authority.Revision == status.Authority.Revision {
+		return fmt.Errorf("acknowledged approval was not retained as a new terminal revision: %+v", retained.Authority)
+	}
+	if retained.NextTransition.ReasonCode == "approved_acknowledgement_required" || retained.NextTransition.ReasonCode == "fresh_target_ready" {
+		return fmt.Errorf("acknowledged approval routed to %q instead of retained terminal authority", retained.NextTransition.ReasonCode)
 	}
 	return nil
 }
@@ -641,7 +641,7 @@ func waveThreeJourneys() []Journey {
 				{Name: "capture the Go-issued targeted validator that closes with pending acknowledgement", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
 					return captureProviderValidatorSlotFor(r, atomicCorrectionLineage)
 				}},
-				{Name: "no correction authority survives the exact acknowledgement", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				{Name: "exact acknowledgement retains the approved correction authority", Requires: statusCapability, Composite: func(r *journeyRun) error {
 					return requireAtomicLineageAcknowledged(r, atomicCorrectionLineage)
 				}},
 			},

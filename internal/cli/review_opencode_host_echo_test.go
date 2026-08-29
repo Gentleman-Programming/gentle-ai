@@ -114,7 +114,7 @@ func TestOpenCodeReviewTransportMaterializesHostEchoedRoleFrame(t *testing.T) {
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved {
 		t.Fatalf("host-echoed role terminal completion = %#v", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 // TestOpenCodeReviewTransportPassesThroughOnlyByteExactMaterialization pins the

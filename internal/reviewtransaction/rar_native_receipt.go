@@ -10,7 +10,7 @@ import (
 )
 
 // lockNativeReceipt resolves only the historical v1 receipt authority. Compact
-// review state burns on its terminal event and no longer publishes receipts.
+// review state remains the sole approved owner and does not publish a receipt mirror.
 func (repository *RARAuthorityRepository) lockNativeReceipt(
 	ctx context.Context,
 	lineageID string,

@@ -18,27 +18,35 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func assertApprovedCompactAuthorityBurned(t *testing.T, store reviewtransaction.CompactStore, lineage string) {
+func assertApprovedCompactAuthorityAcknowledged(t *testing.T, store reviewtransaction.CompactStore, lineage string) {
 	t.Helper()
 	base := filepath.Dir(filepath.Dir(store.Dir))
-	if record, err := store.Load(); err == nil {
-		if acknowledgement, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); pending {
-			repo := filepath.Dir(filepath.Dir(filepath.Dir(base)))
-			if err := RunReview([]string{
-				"acknowledge-approved", "--cwd", repo, "--lineage", acknowledgement.LineageID,
-				"--target", acknowledgement.TargetIdentity, "--expected-revision", acknowledgement.ExpectedRevision, "--token", acknowledgement.Token,
-			}, io.Discard); err != nil {
-				t.Fatalf("acknowledge pending approved authority: %v", err)
-			}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatalf("load approved compact authority: %v", err)
+	}
+	if acknowledgement, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); pending {
+		repo := filepath.Dir(filepath.Dir(filepath.Dir(base)))
+		if err := RunReview([]string{
+			"acknowledge-approved", "--cwd", repo, "--lineage", acknowledgement.LineageID,
+			"--target", acknowledgement.TargetIdentity, "--expected-revision", acknowledgement.ExpectedRevision, "--token", acknowledgement.Token,
+		}, io.Discard); err != nil {
+			t.Fatalf("acknowledge pending approved authority: %v", err)
+		}
+		record, err = store.Load()
+		if err != nil {
+			t.Fatalf("load acknowledged approved authority: %v", err)
 		}
 	}
+	if record.State.State != reviewtransaction.StateApproved || record.State.LineageID != lineage || record.State.ApprovedAckToken != "" {
+		t.Fatalf("acknowledged compact authority = %#v, want durable tokenless approval", record.State)
+	}
 	for _, path := range []string{
-		filepath.Join(base, "v2", lineage),
 		filepath.Join(base, "effect-markers", "v1", lineage),
 		filepath.Join(base, "incidents", lineage),
 	} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("approved compact authority survived at %s: %v", path, err)
+			t.Fatalf("acknowledged compact authority left stale sidecar at %s: %v", path, err)
 		}
 	}
 }
@@ -91,7 +99,7 @@ func cliReviewerCaptureArgs(t *testing.T, repo string, started ReviewFacadeStart
 	return append(binding, "--input", resultPath)
 }
 
-func TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns(t *testing.T) {
+func TestReviewAcknowledgeApprovedPreservesExactStagedAuthorityForPreCommit(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started := startHighRiskCLIReview(t, repo)
@@ -119,9 +127,6 @@ func TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns(t *testing.
 		t.Fatalf("last capture terminal result = %#v, want approved pending acknowledgement", terminal)
 	}
 	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
-	if _, err := store.Load(); err != nil {
-		t.Fatalf("terminal capture burned pending authority: %v", err)
-	}
 
 	var restartOutput bytes.Buffer
 	if err := RunReview([]string{
@@ -137,9 +142,6 @@ func TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns(t *testing.
 		t.Fatalf("restart status transition = %#v, want pending acknowledgement", restarted.NextTransition)
 	}
 	assertApprovedAcknowledgementTransition(t, restarted.NextTransition.Execute, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
-	if restarted.NextTransition.Execute.Command != terminal.Acknowledgement.Command {
-		t.Fatalf("restart acknowledgement command = %q, want %q", restarted.NextTransition.Execute.Command, terminal.Acknowledgement.Command)
-	}
 
 	acknowledgement := terminal.Acknowledgement
 	wrongToken := strings.Repeat("0", 64)
@@ -150,11 +152,9 @@ func TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns(t *testing.
 		"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID,
 		"--target", started.TargetIdentity, "--expected-revision", terminal.StoreRevision, "--token", wrongToken,
 	}, io.Discard); err == nil {
-		t.Fatal("wrong acknowledgement token burned authority")
+		t.Fatal("wrong acknowledgement token succeeded")
 	}
-	if _, err := store.Load(); err != nil {
-		t.Fatalf("wrong acknowledgement token mutated authority: %v", err)
-	}
+	assertPreCommitAllowed(t, repo, started.LineageID, false)
 
 	if err := RunReview([]string{
 		"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID,
@@ -162,14 +162,59 @@ func TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns(t *testing.
 	}, io.Discard); err != nil {
 		t.Fatalf("acknowledge approved authority: %v", err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
-	if err := RunReview([]string{
-		"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID,
-		"--target", started.TargetIdentity, "--expected-revision", terminal.StoreRevision, "--token", acknowledgement.Arguments[4].Value,
-	}, io.Discard); err == nil {
-		t.Fatal("replayed acknowledgement recreated or burned authority")
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateApproved || after.State.ApprovedAckToken != "" {
+		t.Fatalf("acknowledgement lost durable approved authority: %#v, %v", after, err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+
+	var acknowledgedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", started.LineageID,
+		"--contract", ReviewIntegrationContractV2, "--next-transition",
+	}, &acknowledgedOutput); err != nil {
+		t.Fatalf("acknowledged status: %v\n%s", err, acknowledgedOutput.String())
+	}
+	var acknowledged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, acknowledgedOutput.Bytes(), &acknowledged)
+	if acknowledged.Authority == nil || acknowledged.Authority.LineageID != started.LineageID ||
+		acknowledged.Authority.State != reviewtransaction.StateApproved {
+		t.Fatalf("acknowledged status lost approved authority: %#v", acknowledged)
+	}
+	if acknowledged.NextTransition != nil && acknowledged.NextTransition.ReasonCode == "fresh_target_ready" {
+		t.Fatalf("acknowledged status offered a fresh review: %#v", acknowledged.NextTransition)
+	}
+	assertPreCommitAllowed(t, repo, started.LineageID, true)
+
+	candidatePath := filepath.Join(repo, "internal", "auth", "session.go")
+	candidate, err := os.ReadFile(candidatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidatePath, append(candidate, []byte("\n// staged drift\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "internal/auth/session.go")
+	assertPreCommitAllowed(t, repo, started.LineageID, false)
+}
+
+func assertPreCommitAllowed(t *testing.T, repo, lineage string, want bool) {
+	t.Helper()
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"validate", "--cwd", repo, "--lineage", lineage, "--gate", "pre-commit",
+	}, &output); err != nil {
+		t.Fatalf("validate pre-commit: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode pre-commit result: %v\n%s", err, output.String())
+	}
+	if result.Allowed != want {
+		t.Fatalf("pre-commit allowed = %v, want %v: %#v", result.Allowed, want, result)
+	}
+	if want && (result.Result != reviewtransaction.GateAllow || result.Context.LineageID != lineage) {
+		t.Fatalf("allowed pre-commit result is not lineage-bound: %#v", result)
+	}
 }
 
 func assertApprovedAcknowledgementTransition(t *testing.T, transition *ReviewTransitionExecution, repo, lineage, target, revision string) {
@@ -196,7 +241,7 @@ func assertApprovedAcknowledgementTransition(t *testing.T, transition *ReviewTra
 	}
 }
 
-func TestLastReviewerCaptureReturnsAdvisoriesBeforeBurn(t *testing.T) {
+func TestLastReviewerCaptureReturnsAdvisoriesBeforeAcknowledgement(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started := startHighRiskCLIReview(t, repo)
@@ -223,9 +268,9 @@ func TestLastReviewerCaptureReturnsAdvisoriesBeforeBurn(t *testing.T) {
 	}
 	if terminal.State != reviewtransaction.StateApproved || terminal.AdvisoryFindings == nil ||
 		len(terminal.AdvisoryFindings.Findings) != 1 || terminal.AdvisoryFindings.Findings[0].ID != "R3-W01" {
-		t.Fatalf("last capture advisories = %#v, want the admitted warning before burn", terminal)
+		t.Fatalf("last capture advisories = %#v, want the admitted warning before acknowledgement", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 func TestLastReviewerCaptureOpensBoundedCorrectionForSevereFinding(t *testing.T) {
@@ -317,7 +362,7 @@ func TestConcurrentFinalLensCaptureElectsOneCloserAndLeavesNoAuthority(t *testin
 	if terminal != 1 {
 		t.Fatalf("concurrent final-lens terminal responses = %d, want exactly one; errors=%v", terminal, errorsByAttempt)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T) (string, string, reviewtransaction.TargetedValidationRequest) {
@@ -408,7 +453,7 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 	}, &terminalOutput); err != nil {
 		t.Fatalf("capture targeted validator without repository verification evidence: %v\n%s", err, terminalOutput.String())
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func TestStatusRoutesCompiledValidatorToTerminalCapture(t *testing.T) {
@@ -466,7 +511,7 @@ func TestCompiledTargetedValidatorCaptureClosesOnItsTerminalEvent(t *testing.T) 
 		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
 		t.Fatalf("compiled validator terminal closure = %#v", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func TestCorrectionStatusRoutesFrozenCandidateDirectlyToTargetedValidation(t *testing.T) {
@@ -522,7 +567,7 @@ func TestTargetedValidationCaptureClosesWithoutVerificationEvidence(t *testing.T
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved {
 		t.Fatalf("targeted validation capture result = %#v", terminal)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func TestConcurrentAndReplayedTargetedValidatorCaptureHasOneCloser(t *testing.T) {
@@ -610,11 +655,11 @@ func TestConcurrentAndReplayedTargetedValidatorCaptureHasOneCloser(t *testing.T)
 		t.Fatalf("status acknowledgement command = %q, want %q", status.NextTransition.Execute.Command, closer.Acknowledgement.Command)
 	}
 
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 	if err := RunReviewCaptureValidation(args, &bytes.Buffer{}); err == nil {
 		t.Fatal("replayed targeted validator capture resurrected burned authority")
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize(t *testing.T) {
@@ -667,7 +712,7 @@ func TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize(t *testing
 		t.Fatalf("pending targeted validator acknowledgement = %#v, terminal = %#v", pending, terminal)
 	}
 	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, lineage, pending.TargetIdentity, pending.ExpectedRevision)
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func TestReviewStartWithZeroLensesIssuesAcknowledgement(t *testing.T) {
@@ -686,7 +731,7 @@ func TestReviewStartWithZeroLensesIssuesAcknowledgement(t *testing.T) {
 	if _, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); !pending {
 		t.Fatalf("zero-lens START did not issue a pending acknowledgement: %#v", record)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 }
 
 func correctionRequiredForPlanCapture(t *testing.T) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, reviewtransaction.CorrectionPlanRequest) {

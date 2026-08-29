@@ -70,7 +70,7 @@ func TestReviewCaptureResultStrictBindingTerminalCapture(t *testing.T) {
 	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 func TestReviewCaptureResultAdmitsOneJSONEnvelopeInsideProse(t *testing.T) {
@@ -469,7 +469,7 @@ func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 	if terminal != 1 || acknowledgements != len(record.State.SelectedLenses)-1 {
 		t.Fatalf("concurrent selected-lens captures = %d terminal + %d acknowledgements, want 1 + %d; errors=%v", terminal, acknowledgements, len(record.State.SelectedLenses)-1, errs)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 func newArtifactReview(t *testing.T, high bool) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
 	t.Helper()

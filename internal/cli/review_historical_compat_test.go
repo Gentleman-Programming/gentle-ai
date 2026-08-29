@@ -247,7 +247,7 @@ func TestCurrentCaptureCompletionLeavesHistoricalSiblingBytePreserved(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, currentStore, current.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, currentStore, current.LineageID)
 	if after, err := os.ReadFile(historicalStore.StatePath()); err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("current capture completion rewrote historical authority bytes: %v", err)
 	}

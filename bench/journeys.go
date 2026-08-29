@@ -870,13 +870,13 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j04-size-does-not-escalate",
 			Review: reviewOptedIn,
-			Title:  "#3417: 1200 lines of prose remain low risk and burn their terminal transaction",
-			Source: "#3417 atomic review keeps risk selection separate from durable delivery authorization",
+			Title:  "#3867: 1200 lines of prose remain low risk and retain acknowledged terminal authority",
+			Source: "#3867 keeps risk selection separate from exact acknowledged pre-commit authority",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage 1200 lines of docs", Fixture: stageLargeDocs},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "low-risk finalization burns the transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: func(sandbox *Sandbox, observation Observation) error {
+				{Name: "low-risk finalization emits the pending acknowledgement", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: func(sandbox *Sandbox, observation Observation) error {
 					return requirePendingApproval(sandbox.Lineage)(sandbox, observation)
 				}},
 			},
@@ -1037,7 +1037,7 @@ func coreJourneys() []Journey {
 				{Name: "exact active-lineage rejected capture then full selected-set recapture", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return rejectedThenRecaptureFor(r, rejectedRecaptureLineage)
 				}},
-				{Name: "the final accepted capture exposes acknowledgement before the exact active-lineage transaction burns", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				{Name: "the final accepted capture exposes acknowledgement before retaining the exact approved active lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
 					return requireAtomicLineageAcknowledged(r, rejectedRecaptureLineage)
 				}},
 			},

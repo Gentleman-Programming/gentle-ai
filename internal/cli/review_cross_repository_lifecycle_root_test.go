@@ -111,7 +111,7 @@ func TestCrossRepositoryLifecycleRootConformance(t *testing.T) {
 			for order := range legacyTargetStart.SelectedLenses {
 				captureCLIReviewerResult(t, targetRoot, legacyTargetStart, order)
 			}
-			assertApprovedCompactAuthorityBurned(t, targetStore, lineage)
+			assertApprovedCompactAuthorityAcknowledged(t, targetStore, lineage)
 
 			t.Chdir(sessionRoot)
 			sessionAuthorityAfterBurn, err := os.ReadFile(sessionStore.StatePath())

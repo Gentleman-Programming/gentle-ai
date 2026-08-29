@@ -28,13 +28,13 @@ COMMANDS
                Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
-               Admit one reviewer result; the final capture closes and burns its review
+               Admit one reviewer result; the final capture closes and awaits acknowledgement
   review capture-correction-plan --lineage <id> --target <id> --expected-revision <rev> --request-hash <hash> --correction-lines <n>
                Capture the positive bounded correction forecast before editing
   review capture-refuter --lineage <id> --target <id> --expected-revision <rev> --input <refuter.json>
                Admit the provider-bound refuter result when STATUS requests it
   review capture-validation --lineage <id> --target <id> --expected-revision <rev> --request-hash <hash> --input <validator.json>
-               Admit targeted validator evidence; a passing capture closes and burns its review
+               Admit targeted validator evidence; a passing capture closes and awaits acknowledgement
   review inspect-candidate --repository-context <handle> --expected-revision <rev> --lineage <id> --target <id> --lens <lens> --order <n> --operation <operation>
                Read one bounded immutable candidate view through provider authority
   review validate --gate <gate> [--cwd <repo>]

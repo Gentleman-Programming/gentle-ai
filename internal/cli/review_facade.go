@@ -103,7 +103,8 @@ type ReviewFacadeStartResult struct {
 	// carries the extra token. A decline is a reported choice, never a veto.
 	Consent string `json:"consent,omitempty"`
 	// Acknowledgement is present only for a v2 zero-lens approved START. It
-	// carries the exact continuation that burns the pending compact authority.
+	// carries the exact continuation that consumes the pending token while
+	// preserving the approved compact authority.
 	Acknowledgement *ReviewTransitionExecution `json:"acknowledgement,omitempty"`
 }
 
@@ -640,7 +641,7 @@ func runReviewCommandContext(ctx context.Context, args []string, stdout io.Write
 	case "repair":
 		return runReviewRepair(ctx, args[1:], stdout)
 	case "validate":
-		return runReviewFacadeValidateNonDeciding(ctx, args[1:], stdout)
+		return runReviewFacadeValidate(ctx, args[1:], stdout)
 	default:
 		return runReviewCommand(args, stdout)
 	}
@@ -2127,19 +2128,17 @@ func reviewFacadeStartResultFor(action string, lensesRequired bool, authority re
 	return result
 }
 
-// runReviewFacadeValidateNonDeciding is the shipped delivery-gate route. Gates
-// remain syntax-checked commands, but they no longer discover authority, read
-// receipts, derive candidates, or decide delivery. The effective RDD mode is the
-// only governing read: disabled uses the established disabled/unmanaged report;
-// enabled reports the equally non-deciding unmanaged disposition.
-func runReviewFacadeValidateNonDeciding(ctx context.Context, args []string, stdout io.Writer) error {
+// runReviewFacadeValidate admits one narrow managed decision: an enabled, explicit-
+// lineage pre-commit request may use acknowledged compact authority. Every other
+// gate shape preserves the established repository-policy disposition.
+func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := validateReviewTransitionSelectorFlagCounts(args, ReviewIntegrationOperationValidate); err != nil {
 		return err
 	}
 	flags := newReviewFlagSet("review validate", stdout, "Validate delivery-gate syntax and report the repository policy that governs delivery.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
-	_ = flags.String("lineage", "", "accepted historical lineage selector; gates do not read authority")
+	lineage := flags.String("lineage", "", "exact approved review lineage")
 	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
 	_ = flags.String("base-ref", "", "accepted historical pre-pr publication base")
 	_ = flags.String("pre-pr-ci-attestation", "", "accepted historical pre-pr CI attestation")
@@ -2165,7 +2164,7 @@ func runReviewFacadeValidateNonDeciding(ctx context.Context, args []string, stdo
 	if strings.TrimSpace(*gate) == "" || !validReviewIntegrationGate(reviewtransaction.GateKind(*gate)) {
 		return reviewPreflightError(fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", ")))
 	}
-	return runNonDecidingReviewGate(ctx, *cwd, reviewtransaction.GateKind(*gate), negotiated, *contract, stdout)
+	return runReviewDeliveryGate(ctx, *cwd, *lineage, reviewtransaction.GateKind(*gate), negotiated, *contract, stdout)
 }
 
 func facadeSelectedLenses(assessment reviewtransaction.RiskAssessment, focus string) ([]string, error) {
@@ -2439,6 +2438,78 @@ type reviewUnmanagedGateResult struct {
 	Reason   string                        `json:"reason"`
 	Context  reviewUnmanagedGateContext    `json:"context"`
 	Delivery reviewtransaction.RDDDelivery `json:"delivery"`
+}
+
+// runReviewDeliveryGate preserves ordinary repository-policy behavior unless an
+// enabled pre-commit request names one exact compact lineage. That narrow managed
+// route derives the local staged candidate and compares it with the acknowledged
+// approved authority; no remote, receipt mirror, or parallel owner participates.
+func runReviewDeliveryGate(ctx context.Context, cwd, lineage string, gate reviewtransaction.GateKind, negotiated bool, contract string, stdout io.Writer) error {
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve review repository root: %w", err)
+	}
+	disabled, err := reviewDrivenDevelopmentDisabled(ctx, root)
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return emitDisabledUnmanagedDelivery(stdout, gate, negotiated, contract)
+	}
+	lineage = strings.TrimSpace(lineage)
+	if gate != reviewtransaction.GatePreCommit || lineage == "" {
+		return emitEnabledUnmanagedDelivery(stdout, gate, negotiated, contract)
+	}
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return err
+	}
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return emitEnabledUnmanagedDelivery(stdout, gate, negotiated, contract)
+		}
+		return fmt.Errorf("load compact pre-commit authority: %w", err)
+	}
+	approved := record.State.CurrentSnapshot
+	live, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(ctx, reviewtransaction.Target{
+		Kind: approved.Kind, Projection: reviewtransaction.ProjectionStaged,
+		IntendedUntracked: append([]string{}, approved.IntendedUntracked...),
+	})
+	if err != nil {
+		return fmt.Errorf("derive staged pre-commit candidate: %w", err)
+	}
+	exact := live.BaseTree == approved.BaseTree && live.CandidateTree == approved.CandidateTree && live.PathsDigest == approved.PathsDigest
+
+	result := reviewtransaction.GateInvalidated
+	relation := reviewtransaction.ShadowRelationExact
+	reason := "approved review acknowledgement is still pending"
+	allowed := false
+	switch {
+	case record.State.State != reviewtransaction.StateApproved:
+		reason = fmt.Sprintf("review lineage is %s, not approved", record.State.State)
+	case record.State.ApprovedAckToken != "":
+	case !exact:
+		result = reviewtransaction.GateScopeChanged
+		relation = reviewtransaction.ShadowRelationChanged
+		reason = "staged candidate does not match the approved review authority"
+	default:
+		result = reviewtransaction.GateAllow
+		reason = "acknowledged approved review authority governs this exact staged candidate"
+		allowed = true
+	}
+	context := reviewtransaction.GateContext{
+		Gate: gate, LineageID: record.State.LineageID, Generation: record.State.Generation, StoreRevision: record.Revision,
+		BaseTree: live.BaseTree, CandidateTree: live.CandidateTree, PathsDigest: live.PathsDigest,
+		FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash, LedgerHash: record.State.LedgerHash(), EvidenceHash: record.State.EvidenceHash,
+		BaseRelationshipValid: live.BaseTree == approved.BaseTree,
+	}
+	gateResult := ReviewValidateResult{
+		Schema: ReviewValidateSchema, Result: result, Allowed: allowed, Action: reviewGateAction(result), Reason: reason,
+		Context: context, Relation: relation,
+	}
+	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, gateResult, gateResult, contract)
 }
 
 // runNonDecidingReviewGate resolves a repository only to determine the effective

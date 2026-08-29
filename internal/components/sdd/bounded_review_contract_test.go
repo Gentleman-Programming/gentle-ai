@@ -62,12 +62,12 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Never hand candidate bytes through `/tmp`",
 		"### Authority-First Terminal Procedure",
-		"Only that exact invocation burns authority and artifacts",
-		"enabled gates return `invalidated/unmanaged`",
-		"disabled gates return `disabled/unmanaged`",
+		"Only that exact invocation consumes the token while retaining the approved compact authority",
+		"Enabled gates without an exact lineage",
+		"Disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
 		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
-		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
+		"A gate allow authorizes only the requested pre-commit continuation",
 		"### Cross-repository lifecycle root",
 		"explicit user authorization",
 		"canonical B worktree root",
@@ -76,7 +76,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Never append, remove, or rebuild provider-issued command tokens",
 		"Opaque `repository_context` can capture or materialize from any process cwd",
 		"Go owns repository binding; adapters never parse authorization or roots",
-		"Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched",
+		"Approval awaits acknowledgement in B; exact acknowledgement retains B's approved authority, and A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
@@ -90,17 +90,17 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 	}...)
 }
 
-func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *testing.T) {
+func TestReviewLifecycleContractRequiresRetainedApprovalAndNarrowPreCommitGate(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
-		"Only that exact invocation burns authority and artifacts",
-		"enabled gates return `invalidated/unmanaged`",
-		"disabled gates return `disabled/unmanaged`",
+		"Only that exact invocation consumes the token while retaining the approved compact authority",
+		"Enabled gates without an exact lineage",
+		"Disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
 		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
-		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
+		"A gate allow authorizes only the requested pre-commit continuation",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("atomic lifecycle contract missing %q", want)
@@ -121,7 +121,7 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *test
 func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T) {
 	content := boundedReviewContract()
 	const start = "### Continue after a stop reason code"
-	const end = "## Delivery follows ordinary repository policy"
+	const end = "## Delivery gate boundary"
 	startIndex := strings.Index(content, start)
 	endIndex := strings.Index(content, end)
 	if startIndex < 0 || endIndex < startIndex {
@@ -372,7 +372,7 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 func TestOpenCodeOrchestratorAddsOnlyOneConcurrentReviewerGroupContract(t *testing.T) {
 	const openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
 		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
-		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
+		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, run only the exact returned acknowledgement; it consumes the token and retains terminal authority for exact pre-commit validation. Do not FINALIZE or invent a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 
 	for _, test := range []struct {
 		name  string
@@ -544,10 +544,10 @@ func TestBoundedReviewContractDoesNotEnforceModelPolicy(t *testing.T) {
 func TestBoundedReviewContractMakesCompatibilityGatesNonDeciding(t *testing.T) {
 	content := boundedReviewContract()
 	for _, clause := range []string{
-		"Shipped `review validate` and gate commands are compatibility/informational only",
-		"enabled gates return `invalidated/unmanaged`",
-		"disabled gates return `disabled/unmanaged`",
-		"They never allow, approve, block, commit, push, open a PR, or govern release",
+		"An enabled `pre-commit --lineage <id>` reads retained compact authority",
+		"Enabled gates without an exact lineage",
+		"Disabled gates return `disabled/unmanaged`",
+		"A gate allow authorizes only the requested pre-commit continuation",
 	} {
 		if !strings.Contains(content, clause) {
 			t.Errorf("contract missing non-deciding gate clause %q", clause)
@@ -567,8 +567,8 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndAtomic(t *testing.T) {
 		{order: 2, operation: "exact returned START", result: "one compact lineage/worktree/target binding; retain lineage, revision, and target"},
 		{order: 3, operation: "exact-lineage STATUS and collect", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
 		{order: 4, operation: "final admitted capture", result: "native readback, approved authority, and one exact acknowledgement continuation"},
-		{order: 5, operation: "STATUS restart + exact acknowledgement", result: "replayed operation/token/revision; only exact acknowledgement burns authority"},
-		{order: 6, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
+		{order: 5, operation: "STATUS restart + exact acknowledgement", result: "replayed operation/token/revision; exact acknowledgement consumes only the token and retains approval"},
+		{order: 6, operation: "terminal lifecycle stop", result: "explicit-lineage pre-commit may validate the exact staged candidate; other delivery follows ordinary repository policy"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("authority-first rows = %d, want %d", len(rows), len(want))

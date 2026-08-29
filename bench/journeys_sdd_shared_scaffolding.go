@@ -6,15 +6,15 @@ import (
 )
 
 // sddSharedScaffoldingJourneys protects the narrow shared OpenSpec allowlist:
-// fresh project scaffolding is not another change payload and, after #3417 burns
-// the terminal review, SDD continues under ordinary policy without a gate.
+// fresh project scaffolding is not another change payload and retained review
+// authority is not selected by SDD archive routing.
 func sddSharedScaffoldingJourneys() []Journey {
 	return []Journey{{
 		ID:     "j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
 		Review: reviewOptedIn,
-		Title:  "#3417: terminal burn leaves shared OpenSpec scaffolding eligible under unmanaged ordinary policy",
-		Source: "shared OpenSpec policy under #3417: config.yaml and empty archive/spec roots are infrastructure, not foreign payload; burned review leaves no durable authority or gate",
-		Steps: append(sddBurnedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
+		Title:  "#3867: retained review authority leaves shared OpenSpec scaffolding under unmanaged archive policy",
+		Source: "shared OpenSpec policy under #3867: config.yaml and empty archive/spec roots are infrastructure, not foreign payload; SDD archive does not select pre-commit authority",
+		Steps: append(sddAcknowledgedAuthoritySteps(sddSharedScaffoldingAuthorityFixture),
 			Step{Name: "sdd-status keeps shared OpenSpec scaffolding archive-ready under unmanaged ordinary policy", Requires: sddStatusCapability,
 				Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("shared OpenSpec scaffolding", requireSDDUnmanagedOrdinaryArchive("shared OpenSpec scaffolding"))},
 		),

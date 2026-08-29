@@ -342,7 +342,7 @@ func TestSelectorlessCommittedCorrectionClosesOnTargetedValidation(t *testing.T)
 			if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved {
 				t.Fatalf("committed correction terminal capture = %#v", terminal)
 			}
-			assertApprovedCompactAuthorityBurned(t, authorityStore, lineage)
+			assertApprovedCompactAuthorityAcknowledged(t, authorityStore, lineage)
 		})
 	}
 }
@@ -408,7 +408,7 @@ func TestStagedCorrectionClosesOnTargetedValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }
 
 func TestSelectorlessCommittedCorrectionFailsClosedForUnreadableAuthority(t *testing.T) {

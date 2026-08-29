@@ -127,7 +127,7 @@ func TestReviewFacadeUnbornHeadStagedLifecycle(t *testing.T) {
 	}
 
 	closeUnbornReviewOnSelectedCaptures(t, repo, started)
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 
 	runReviewCLIGit(t, repo, "commit", "-qm", "first commit")
 	if headTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}")); headTree != record.State.CurrentSnapshot.CandidateTree {
@@ -175,7 +175,7 @@ func TestReviewFacadeExistingRemoteEmptyCommitAllowsPublicationGates(t *testing.
 		t.Fatal(err)
 	}
 	closeUnbornReviewOnSelectedCaptures(t, repo, started)
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 
 	runReviewCLIGit(t, repo, "commit", "-qm", "deliver reviewed candidate")
 	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {

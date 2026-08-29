@@ -122,7 +122,7 @@ func TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart(t *testing.T)
 		t.Fatalf("zero-lens reclaim start omitted acknowledgement: %#v", started)
 	}
 	assertApprovedAcknowledgementTransition(t, started.Acknowledgement, repo, started.LineageID, started.TargetIdentity, started.Acknowledgement.Binding.Revision)
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 
 	if err := RunReview([]string{
 		"reclaim", "--cwd", repo, "--lineage", "reclaim-audit",
@@ -131,7 +131,7 @@ func TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart(t *testing.T)
 		t.Fatalf("reclaim enumerated residue: %v", err)
 	}
 	output.Reset()
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-reclaim-start"}, &output); err != nil {
-		t.Fatalf("review start after reclaim: %v\n%s", err, output.String())
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-reclaim-after"}, &output); err != nil {
+		t.Fatalf("independent review start after reclaim: %v\n%s", err, output.String())
 	}
 }

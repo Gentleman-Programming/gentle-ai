@@ -111,5 +111,5 @@ func TestCurrentCaptureResultClosesApprovedLineage(t *testing.T) {
 		captureCLIReviewerResult(t, repo, started, order)
 	}
 
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 }

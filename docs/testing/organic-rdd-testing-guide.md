@@ -1,7 +1,7 @@
 # 🧪 How to test — Organic RDD (prerelease 2.2.0-rc.1)
 
 > [!IMPORTANT]
-> **Current closure and delivery semantics.** A zero-lens START, or the final admitted lens, refuter, or validation capture, closes and burns a review. Delivery always follows ordinary repository policy; review closure is informational.
+> **Current closure and delivery semantics.** A zero-lens START, or the final admitted lens, refuter, or validation capture, closes with one exact acknowledgement. Acknowledgement retains approved authority for exact pre-commit validation; other repository operations remain human-owned.
 
 > [!WARNING]
 > **Historical and superseded guide.** This document preserves the candidate-specific validation procedure for `v2.2.0-rc.1` and PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). It is not current installation or validation guidance for stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0), prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), or unreleased `main`. Use the [Quickstart version policy](../quickstart.md#version-policy) for current installation channels and validation entry points.
@@ -88,14 +88,14 @@ It does NOT hang, it does NOT review. A refusal that exits non-zero and names no
 ### Flow 3: Documentation-only change (zero ceremony)
 
 1. [ ] Edit `README.md` (plain text) and stage **only that file**: `git add README.md`.
-2. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: `risk_level: low`, `selected_lenses: []` — zero reviewers, no question; START closes and burns the review.
+2. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: `risk_level: low`, `selected_lenses: []` — zero reviewers, no question; START closes with an exact acknowledgement.
 
 ### Current review lifecycle (use for every flow below)
 
-1. Start the review. A zero-lens START closes and burns it immediately. For selected lenses, use only the exact STATUS-issued capture route for each admitted result.
-2. If STATUS requests a correction, use its bound `capture-correction-plan`. After the bounded correction, use the terminal STATUS-issued `capture-validation`; its admitted capture closes and burns the review.
-3. If capture output is malformed, incomplete, unavailable, or ambiguous, query STATUS for the same lineage. STATUS reconciles the outcome; relaunch only when it reoffers the identical bound slot.
-4. Commit, push, PR, release, and archive actions follow ordinary unmanaged repository policy. Do not run a separate delivery step after review closure.
+1. Start the review. A zero-lens START closes with a pending acknowledgement. For selected lenses, use only the exact STATUS-issued capture route for each admitted result.
+2. If STATUS requests a correction, use its bound `capture-correction-plan`. After correction, use the returned `capture-validation`; an approved capture emits the same acknowledgement shape.
+3. Run only the exact acknowledgement. It clears the token and retains approved authority. If any capture or acknowledgement is ambiguous, query STATUS for the same lineage and follow only its returned route.
+4. Validate the unchanged staged candidate with `review validate --gate pre-commit --lineage <id>`. Commit, push, PR, merge, release, and archive remain human-owned repository operations.
 
 ### Flow 4: The review is chosen by evidence, not by size
 
@@ -112,7 +112,7 @@ It does NOT hang, it does NOT review. A refusal that exits non-zero and names no
 
 **If you are driving this from a script or an agent**: the answer is read as one whole line, so it must end with a newline. Sending the bare character `2` over a pseudo-terminal is echoed but never completes the read, and the command waits until your harness kills it. Send `2\n`. There is no timeout on this prompt, so a missing newline looks exactly like a hang.
 
-### Flow 6: Delivery stays ordinary unmanaged
+### Flow 6: Push remains ordinary repository policy
 
 **Watch out for the fixture**: this flow needs a configured upstream so the push is real. Set one up first:
 
@@ -147,7 +147,7 @@ Reported by @Wladimirfn, @Denver2828, @MarsSall and @Freedom2828. The old candid
 
 You need the remote from Flow 6.
 
-1. [ ] Make a docs change and run `review start` → **Expected**: its zero-lens START closes and burns the review.
+1. [ ] Make a docs change and run `review start` → **Expected**: its zero-lens START closes with pending acknowledgement; exact acknowledgement retains approved authority.
 2. [ ] Commit and push the change.
 3. [ ] Turn reviews off, make and commit another docs change, then push it.
 4. [ ] Turn reviews on and make a third docs change → **Expected**: a new START concerns only this new candidate; previously closed reviews and published commits do not govern ordinary delivery.
@@ -179,7 +179,7 @@ gentle-ai review status --next-transition --contract gentle-ai.review-integratio
 ### Flow 12: Final capture closes the review
 
 1. [ ] Start a review that selects lenses and follow only the STATUS-issued `capture-result` route for each selected lens.
-2. [ ] Submit the final admitted capture → **Expected**: the final reviewer, refuter, or targeted-validator capture closes the review and burns its authority. No additional close or retry command follows it; delivery remains ordinary unmanaged policy.
+2. [ ] Submit the final admitted capture → **Expected**: it closes the review and emits one exact acknowledgement. Run that acknowledgement; the approved authority remains discoverable for exact staged pre-commit validation.
 
 If a capture is malformed, incomplete, or unavailable, query the same exact-lineage STATUS and relaunch only when it reoffers the same bound slot.
 
@@ -205,7 +205,7 @@ The bug @decode2 and @fisidj found. You need the remote from Flow 6.
 
 1. [ ] Reach a correction state and query STATUS for the review lineage.
 2. [ ] Use only the bound `capture-correction-plan` STATUS returns → **Expected**: it identifies the admitted correction scope.
-3. [ ] After the bounded correction, query STATUS again and use the terminal `capture-validation` it returns → **Expected**: the admitted validation capture closes and burns the review.
+3. [ ] After the bounded correction, query STATUS again and use the terminal `capture-validation` it returns → **Expected**: the admitted validation capture closes with pending acknowledgement; exact acknowledgement retains approved authority.
 4. [ ] If either capture result is ambiguous, query STATUS again before doing anything else; it reconciles closure or reoffers the same bound slot.
 
 ### Flow 16: STATUS says which capture comes next
@@ -252,10 +252,10 @@ macOS puts `$TMPDIR` under `/var/folders/...`, and `/var` is a symlink to `/priv
 echo "one more line" >> guide.md
 git add guide.md
 gentle-ai review start --cwd .
-# For this docs-only low-risk case, START closes and burns the review.
+# For this docs-only low-risk case, START closes with pending acknowledgement; exact acknowledgement retains approved authority.
 ```
 
-→ **Expected**: the zero-lens START closes and burns the review. No "no discoverable review lineage" or path-shaped error.
+→ **Expected**: the zero-lens START closes with pending acknowledgement; exact acknowledgement retains approved authority. No "no discoverable review lineage" or path-shaped error.
 
 **The `git add` is not optional and it is not tidiness.** START with the default workspace projection freezes your uncommitted change. Staging keeps the snapshot stable while this flow verifies that `/var` and `/private/var` resolve to the same review state. Reported by @edwinsaavedran after the old path handling produced a false signal.
 3. [ ] Now `cd` into the **other** spelling of the same directory (add or remove the `/private` prefix) and run `review status --cwd "$PWD"` → **Expected**: the same lineage, same state. If it reports no authority, that is the defect: paste both paths.
@@ -274,7 +274,7 @@ hdiutil attach /tmp/rddtest.dmg
 If `hdiutil` rejects the filesystem name, `hdiutil create -help` lists the ones your macOS version accepts. A real ExFAT USB stick works just as well, and any external volume you already have formatted that way is fine.
 
 2. [ ] Create a throwaway repo **on that volume** (`/Volumes/RDDTEST`), make a change, start the review, and follow each STATUS-issued capture route.
-3. [ ] → **Expected**: the reviewer result publishes, and the final admitted capture closes and burns the review. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
+3. [ ] → **Expected**: the reviewer result publishes, and the final admitted capture closes with pending acknowledgement; exact acknowledgement retains approved authority. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
 4. [ ] Detach with `hdiutil detach /Volumes/RDDTEST` when done.
 
 ### Flow 22: First-use store contention (#1850) — **fixed on the branch, still broken in the published asset**
@@ -396,10 +396,10 @@ into whichever of the two it happens to reach first.
 ```
 gentle-ai review start --cwd .
 # Follow each STATUS-issued review capture-result invocation.
-# The final admitted capture closes and burns the review.
+# The final admitted capture closes with pending acknowledgement; exact acknowledgement retains approved authority.
 ```
 
-→ **Expected**: the final admitted capture closes and burns the review, exactly as on a local disk.
+→ **Expected**: the final admitted capture closes with pending acknowledgement; exact acknowledgement retains approved authority, exactly as on a local disk.
 
 3. [ ] Now run two reviews at once against the same repo from two machines (or
    two shells on two mounts of the same export), started within a second of each
@@ -457,7 +457,7 @@ sudo chown "$USER" /tmp/tiny
    naming the disk; the review is not reported as closed.
 4. [ ] Delete the ballast and query STATUS for the same lineage → **Expected**:
    it reconciles the result or reoffers the identical bound capture. Submit it
-   only when reoffered; its final admitted capture closes and burns the review.
+   only when reoffered; its final admitted capture closes with pending acknowledgement; exact acknowledgement retains approved authority.
 
 ### Flow 30: A case-insensitive, Unicode-normalizing volume — **needs APFS, HFS+, exFAT or NTFS**
 
@@ -516,7 +516,7 @@ reported as a permanent corruption.
 1..20 | ForEach-Object {
   gentle-ai review start --cwd .
   # Follow each STATUS-issued review capture-result invocation.
-  # The final admitted capture closes and burns the review.
+  # The final admitted capture closes with pending acknowledgement; exact acknowledgement retains approved authority.
 }
 ```
 

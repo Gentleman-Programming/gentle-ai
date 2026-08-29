@@ -177,8 +177,8 @@ type ReviewTargetStatusProjection struct {
 
 func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatusResult, contract string) ReviewTargetStatusResult {
 	// Historical terminal states are authority observations only. Public STATUS
-	// never offers a replay, evidence submission, or delivery gate for them;
-	// new lineages burn during their final causal capture event.
+	// never offers evidence submission for them; acknowledged approvals remain
+	// durable so an exact delivery gate can discover their candidate binding.
 	switch native.Action {
 	}
 	schema := ReviewIntegrationStatusSchema
@@ -1321,7 +1321,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			arguments["lineage"] != execution.Binding.LineageID || arguments["target"] != execution.Binding.TargetIdentity ||
 			arguments["expected-revision"] != execution.Binding.Revision || !validReviewAcknowledgementToken(arguments["token"]) ||
 			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateApproved)}) {
-			return errors.New("approved acknowledgement transition binding is invalid") // refusal:by-design world-action: only the exact pending acknowledgement continuation can burn approved authority
+			return errors.New("approved acknowledgement transition binding is invalid") // refusal:by-design world-action: only the exact pending acknowledgement continuation can consume its token while preserving approved authority
 		}
 		for _, argument := range execution.Arguments {
 			if argument.Token != reviewTransitionArgumentToken(argument) {

@@ -113,7 +113,7 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 
 func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T) {
 	reviewEnabledHome(t)
-	t.Run("created and closed-review restart", func(t *testing.T) {
+	t.Run("created and acknowledged approval status", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 		lineage := "review-start-context-reuse"
@@ -124,10 +124,18 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		assertNegotiatedStartFrozenContext(t, repo, created)
 		completeNegotiatedStartReview(t, repo, created, true)
 
-		recreated := runNegotiatedReviewStart(t, repo, lineage)
-		if recreated.Action != "created" || recreated.BaseTree != created.BaseTree || recreated.CandidateTree != created.CandidateTree ||
-			!reflect.DeepEqual(*recreated.ChangedPathManifest, *created.ChangedPathManifest) {
-			t.Fatalf("START after clean capture closure = %#v", recreated)
+		var statusOutput bytes.Buffer
+		if err := RunReview([]string{
+			"status", "--cwd", repo, "--lineage", lineage,
+			"--contract", ReviewIntegrationContractV2, "--next-transition",
+		}, &statusOutput); err != nil {
+			t.Fatalf("status after clean capture closure: %v\n%s", err, statusOutput.String())
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+		if status.Authority == nil || status.Authority.LineageID != lineage || status.Authority.State != reviewtransaction.StateApproved ||
+			status.NextTransition != nil && status.NextTransition.ReasonCode == "fresh_target_ready" {
+			t.Fatalf("status after clean capture closure = %#v, want retained approval", status)
 		}
 	})
 
@@ -405,7 +413,7 @@ func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewInte
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+		assertApprovedCompactAuthorityAcknowledged(t, store, started.LineageID)
 	}
 }
 

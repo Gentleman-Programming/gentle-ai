@@ -69,7 +69,7 @@ func TestLowRiskStartBurnsUnderPublishedStatusContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertApprovedCompactAuthorityBurned(t, store, lineage)
+	assertApprovedCompactAuthorityAcknowledged(t, store, lineage)
 
 	var output bytes.Buffer
 	if err := RunReview([]string{
