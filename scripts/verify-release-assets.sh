@@ -152,7 +152,7 @@ if ! jq -e --arg repository "$GITHUB_REPOSITORY" --arg tag "$tag" --arg source_s
     (.name | type == "string") and .name == $workflow and (.run_id | type == "string") and .run_id == $run_id and
     (.run_attempt | type == "number") and .run_attempt == $run_attempt and (.job | type == "string") and .job == "release") and
   (.toolchain | type == "object" and keys_unsorted == ["goreleaser", "go"] and
-    (.goreleaser | type == "string") and .goreleaser == "v2.15.2" and (.go | type == "string") and test("^go1\\.[0-9]+(\\.[0-9]+)?$")) and
+    (.goreleaser | type == "string") and .goreleaser == "v2.15.2" and (.go | type == "string" and test("^go1\\.[0-9]+(\\.[0-9]+)?$"))) and
   (.provider_contract_semver | type == "string") and .provider_contract_semver == $contract_semver and
   (.configuration_sha256 | type == "string") and .configuration_sha256 == $configuration_sha256 and
   (.artifacts | type == "array" and length == 5) and

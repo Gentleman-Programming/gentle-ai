@@ -219,8 +219,8 @@ if [[ "$1" == release && "$2" == download && "$3" == "$tag" ]]; then
     artifact-matrix) sed -i 's/"darwin"/"solaris"/' "$directory/manifest.json" ;;
   esac
   case "$scenario" in
-    tar-extra) printf x >"$directory/extra"; (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json extra) ;;
-    tar-link) (cd "$directory" && mv manifest.json target && ln -s target manifest.json && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json) ;;
+    tar-extra) printf x >"$directory/extra"; (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json extra); rm "$directory/extra" ;;
+    tar-link) (cd "$directory" && mv manifest.json target && ln -s target manifest.json && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json); rm "$directory/target" ;;
     tar-path) mkdir "$directory/nested"; mv "$directory/manifest.json" "$directory/nested/manifest.json"; (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz nested) ;;
     tar-duplicate) (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json manifest.json) ;;
     *) (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json) ;;
