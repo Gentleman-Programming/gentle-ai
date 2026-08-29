@@ -823,7 +823,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		PiBackgroundIntent:   s.PiBackgroundIntent,
 		UninstallAgents:      agents,
 		UninstallComponents:  defaultUninstallComponents(),
-		UninstallEngramScope: model.EngramUninstallScopeGlobal,
+		UninstallEngramScope: model.EngramUninstallScopeNone,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -1372,7 +1372,7 @@ func (m Model) View() string {
 	case ScreenUninstallComponents:
 		return screens.RenderUninstallComponents(m.UninstallComponents, m.Cursor)
 	case ScreenUninstallProfiles:
-		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
+		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.shouldShowUninstallEngramScopeSelection(), m.shouldOfferNoCleanupEngramScope(), m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
 	case ScreenUninstallConfirm:
 		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
@@ -2018,6 +2018,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		switch {
 		case m.Cursor < len(options):
 			m.UninstallMode = options[m.Cursor].Mode
+			m.UninstallEngramScope = defaultUninstallEngramScope(m.UninstallMode)
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
 				m.setScreen(ScreenUninstall)
@@ -2080,7 +2081,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		profileCount := len(m.UninstallProfilesAvailable)
 		engramScopeOptionCount := 0
 		if m.shouldShowUninstallEngramScopeSelection() {
-			engramScopeOptionCount = 2
+			engramScopeOptionCount = len(m.uninstallEngramScopeOptions())
 		}
 		continueIdx := profileCount + engramScopeOptionCount
 		switch {
@@ -3003,7 +3004,7 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallProfilesToRemove = nil
 	m.UninstallProfileSelection = false
 	m.UninstallEngramProjectScopeAvailable = false
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallEngramScope = model.EngramUninstallScopeNone
 	m.UninstallResult = componentuninstall.Result{}
 	m.UninstallErr = nil
 	m.SyncCleanInstallFiles = nil
@@ -3382,7 +3383,7 @@ func (m Model) startUninstall() tea.Cmd {
 
 func (m *Model) refreshUninstallProfiles() {
 	m.UninstallEngramProjectScopeAvailable = m.detectProjectEngramData()
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallEngramScope = defaultUninstallEngramScope(m.UninstallMode)
 
 	if !m.hasDetectedOpenCode() {
 		m.UninstallProfilesAvailable = nil
@@ -3399,6 +3400,9 @@ func (m *Model) refreshUninstallProfiles() {
 		return
 	}
 	m.UninstallProfilesAvailable = profileNames(profiles)
+	if m.shouldOfferNoCleanupEngramScope() {
+		m.UninstallEngramScope = model.EngramUninstallScopeNone
+	}
 }
 
 func (m Model) detectProjectEngramData() bool {
@@ -3870,10 +3874,10 @@ func (m *Model) setScreen(next Screen) {
 		}
 	}
 	if next == ScreenUninstallMode {
+		m.UninstallEngramScope = defaultUninstallEngramScope(m.UninstallMode)
 		m.refreshUninstallProfiles()
 		m.UninstallProfilesToRemove = nil
 		m.UninstallProfileSelection = false
-		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	}
 }
 
@@ -3960,7 +3964,7 @@ func (m Model) optionCount() int {
 	case ScreenUninstallProfiles:
 		count := len(m.UninstallProfilesAvailable) + 2
 		if m.shouldShowUninstallEngramScopeSelection() {
-			count += 2
+			count += len(m.uninstallEngramScopeOptions())
 		}
 		return count
 	case ScreenUninstallConfirm:
@@ -4193,13 +4197,14 @@ func (m *Model) toggleCurrentUninstallEngramScope() {
 		return
 	}
 	idx := m.Cursor - profileCount
-	if idx == 0 {
-		m.UninstallEngramScope = model.EngramUninstallScopeProject
-		return
+	options := m.uninstallEngramScopeOptions()
+	if idx >= 0 && idx < len(options) {
+		m.UninstallEngramScope = options[idx].Scope
 	}
-	if idx == 1 {
-		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
-	}
+}
+
+func defaultUninstallEngramScope(mode model.UninstallMode) model.EngramUninstallScope {
+	return model.EngramUninstallScopeGlobal
 }
 
 func (m *Model) toggleCurrentSkill() {
@@ -4906,10 +4911,16 @@ func (m Model) shouldShowUninstallProfilesSelection() bool {
 }
 
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
-	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
-		return false
-	}
-	return m.UninstallEngramProjectScopeAvailable
+	return hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) &&
+		(m.shouldShowUninstallProfilesSelection() || m.UninstallEngramProjectScopeAvailable)
+}
+
+func (m Model) shouldOfferNoCleanupEngramScope() bool {
+	return m.UninstallMode == model.UninstallModePartial && m.shouldShowUninstallProfilesSelection()
+}
+
+func (m Model) uninstallEngramScopeOptions() []screens.UninstallEngramScopeOption {
+	return screens.UninstallEngramScopeOptions(m.UninstallEngramProjectScopeAvailable, m.shouldOfferNoCleanupEngramScope())
 }
 
 func (m Model) shouldShowUninstallSubSelection() bool {

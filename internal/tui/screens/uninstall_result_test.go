@@ -89,3 +89,41 @@ func TestRenderUninstallResultIncludesEngramScopeSummary(t *testing.T) {
 		t.Fatalf("RenderUninstallResult() should include Engram project scope summary; got:\n%s", out)
 	}
 }
+
+func TestRenderUninstallConfirmEngramWorkspaceWarningMatchesCleanupEffect(t *testing.T) {
+	tests := []struct {
+		name             string
+		components       []model.ComponentID
+		profiles         []string
+		scope            model.EngramUninstallScope
+		projectAvailable bool
+		wantWarning      bool
+	}{
+		{name: "Engram-only project cleanup", components: []model.ComponentID{model.ComponentEngram}, scope: model.EngramUninstallScopeProject, projectAvailable: true, wantWarning: true},
+		{name: "no cleanup", components: []model.ComponentID{model.ComponentEngram}, scope: model.EngramUninstallScopeNone, projectAvailable: true},
+		{name: "project cleanup with unrelated selection", components: []model.ComponentID{model.ComponentPersona}, scope: model.EngramUninstallScopeProject, projectAvailable: true, wantWarning: true},
+		{name: "global cleanup", components: []model.ComponentID{model.ComponentEngram}, scope: model.EngramUninstallScopeGlobal, projectAvailable: true},
+		{name: "profile-only removal", components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram}, profiles: []string{"cheap"}, scope: model.EngramUninstallScopeNone, projectAvailable: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := RenderUninstallConfirm(
+				model.UninstallModePartial,
+				[]model.AgentID{model.AgentOpenCode},
+				tt.components,
+				tt.profiles,
+				tt.scope,
+				tt.projectAvailable,
+				0,
+				false,
+				0,
+			)
+
+			gotWarning := strings.Contains(out, "• .engram/ (persistent memory context)")
+			if gotWarning != tt.wantWarning {
+				t.Fatalf(".engram warning present = %t, want %t; got:\n%s", gotWarning, tt.wantWarning, out)
+			}
+		})
+	}
+}
