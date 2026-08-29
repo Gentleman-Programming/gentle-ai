@@ -352,7 +352,16 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			(result.NextTransition.ReasonCode == "targeted_validation_required" ||
 				result.NextTransition.ReasonCode == reviewInconclusiveTargetedValidationReason) && result.NextTransition.Collect != nil &&
 			len(result.NextTransition.Collect.Inputs) == 1 && result.NextTransition.Collect.Inputs[0].ProviderTask != nil
-		if !providerTargetedValidation && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
+		// A transition that collects something else first legitimately carries no
+		// validation request while the status still reports the one the review
+		// is waiting on. An untracked file appearing mid-correction is the
+		// ordinary way to reach that: the operator has to declare it before the
+		// validator can run, and the pending request does not stop being true
+		// meanwhile. Requiring presence parity there stranded the lineage, since
+		// exact-lineage STATUS is its only re-entry (#3647).
+		collectsUntrackedSelection := result.NextTransition.Kind == reviewNextTransitionCollect &&
+			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
+		if !providerTargetedValidation && !collectsUntrackedSelection && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
 			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
 		}
