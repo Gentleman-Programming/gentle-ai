@@ -54,8 +54,11 @@ func TestLocalBuildWritesNoReleaseClaim(t *testing.T) {
 	if err := json.Unmarshal(payload, &body); err != nil {
 		t.Fatalf("local manifest is not JSON: %v", err)
 	}
-	if body["schema"] == "gentle-ai.release-provenance/v1" {
-		t.Fatalf("a local build claimed release provenance: %s", payload)
+	if body["schema"] != "gentle-ai.release-provenance/local-build" {
+		t.Fatalf("local manifest schema = %v, want the local-build schema: %s", body["schema"], payload)
+	}
+	if reason, _ := body["reason"].(string); !strings.Contains(reason, "no release provenance") {
+		t.Fatalf("local manifest does not say why it claims nothing: %s", payload)
 	}
 	for _, claim := range []string{"tag", "source_sha", "workflow"} {
 		if _, present := body[claim]; present {
@@ -70,28 +73,33 @@ func TestLocalBuildWritesNoReleaseClaim(t *testing.T) {
 // archive whose manifest quietly claims nothing, which is the outcome the whole
 // guard exists to prevent.
 func TestPartialReleaseIdentityNeverDowngrades(t *testing.T) {
-	for _, missing := range []string{"GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_REF_NAME", "GITHUB_WORKFLOW", "GITHUB_JOB", "GITHUB_RUN_ATTEMPT"} {
+	for _, missing := range releaseIdentityEnvironment {
 		t.Run("without "+missing, func(t *testing.T) {
 			out, args := provenanceArgs(t)
 			ciEnvironment(t)
 			t.Setenv(missing, "")
+			// GITHUB_ACTIONS is the one variable the canonical manifest does not
+			// bind, so losing it alone leaves every recorded fact real and the
+			// build still produces provenance. Losing any bound variable refuses.
+			// Neither outcome may ever be the local manifest: that downgrade is
+			// what this gate exists to prevent.
+			wantProvenance := missing == "GITHUB_ACTIONS"
 			err := run(args)
 			payload, readErr := os.ReadFile(out)
-			if err != nil {
-				if readErr == nil {
-					t.Fatalf("a refused release build missing %s still wrote a manifest", missing)
+			if wantProvenance {
+				if err != nil || readErr != nil {
+					t.Fatalf("losing %s alone must still record real provenance: %v, %v", missing, err, readErr)
+				}
+				if !strings.Contains(string(payload), `"schema":"gentle-ai.release-provenance/v1"`) {
+					t.Fatalf("a release build missing %s downgraded: %s", missing, payload)
 				}
 				return
 			}
-			// Succeeding is only acceptable while every field the manifest binds
-			// is real, which means it must be canonical provenance. The one thing
-			// it may never be is the local manifest: that is the downgrade this
-			// gate exists to prevent.
-			if readErr != nil {
-				t.Fatalf("a successful release build missing %s wrote nothing", missing)
+			if err == nil {
+				t.Fatalf("a release build missing the bound %s produced a manifest instead of refusing: %s", missing, payload)
 			}
-			if !strings.Contains(string(payload), `"schema":"gentle-ai.release-provenance/v1"`) {
-				t.Fatalf("a release build missing %s downgraded to a non-release manifest: %s", missing, payload)
+			if readErr == nil {
+				t.Fatalf("a refused release build missing %s still wrote a manifest: %s", missing, payload)
 			}
 		})
 	}
