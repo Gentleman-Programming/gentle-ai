@@ -58,8 +58,15 @@ func TestReviewStatusSelectorFreeResolvesRepositoryRoot(t *testing.T) {
 		}
 	})
 
-	if err := RunReview([]string{"status", "--cwd", t.TempDir()}, &bytes.Buffer{}); err == nil {
-		t.Fatal("review status accepted a path outside a repository")
+	// #3880: a genuinely unversioned workspace bootstraps local Git instead
+	// of failing; status then reports an empty authority list exactly like any
+	// other repository with no lineages.
+	unversioned := t.TempDir()
+	if err := RunReview([]string{"status", "--cwd", unversioned}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("review status on an unversioned workspace error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(unversioned, ".git")); statErr != nil {
+		t.Fatalf("unversioned workspace was not bootstrapped: %v", statErr)
 	}
 
 	nestedRepository := filepath.Join(repo, "nested-repository")

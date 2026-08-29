@@ -80,16 +80,24 @@ func TestReviewStartInABareRepositoryNamesAWorkingTreeThatActuallyWorks(t *testi
 func TestReviewStartOutsideAnyRepositoryStillSurfacesItsCause(t *testing.T) {
 	reviewModeHome(t)
 	outside := t.TempDir()
+	// #3880: a genuinely unversioned workspace is now bootstrapped instead of
+	// refused, so present-but-invalid Git metadata is the scenario that must
+	// still surface the cause it came with: the bootstrap never overwrites an
+	// existing .git entry, and the refusal must never claim the repository is
+	// bare.
+	if err := os.WriteFile(filepath.Join(outside, ".git"), []byte("not a git directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	err := RunReview([]string{"start", "--cwd", outside}, &output)
 	if err == nil {
-		t.Fatalf("review start outside a repository was allowed: %s", output.String())
+		t.Fatalf("review start over invalid Git metadata was allowed: %s", output.String())
 	}
 	if message := err.Error(); strings.Contains(message, "bare") {
 		t.Fatalf("a non-bare failure was misclassified as bare: %s", message)
 	}
-	if message := err.Error(); !strings.Contains(message, "not a git repository") {
+	if message := err.Error(); !strings.Contains(message, "invalid gitfile format") {
 		t.Fatalf("an unexpected git failure lost its cause: %s", err)
 	}
 }

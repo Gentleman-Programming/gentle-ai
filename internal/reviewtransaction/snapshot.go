@@ -619,7 +619,21 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	}
 	root, err := resolveGitDirectory(ctx, abs, "--show-toplevel")
 	if err != nil {
-		return "", err
+		// #3880: a genuinely unversioned workspace is bootstrappable, not a
+		// dead end. Local Git is all ordinary review needs, and initializing it
+		// lets the negotiated lifecycle proceed exactly as it does for a
+		// manually initialized unborn repository.
+		bootstrapped, bootstrapErr := bootstrapUnversionedWorkspace(ctx, abs, err)
+		if bootstrapErr != nil {
+			return "", bootstrapErr
+		}
+		if !bootstrapped {
+			return "", err
+		}
+		root, err = resolveGitDirectory(ctx, abs, "--show-toplevel")
+		if err != nil {
+			return "", err
+		}
 	}
 	// 1773 boundary 2: filepath.Rel decided containment by comparing strings,
 	// so on a default case-insensitive APFS volume the requested path and the
@@ -923,6 +937,38 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Remaining: remaining})
 	}
 	return live, nil
+}
+
+// bootstrapUnversionedWorkspace initializes local Git for a genuinely
+// unversioned workspace (#3880). Review freezes and diffs candidates with
+// local Git, but ordinary review needs no remote: after the bootstrap the
+// negotiated lifecycle proceeds exactly as it does for a manually initialized
+// unborn repository.
+//
+// The bootstrap is deliberately narrow. It fires only when root resolution
+// failed as a Git command failure while no `.git` entry exists at the
+// workspace: `rev-parse --show-toplevel` walks ancestor directories, so its
+// failure with no `.git` here proves no ancestor holds a repository either.
+// A bare repository keeps its own refusal, and a workspace whose `.git` entry
+// exists but does not resolve carries present-but-invalid metadata that the
+// bootstrap must never overwrite. `git init` alone stages nothing, commits
+// nothing, and configures no remote.
+func bootstrapUnversionedWorkspace(ctx context.Context, workspace string, resolveErr error) (bool, error) {
+	var bare *BareRepositoryError
+	if errors.As(resolveErr, &bare) {
+		return false, nil
+	}
+	var gitFailure *GitCommandError
+	if !errors.As(resolveErr, &gitFailure) {
+		return false, nil
+	}
+	if _, statErr := os.Lstat(filepath.Join(workspace, ".git")); !os.IsNotExist(statErr) {
+		return false, nil
+	}
+	if _, initErr := runGit(ctx, workspace, nil, nil, "init"); initErr != nil {
+		return false, fmt.Errorf("local Git bootstrap for the unversioned workspace failed: %w", initErr)
+	}
+	return true, nil
 }
 
 func canonicalRepositoryPath(path string) (string, error) {
