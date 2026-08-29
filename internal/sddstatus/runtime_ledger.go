@@ -201,13 +201,14 @@ type RuntimeObjective struct {
 }
 
 type RuntimeAttempt struct {
-	Ordinal                int      `json:"ordinal"`
-	ObjectiveID            string   `json:"objective_id"`
-	ObjectiveGeneration    int      `json:"objective_generation"`
-	WorkUnit               string   `json:"work_unit"`
-	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
-	BeginCandidateTree     string   `json:"begin_candidate_tree"`
-	IntendedUntracked      []string `json:"intended_untracked,omitempty"`
+	Ordinal                    int      `json:"ordinal"`
+	ObjectiveID                string   `json:"objective_id"`
+	ObjectiveGeneration        int      `json:"objective_generation"`
+	WorkUnit                   string   `json:"work_unit"`
+	BeginCandidateIdentity     string   `json:"begin_candidate_identity"`
+	BeginCandidateTree         string   `json:"begin_candidate_tree"`
+	IntendedUntracked          []string `json:"intended_untracked,omitempty"`
+	EligibleUntrackedInventory string   `json:"eligible_untracked_inventory,omitempty"`
 	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
 	// ran under (#2296 part 1). It is empty for every chain recorded before
 	// this field existed — that emptiness IS the legacy signal, so replay and
@@ -374,6 +375,15 @@ type FinishAttemptRequest struct {
 	CleanupEvidence            string             `json:"cleanup_evidence"`
 	ProcessEvidence            string             `json:"process_evidence"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
+
+	// A settle-time declaration about untracked files this attempt created.
+	// Both are omitempty so a request that declares nothing marshals exactly
+	// as it did before the fields existed, which keeps every legacy finish
+	// request digest byte-identical without a second hashing shape.
+	// IntendedUntracked is nil when nothing was declared and non-nil (possibly
+	// empty, from --untracked-scope=exclude) when something was.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	ExpectedUntrackedInventory string    `json:"expected_untracked_inventory,omitempty"`
 }
 
 type HandoffAttemptRequest struct {
@@ -546,6 +556,14 @@ type runtimeBeginEvent struct {
 	// A nil pointer preserves records written before candidate provenance was
 	// introduced; a non-nil empty slice is a modern, explicit empty selection.
 	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
+	// EligibleUntrackedInventory is the digest of the whole eligible untracked
+	// inventory this attempt began against -- what the caller saw when they
+	// declared. IntendedUntracked records only what they SELECTED, so without
+	// this the finish guard cannot tell a path the caller deliberately left
+	// out from one the attempt created afterwards (#3806). A nil pointer is a
+	// record written before the field existed, and the guard stays silent for
+	// it rather than re-asking a decision it cannot read.
+	EligibleUntrackedInventory *string `json:"eligible_untracked_inventory,omitempty"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -609,6 +627,14 @@ type runtimeFinishEvent struct {
 	ProcessEvidence            string             `json:"process_evidence"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+
+	// IntendedUntracked is the selection this settlement actually overlaid,
+	// which is the begin selection unless the caller declared a new one here.
+	// DeclaredUntrackedInventory is the digest they declared against; it is
+	// empty exactly when they declared nothing, which is how replay knows
+	// whether the request carried a selection of its own.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	DeclaredUntrackedInventory string    `json:"declared_untracked_inventory,omitempty"`
 }
 
 type runtimeRequestReceipt struct {
@@ -771,12 +797,16 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			objectiveID = status.Objective.ID
 		}
 		intendedUntracked := slices.Clone(snapshot.IntendedUntracked)
+		_, eligibleInventory, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).IntendedUntrackedInventory(ctx)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("read the eligible untracked inventory this attempt begins against: %w", err)
+		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-			IntendedUntracked: &intendedUntracked,
-			BeginWorktree:     store.Workspace, EffectiveWorktree: store.Workspace,
+			IntendedUntracked: &intendedUntracked, EligibleUntrackedInventory: &eligibleInventory,
+			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -835,13 +865,24 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if request.Outcome == AttemptPassed && chainHasFailedEvidence && !evidenceRemediation {
 			return runtimeRecord{}, fmt.Errorf("passing correction for failed verification %q requires --remediates-evidence-revision %q; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence, chainFailedEvidence)
 		}
+		// The candidate is the begin tree overlaid with tracked changes, the
+		// index, and a selection of untracked paths. The selection made at
+		// begin was a decision about what already existed then, so a file the
+		// attempt itself created is in none of those and settling over it
+		// records the attempt's own product as no change at all (#3806). This
+		// resolves which selection this settlement overlays, and refuses while
+		// the caller can still act when the answer is nobody's decision yet.
+		intendedUntracked, declaredInventory, err := store.settlementUntrackedSelection(ctx, *active, request)
+		if err != nil {
+			return runtimeRecord{}, err
+		}
 		// Issue #2394: the runtime candidate is the same declared candidate
 		// review freezes -- tracked changes plus whatever the user put in the
 		// index. Sweeping the worktree here would make drift detection and
 		// review disagree about what the candidate even is.
 		snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
 			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: active.BeginCandidateTree,
-			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: active.IntendedUntracked,
+			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intendedUntracked,
 		})
 		if err != nil {
 			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
@@ -884,9 +925,89 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
 			ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, changedLines),
+			IntendedUntracked:          &intendedUntracked,
+			DeclaredUntrackedInventory: declaredInventory,
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
+}
+
+// runtimeUndeclaredUntrackedListLimit bounds the paths a single refusal spells
+// out. The eligible inventory is unbounded, and a refusal nobody can read is
+// one nobody acts on.
+const runtimeUndeclaredUntrackedListLimit = 10
+
+// settlementUntrackedSelection answers which untracked paths this settlement
+// overlays onto the begin tree, and returns the inventory digest the caller
+// declared against (empty when they declared nothing).
+//
+// The question only has a new answer when the attempt created eligible
+// untracked files. Everything else the caller already ruled on: a path they
+// selected at begin is candidate bytes, and a path they saw in that same
+// inventory and did not select, they left out on purpose. Comparing today's
+// inventory against the one recorded at begin is what separates the two, and
+// it is why the begin record carries that digest at all.
+func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest) ([]string, string, error) {
+	if active.EligibleUntrackedInventory == "" {
+		// A record written before the begin inventory was captured cannot say
+		// what the caller saw, so no decision can honestly be demanded of them
+		// now and none may be accepted either.
+		if request.IntendedUntracked != nil {
+			return nil, "", errors.New("this attempt began before settle-time untracked declarations existed, so it has no inventory to declare against; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` without --untracked-scope")
+		}
+		return active.IntendedUntracked, "", nil
+	}
+	inventory, digest, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("read the eligible untracked inventory before settling: %w", err)
+	}
+	undecided := make([]string, 0, len(inventory))
+	for _, path := range inventory {
+		if !slices.Contains(active.IntendedUntracked, path) {
+			undecided = append(undecided, path)
+		}
+	}
+	if request.IntendedUntracked == nil {
+		// Nothing eligible is undecided, or the inventory is the very one the
+		// caller declared against at begin. Either way this settlement asks
+		// them nothing new.
+		if len(undecided) == 0 || digest == active.EligibleUntrackedInventory {
+			return active.IntendedUntracked, "", nil
+		}
+		return nil, "", runtimeBornDuringUntrackedRefusal(undecided, digest)
+	}
+	if request.ExpectedUntrackedInventory != digest {
+		return nil, "", fmt.Errorf("this declaration was made against untracked inventory %s but the workspace now holds %s; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --expected-untracked-inventory=%s", request.ExpectedUntrackedInventory, digest, digest)
+	}
+	selection := *request.IntendedUntracked
+	for _, path := range selection {
+		if !slices.Contains(inventory, path) {
+			return nil, "", fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition` to see what is eligible, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with only those paths", path)
+		}
+	}
+	// A path selected at begin is already in the begin tree. Dropping it here
+	// would make the overlay subtract bytes the attempt never touched, so a
+	// settlement may widen the selection but never narrow it.
+	for _, path := range active.IntendedUntracked {
+		if slices.Contains(inventory, path) && !slices.Contains(selection, path) {
+			return nil, "", fmt.Errorf("this attempt began with %q in its candidate, and a settlement cannot take it back out; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --intended-untracked=%s included", path, path)
+		}
+	}
+	return selection, digest, nil
+}
+
+// runtimeBornDuringUntrackedRefusal names the eligible untracked paths nobody
+// has ruled on yet, and both ways to rule on them. Selecting one makes it
+// candidate bytes and charges its lines; excluding it leaves it out, which is
+// what today's settlement does silently and what this refusal exists to put on
+// the record instead.
+func runtimeBornDuringUntrackedRefusal(undecided []string, digest string) error {
+	listed, remainder := undecided, ""
+	if len(listed) > runtimeUndeclaredUntrackedListLimit {
+		remainder = fmt.Sprintf(" and %d more", len(listed)-runtimeUndeclaredUntrackedListLimit)
+		listed = listed[:runtimeUndeclaredUntrackedListLimit]
+	}
+	return fmt.Errorf("this attempt left eligible untracked files its candidate does not include, so settling now would record them as no change at all: %s%s; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s to account them, or --untracked-scope=exclude --expected-untracked-inventory=%s to leave them out on the record", strings.Join(listed, ", "), remainder, digest, digest)
 }
 
 // captureFinalVerifyReport derives the final verification attestation from the
@@ -1898,7 +2019,8 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
 		BeginCandidateTree: event.BeginCandidateTree, IntendedUntracked: intendedUntracked, BeginWorktree: event.BeginWorktree,
-		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
+		EligibleUntrackedInventory: runtimeOptionalString(event.EligibleUntrackedInventory),
+		EffectiveWorktree:          event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
@@ -2158,6 +2280,12 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.ProcessEvidence = event.ProcessEvidence
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
+	// A rescope successor inherits its predecessor's recorded selection, so the
+	// settled attempt must report the one it actually settled with, not the one
+	// it began with (#3806).
+	if event.IntendedUntracked != nil {
+		attempt.IntendedUntracked = slices.Clone(*event.IntendedUntracked)
+	}
 	replay.Status.ActiveAttempt = nil
 	replay.Status.CumulativeChangedLines += event.ChangedLines
 	replay.Status.LifetimeChangedLines += event.ChangedLines
@@ -2249,8 +2377,18 @@ func applyRuntimeGrantEvent(replay *runtimeReplay, event *runtimeGrantEvent) {
 	}
 }
 
+func runtimeOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func validateRuntimeBeginEvent(record runtimeRecord) error {
 	event := record.Begin
+	if event.EligibleUntrackedInventory != nil && !runtimeRevisionPattern.MatchString(*event.EligibleUntrackedInventory) {
+		return rejectRuntimeRecord("invalid_eligible_untracked_inventory")
+	}
 	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
 		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
@@ -2341,6 +2479,13 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis, HarnessDisposition: event.HarnessDisposition,
 			CleanupEvidence: event.CleanupEvidence, ProcessEvidence: event.ProcessEvidence,
 			RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
+			ExpectedUntrackedInventory: event.DeclaredUntrackedInventory,
+		}
+		// The event records the selection this settlement used; the request
+		// carried one only when the caller declared, which is exactly when the
+		// event carries the digest they declared against.
+		if event.DeclaredUntrackedInventory != "" {
+			request.IntendedUntracked = event.IntendedUntracked
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return rejectRuntimeRecord("finish_request_digest_match")
@@ -2566,6 +2711,19 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	}
 	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
+	}
+	if (request.IntendedUntracked == nil) != (request.ExpectedUntrackedInventory == "") {
+		return FinishAttemptRequest{}, errors.New("an untracked declaration needs both its selection and the inventory digest it was made against; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope and --expected-untracked-inventory together")
+	}
+	if request.ExpectedUntrackedInventory != "" && !runtimeRevisionPattern.MatchString(request.ExpectedUntrackedInventory) {
+		return FinishAttemptRequest{}, errors.New("expected_untracked_inventory must be sha256:<64-lowercase-hex>; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with the digest `gentle-ai review status --next-transition` publishes")
+	}
+	if request.IntendedUntracked != nil {
+		canonical, canonicalErr := canonicalRuntimeIntendedUntracked(*request.IntendedUntracked)
+		if canonicalErr != nil {
+			return FinishAttemptRequest{}, canonicalErr
+		}
+		request.IntendedUntracked = &canonical
 	}
 	if request.RemediatesEvidenceRevision != "" {
 		// Every outcome is a truthful settlement of a declared correction
