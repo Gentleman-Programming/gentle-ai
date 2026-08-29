@@ -162,7 +162,12 @@ func AcknowledgeApprovedCompactAuthority(ctx context.Context, repo, lineageID, t
 	store := CompactStore{Dir: filepath.Join(base, "v2", lineageID), lineageID: lineageID}
 	record, err := store.loadCompactRecordLocked()
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		// Narrow on the fact, not on the error class: the absent-authority
+		// refusal is only honest when this lineage's state file is the thing
+		// that is missing. An ErrNotExist raised anywhere else inside the load
+		// keeps its wrapped cause rather than being reported as an already
+		// acknowledged lineage.
+		if _, statErr := os.Lstat(store.StatePath()); errors.Is(err, fs.ErrNotExist) && errors.Is(statErr, fs.ErrNotExist) {
 			return ErrApprovedAcknowledgementAuthorityAbsent
 		}
 		return fmt.Errorf("load compact authority: %w", err)
