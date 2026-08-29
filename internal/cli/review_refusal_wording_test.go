@@ -91,6 +91,7 @@ func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.
 		t.Fatalf("START result = %#v", started)
 	}
 	err := RunReviewCaptureResult([]string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

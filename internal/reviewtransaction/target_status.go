@@ -401,24 +401,24 @@ func explicitReviewingCompactCandidate(ctx context.Context, repo string, candida
 	if err != nil || superseded {
 		return false, false, err
 	}
-	store, err := CompactAuthoritativeStore(ctx, repo, state.LineageID)
-	if err != nil {
-		return false, false, err
-	}
 	pending := false
 	for order, lens := range state.SelectedLenses {
-		slot, err := ReadCompactReviewerResultSlot(store.Dir, order, lens)
-		if err != nil {
-			return false, false, err
+		captured := false
+		for _, entry := range state.AdmittedRoleResults {
+			captured = !state.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == CompactRoleLens && entry.CapturePhaseRevision == state.CapturePhaseRevision &&
+				entry.TargetIdentity == state.InitialSnapshot.Identity && entry.SelectedOrder == order && entry.Lens == lens
+			if captured {
+				break
+			}
 		}
-		pending = pending || !slot.Occupied
+		pending = pending || !captured
 	}
 	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(ctx, state.InitialSnapshot)
 	if err != nil {
 		return false, false, err
 	}
 	for order, lens := range state.SelectedLenses {
-		if _, err := NewArtifactSubject(state, candidate.compact.Revision, frozen, lens, order, ""); err != nil {
+		if _, err := NewArtifactSubject(state, state.CapturePhaseRevision, frozen, lens, order, ""); err != nil {
 			return false, false, err
 		}
 	}

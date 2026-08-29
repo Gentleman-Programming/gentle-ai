@@ -370,6 +370,11 @@ func (fixture evidenceOnlyRuntimeRemediationFixture) settle(t *testing.T) Runtim
 		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "verification passed against the unchanged candidate",
 		HarnessDisposition: HarnessReused, CleanupEvidence: "retry cleanup completed",
 		ProcessEvidence: "retry process scan completed", RemediatesEvidenceRevision: fixture.failedEvidence,
+		// The change artifacts this fixture writes during the attempt are SDD
+		// bookkeeping, not the work unit's product, and this scenario turns on
+		// the candidate staying byte-identical. Excluding them is now an
+		// explicit recorded decision rather than a silent omission (#3806).
+		IntendedUntracked: &[]string{}, ExpectedUntrackedInventory: currentUntrackedInventoryDigest(t, fixture.repo),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -42,7 +42,7 @@ func (b *battery) runHostCodexLane() {
 		b.fail(hostCodexLane, "reviewer capture admitted", "no capture-result collect input carrying an agent argument; "+firstLine(stderr))
 		return
 	}
-	if !b.hostCaptureLens(hostCodexLane, repo, nil, input) {
+	if !b.hostCaptureLens(hostCodexLane, repo, "codex", nil, input) {
 		return
 	}
 	b.hostFollowToReceipt(hostCodexLane, repo, "codex", nil)

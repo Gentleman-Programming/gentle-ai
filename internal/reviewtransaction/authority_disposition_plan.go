@@ -102,6 +102,23 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 	return selectors, nil
 }
 
+// historicalAuthorityDispositionPlanRecord returns the one released authority
+// record that can be planned for quarantine. Its own outdated diagnostic is the
+// sole admissible diagnostic: any malformed, unreadable, missing, or unexpected
+// additional authority entry prevents a historical plan from being published.
+func historicalAuthorityDispositionPlanRecord(report CompactRecoveryInspectionReport) (string, historicalCompactForensicRecord, bool) {
+	if len(report.historical) != 1 || len(report.EntryDiagnostics) != 1 {
+		return "", historicalCompactForensicRecord{}, false
+	}
+	for lineage, historical := range report.historical {
+		diagnostic := report.EntryDiagnostics[0]
+		if diagnostic.LineageID == lineage && diagnostic.Problem == compactInspectionEntryOutdated {
+			return lineage, historical, true
+		}
+	}
+	return "", historicalCompactForensicRecord{}, false
+}
+
 // deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
 // deterministically from report and records — both of which MUST come from
 // the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
@@ -118,12 +135,8 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
-	if len(requested) == 0 && len(selectors) == 0 && len(report.historical) == 1 && len(report.EntryDiagnostics) == 1 {
-		for lineage, historical := range report.historical {
-			diagnostic := report.EntryDiagnostics[0]
-			if diagnostic.LineageID != lineage || diagnostic.Problem != compactInspectionEntryOutdated {
-				break
-			}
+	if len(requested) == 0 && len(selectors) == 0 {
+		if lineage, historical, eligible := historicalAuthorityDispositionPlanRecord(report); eligible {
 			inventory, err := authorityInventoryRevision(records, report.historical)
 			if err != nil {
 				return AuthorityDispositionPlan{}, err

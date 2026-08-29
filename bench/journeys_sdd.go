@@ -1162,7 +1162,7 @@ func sddBurnedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 		{Name: "capture final evidence for the exact active lineage", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
 		{Name: "#3417 final evidence burns the exact active-lineage transaction", Requires: selectedFinalizeEvidenceCapability,
 			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true"), After: func(sandbox *Sandbox, observation Observation) error {
-				return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+				return requirePendingApproval(sandbox.Lineage)(sandbox, observation)
 			}},
 		{Name: "prove the terminal burn leaves no durable authority or receipt", Composite: sddProveSelectedBurned},
 	}
@@ -1172,7 +1172,7 @@ func sddProveSelectedBurned(r *journeyRun) error {
 	if r.sandbox.Lineage == "" {
 		return errors.New("#3417 SDD fixture has no exact lineage to prove burned")
 	}
-	return requireAtomicLineageBurned(r, r.sandbox.Lineage)
+	return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage)
 }
 
 // ---------------------------------------------------------------------------

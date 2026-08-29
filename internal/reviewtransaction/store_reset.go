@@ -156,10 +156,6 @@ var storeResetRemovableTargets = []storeResetTarget{
 		reason: "per-lineage delivery idempotence markers; meaningless once their lineage is gone",
 	},
 	{
-		name: "review-transactions/incidents", parts: []string{"review-transactions", "incidents"},
-		reason: "per-lineage preserved raw reviewer results",
-	},
-	{
 		name: "reviews", parts: []string{"reviews"}, optIn: true,
 		reason: "review graph store written by the gentle-pi adapter, outside this command's lease and in-flight coverage; removed only because --include-adapter-reviews was given",
 		withheldReason: "review graph store the gentle-pi adapter writes and this command cannot vouch for: " +
@@ -168,7 +164,7 @@ var storeResetRemovableTargets = []storeResetTarget{
 }
 
 // storeResetPreservedTargets is the complete exclusion list. Two of these are
-// the kill switch, two are state another component owns, and two are paths no
+// the kill switch, two are state another component owns, and one is a path no
 // gentle-ai code has ever written -- which is itself the reason.
 var storeResetPreservedTargets = []storeResetTarget{
 	{
@@ -190,10 +186,6 @@ var storeResetPreservedTargets = []storeResetTarget{
 	{
 		name: "review-artifacts", parts: []string{"review-artifacts"},
 		reason: "no gentle-ai code writes or reads this path, so its contents were placed by hand; a reset never removes what the product did not create",
-	},
-	{
-		name: "incidents", parts: []string{"incidents"},
-		reason: "same: nothing in this product writes this path, and per-lineage incidents live under review-transactions/incidents instead",
 	},
 	{
 		name: "REVIEW-MAINTENANCE.lock", parts: []string{"REVIEW-MAINTENANCE.lock"},

@@ -6,6 +6,7 @@ func TestCompleteReviewApprovesCleanAdmittedResultsWithoutFinalEvidence(t *testi
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	state := newCompactTestState(t, repo, "clean-last-event-closure")
+	state, store := startReviewingCompactAuthority(t, repo, state)
 
 	results := make([]LensResult, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
@@ -16,13 +17,11 @@ func TestCompleteReviewApprovesCleanAdmittedResultsWithoutFinalEvidence(t *testi
 		}
 	}
 
-	if err := state.CompleteReview(CompactReviewInput{
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults:     results,
 		Classifications: []FindingEvidence{},
 		RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if state.State != StateValidating {
 		t.Fatalf("clean admitted review state = %q, want %q", state.State, StateValidating)
 	}

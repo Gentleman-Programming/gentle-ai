@@ -22,6 +22,7 @@ func coverageCorrectionFixture(t *testing.T, repo, lineage string, forecast int)
 	writeSnapshotFile(t, repo, "internal/widget/widget.go",
 		"package widget\n\nimport \"runtime\"\n\nfunc Widget() string {\n\tif runtime.GOOS == \"windows\" {\n\t\treturn \"windows\"\n\t}\n\treturn \"posix\"\n}\n")
 	state := newCompactTestState(t, repo, lineage)
+	state, store := startReviewingCompactAuthority(t, repo, state)
 	if !equalStrings(state.GenesisPaths, []string{"internal/widget/widget.go"}) {
 		t.Fatalf("fixture genesis scope = %v, want the single reviewed production file", state.GenesisPaths)
 	}
@@ -30,8 +31,9 @@ func coverageCorrectionFixture(t *testing.T, repo, lineage string, forecast int)
 	}
 	finding := Finding{
 		ID: "R3-001", Lens: state.SelectedLenses[0], Location: "internal/widget/widget.go:6", Severity: "CRITICAL",
-		Claim:     "the new windows branch has no test able to execute it",
-		ProofRefs: []string{"no test file in internal/widget exercises the windows branch"},
+		Claim:         "the new windows branch has no test able to execute it",
+		ProofRefs:     []string{"no test file in internal/widget exercises the windows branch"},
+		EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
 	}
 	results := make([]LensResult, 0, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
@@ -41,16 +43,14 @@ func coverageCorrectionFixture(t *testing.T, repo, lineage string, forecast int)
 		}
 		results = append(results, result)
 	}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults: results,
 		Classifications: []FindingEvidence{{
 			FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced,
 			Proof: "the changed hunk introduces the untested branch",
 		}},
 		RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatalf("CompleteReview: %v", err)
-	}
+	})
 	if state.State != StateCorrectionRequired {
 		t.Fatalf("fixture state = %q, want correction_required", state.State)
 	}
