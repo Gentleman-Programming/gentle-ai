@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -84,25 +85,44 @@ func TestTargetedValidatorPromptCarriesEveryInspectionArgument(t *testing.T) {
 func TestTargetedValidatorPromptCarriesFrozenPolicyAndCausalFindingEvidence(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, state, revision := driveReviewToOpenTargetedValidation(t)
-	prompt := string(targetedValidatorProviderPrompt(t, repo, state, revision))
+	prompt := targetedValidatorProviderPrompt(t, repo, state, revision)
 
-	if !strings.Contains(prompt, facadeReviewPolicy) {
+	if !bytes.Contains(prompt, []byte(facadeReviewPolicy)) {
 		t.Fatal("targeted validator prompt omits the exact policy bound when the review started")
 	}
-	for _, findingID := range state.FixFindingIDs {
+	request := decodeTargetedValidatorPromptRequest(t, prompt)
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.ValidationRequest.FixFindings) != len(state.FixFindingIDs) ||
+		len(request.ValidationRequest.FixClassifications) != len(state.FixFindingIDs) {
+		t.Fatalf("targeted validator request causal evidence = findings=%d classifications=%d, want %d each", len(request.ValidationRequest.FixFindings), len(request.ValidationRequest.FixClassifications), len(state.FixFindingIDs))
+	}
+	for index, findingID := range state.FixFindingIDs {
 		var finding reviewtransaction.Finding
-		for _, candidate := range state.Findings {
+		for _, candidate := range view.Findings {
 			if candidate.ID == findingID {
 				finding = candidate
 				break
 			}
 		}
-		classification, found := state.Classifications[findingID]
+		classification, found := view.Classifications[findingID]
 		if finding.ID == "" || !found {
 			t.Fatalf("open correction has no frozen causal finding for %q: %#v", findingID, state)
 		}
-		for _, value := range append([]string{finding.ID, finding.Location, finding.Claim, classification.Proof}, finding.ProofRefs...) {
-			if !strings.Contains(prompt, value) {
+		if !reflect.DeepEqual(request.ValidationRequest.FixFindings[index], finding) || !reflect.DeepEqual(request.ValidationRequest.FixClassifications[index], classification) {
+			t.Fatalf("targeted validator request causal evidence[%d] = finding %#v classification %#v, want admitted finding %#v classification %#v", index, request.ValidationRequest.FixFindings[index], request.ValidationRequest.FixClassifications[index], finding, classification)
+		}
+		canonicalProofBytes, err := json.Marshal(classification.Proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(prompt, canonicalProofBytes) {
+			t.Fatalf("targeted validator prompt omits canonical admitted classification proof bytes %q", canonicalProofBytes)
+		}
+		for _, value := range append([]string{finding.ID, finding.Location, finding.Claim}, finding.ProofRefs...) {
+			if !bytes.Contains(prompt, []byte(value)) {
 				t.Fatalf("targeted validator prompt omits frozen causal finding evidence %q", value)
 			}
 		}
@@ -151,6 +171,9 @@ func TestTargetedValidatorInspectionRecipeExecutes(t *testing.T) {
 		"--request-hash", request.ValidationRequest.RequestHash,
 		"--repository-context", request.RepositoryContext,
 	}
+	// Go launches the targeted validator with the repository as its cwd, so a
+	// recipe derived from the prompt alone runs there too.
+	t.Chdir(repo)
 	for _, operation := range [][]string{
 		{"--operation", "name-status"},
 		{"--operation", "numstat"},
@@ -213,11 +236,13 @@ func targetedValidatorProviderPrompt(t *testing.T, repo string, state reviewtran
 type targetedValidatorPromptRequest struct {
 	RepositoryContext string `json:"repository_context"`
 	ValidationRequest struct {
-		RequestHash              string   `json:"request_hash"`
-		LineageID                string   `json:"lineage_id"`
-		ExpectedRevision         string   `json:"expected_revision"`
-		CorrectionTargetIdentity string   `json:"correction_target_identity"`
-		CorrectionPaths          []string `json:"correction_paths"`
+		RequestHash              string                              `json:"request_hash"`
+		LineageID                string                              `json:"lineage_id"`
+		ExpectedRevision         string                              `json:"expected_revision"`
+		CorrectionTargetIdentity string                              `json:"correction_target_identity"`
+		CorrectionPaths          []string                            `json:"correction_paths"`
+		FixFindings              []reviewtransaction.Finding         `json:"fix_findings"`
+		FixClassifications       []reviewtransaction.FindingEvidence `json:"fix_classifications"`
 	} `json:"validation_request"`
 }
 
@@ -296,5 +321,5 @@ func driveReviewToOpenTargetedValidation(t *testing.T) (repo string, state revie
 	if err != nil {
 		t.Fatalf("discover open correction authority: %v", err)
 	}
-	return repo, record.State, record.Revision
+	return repo, record.State, record.State.CapturePhaseRevision
 }

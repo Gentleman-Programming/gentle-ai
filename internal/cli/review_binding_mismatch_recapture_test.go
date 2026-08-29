@@ -51,7 +51,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, lens, 0, "")
+	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, frozen, lens, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +87,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 
 	// The claim the message makes must be true: the rejection consumed no slot
 	// and moved no authority.
-	if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected binding_mismatch admission consumed the immutable result slot: %v", statErr)
-	}
+	assertNoAdmittedReviewerResults(t, store)
 	assertArtifactRevision(t, store, record.Revision)
 
 	// Run EXACTLY the continuation the message names: capture again on the same
@@ -109,7 +107,6 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 		terminal.LineageID != started.LineageID || terminal.State != reviewtransaction.StateApproved {
 		t.Fatalf("binding_mismatch recapture terminal result = %#v", terminal)
 	}
-	if _, err := store.Load(); !os.IsNotExist(err) {
-		t.Fatalf("binding_mismatch recapture left durable approved authority: %v", err)
-	}
+	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }

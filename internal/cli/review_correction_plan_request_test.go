@@ -111,8 +111,12 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("correction transition = %#v", transition)
 			}
 			request := transition.CorrectionRequest
-			classification := record.State.Classifications[record.State.FixFindingIDs[0]]
-			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.Revision ||
+			view, err := record.State.CompactReviewView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			classification := view.Classifications[record.State.FixFindingIDs[0]]
+			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.State.CapturePhaseRevision ||
 				request.TargetIdentity != record.State.CurrentSnapshot.Identity || request.CorrectionBudget != record.State.CorrectionBudget ||
 				!reflect.DeepEqual(request.FixFindingIDs, record.State.FixFindingIDs) || len(request.Findings) != 1 ||
 				request.Findings[0].ID != record.State.FixFindingIDs[0] || request.Findings[0].Location != tt.path+":1" ||
@@ -202,16 +206,21 @@ func captureCorrectionPlanFromCurrentStatus(t *testing.T, cwd, lineage string, c
 		transition.Collect.Inputs[0].CaptureOperation != reviewCaptureCorrectionPlanOperation {
 		t.Fatalf("correction-plan STATUS = %#v", transition)
 	}
-	captureArgs := reviewTransitionInputTokens(t, transition.Collect.Inputs[0])
+	captureArgs := reviewTransitionInputTokens(t, cwd, transition.Collect.Inputs[0])
 	captureArgs = append(captureArgs, "--correction-lines", strconv.Itoa(correctionLines))
 	if err := RunReviewCaptureCorrectionPlan(captureArgs, &bytes.Buffer{}); err != nil {
 		t.Fatalf("capture current correction plan: %v", err)
 	}
 }
 
-func reviewTransitionInputTokens(t *testing.T, input ReviewTransitionInput) []string {
+// reviewTransitionInputTokens replays one collect input exactly as a host does.
+// The rendered transition carries no filesystem path, so the host supplies the
+// repository the provider-issued context digest is verified against -- either
+// by running in it, or by naming it as this helper does.
+func reviewTransitionInputTokens(t *testing.T, repo string, input ReviewTransitionInput) []string {
 	t.Helper()
-	args := make([]string, 0, len(input.Arguments))
+	args := make([]string, 0, len(input.Arguments)+1)
+	args = append(args, "--cwd="+repo)
 	for _, argument := range input.Arguments {
 		if argument.Token == "" {
 			t.Fatalf("transition argument %q has no exact token", argument.Name)

@@ -233,13 +233,11 @@ func writeNonPristineDispositionRepairFixture(t *testing.T, repo, prefix string)
 		Disposition: reviewtransaction.RecoveryEscalated, Reason: "retry", Actor: "maintainer@example.com",
 		RecoveredAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC), MaintainerAuthorization: dispositionForgedAuthorization,
 	}
-	results := make([]reviewtransaction.LensResult, 0, len(successor.SelectedLenses))
-	for _, lens := range successor.SelectedLenses {
-		results = append(results, reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"reviewed once"}})
+	view, err := successor.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := successor.CompleteReview(reviewtransaction.CompactReviewInput{
-		LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{},
-	}); err != nil {
+	if err := successor.CompleteReview(compactReviewInputFromView(view)); err != nil {
 		t.Fatal(err)
 	}
 	writeReconcileCLIRecord(t, repo, successor)

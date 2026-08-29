@@ -181,15 +181,16 @@ func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertised
 				t.Cleanup(func() { reviewProviderAdapterFor = previous })
 				var output bytes.Buffer
 				if err := RunReviewCaptureResult([]string{
+					"--cwd", repo,
 					"--repository-context", started.RepositoryContext.Handle, "--lineage", lineage,
-					"--target", started.RepositoryContext.TargetIdentity, "--expected-revision", record.Revision,
+					"--target", started.RepositoryContext.TargetIdentity, "--expected-revision", started.RepositoryContext.Revision,
 					"--lens", started.SelectedLenses[0], "--order", "0", "--agent", string(runtime),
 				}, &output); err != nil {
 					t.Fatalf("%s final capture: %v\n%s", runtime, err, output.String())
 				}
 				terminal = output.Bytes()
 			case model.AgentOpenCode:
-				relay := startOpenCodeTransportRelay(t, openCodeLensTransportStart(t, repo, record, started.SelectedLenses[0]))
+				relay := startOpenCodeTransportRelay(t, repo, openCodeLensTransportStart(t, repo, record, started.SelectedLenses[0]))
 				hostOutput := string(payload)
 				completed, err := relay.complete(openCodeTransportEnvelope{
 					Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
@@ -333,7 +334,7 @@ func TestSelectorlessCommittedCorrectionClosesOnTargetedValidation(t *testing.T)
 			}
 			t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 			var terminalOutput bytes.Buffer
-			if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
+			if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
 				t.Fatalf("capture selector-less targeted validation: %v\n%s", err, terminalOutput.String())
 			}
 			var terminal reviewLastEventClosureResult
@@ -395,7 +396,7 @@ func TestStagedCorrectionClosesOnTargetedValidation(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	var terminalOutput bytes.Buffer
-	if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
+	if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0]), &terminalOutput); err != nil {
 		t.Fatalf("capture staged targeted validation: %v\n%s", err, terminalOutput.String())
 	}
 	var terminal reviewLastEventClosureResult
@@ -464,9 +465,8 @@ func TestSelectorlessCommittedCorrectionFailsClosedForOverBudgetReconstruction(t
 
 func committedCorrectionWithOperationalReconstructionAuthority(t *testing.T) string {
 	t.Helper()
-	repo, base, lineage := forecastCommittedCorrection(t)
+	repo, _, lineage := forecastCommittedCorrection(t)
 	writeCommittedCorrection(t, repo, false)
-	runReviewCLIGit(t, repo, "branch", "-f", base, "HEAD")
 
 	source, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
@@ -480,42 +480,8 @@ func committedCorrectionWithOperationalReconstructionAuthority(t *testing.T) str
 	if err := os.WriteFile(filepath.Join(repo, missingPath), []byte("reconstruction fixture\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace,
-		BaseRef: record.State.InitialSnapshot.BaseTree, IntendedUntracked: []string{missingPath},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	startCommittedCorrectionFixture(t, repo, "operational-reconstruction", record.State.InitialSnapshot.BaseTree, []string{missingPath}, 2)
 	if err := os.Remove(filepath.Join(repo, missingPath)); err != nil {
-		t.Fatal(err)
-	}
-
-	state := record.State
-	state.LineageID = "operational-reconstruction"
-	state.InitialAtomicStart = nil
-	state.InitialSnapshot, state.CurrentSnapshot = snapshot, snapshot
-	state.GenesisPaths = append([]string(nil), snapshot.Paths...)
-	if err := state.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	record.State = state
-	record.Revision, err = reviewtransaction.CompactRevisionForState(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(store.StatePath(), append(payload, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return repo
@@ -545,58 +511,47 @@ func assertReconstructedBudgetFailure(t *testing.T, err error, output string) {
 
 func committedCorrectionWithOverBudgetReconstructionAuthority(t *testing.T) string {
 	t.Helper()
-	repo, base, lineage := forecastCommittedCorrection(t)
+	repo, base, _ := forecastCommittedCorrection(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\nvar repaired = true\nvar extraOne = 1\nvar extraTwo = 2\nvar extraThree = 3\nvar extraFour = 4\nvar extraFive = 5\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "large candidate")
-	healthySnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace,
-		BaseRef: base, IntendedUntracked: []string{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	healthy := record.State
-	healthy.LineageID = "healthy-reconstruction"
-	healthy.InitialAtomicStart = nil
-	healthy.InitialSnapshot, healthy.CurrentSnapshot = healthySnapshot, healthySnapshot
-	healthy.GenesisPaths = append([]string(nil), healthySnapshot.Paths...)
-	healthy.OriginalChangedLines, healthy.CorrectionBudget = 10, 5
-	forecast := 5
-	healthy.ProposedCorrectionLines = &forecast
-	if err := healthy.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	record.State = healthy
-	record.Revision, err = reviewtransaction.CompactRevisionForState(healthy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	healthyStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, healthy.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(healthyStore.Dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(healthyStore.StatePath(), append(payload, '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	startCommittedCorrectionFixture(t, repo, "healthy-reconstruction", base, nil, 5)
 	writeOverBudgetCommittedCorrection(t, repo)
 	runReviewCLIGit(t, repo, "branch", "-f", base, "HEAD")
 	return repo
+}
+
+func startCommittedCorrectionFixture(t *testing.T, repo, lineage, baseRef string, intendedUntracked []string, correctionLines int) {
+	t.Helper()
+	args := []string{"--cwd", repo, "--lineage", lineage, "--base-ref", baseRef, "--committed-only"}
+	if len(intendedUntracked) > 0 {
+		_, inventoryDigest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, "--untracked-scope", "select", "--expected-untracked-inventory", inventoryDigest)
+		for _, path := range intendedUntracked {
+			args = append(args, "--intended-untracked", path)
+		}
+	}
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	for order := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == 0 {
+			findings = []facadeFinding{{
+				Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate is wrong",
+				ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
+	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, lineage, correctionLines)
 }
 
 // forecastCommittedCorrection drives a real lineage from START through a

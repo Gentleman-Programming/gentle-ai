@@ -52,10 +52,14 @@ func TestCompleteCorrectionVerificationPreservesFullCandidateScope(t *testing.T)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\nwrong\n")
 	writeSnapshotFile(t, repo, "deleted.txt", "reviewed companion\n")
 	state := newCompactTestState(t, repo, "full-candidate-correction")
+	state, store := startReviewingCompactAuthority(t, repo, state)
 	if !reflect.DeepEqual(state.GenesisPaths, []string{"deleted.txt", "tracked.txt"}) {
 		t.Fatalf("genesis paths = %v", state.GenesisPaths)
 	}
-	finding := Finding{ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:2", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}}
+	finding := Finding{
+		ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:2", Severity: "CRITICAL",
+		Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
+	}
 	results := make([]LensResult, len(state.SelectedLenses))
 	for index, lens := range state.SelectedLenses {
 		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
@@ -63,13 +67,11 @@ func TestCompleteCorrectionVerificationPreservesFullCandidateScope(t *testing.T)
 			results[index].Findings = []Finding{finding}
 		}
 	}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults:     results,
 		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk causes failure"}},
 		RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if err := state.BeginCorrection(1); err != nil {
 		t.Fatal(err)
 	}

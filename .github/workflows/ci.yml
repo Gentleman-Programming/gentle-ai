@@ -265,13 +265,10 @@ jobs:
             'TestStdioHandshake_PreservesCallerCancellation',
             'TestProbeStdio_MissingAbsoluteConfiguredCommandFails',
             'TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled',
-            'TestCompactEffectMarkerStrictValidation',
-            'TestCompactEffectMarkerIsPrivateSeparateAndStable',
-            'TestCompactRepositoryContextIntentAndReconcilerContract',
-            'TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot',
-            'TestLastReviewerCaptureApprovesAndBurnsWithoutFinalize',
+            'TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns',
             'TestCaptureCorrectionPlanBindsExactRequestAndRefusesBudgetOverrun',
-            'TestTargetedValidatorCaptureApprovesAndBurnsWithoutFinalize',
+            'TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize',
+            'TestReviewStartWithZeroLensesIssuesAcknowledgement',
             'TestReviewRecoverEscalatedRequiresExactSuccessorBoundAuthorization',
             'TestCompactReceiptAndGateAPIsAreAbsentFromProductionPackages'
           )

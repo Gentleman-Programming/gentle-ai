@@ -19,16 +19,22 @@ func frozenCompactLedgerHash(t *testing.T, findings []Finding) string {
 }
 
 func TestCompactStateLedgerHashDistinguishesPristineFromFrozenFindings(t *testing.T) {
-	pristine := CompactState{Findings: []Finding{}}
+	pristine := CompactState{}
 	if got := pristine.LedgerHash(); got != EmptyFixDeltaHash {
 		t.Fatalf("pristine ledger hash = %q, want honest empty hash %q", got, EmptyFixDeltaHash)
 	}
-	if got := (CompactState{}).LedgerHash(); got != EmptyFixDeltaHash {
-		t.Fatalf("nil-findings ledger hash = %q, want honest empty hash %q", got, EmptyFixDeltaHash)
+	fixture := newCompactReviewerCaptureFixture(t, "ledger-hash-admitted")
+	findings := []Finding{{
+		ID: "R3-001", Lens: "reliability", Location: "internal/a.go:1", Severity: "CRITICAL",
+		Claim: "wrong value", ProofRefs: []string{"candidate-only failure"},
+		EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
+	}}
+	captureAdmittedCorrectionFinding(t, fixture.store, fixture.state, findings[0])
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	findings := []Finding{{ID: "R3-001", Lens: "reliability", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}}}
-	frozen := CompactState{Findings: findings}
-	if got, want := frozen.LedgerHash(), frozenCompactLedgerHash(t, findings); got != want || got == EmptyFixDeltaHash {
+	if got, want := record.State.LedgerHash(), frozenCompactLedgerHash(t, findings); got != want || got == EmptyFixDeltaHash {
 		t.Fatalf("frozen ledger hash = %q, want canonical ledger hash %q", got, want)
 	}
 }

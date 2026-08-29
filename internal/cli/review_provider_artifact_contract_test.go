@@ -59,7 +59,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 		"fixtures/status.fixture.json":       "846377e06df2cae3587c4258ea75fe1ec1b51f08d01f1d498378c3bf13e93921",
 		"schemas/capabilities.schema.json":   "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "8f4de69091323f22ce6e7c003c344adada92c76ceb4e938347b4d2027bd70f3a",
+		"schemas/status.schema.json":         "3b257b417270744061dc943a97537e253e36e34de4591b0400e3c38ea3efde80",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -92,7 +92,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// the emitter legitimately publishes once the relay handshake is
 		// declared. Deliberate, not drift.
 		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
-		"schemas/status.schema.json":     "8f4de69091323f22ce6e7c003c344adada92c76ceb4e938347b4d2027bd70f3a",
+		"schemas/status.schema.json":     "3b257b417270744061dc943a97537e253e36e34de4591b0400e3c38ea3efde80",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -123,7 +123,8 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
-		"schemas/status-v5.schema.json": "dd543b0231e412d384f0c955f2d036f9ad17e754ca3c48a2578c9cbb86ce298a",
+		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
+		"schemas/status-v5.schema.json": "997bd9628ea59871640e4a17b46d61f8590c93f64e9344f24d809eb6b7cbcf6c",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -146,7 +147,8 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json":            "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		"schemas/last-event-closure.schema.json":     "612531204afa5941e4927c38e868c720a4519fe4b9a5a4ffd29f021dc053001d",
+		"schemas/last-event-closure.schema.json":     "9059651e39278f6932929392f4dacc3911d65fe3769171e2401b87df55da9030",
+		"schemas/transition-execution.schema.json":   "91d7be268283aee030bc4340ac5a2ff7651d5dd5a1624c2433922f38dd4d59cd",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {

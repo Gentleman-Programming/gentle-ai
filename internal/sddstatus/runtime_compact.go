@@ -107,6 +107,11 @@ type CompactSettleRequest struct {
 	ProcessEvidence    string
 
 	RemediatesEvidenceRevision string
+
+	// The settle-time untracked declaration, forwarded verbatim to Finish.
+	// Nil means the caller declared nothing.
+	IntendedUntracked          *[]string
+	ExpectedUntrackedInventory string
 }
 
 type CompactHandoffRequest struct {
@@ -297,7 +302,8 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		ExpectedRevision: status.Revision, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
-		ProcessEvidence: request.ProcessEvidence,
+		ProcessEvidence: request.ProcessEvidence, IntendedUntracked: request.IntendedUntracked,
+		ExpectedUntrackedInventory: request.ExpectedUntrackedInventory,
 	}
 	failedEvidence, hasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
 	if request.RemediatesEvidenceRevision != "" && (!hasFailedEvidence || failedEvidence != request.RemediatesEvidenceRevision) {
@@ -345,7 +351,8 @@ func normalizeCompactSettleRequest(request CompactSettleRequest) error {
 		ExpectedRevision: request.Token, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
-		ProcessEvidence: request.ProcessEvidence,
+		ProcessEvidence: request.ProcessEvidence, IntendedUntracked: request.IntendedUntracked,
+		ExpectedUntrackedInventory: request.ExpectedUntrackedInventory,
 	})
 	if err != nil {
 		return err
@@ -383,13 +390,35 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 		request.Outcome == event.Outcome && request.EvidenceRevision == event.EvidenceRevision &&
 		request.Diagnosis == event.Diagnosis && request.HarnessDisposition == event.HarnessDisposition &&
 		request.CleanupEvidence == event.CleanupEvidence && request.ProcessEvidence == event.ProcessEvidence &&
-		request.RemediatesEvidenceRevision == event.RemediatesEvidenceRevision
+		request.RemediatesEvidenceRevision == event.RemediatesEvidenceRevision &&
+		request.ExpectedUntrackedInventory == event.DeclaredUntrackedInventory &&
+		compactSettleDeclarationMatches(request.IntendedUntracked, event)
 	return FinishAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 		EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis,
 		HarnessDisposition: event.HarnessDisposition, CleanupEvidence: event.CleanupEvidence,
 		ProcessEvidence: event.ProcessEvidence, RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
+		IntendedUntracked: replayedSettleDeclaration(event), ExpectedUntrackedInventory: event.DeclaredUntrackedInventory,
 	}, matches
+}
+
+// replayedSettleDeclaration recovers the selection the original request
+// carried. The event always records the selection the settlement used, but the
+// request carried one only when the caller declared, which the recorded digest
+// is what says.
+func replayedSettleDeclaration(event *runtimeFinishEvent) *[]string {
+	if event.DeclaredUntrackedInventory == "" {
+		return nil
+	}
+	return event.IntendedUntracked
+}
+
+func compactSettleDeclarationMatches(declared *[]string, event *runtimeFinishEvent) bool {
+	replayed := replayedSettleDeclaration(event)
+	if declared == nil || replayed == nil {
+		return declared == nil && replayed == nil
+	}
+	return slices.Equal(*declared, *replayed)
 }
 
 // compactAcquireResult reconciles a committed begin whose publication the
