@@ -350,6 +350,16 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 	if status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
 		t.Fatalf("untracked selection offered no single collect input: %#v", status.NextTransition.Collect)
 	}
+	// This input is a decision the operator owns, so it carries values and no
+	// runnable tokens: the product names the exact flags in its own refusal
+	// rather than issuing an invocation. Composing them here is therefore the
+	// real route, and this assertion makes a future change that starts issuing
+	// tokens fail rather than let the test keep hand-building them.
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		if argument.Token != "" {
+			t.Fatalf("untracked selection now issues runnable tokens; replay them instead of composing flags: %#v", argument)
+		}
+	}
 	inventory := ""
 	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
 		if argument.Name == "expected_untracked_inventory" {
