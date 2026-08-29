@@ -11,7 +11,13 @@ import (
 )
 
 const (
-	schema              = "gentle-ai.release-provenance/v1"
+	schema = "gentle-ai.release-provenance/v1"
+	// localSchema marks a manifest produced outside GitHub Actions. It exists
+	// because the archive that packages the manifest needs the file to be there,
+	// not because a local build has provenance to report: prerelease tags do not
+	// trigger release.yml, so building one by hand is the documented path, and a
+	// local checkout knows no tag, run or workflow it could honestly name.
+	localSchema         = "gentle-ai.release-provenance/local-build"
 	repository          = "Gentleman-Programming/gentle-ai"
 	goReleaserVersion   = "v2.15.2"
 	providerArchiveKind = "provider-contract"
@@ -56,6 +62,11 @@ type workflow struct {
 	RunID      string `json:"run_id"`
 	RunAttempt int    `json:"run_attempt"`
 	Job        string `json:"job"`
+}
+
+type localManifest struct {
+	Schema string `json:"schema"`
+	Reason string `json:"reason"`
 }
 
 type toolchain struct {
@@ -113,18 +124,52 @@ func Build(config []byte, input Input) ([]byte, error) {
 
 // Write creates a manifest at output without replacing an existing file.
 func Write(output, configPath string, input Input) error {
-	info, err := os.Lstat(configPath)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return errors.New("release provenance configuration is invalid")
-	}
-	config, err := os.ReadFile(configPath)
+	config, err := readReleaseConfiguration(configPath)
 	if err != nil {
-		return errors.New("release provenance configuration is unreadable")
+		return err
 	}
 	payload, err := Build(config, input)
 	if err != nil {
 		return err
 	}
+	return writeManifestOnce(output, payload)
+}
+
+// WriteLocal records that this build has no release provenance to report.
+//
+// The archive that packages the manifest needs the file to exist, and a
+// prerelease tag does not trigger release.yml, so building one by hand is the
+// documented path. A local checkout knows no tag, run, or workflow it could
+// honestly name, so this states only that, under its own schema. Every field the
+// canonical manifest binds is absent rather than invented, and no reader can
+// mistake it for the evidence a release carries.
+func WriteLocal(output, configPath string) error {
+	if _, err := readReleaseConfiguration(configPath); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(localManifest{
+		Schema: localSchema,
+		Reason: "built outside GitHub Actions; this build reports no release provenance",
+	})
+	if err != nil {
+		return errors.New("release provenance encoding failed")
+	}
+	return writeManifestOnce(output, append(encoded, '\n'))
+}
+
+func readReleaseConfiguration(configPath string) ([]byte, error) {
+	info, err := os.Lstat(configPath)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("release provenance configuration is invalid")
+	}
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, errors.New("release provenance configuration is unreadable")
+	}
+	return config, nil
+}
+
+func writeManifestOnce(output string, payload []byte) error {
 	parent, err := os.Stat(filepath.Dir(output))
 	if err != nil || !parent.IsDir() {
 		return errors.New("release provenance output parent is unavailable")
@@ -144,7 +189,7 @@ func Write(output, configPath string, input Input) error {
 	if err := file.Close(); err != nil {
 		return errors.New("release provenance output cannot be closed")
 	}
-	info, err = os.Lstat(output)
+	info, err := os.Lstat(output)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
 		return errors.New("release provenance output is invalid")
 	}

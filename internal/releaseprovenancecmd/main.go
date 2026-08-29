@@ -27,6 +27,14 @@ func run(args []string) error {
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *output == "" || *config == "" || *goReleaser != "v2.15.2" {
 		return fmt.Errorf("usage: releaseprovenancecmd --out <file> --config <file> --goreleaser-version v2.15.2")
 	}
+	// Outside GitHub Actions there is no provenance to record. That is the
+	// documented prerelease path -- release.yml never runs for a prerelease tag,
+	// so its binaries are built by hand -- and a local checkout knows no run to
+	// name. Refusing here took the whole build down with it, including the
+	// snapshot a maintainer uses to check this configuration.
+	if os.Getenv("GITHUB_ACTIONS") != "true" {
+		return releaseprovenance.WriteLocal(*output, *config)
+	}
 	if os.Getenv("GITHUB_REPOSITORY") != "Gentleman-Programming/gentle-ai" {
 		return fmt.Errorf("release provenance input is invalid")
 	}
