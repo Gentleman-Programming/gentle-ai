@@ -32,13 +32,13 @@ func TestLastRecapturedLensDrivesTheCurrentCorrectionPlan(t *testing.T) {
 	if err != nil || current.State.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("last capture state = %#v, %v", current, err)
 	}
-	request, err := reviewtransaction.BuildCorrectionPlanRequest(current.State, current.Revision)
+	request, err := reviewtransaction.BuildCorrectionPlanRequest(current.State, current.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewCaptureCorrectionPlan([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", request.TargetIdentity,
-		"--expected-revision", current.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", current.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--correction-lines", fmt.Sprint(1),
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("capture current correction plan: %v", err)

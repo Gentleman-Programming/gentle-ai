@@ -47,16 +47,6 @@ func (err *directorySyncError) Error() string {
 
 func (err *directorySyncError) Unwrap() error { return err.cause }
 
-// ImmutablePublicationConflictError requires maintainer action because replay
-// cannot replace a conflicting immutable artifact.
-type ImmutablePublicationConflictError struct{ Cause error }
-
-func (err *ImmutablePublicationConflictError) Error() string {
-	return fmt.Sprintf("immutable review publication conflict: %v", err.Cause)
-}
-
-func (err *ImmutablePublicationConflictError) Unwrap() error { return err.Cause }
-
 // SyncReviewDirectory persists a directory entry when the platform supports it.
 // Windows filesystems may reject directory handles; in that case the file rename
 // remains atomic, but power-loss durability of the directory entry is not claimed.
@@ -921,61 +911,6 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := SyncReviewDirectory(filepath.Dir(path)); err != nil {
-		return &directorySyncError{path: path, cause: err}
-	}
-	return nil
-}
-
-func publishImmutable(path string, payload []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(dir, ".publish-*")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(mode); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if _, err := temp.Write(payload); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := publishNoReplace(tempPath, path); err != nil {
-		if !os.IsExist(err) {
-			return err
-		}
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			return statErr
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return &ImmutablePublicationConflictError{Cause: errors.New("non-regular existing path")}
-		}
-		existing, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		if !bytes.Equal(existing, payload) {
-			return &ImmutablePublicationConflictError{Cause: errors.New("existing content differs")}
-		}
-		if err := SyncReviewDirectory(dir); err != nil {
-			return &directorySyncError{path: path, cause: err}
-		}
-		return nil
-	}
-	if err := SyncReviewDirectory(dir); err != nil {
 		return &directorySyncError{path: path, cause: err}
 	}
 	return nil

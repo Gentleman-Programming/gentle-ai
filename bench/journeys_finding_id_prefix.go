@@ -132,9 +132,9 @@ func captureDisclosedFindingIDPrefixes(r *journeyRun, lineage string) error {
 		if captured.Schema == "gentle-ai.review-last-event-closure/v1" {
 			if round != 3 || captured.Operation != "review/capture-result" ||
 				captured.LineageID != lineage || captured.State != "approved" {
-				return fmt.Errorf("terminal mapped-ID capture for %q = %+v", lens, captured)
+				return fmt.Errorf("terminal mapped-ID acknowledgement capture for %q = %+v", lens, captured)
 			}
-			return requireAtomicLineageBurned(r, lineage)
+			return requireAtomicLineageAcknowledged(r, lineage)
 		}
 		if captured.AdmissionDecision != "completed" {
 			return fmt.Errorf("capture mapped ID for %q = %q; want an admitted result or terminal closure", lens, observation.Stdout)

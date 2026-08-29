@@ -116,9 +116,9 @@ func stagedDeliveryJourneys() []Journey {
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: add a second tracked delivery path", Fixture: prepareWorkspaceDeliveryBaseline},
 			{Name: "fixture: two-path workspace candidate staged", Fixture: stageWorkspaceDeliveryCandidate},
-			{Name: "review the staged workspace candidate; zero lenses close and burn at START", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},
+			{Name: "review the staged workspace candidate; zero lenses expose acknowledgement at START before burn", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},
 			{Name: "the zero-lens terminal event leaves no staged authority", Requires: statusCapability, Composite: func(r *journeyRun) error {
-				return requireAtomicLineageBurned(r, stagedDeliveryLineage)
+				return requireAtomicLineageAcknowledged(r, stagedDeliveryLineage)
 			}},
 			{Name: "fixture: empty index after the terminal burn", Fixture: unstageWorkspaceDeliveryCandidate},
 			{Name: "empty index pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {

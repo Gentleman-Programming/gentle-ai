@@ -53,7 +53,7 @@ func TestRejectedTargetedValidatorCaptureRoutesEscalatedRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision, payload)
+	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(t.Context(), repo, store, record.State, record.State.CapturePhaseRevision, payload)
 	if err != nil || closure == nil || closure.State != reviewtransaction.StateEscalated {
 		t.Fatalf("rejected targeted validator closure = %#v, %v", closure, err)
 	}

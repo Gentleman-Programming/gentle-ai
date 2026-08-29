@@ -88,7 +88,9 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	var err error
 	if operation == "status" {
 		result.Scope = reviewModeScopeBoth
-		result.Status, err = reviewModeStatus(ctx, *cwd)
+		result.Status, err = ReviewModeStatus(ctx, *cwd)
+	} else if selectedScope == reviewModeScopeGlobal {
+		result.Status, err = SetGlobalReviewMode(ctx, *cwd, operation == "enable")
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
 	}
@@ -100,6 +102,21 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 
 // reviewModeStatus is strictly read-only: it never creates user state and never
 // creates repository state.
+// ReviewModeStatus resolves the persisted review-mode sources without mutating them.
+func ReviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
+	return reviewModeStatus(ctx, repo)
+}
+
+// SetGlobalReviewMode changes only the global review-mode source and returns the
+// resolved status for the requested repository.
+func SetGlobalReviewMode(ctx context.Context, repo string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
+	operation := "disable"
+	if enabled {
+		operation = "enable"
+	}
+	return applyReviewMode(ctx, repo, operation, reviewModeScopeGlobal, "", false)
+}
+
 func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
 	global, err := readGlobalRDDMode()
 	if err != nil {
@@ -372,21 +389,23 @@ func writeGlobalRDDMode(operation string) error {
 	if err != nil {
 		return fmt.Errorf("resolve user home directory: %w", err)
 	}
-	persisted, err := state.Read(home)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read global review mode: %w", err)
-	}
-	mode := reviewtransaction.RDDModeOff
-	if operation == "enable" {
-		mode = reviewtransaction.RDDModeOn
-	}
-	recorded := time.Now().UTC()
-	persisted.RDDMode = string(mode)
-	persisted.RDDModeRecordedAt = &recorded
-	if err := state.Write(home, persisted); err != nil {
-		return fmt.Errorf("persist global review mode: %w", err)
-	}
-	return nil
+	return withInstallStateLock(home, func() error {
+		persisted, err := state.Read(home)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read global review mode: %w", err)
+		}
+		mode := reviewtransaction.RDDModeOff
+		if operation == "enable" {
+			mode = reviewtransaction.RDDModeOn
+		}
+		recorded := time.Now().UTC()
+		persisted.RDDMode = string(mode)
+		persisted.RDDModeRecordedAt = &recorded
+		if err := state.Write(home, persisted); err != nil {
+			return fmt.Errorf("persist global review mode: %w", err)
+		}
+		return nil
+	})
 }
 
 func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) error {

@@ -192,20 +192,20 @@ func TestFailedCriteriaEscalationStatusStillStopsWithUnchangedTarget(t *testing.
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
 	state := newCompactTestState(t, repo, "failed-criteria-status-dead-end")
+	state, store := startReviewingCompactAuthority(t, repo, state)
 	if state.CorrectionBudget < 2 || len(state.SelectedLenses) != 1 {
 		t.Fatalf("fixture risk/budget = %q/%d", state.RiskLevel, state.CorrectionBudget)
 	}
 	finding := Finding{
 		ID: "R3-001", Lens: "reliability", Location: "tracked.txt:5", Severity: "CRITICAL",
 		Claim: "candidate retains the wrong value", ProofRefs: []string{"candidate-only differential failure"},
+		EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
 	}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults:     []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed exact candidate tree"}}},
 		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk"}},
 		RefuterOutcomes: []EvidenceResult{},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if err := state.BeginCorrection(1); err != nil {
 		t.Fatal(err)
 	}
@@ -555,6 +555,35 @@ func storeLegacyReviewingStatus(t *testing.T, repo, lineage string, snapshot Sna
 	}
 	if _, err := store.Append("", Record{Operation: "review/start", Transaction: *tx}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTargetStatusReopenedLensesAdvertiseOnlyQuarantinedRecapture(t *testing.T) {
+	repo, store, state := highRiskCaptureAuthority(t, "status-reopen-recapture")
+	for order := range state.SelectedLenses {
+		captureCompactLens(t, store, state, order)
+	}
+	record := requireCompactRoleCount(t, store, 4)
+	if err := store.CaptureAdmittedRefuterResult(t.Context(), CompactAdmittedRefuterResultRequest{ExpectedRevision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity, RequestHash: hash("d"), Payload: []byte(`{"results":[]}`)}); err != nil {
+		t.Fatal(err)
+	}
+	beforeReopen := requireCompactRoleCount(t, store, 5)
+	record = reopenOneCapturedLens(t, repo, store, beforeReopen, LensRisk)
+	for order, lens := range record.State.SelectedLenses {
+		entry, captured, lookupErr := record.State.ActiveAdmittedLensResult(order)
+		if lookupErr != nil {
+			t.Fatalf("status active capture slot %q at order %d: %v", lens, order, lookupErr)
+		}
+		if captured != (lens != LensRisk) {
+			t.Fatalf("status capture slot %q at order %d = %t, want %t", lens, order, captured, lens != LensRisk)
+		}
+		if captured && entry.CapturePhaseRevision != beforeReopen.State.CapturePhaseRevision {
+			t.Fatalf("retained active slot %q phase = %q, want immutable phase %q", lens, entry.CapturePhaseRevision, beforeReopen.State.CapturePhaseRevision)
+		}
+	}
+	status, err := AssessTargetStatus(t.Context(), repo, TargetStatusRequest{Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: record.State.LineageID})
+	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateReviewing {
+		t.Fatalf("reopened reviewing status = %#v, %v", status, err)
 	}
 }
 
@@ -1136,7 +1165,8 @@ func writeApprovedTargetStatusHistory(t *testing.T, repo string, count int) {
 		for index, lens := range state.SelectedLenses {
 			results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
 		}
-		if err := state.CompleteReview(CompactReviewInput{LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
+		state, started = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}})
+		if false {
 			t.Fatal(err)
 		}
 		if err := state.CloseCleanReviewOnLastEvent(); err != nil {

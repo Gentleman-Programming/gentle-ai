@@ -2,7 +2,6 @@ package reviewtransaction
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -38,26 +37,94 @@ func TestCompactReviewBoundsCandidateCausalityToGenesisLocations(t *testing.T) {
 			repo := initSnapshotRepo(t)
 			writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 			state := newCompactTestState(t, repo, "causal-scope")
-			finding := Finding{ID: "R3-001", Lens: "reliability", Location: tt.location, Severity: "CRITICAL", Claim: "observable failure", ProofRefs: []string{"defect reproduced"}}
-			err := state.CompleteReview(CompactReviewInput{
-				LensResults:     []LensResult{{Lens: LensReliability, Findings: []Finding{finding}, Evidence: []string{"reviewed exact candidate"}}},
-				Classifications: []FindingEvidence{{FindingID: finding.ID, Class: tt.class, Causality: tt.causality, Proof: "defect reproduced"}},
-				RefuterOutcomes: tt.refuter,
-			})
+			state, store := startReviewingCompactAuthority(t, repo, state)
+			finding := Finding{
+				ID: "R3-001", Lens: "reliability", Location: tt.location, Severity: "CRITICAL",
+				Claim: "observable failure", ProofRefs: []string{"defect reproduced"},
+				EvidenceClass: tt.class, CausalDisposition: tt.causality,
+			}
+			if tt.location != "tracked.txt:1" {
+				// Active capture now rejects an invalid or out-of-manifest location
+				// before it can become semantic authority. This is stronger than
+				// the retired projection's post-capture causality downgrade.
+				if _, err := store.CaptureAdmittedReviewerResult(t.Context(), compactLensCaptureRequest(t, store, state, 0, finding)); err == nil {
+					t.Fatalf("out-of-scope finding %q was admitted", tt.location)
+				}
+				record := requireCompactRoleCount(t, store, 0)
+				if record.State.CapturePhaseRevision != state.CapturePhaseRevision {
+					t.Fatal("rejected capture changed the active retry phase")
+				}
+				return
+			}
 			if tt.wantRefuterRequired {
-				if err == nil {
+				captureCompactLens(t, store, state, 0, finding)
+				record := requireCompactRoleCount(t, store, 1)
+				view, err := record.State.CompactReviewView()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := record.State.CompleteReview(CompactReviewInput{LensResults: view.LensResults}); err == nil {
 					t.Fatal("inferential finding without refuter was accepted")
 				}
 				return
 			}
+			state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
+				LensResults:     []LensResult{{Lens: LensReliability, Findings: []Finding{finding}, Evidence: []string{"reviewed exact candidate"}}},
+				Classifications: []FindingEvidence{{FindingID: finding.ID, Class: tt.class, Causality: tt.causality, Proof: "defect reproduced"}},
+				RefuterOutcomes: tt.refuter,
+			})
+			view, err := state.CompactReviewView()
 			if err != nil {
 				t.Fatal(err)
 			}
-			classification := state.Classifications[finding.ID]
-			if state.State != tt.wantState || classification.Causality != tt.wantCausality || state.Outcomes[finding.ID] != tt.wantOutcome || (len(state.FixFindingIDs) == 1) != tt.wantFix || (len(state.FollowUps) == 1) != tt.wantFollow {
-				t.Fatalf("routing = state %q, causality %q, outcome %q, fixes %v, follow-ups %v", state.State, classification.Causality, state.Outcomes[finding.ID], state.FixFindingIDs, state.FollowUps)
+			classification := view.Classifications[finding.ID]
+			if state.State != tt.wantState || classification.Causality != tt.wantCausality || view.Outcomes[finding.ID] != tt.wantOutcome || (len(state.FixFindingIDs) == 1) != tt.wantFix || (len(view.FollowUps) == 1) != tt.wantFollow {
+				t.Fatalf("routing = state %q, causality %q, outcome %q, fixes %v, follow-ups %v", state.State, classification.Causality, view.Outcomes[finding.ID], state.FixFindingIDs, view.FollowUps)
 			}
 		})
+	}
+}
+
+func TestCompactReviewViewDowngradesCandidateCausalityMissingFromAdmission(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "derived-view-admission-causality")
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	record := requireCompactRoleCount(t, fixture.store, 1)
+	state := record.State
+	entry := state.AdmittedRoleResults[0]
+	var envelope compactAdmittedReviewerResult
+	if err := json.Unmarshal(entry.Value, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	finding := Finding{ID: "R3-001", Lens: LensReliability, Location: "internal/a.go:1", Severity: "CRITICAL", Claim: "candidate defect", ProofRefs: []string{"internal/a.go:1"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced}
+	result, err := CanonicalCompactLensResult(LensResult{Lens: LensReliability, Findings: []Finding{finding}, Evidence: []string{"internal/a.go:1 inspected"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(compactProviderReviewerResult{SubjectHash: envelope.Subject.SubjectHash, Inspection: fixture.request.Inspection, Lens: result.Lens, Findings: result.Findings, Evidence: result.Evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Result = payload
+	envelope.Admission.ResultHash = result.ResultHash
+	envelope.Admission.RawSHA256 = payloadSHA256(append(append([]byte(nil), payload...), '\n'))
+	envelope.Admission.CanonicalSHA256 = envelope.Admission.RawSHA256
+	envelope.Admission.CandidateCausalFindingIDs = []string{}
+	entry.Value, err = json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.ArtifactDigest = compactPreservedPayloadDigest(append(append([]byte(nil), entry.Value...), '\n'))
+	entry.ResultHash = result.ResultHash
+	state.AdmittedRoleResults = []CompactAdmittedRoleResult{entry}
+
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.Classifications[finding.ID].Causality; got != CausalUnknown || view.Outcomes[finding.ID] != OutcomeInconclusive || len(view.FixFindingIDs) != 0 {
+		t.Fatalf("unadmitted causal route = classification %#v, outcomes %#v, fixes %v", view.Classifications, view.Outcomes, view.FixFindingIDs)
 	}
 }
 
@@ -81,20 +148,19 @@ func TestCompactStoreLoadsHistoricalOutOfGenesisCausalityWithoutRewrite(t *testi
 func persistHistoricalOutOfGenesisCompactState(t *testing.T, repo, lineage string) (CompactStore, CompactRecord, []byte) {
 	t.Helper()
 	state := newCompactTestState(t, repo, lineage)
-	finding := Finding{ID: "R3-001", Lens: "reliability", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "observable failure", ProofRefs: []string{"candidate failure"}}
-	if err := state.CompleteReview(CompactReviewInput{
+	state, store := startReviewingCompactAuthority(t, repo, state)
+	finding := Finding{
+		ID: "R3-001", Lens: "reliability", Location: "tracked.txt:1", Severity: "CRITICAL",
+		Claim: "observable failure", ProofRefs: []string{"candidate failure"},
+		EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
+	}
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults:     []LensResult{{Lens: LensReliability, Findings: []Finding{finding}, Evidence: []string{"reviewed exact candidate"}}},
 		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "candidate failure"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	state.Findings[0].Location = "legacy/unsafe.go:1"
-	state.LensResults[0].Findings[0].Location = state.Findings[0].Location
-	state.LensResults[0].ResultHash = LensResultHash(state.LensResults[0])
-	store, storeErr := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	})
 	record, payload, recordErr := makeCompactRecord(state)
-	if storeErr != nil || recordErr != nil {
-		t.Fatalf("build historical record: store=%v record=%v", storeErr, recordErr)
+	if recordErr != nil {
+		t.Fatalf("build historical record: %v", recordErr)
 	}
 	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
 		t.Fatal(err)

@@ -112,10 +112,10 @@ func finalizeV5NormalReview(r *journeyRun) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("finalize normal v5 evidence: %s", firstLine(observation.Stderr))
 	}
-	if err := requireBurnedApproval(captureEvidenceDescriptorNormalLineage)(r.sandbox, observation); err != nil {
+	if err := requirePendingApproval(captureEvidenceDescriptorNormalLineage)(r.sandbox, observation); err != nil {
 		return err
 	}
-	return requireAtomicLineageBurned(r, captureEvidenceDescriptorNormalLineage)
+	return requireAtomicLineageAcknowledged(r, captureEvidenceDescriptorNormalLineage)
 }
 
 func captureV5NormalEvidenceDescriptor(r *journeyRun) error {
@@ -246,7 +246,7 @@ func completeBurnedV5DescriptorCorrectionFor(r *journeyRun, lineage string) erro
 	if err := completeV5DescriptorCorrectionFor(r, lineage); err != nil {
 		return err
 	}
-	return requireAtomicLineageBurned(r, lineage)
+	return requireAtomicLineageAcknowledged(r, lineage)
 }
 
 func completeV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {
