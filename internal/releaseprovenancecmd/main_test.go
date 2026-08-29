@@ -64,6 +64,39 @@ func TestLocalBuildWritesNoReleaseClaim(t *testing.T) {
 	}
 }
 
+// TestPartialReleaseIdentityStillRefuses is the case the local path must never
+// swallow: a release build that lost one environment variable. Keying the local
+// route on GITHUB_ACTIONS alone would turn that hard failure into a published
+// archive whose manifest quietly claims nothing, which is the outcome the whole
+// guard exists to prevent.
+func TestPartialReleaseIdentityNeverDowngrades(t *testing.T) {
+	for _, missing := range []string{"GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_REF_NAME", "GITHUB_WORKFLOW", "GITHUB_JOB", "GITHUB_RUN_ATTEMPT"} {
+		t.Run("without "+missing, func(t *testing.T) {
+			out, args := provenanceArgs(t)
+			ciEnvironment(t)
+			t.Setenv(missing, "")
+			err := run(args)
+			payload, readErr := os.ReadFile(out)
+			if err != nil {
+				if readErr == nil {
+					t.Fatalf("a refused release build missing %s still wrote a manifest", missing)
+				}
+				return
+			}
+			// Succeeding is only acceptable while every field the manifest binds
+			// is real, which means it must be canonical provenance. The one thing
+			// it may never be is the local manifest: that is the downgrade this
+			// gate exists to prevent.
+			if readErr != nil {
+				t.Fatalf("a successful release build missing %s wrote nothing", missing)
+			}
+			if !strings.Contains(string(payload), `"schema":"gentle-ai.release-provenance/v1"`) {
+				t.Fatalf("a release build missing %s downgraded to a non-release manifest: %s", missing, payload)
+			}
+		})
+	}
+}
+
 // TestCIBuildStillProducesReleaseProvenance keeps the guard the local path must
 // not weaken: inside Actions the manifest is the canonical v1 evidence, and an
 // input that cannot be trusted still refuses rather than degrading.
