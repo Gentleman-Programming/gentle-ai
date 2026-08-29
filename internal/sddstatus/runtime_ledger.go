@@ -128,7 +128,20 @@ var (
 	// refusal as the cause, because that cause is the only thing that knows
 	// the runnable repository exit. This sentinel classifies; the cause
 	// continues.
-	ErrRuntimeCandidateUnavailable    = errors.New("SDD runtime candidate could not be captured from the repository")                        // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
+	ErrRuntimeCandidateUnavailable = errors.New("SDD runtime candidate could not be captured from the repository") // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
+	// ErrRuntimeUndeclaredUntracked classifies every
+	// settlementUntrackedSelection refusal (#3881): the attempt authority is
+	// intact and unmutated, and what refused is the settlement's untracked
+	// ruling -- missing for files the attempt created (#3806's headline
+	// case), made against a stale inventory, naming a path outside the
+	// eligible inventory, narrowing a begin selection, or offered to a legacy
+	// record that has no inventory to accept one against. Every exit is a
+	// corrected rerun of settle/finish, so the caller can always continue;
+	// left unclassified these fell through to compactMutationFailure's opaque
+	// authority_failure default, which its own contract reserves for what its
+	// name says. Like its siblings it never travels alone: every wrap keeps
+	// the refusal text that names the runnable continuation.
+	ErrRuntimeUndeclaredUntracked     = errors.New("SDD runtime settlement requires an untracked ruling this request does not carry")        // refusal:by-design operator-knowledge: only the caller can choose whether to select or exclude the eligible untracked paths, and every wrap names the exact settle/finish rerun that carries that choice
 	ErrRuntimeHandoffSource           = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
@@ -799,7 +812,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		intendedUntracked := slices.Clone(snapshot.IntendedUntracked)
 		_, eligibleInventory, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).IntendedUntrackedInventory(ctx)
 		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("read the eligible untracked inventory this attempt begins against: %w", err)
+			return runtimeRecord{}, fmt.Errorf("%w while reading the eligible untracked inventory this attempt begins against: %w", ErrRuntimeCandidateUnavailable, err)
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
@@ -953,13 +966,13 @@ func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, acti
 		// what the caller saw, so no decision can honestly be demanded of them
 		// now and none may be accepted either.
 		if request.IntendedUntracked != nil {
-			return nil, "", errors.New("this attempt began before settle-time untracked declarations existed, so it has no inventory to declare against; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` without --untracked-scope")
+			return nil, "", fmt.Errorf("%w: this attempt began before settle-time untracked declarations existed, so it has no inventory to declare against; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` without --untracked-scope", ErrRuntimeUndeclaredUntracked)
 		}
 		return active.IntendedUntracked, "", nil
 	}
 	inventory, digest, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).IntendedUntrackedInventory(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("read the eligible untracked inventory before settling: %w", err)
+		return nil, "", fmt.Errorf("%w while reading the eligible untracked inventory before settling: %w", ErrRuntimeCandidateUnavailable, err)
 	}
 	undecided := make([]string, 0, len(inventory))
 	for _, path := range inventory {
@@ -977,12 +990,12 @@ func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, acti
 		return nil, "", runtimeBornDuringUntrackedRefusal(undecided, digest)
 	}
 	if request.ExpectedUntrackedInventory != digest {
-		return nil, "", fmt.Errorf("this declaration was made against untracked inventory %s but the workspace now holds %s; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --expected-untracked-inventory=%s", request.ExpectedUntrackedInventory, digest, digest)
+		return nil, "", fmt.Errorf("%w: this declaration was made against untracked inventory %s but the workspace now holds %s; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --expected-untracked-inventory=%s", ErrRuntimeUndeclaredUntracked, request.ExpectedUntrackedInventory, digest, digest)
 	}
 	selection := *request.IntendedUntracked
 	for _, path := range selection {
 		if !slices.Contains(inventory, path) {
-			return nil, "", fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition` to see what is eligible, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with only those paths", path)
+			return nil, "", fmt.Errorf("%w: intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition` to see what is eligible, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with only those paths", ErrRuntimeUndeclaredUntracked, path)
 		}
 	}
 	// A path selected at begin is already in the begin tree. Dropping it here
@@ -990,7 +1003,7 @@ func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, acti
 	// settlement may widen the selection but never narrow it.
 	for _, path := range active.IntendedUntracked {
 		if slices.Contains(inventory, path) && !slices.Contains(selection, path) {
-			return nil, "", fmt.Errorf("this attempt began with %q in its candidate, and a settlement cannot take it back out; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --intended-untracked=%s included", path, path)
+			return nil, "", fmt.Errorf("%w: this attempt began with %q in its candidate, and a settlement cannot take it back out; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --intended-untracked=%s included", ErrRuntimeUndeclaredUntracked, path, path)
 		}
 	}
 	return selection, digest, nil
@@ -1007,7 +1020,7 @@ func runtimeBornDuringUntrackedRefusal(undecided []string, digest string) error 
 		remainder = fmt.Sprintf(" and %d more", len(listed)-runtimeUndeclaredUntrackedListLimit)
 		listed = listed[:runtimeUndeclaredUntrackedListLimit]
 	}
-	return fmt.Errorf("this attempt left eligible untracked files its candidate does not include, so settling now would record them as no change at all: %s%s; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s to account them, or --untracked-scope=exclude --expected-untracked-inventory=%s to leave them out on the record", strings.Join(listed, ", "), remainder, digest, digest)
+	return fmt.Errorf("%w: this attempt left eligible untracked files its candidate does not include, so settling now would record them as no change at all: %s%s; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s to account them, or --untracked-scope=exclude --expected-untracked-inventory=%s to leave them out on the record", ErrRuntimeUndeclaredUntracked, strings.Join(listed, ", "), remainder, digest, digest)
 }
 
 // captureFinalVerifyReport derives the final verification attestation from the

@@ -36,6 +36,15 @@ const (
 	// was declared), so the settlement that declaration promises is
 	// structurally impossible and no token may be issued for it.
 	CompactBlockRemediationUnsatisfiable CompactBlockReason = "remediation_unsatisfiable"
+	// CompactBlockUndeclaredUntracked is the settlement-side untracked ruling
+	// block (#3881): the attempt authority is intact and unmutated, and what
+	// refused is the settlement's untracked declaration -- missing for files
+	// the attempt itself created (#3806), stale, naming an ineligible path,
+	// narrowing a begin selection, or offered to a pre-inventory legacy
+	// record. Every exit is a corrected rerun of settle/finish, so a consumer
+	// routing on this reason continues, where authority_failure would tell it
+	// to stop.
+	CompactBlockUndeclaredUntracked CompactBlockReason = "undeclared_untracked"
 )
 
 // CompactAttemptResult is the bounded orchestration projection. RuntimeStatus
@@ -482,6 +491,13 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	case errors.Is(err, ErrRuntimeRevisionConflict), errors.Is(err, ErrRuntimeConcurrentUpdate),
 		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt):
 		reason = CompactBlockInvalidContinuation
+	// ErrRuntimeUndeclaredUntracked is the sentinel behind every
+	// settlementUntrackedSelection refusal (#3881): the settlement needs an
+	// untracked ruling the request does not carry. Caller-actionable -- the
+	// wrapped text names the exact rerun -- so it must not report as
+	// authority_failure, which the contract reserves for what its name says.
+	case errors.Is(err, ErrRuntimeUndeclaredUntracked):
+		reason = CompactBlockUndeclaredUntracked
 	// ErrRuntimeWorktreeMismatch is the sentinel behind
 	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
 	// different linked worktree than the one Begin recorded. Left

@@ -346,8 +346,8 @@ func TestRunSDDAttemptSettleDeclaresUntrackedFilesBornDuringTheAttempt(t *testin
 				"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan clean",
 			}
 			blocked, _ := runCompactSDDAttempt(t, settle)
-			if blocked.State != "blocked" {
-				t.Fatalf("undeclared born-during settlement = %#v", blocked)
+			if blocked.State != "blocked" || blocked.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
+				t.Fatalf("undeclared born-during settlement = %#v, want blocked/%s", blocked, sddstatus.CompactBlockUndeclaredUntracked)
 			}
 			if !strings.Contains(blocked.Exit, "born.txt") ||
 				!strings.Contains(blocked.Exit, "--untracked-scope=select") ||
