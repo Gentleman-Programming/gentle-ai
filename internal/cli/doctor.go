@@ -497,7 +497,7 @@ func danglingAncestor(homeDir, path string) (string, error) {
 			// sync cannot mkdir below a regular file. POSIX surfaces this as
 			// ENOTDIR at the final lstat, but Windows reports it as not-exist,
 			// which is how the walk gets here.
-			return "", fmt.Errorf("ancestor %s is not a directory", ancestor)
+			return "", fmt.Errorf("ancestor %s is not a directory", ancestor) // refusal:by-design world-action: the caller embeds this cause in a warn that already names the continuation (inspect or repair the path, re-run 'gentle-ai doctor'); the repair itself happens on the filesystem, not through a command
 		}
 		if _, err := os.Stat(ancestor); os.IsNotExist(err) {
 			return ancestor, nil
