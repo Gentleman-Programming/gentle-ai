@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // delegatingSDDCommands lists every OpenCode SDD command whose frontmatter
@@ -30,12 +32,18 @@ var delegatingSDDCommands = []string{
 	"sdd-research.md",
 }
 
-// commandFrontmatterText extracts the raw YAML frontmatter block (between
-// the opening and closing `---` delimiters) of a command asset. Assertions
-// about metadata must be scoped to this block: the literal `subtask: true`
-// appearing in a command body (for example, when the body documents the
-// field) is prose, not a routing regression.
-func commandFrontmatterText(t *testing.T, path string) string {
+// openCodeCommandMeta carries the frontmatter fields the #2939 ratchet
+// asserts on. Decoding the YAML (instead of substring-matching the raw file)
+// makes the assertions exact: prose or comments that mention the literal
+// `agent:` or `subtask:` values cannot produce a false pass or failure.
+type openCodeCommandMeta struct {
+	Agent   string `yaml:"agent"`
+	Subtask bool   `yaml:"subtask"`
+}
+
+// decodeCommandFrontmatter reads a command asset and decodes its YAML
+// frontmatter block (between the opening and closing `---` delimiters).
+func decodeCommandFrontmatter(t *testing.T, path string) openCodeCommandMeta {
 	t.Helper()
 
 	data, err := os.ReadFile(path)
@@ -53,7 +61,12 @@ func commandFrontmatterText(t *testing.T, path string) string {
 	if end == -1 {
 		t.Fatalf("%s: no closing frontmatter delimiter", path)
 	}
-	return rest[:end]
+
+	var meta openCodeCommandMeta
+	if err := yaml.Unmarshal([]byte(rest[:end]), &meta); err != nil {
+		t.Fatalf("%s: invalid frontmatter YAML: %v", path, err)
+	}
+	return meta
 }
 
 // TestNoSubtaskOnSDDOpenCodeCommands is the #2939 source-asset ratchet: the
@@ -66,11 +79,11 @@ func commandFrontmatterText(t *testing.T, path string) string {
 func TestNoSubtaskOnSDDOpenCodeCommands(t *testing.T) {
 	root := filepath.Join("..", "..", "internal", "assets", "opencode", "commands")
 	for _, name := range delegatingSDDCommands {
-		fm := commandFrontmatterText(t, filepath.Join(root, name))
-		if !strings.Contains(fm, "agent: gentle-orchestrator") {
-			t.Errorf("%s lost `agent: gentle-orchestrator` routing; the fix must remove only `subtask: true`", name)
+		meta := decodeCommandFrontmatter(t, filepath.Join(root, name))
+		if meta.Agent != "gentle-orchestrator" {
+			t.Errorf("%s lost `agent: gentle-orchestrator` routing (got %q); the fix must remove only `subtask: true`", name, meta.Agent)
 		}
-		if strings.Contains(fm, "subtask: true") {
+		if meta.Subtask {
 			t.Errorf("%s still declares `subtask: true`; OpenCode will force gentle-orchestrator into a sub-agent invocation. Remove the line from the YAML frontmatter (the orchestrator `task` allowlist already covers every phase worker).", name)
 		}
 	}

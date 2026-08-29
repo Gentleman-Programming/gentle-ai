@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
+	"gopkg.in/yaml.v3"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
@@ -552,9 +553,19 @@ func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
 	}
 }
 
-// installedCommandFrontmatter extracts the raw YAML frontmatter block of a
-// command file materialized under an injected OpenCode configuration.
-func installedCommandFrontmatter(t *testing.T, path string) string {
+// openCodeCommandMeta carries the installed frontmatter fields the #2939
+// ratchet asserts on. Decoding the YAML (instead of substring-matching the
+// raw block) makes the assertions exact: a description or comment that
+// mentions the literal `agent:` or `subtask:` values cannot produce a false
+// pass or a false failure.
+type openCodeCommandMeta struct {
+	Agent   string `yaml:"agent"`
+	Subtask bool   `yaml:"subtask"`
+}
+
+// decodeInstalledCommandFrontmatter reads a command file materialized under
+// an injected OpenCode configuration and decodes its YAML frontmatter block.
+func decodeInstalledCommandFrontmatter(t *testing.T, path string) openCodeCommandMeta {
 	t.Helper()
 
 	data, err := os.ReadFile(path)
@@ -572,7 +583,12 @@ func installedCommandFrontmatter(t *testing.T, path string) string {
 	if end == -1 {
 		t.Fatalf("%s: no closing frontmatter delimiter", path)
 	}
-	return rest[:end]
+
+	var meta openCodeCommandMeta
+	if err := yaml.Unmarshal([]byte(rest[:end]), &meta); err != nil {
+		t.Fatalf("%s: invalid frontmatter YAML: %v", path, err)
+	}
+	return meta
 }
 
 // TestInjectOpenCodeSDDCommandsRemainParentOwned is the #2939 installation
@@ -606,11 +622,11 @@ func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
 		"sdd-research.md",
 	} {
 		path := filepath.Join(home, ".config", "opencode", "commands", name)
-		fm := installedCommandFrontmatter(t, path)
-		if !strings.Contains(fm, "agent: gentle-orchestrator") {
-			t.Errorf("installed %s lost `agent: gentle-orchestrator` routing; the fix must remove only `subtask: true`", name)
+		meta := decodeInstalledCommandFrontmatter(t, path)
+		if meta.Agent != "gentle-orchestrator" {
+			t.Errorf("installed %s lost `agent: gentle-orchestrator` routing (got %q); the fix must remove only `subtask: true`", name, meta.Agent)
 		}
-		if strings.Contains(fm, "subtask: true") {
+		if meta.Subtask {
 			t.Errorf("installed %s declares `subtask: true`; OpenCode forces gentle-orchestrator into a sub-agent invocation — remove the field so the command stays in the primary orchestrator session", name)
 		}
 	}
