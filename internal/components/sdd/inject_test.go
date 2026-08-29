@@ -591,26 +591,11 @@ func decodeInstalledCommandFrontmatter(t *testing.T, path string) openCodeComman
 	return meta
 }
 
-// TestInjectOpenCodeSDDCommandsRemainParentOwned is the #2939 installation
-// ratchet: after Inject materializes the OpenCode command set, every SDD
-// command that routes through the primary `gentle-orchestrator` agent must
-// be installed WITHOUT `subtask: true` in its frontmatter. With that field,
-// OpenCode forces even a primary-mode agent into a sub-agent invocation, so
-// the command would spawn an orchestrator child that must delegate again to
-// the hidden phase worker — one avoidable model hop and a nested path that
-// can be refused at the default subagent depth.
-//
-// The agent binding itself must survive the fix: removing `subtask: true`
-// must only keep the command in the primary orchestrator session, never
-// detach it from `gentle-orchestrator`. The source-asset twin of this guard
-// is TestNoSubtaskOnSDDOpenCodeCommands in internal/components.
-func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
-	mockNoPackageManager(t)
-	home := t.TempDir()
-
-	if _, err := Inject(home, opencodeAdapter(), ""); err != nil {
-		t.Fatalf("Inject() error = %v", err)
-	}
+// assertSDDCommandsParentOwned asserts that every delegating SDD command
+// installed under home keeps the gentle-orchestrator routing and carries no
+// forced-subtask field.
+func assertSDDCommandsParentOwned(t *testing.T, home string) {
+	t.Helper()
 
 	for _, name := range []string{
 		"sdd-init.md",
@@ -630,6 +615,60 @@ func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
 			t.Errorf("installed %s declares `subtask: true`; OpenCode forces gentle-orchestrator into a sub-agent invocation — remove the field so the command stays in the primary orchestrator session", name)
 		}
 	}
+}
+
+// TestInjectOpenCodeSDDCommandsRemainParentOwned is the #2939 installation
+// ratchet: after Inject materializes the OpenCode command set, every SDD
+// command that routes through the primary `gentle-orchestrator` agent must
+// be installed WITHOUT `subtask: true` in its frontmatter. With that field,
+// OpenCode forces even a primary-mode agent into a sub-agent invocation, so
+// the command would spawn an orchestrator child that must delegate again to
+// the hidden phase worker — one avoidable model hop and a nested path that
+// can be refused at the default subagent depth.
+//
+// It covers both install paths. Fresh install: a clean home gets the fixed
+// assets. Upgrade: a pre-fix install whose sdd-init.md still declares
+// `subtask: true` must be overwritten, never preserved — a user upgrading
+// from an affected version reaches the fixed state through a re-sync. A
+// repeat Inject must then be a no-op that leaves the parent-owned state in
+// place.
+//
+// The agent binding itself must survive the fix: removing `subtask: true`
+// must only keep the command in the primary orchestrator session, never
+// detach it from `gentle-orchestrator`. The source-asset twin of this guard
+// is TestNoSubtaskOnSDDOpenCodeCommands in internal/components.
+func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	// Seed one stale command from a pre-fix install: a re-sync must replace
+	// it, not keep the forced-subtask metadata on disk.
+	commandsDir := filepath.Join(home, ".config", "opencode", "commands")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(commands): %v", err)
+	}
+	stale := "---\ndescription: stale pre-fix install\nagent: gentle-orchestrator\nsubtask: true\n---\nstale body\n"
+	if err := os.WriteFile(filepath.Join(commandsDir, "sdd-init.md"), []byte(stale), 0o644); err != nil {
+		t.Fatalf("seed stale sdd-init.md: %v", err)
+	}
+
+	first, err := Inject(home, opencodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject() over a stale install must report changes")
+	}
+	assertSDDCommandsParentOwned(t, home)
+
+	second, err := Inject(home, opencodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	if second.Changed {
+		t.Error("second Inject() reported changes; a repeat install must be a no-op")
+	}
+	assertSDDCommandsParentOwned(t, home)
 }
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
