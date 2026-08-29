@@ -207,3 +207,40 @@ func TestApprovedCompactAcknowledgementTokenDoesNotLeakOutsideAuthorityOrReturnV
 		t.Fatalf("raw acknowledgement token persisted outside compact authority: %v", tokenPaths)
 	}
 }
+
+// TestAcknowledgeApprovedCompactAuthorityReplayRefusesWithoutLeakingAPath pins
+// the refusal shape every other check on this surface already uses. A replayed
+// acknowledgement is an ordinary, expected outcome: the authority it names was
+// burned by the caller's own previous call. Surfacing the raw *os.PathError
+// from the missing state file both leaks the repository layout to whoever reads
+// the error and describes the condition as a filesystem problem rather than as
+// the already-burned authority it is.
+func TestAcknowledgeApprovedCompactAuthorityReplayRefusesWithoutLeakingAPath(t *testing.T) {
+	const lineage = "pending-acknowledgement-replay-refusal"
+	repo, base, store, acknowledgement := approvedCompactAcknowledgementFixture(t, lineage)
+
+	if err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage,
+		acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token); err != nil {
+		t.Fatalf("first acknowledgement: %v", err)
+	}
+	if _, err := os.Stat(store.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("acknowledgement left authority behind: %v", err)
+	}
+
+	err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage,
+		acknowledgement.TargetIdentity, acknowledgement.ExpectedRevision, acknowledgement.Token)
+	if err == nil {
+		t.Fatal("replayed acknowledgement succeeded against burned authority")
+	}
+	for _, secret := range []string{repo, base, store.Dir, store.StatePath()} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("replayed acknowledgement refusal leaked %q: %v", secret, err)
+		}
+	}
+	if strings.Contains(err.Error(), "no such file or directory") {
+		t.Fatalf("replayed acknowledgement refusal surfaced a raw filesystem error: %v", err)
+	}
+	if !errors.Is(err, ErrApprovedAcknowledgementAuthorityAbsent) {
+		t.Fatalf("replayed acknowledgement refusal = %v, want the typed absent-authority refusal", err)
+	}
+}

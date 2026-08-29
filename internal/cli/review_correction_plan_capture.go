@@ -83,7 +83,13 @@ func RunReviewCaptureCorrectionPlan(args []string, stdout io.Writer) error {
 	}
 	state := record.State
 	if err := state.BeginCorrection(*correctionLines); err != nil {
-		return err
+		// The forecast is pre-edit caller input, and BeginCorrection refuses it
+		// before recording a proposal or advancing the capture phase, so the
+		// store is provably untouched here. Falling through untyped would earn
+		// the generic operation_outcome_unknown envelope: a false claim that the
+		// outcome is unknown, which sends the operator to recovery instead of to
+		// a smaller forecast.
+		return reviewPreflightError(err)
 	}
 	nextRevision, err := store.Replace(record.Revision, "review/begin-fix", state)
 	if err != nil {
