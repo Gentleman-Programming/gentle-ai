@@ -603,6 +603,7 @@ func TestInjectOpenCodeSDDCommandsRemainParentOwned(t *testing.T) {
 		"sdd-verify.md",
 		"sdd-archive.md",
 		"sdd-onboard.md",
+		"sdd-research.md",
 	} {
 		path := filepath.Join(home, ".config", "opencode", "commands", name)
 		fm := installedCommandFrontmatter(t, path)

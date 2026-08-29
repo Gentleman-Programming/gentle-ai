@@ -27,6 +27,7 @@ var delegatingSDDCommands = []string{
 	"sdd-verify.md",
 	"sdd-archive.md",
 	"sdd-onboard.md",
+	"sdd-research.md",
 }
 
 // commandFrontmatterText extracts the raw YAML frontmatter block (between
