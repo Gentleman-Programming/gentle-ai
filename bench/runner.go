@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/charmbracelet/x/xpty"
 )
 
 // Sandbox is one journey's isolated world: its own HOME, XDG_*, throwaway git
@@ -231,6 +236,145 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 		StdoutCaptured: true,
 		StderrCaptured: true,
 	}
+}
+
+const ttyTimeout = 10 * time.Second
+const ttyCleanupGrace = 250 * time.Millisecond
+
+var errTTYWaitCleanupTimeout = errors.New("TTY wait cleanup timed out")
+
+func (s *Sandbox) invokeTTY(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	cmd := exec.Command(s.Binary, args...)
+	cmd.Dir, cmd.Env = dir, s.env()
+	pty, err := xpty.NewPty(80, 24)
+	if err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	if err := pty.Start(cmd); err != nil {
+		_ = pty.Close()
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	return runTTY(cmd, pty, args, exchange, xpty.WaitProcess)
+}
+func runTTY(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
+	return runTTYWithTimeout(cmd, terminal, args, exchange, ttyTimeout, wait)
+}
+func awaitTTYResult(result <-chan error) (error, bool) {
+	timer := time.NewTimer(ttyCleanupGrace)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+// runTTYWithTimeout owns every reader worker it starts. Exchange callbacks are
+// package-local and must return when terminal.Close unblocks their pending I/O.
+func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, timeout time.Duration, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
+	var closed sync.Once
+	var closeErr error
+	closePTY := func() { closed.Do(func() { closeErr = terminal.Close() }) }
+	defer closePTY()
+	var output bytes.Buffer
+	reader := bufio.NewReader(io.TeeReader(terminal, &output))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- wait(context.Background(), cmd) }()
+	exchangeResult := make(chan error, 1)
+	go func() { exchangeResult <- exchange(reader, terminal) }()
+	var exchangeErr, waitErr, killErr, timeoutErr, cleanupErr error
+	waitDone, exchangeDone := false, false
+	terminate := func() { killErr = errors.Join(killErr, killProcess(cmd)) }
+	select {
+	case exchangeErr = <-exchangeResult:
+		exchangeDone = true
+	case waitErr = <-waitResult:
+		waitDone = true
+		if errors.Is(waitErr, context.DeadlineExceeded) || errors.Is(waitErr, context.Canceled) {
+			timeoutErr = waitErr
+			terminate()
+		}
+	case <-ctx.Done():
+		timeoutErr = ctx.Err()
+		terminate()
+	}
+	if !exchangeDone {
+		exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
+		if !exchangeDone {
+			closePTY()
+			exchangeErr = <-exchangeResult
+			exchangeDone = true
+		}
+	}
+	if exchangeErr != nil && timeoutErr == nil {
+		terminate()
+	}
+	var drainResult chan error
+	if exchangeDone {
+		drainResult = make(chan error, 1)
+		go func() { _, err := io.Copy(io.Discard, reader); drainResult <- err }()
+	}
+	if !waitDone {
+		select {
+		case waitErr = <-waitResult:
+			waitDone = true
+		case <-ctx.Done():
+			if timeoutErr == nil {
+				timeoutErr = ctx.Err()
+				terminate()
+			}
+			waitErr, waitDone = awaitTTYResult(waitResult)
+			if !waitDone {
+				cleanupErr = errors.Join(cleanupErr, errTTYWaitCleanupTimeout)
+			}
+		}
+	}
+	var drainErr error
+	if drainResult != nil {
+		var drainDone bool
+		drainErr, drainDone = awaitTTYResult(drainResult)
+		if !drainDone {
+			closePTY()
+			drainErr = <-drainResult
+		}
+	}
+	closePTY()
+	if isBenignTTYDrainError(drainErr) {
+		drainErr = nil
+	}
+	if isBenignTTYCloseError(closeErr) {
+		closeErr = nil
+	}
+	lifecycleErr := errors.Join(waitErr, cleanupErr)
+	stderr, exitCode := "", 0
+	var exitErr *exec.ExitError
+	if errors.As(lifecycleErr, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	} else if lifecycleErr != nil {
+		exitCode = -1
+		stderr = "bench: " + lifecycleErr.Error()
+	}
+	observation := interactiveObservation(args, exitCode, output.String(), stderr)
+	return observation, errors.Join(exchangeErr, killErr, drainErr, closeErr, timeoutErr, lifecycleErr)
+}
+func killProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	err := cmd.Process.Kill()
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
+func isBenignTTYCloseError(err error) bool {
+	return err == nil || errors.Is(err, os.ErrClosed)
+}
+func isBenignTTYDrainError(err error) bool {
+	return err == nil || errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "input/output error")
 }
 
 func (s *Sandbox) invokeInteractive(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
@@ -602,6 +746,13 @@ func (r *journeyRun) runAt(dir string, args []string, modelRun bool) Observation
 // authority or provider output.
 func (r *journeyRun) runInteractive(args []string, modelRun bool, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
 	observation, err := r.sandbox.invokeInteractive(r.sandbox.Repo, args, exchange)
+	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
+	r.accumulator.records = append(r.accumulator.records, record)
+	return observation, err
+}
+
+func (r *journeyRun) runTTY(args []string, modelRun bool, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	observation, err := r.sandbox.invokeTTY(r.sandbox.Repo, args, exchange)
 	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
 	r.accumulator.records = append(r.accumulator.records, record)
 	return observation, err

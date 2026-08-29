@@ -117,6 +117,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
 	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
 	"j119-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
+	"j120-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

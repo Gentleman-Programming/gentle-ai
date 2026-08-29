@@ -827,6 +827,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue3587Journeys()...)
 	journeys = append(journeys, issue3748Journeys()...)
 	journeys = append(journeys, issue3772Journeys()...)
+	journeys = append(journeys, issue3776Journeys()...)
 	journeys = append(journeys, handoffJourneys()...)
 	journeys = removeRetiredAtomicJourneys(journeys)
 	return declareCoreJourneyReviewModes(journeys)
