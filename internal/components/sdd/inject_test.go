@@ -16,7 +16,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
-	"gopkg.in/yaml.v3"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
@@ -25,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"gopkg.in/yaml.v3"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 
