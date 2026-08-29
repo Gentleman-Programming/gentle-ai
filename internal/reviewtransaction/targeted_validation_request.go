@@ -60,17 +60,16 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 	if state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
 		return TargetedValidationRequest{}, ErrCompactCorrectionConsumed
 	}
-	wantRevision, err := CompactRevisionForState(state)
-	if err != nil || revision != wantRevision {
-		return TargetedValidationRequest{}, errors.New("targeted validation request requires the exact compact authority revision")
+	if revision != state.CapturePhaseRevision {
+		return TargetedValidationRequest{}, errors.New("targeted validation request requires the exact compact capture phase") // refusal:by-design world-action: provider code must rebuild the request from current validated authority
 	}
 	store, err := CompactAuthoritativeStore(ctx, repo, state.LineageID)
 	if err != nil {
 		return TargetedValidationRequest{}, err
 	}
 	live, err := store.Load()
-	if err != nil || live.Revision != revision {
-		return TargetedValidationRequest{}, errors.New("targeted validation request requires the current compact authority revision")
+	if err != nil || live.State.CapturePhaseRevision != revision || !compactStateEqual(live.State, state) {
+		return TargetedValidationRequest{}, errors.New("targeted validation request requires the current compact capture phase") // refusal:by-design world-action: provider code must reload and rebuild from the current validated authority
 	}
 	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || len(state.FixFindingIDs) == 0 {
 		return TargetedValidationRequest{}, errors.New("targeted validation request requires a forecasted compact correction")
@@ -222,18 +221,33 @@ func ValidateTargetedValidationRequest(request TargetedValidationRequest) error 
 }
 
 func targetedValidationCausalEvidence(state CompactState) ([]Finding, []FindingEvidence, error) {
-	findings := make(map[string]Finding, len(state.Findings))
-	for _, finding := range state.Findings {
+	fixFindingIDs, err := canonicalStrings(state.FixFindingIDs, "fix finding id")
+	if err != nil || !equalStrings(fixFindingIDs, state.FixFindingIDs) {
+		return nil, nil, errors.New("targeted validation causal evidence has non-canonical frozen fix findings") // refusal:by-design world-action: validator semantics require the exact compact causal ledger
+	}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return nil, nil, err
+	}
+	viewFixFindingIDs, err := canonicalStrings(view.FixFindingIDs, "derived fix finding id")
+	if err != nil || !equalStrings(viewFixFindingIDs, view.FixFindingIDs) || !equalStrings(viewFixFindingIDs, fixFindingIDs) {
+		return nil, nil, errors.New("targeted validation causal evidence does not match admitted fix findings") // refusal:by-design world-action: validator semantics require every accepted fix finding to have exactly one admitted role value
+	}
+	if err := validateCompactReviewConsumerState(state, view); err != nil {
+		return nil, nil, err
+	}
+	findings := make(map[string]Finding, len(view.Findings))
+	for _, finding := range view.Findings {
 		if _, exists := findings[finding.ID]; exists {
-			return nil, nil, errors.New("targeted validation causal evidence repeats a frozen finding") // refusal:by-design world-action: a duplicate frozen finding must be repaired in authority, not selected arbitrarily
+			return nil, nil, errors.New("targeted validation causal evidence repeats an admitted finding") // refusal:by-design world-action: an ambiguous admitted finding must be repaired in authority, not selected arbitrarily
 		}
 		findings[finding.ID] = finding
 	}
-	orderedFindings := make([]Finding, len(state.FixFindingIDs))
-	orderedClassifications := make([]FindingEvidence, len(state.FixFindingIDs))
-	for index, findingID := range state.FixFindingIDs {
+	orderedFindings := make([]Finding, len(fixFindingIDs))
+	orderedClassifications := make([]FindingEvidence, len(fixFindingIDs))
+	for index, findingID := range fixFindingIDs {
 		finding, found := findings[findingID]
-		classification, classified := state.Classifications[findingID]
+		classification, classified := view.Classifications[findingID]
 		if !found || !classified || classification.FindingID != findingID {
 			return nil, nil, errors.New("targeted validation causal evidence does not match the frozen fix findings") // refusal:by-design world-action: validator semantics require the exact compact causal ledger
 		}

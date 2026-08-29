@@ -636,7 +636,7 @@ func completeBurnedCorrectedReview(r *journeyRun) error {
 	if err := completeCorrectedReview(r); err != nil {
 		return err
 	}
-	return requireAtomicLineageBurned(r, correctedDeliveryLineage)
+	return requireAtomicLineageAcknowledged(r, correctedDeliveryLineage)
 }
 
 func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
@@ -1481,11 +1481,11 @@ func waveOneJourneys() []Journey {
 					return captureCorrectionPlanFor(r, correctedDeliveryLineage, 2)
 				}},
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
-				{Name: "post-correction exact active-lineage validator capture burns on completion", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+				{Name: "post-correction exact active-lineage validator capture emits acknowledgement on completion", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
 					return captureProviderValidatorSlotFor(r, correctedDeliveryLineage)
 				}},
-				{Name: "no correction authority survives the terminal validator capture", Requires: statusCapability, Composite: func(r *journeyRun) error {
-					return requireAtomicLineageBurned(r, correctedDeliveryLineage)
+				{Name: "no correction authority survives exact acknowledgement", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, correctedDeliveryLineage)
 				}},
 			},
 		},

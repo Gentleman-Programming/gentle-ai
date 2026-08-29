@@ -271,13 +271,13 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 	}{
 		{"status", []string{"cwd", "change", "change-instance", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"optional", "128 bytes"}},
 		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
-		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
+		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
 		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
 		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
 		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "failed evidence correction"}},
 		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
-		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
+		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
 		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},
 	}
 

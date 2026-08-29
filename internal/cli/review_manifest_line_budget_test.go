@@ -92,6 +92,7 @@ func TestCapturePreflightBoundsChangedPathManifestLineCost(t *testing.T) {
 	started := runNegotiatedReviewStart(t, repo, "manifest-preflight-line-budget")
 	var output bytes.Buffer
 	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

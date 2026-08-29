@@ -62,8 +62,8 @@ type reviewProviderAdmittedResult struct {
 
 // reviewProviderMaterialize deliberately delegates to the current lens-context
 // assembly. It does not emit a delivery descriptor or mutate review authority.
-func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (request reviewProviderRequest, err error) {
-	authority, err := resolveReviewLensAuthority(ctx, deps, repositoryContext, lens)
+func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, repo, repositoryContext, lens string, requested reviewtransaction.ReviewRepositoryContextBinding) (request reviewProviderRequest, err error) {
+	authority, err := resolveReviewLensAuthority(ctx, deps, repo, repositoryContext, lens, requested)
 	if err != nil {
 		return reviewProviderRequest{}, err
 	}

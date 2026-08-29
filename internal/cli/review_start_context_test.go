@@ -400,6 +400,13 @@ func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewInte
 		}
 		captureCLIReviewerResultWithFindings(t, repo, legacy, order, findings, &bytes.Buffer{})
 	}
+	if clean {
+		store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	}
 }
 
 func forceReviewStartContextFailure(forced error) func() {

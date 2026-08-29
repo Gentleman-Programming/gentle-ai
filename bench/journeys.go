@@ -383,10 +383,10 @@ func finalizeRejectedRecapture(r *journeyRun) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("finalize rejected-recapture evidence: %s", firstLine(observation.Stderr))
 	}
-	if err := requireBurnedApproval(rejectedRecaptureLineage)(r.sandbox, observation); err != nil {
+	if err := requirePendingApproval(rejectedRecaptureLineage)(r.sandbox, observation); err != nil {
 		return err
 	}
-	return requireAtomicLineageBurned(r, rejectedRecaptureLineage)
+	return requireAtomicLineageAcknowledged(r, rejectedRecaptureLineage)
 }
 
 // executeNextTransitionVerbatim is the guide's flow 11: take the tokens the
@@ -877,7 +877,7 @@ func coreJourneys() []Journey {
 				{Name: "fixture: stage 1200 lines of docs", Fixture: stageLargeDocs},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "low-risk finalization burns the transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: func(sandbox *Sandbox, observation Observation) error {
-					return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+					return requirePendingApproval(sandbox.Lineage)(sandbox, observation)
 				}},
 			},
 		},
@@ -1037,8 +1037,8 @@ func coreJourneys() []Journey {
 				{Name: "exact active-lineage rejected capture then full selected-set recapture", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return rejectedThenRecaptureFor(r, rejectedRecaptureLineage)
 				}},
-				{Name: "the final accepted capture burns the exact active-lineage transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
-					return requireAtomicLineageBurned(r, rejectedRecaptureLineage)
+				{Name: "the final accepted capture exposes acknowledgement before the exact active-lineage transaction burns", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, rejectedRecaptureLineage)
 				}},
 			},
 		},

@@ -29,8 +29,8 @@ func providerCaptureRetryJourneys() []Journey {
 			{Name: "fixture: stage candidate", Fixture: stageWaveCandidate},
 			{Name: "negotiate and start the Claude provider review", Requires: providerCaptureRetryStatusCapability, Composite: startProviderCaptureRetry},
 			{Name: "failed provider capture preserves the exact pending binding and its retry closes", Requires: providerCaptureRetryCapability, Composite: retryProviderCapture},
-			{Name: "the final provider capture burns the completed lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
-				return requireAtomicLineageBurned(r, providerCaptureRetryLineage)
+			{Name: "the final provider capture awaits exact acknowledgement before it burns the completed lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				return requireAtomicLineageAcknowledged(r, providerCaptureRetryLineage, "--agent", "claude-code")
 			}},
 		},
 	}}
@@ -169,10 +169,11 @@ func retryProviderCapture(r *journeyRun) error {
 	if attempts, err := os.ReadFile(r.sandbox.Scratch["provider-capture-attempts"]); err != nil || string(attempts) != "2\n" {
 		return fmt.Errorf("provider retry attempts = %q, %v; want two adapter invocations", attempts, err)
 	}
-	if advanced, _, err := providerCaptureRetryStatus(r); err != nil || advanced.Authority.LineageID != "" ||
-		advanced.Authority.State != "" || advanced.NextTransition.Kind != "execute" ||
-		advanced.NextTransition.Execute.Operation != "review.start" {
-		return fmt.Errorf("provider retry did not close and burn on its final capture: authority=%+v transition=%+v err=%v", advanced.Authority, advanced.NextTransition, err)
+	if advanced, _, err := providerCaptureRetryStatus(r); err != nil || advanced.Authority.LineageID != providerCaptureRetryLineage ||
+		advanced.Authority.State != "approved" || advanced.NextTransition.Kind != "execute" ||
+		advanced.NextTransition.ReasonCode != "approved_acknowledgement_required" ||
+		advanced.NextTransition.Execute.Operation != "review.acknowledge-approved" {
+		return fmt.Errorf("provider retry did not expose pending acknowledgement after its final capture: authority=%+v transition=%+v err=%v", advanced.Authority, advanced.NextTransition, err)
 	}
 	return nil
 }

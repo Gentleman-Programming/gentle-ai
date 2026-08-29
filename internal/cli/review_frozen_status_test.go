@@ -54,7 +54,7 @@ func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantSubject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, record.State.SelectedLenses[0], 0, "")
+			wantSubject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, frozen, record.State.SelectedLenses[0], 0, "")
 			if err != nil || input.ArtifactSubject == nil || !reflect.DeepEqual(*input.ArtifactSubject, wantSubject) {
 				t.Fatalf("capture binding = %#v, want %#v, err = %v", input, wantSubject, err)
 			}
@@ -86,18 +86,33 @@ func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {
 }
 
 func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t *testing.T) {
-	t.Run("partial canonical slot fails closed", func(t *testing.T) {
+	t.Run("partial canonical record entry fails closed", func(t *testing.T) {
 		repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
 		captureFrozenReviewerResults(t, repo, record, 1)
-		path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, "00-"+record.State.SelectedLenses[0]+".json.sha256")
-		if err := os.Remove(path); err != nil {
+		captured, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured.State.CapturePhaseRevision == "" || len(captured.State.AdmittedRoleResults) != 1 {
+			t.Fatalf("captured compact fixture lost its phase-bound record tuple: %#v", captured.State)
+		}
+		captured.State.AdmittedRoleResults[0].ArtifactDigest = ""
+		captured.Revision, err = reviewtransaction.CompactRevisionForState(captured.State)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := json.MarshalIndent(captured, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.StatePath(), append(payload, '\n'), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
 		status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
 		if status.Applicability != reviewtransaction.TargetApplicabilityCorrupted || status.NextTransition == nil ||
 			status.NextTransition.Kind == reviewNextTransitionCollect {
-			t.Fatalf("partial frozen slot status = %#v", status)
+			t.Fatalf("partial frozen record entry status = %#v", status)
 		}
 	})
 

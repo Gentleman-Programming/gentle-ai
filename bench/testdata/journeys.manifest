@@ -53,3 +53,4 @@ j92-released-compact-history-quarantines-without-compatibility
 j93-stale-managed-assets-start-is-not-unknown
 j96-sdd-same-parent-repository-edit-authority
 j98-sdd-flat-root-spec-is-discovered
+j99-sdd-attempt-born-during-untracked-lifecycle
