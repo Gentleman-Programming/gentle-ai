@@ -44,6 +44,8 @@ var linearRoutes = map[Screen]Route{
 	ScreenProfiles:                       {Backward: ScreenWelcome},
 	ScreenProfileCreate:                  {Backward: ScreenProfiles},
 	ScreenProfileDelete:                  {Backward: ScreenProfiles},
+	ScreenCustomAgents:                   {Backward: ScreenWelcome},
+	ScreenCustomAgentDelete:              {Backward: ScreenCustomAgents},
 	ScreenAgentBuilderEngine:             {Backward: ScreenWelcome},
 	ScreenAgentBuilderPrompt:             {Backward: ScreenAgentBuilderEngine},
 	ScreenAgentBuilderSDD:                {Backward: ScreenAgentBuilderPrompt},

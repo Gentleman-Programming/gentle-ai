@@ -26,8 +26,6 @@ type WelcomeAdvisory struct {
 // When showProfiles is true, an "OpenCode SDD Profiles" option is inserted
 // between "Configure models" and "Manage backups".
 // profileCount is used to show a badge with the current profile count.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
 func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
@@ -36,18 +34,13 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		upgradeLabel = "Upgrade tools (up to date)"
 	}
 
-	agentLabel := "Create your own Agent"
-	if !hasEngines {
-		agentLabel = "Create your own Agent (no agents)"
-	}
-
 	opts := []string{
 		"Start installation",
 		upgradeLabel,
 		"Sync configs",
 		"Upgrade + Sync",
 		"Configure models",
-		agentLabel,
+		"Manage Custom Agents",
 		"OpenCode Community Plugins",
 	}
 
