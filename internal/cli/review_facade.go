@@ -688,7 +688,7 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 }
 
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
+	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory; initialize local Git only for a genuinely unversioned workspace.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
@@ -775,8 +775,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if selectedBaseTree != "" && !validReviewGitTree(selectedBaseTree) {
 			return errors.New("--base-tree requires an exact Git tree object ID")
 		}
-		builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
-		root, err := builder.ResolveRepositoryRoot(ctx)
+		root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 		if err != nil {
 			return fmt.Errorf("resolve negotiated review repository root: %w", err)
 		}
@@ -784,7 +783,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// operation must use the canonical worktree root it resolved. Leaving
 		// the nested selector here would make fresh target freezing reject a
 		// valid foreign repository before START can bind its lifecycle root.
-		builder.Repo = root
+		builder := reviewtransaction.SnapshotBuilder{Repo: root}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
@@ -1139,7 +1138,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}
@@ -1650,8 +1649,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return reviewPreflightError(err)
 	}
-	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
-	root, err := builder.ResolveRepositoryRoot(ctx)
+	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}
