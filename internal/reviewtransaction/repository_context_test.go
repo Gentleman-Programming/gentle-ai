@@ -2,480 +2,284 @@ package reviewtransaction
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
 
-func TestReviewRepositoryContextPublishesOpaquePrivateBinding(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context")
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
+func TestHistoricalRctx1ContextIsReadOnly(t *testing.T) {
+	repo, binding := historicalReviewRepositoryContextFixture(t, "historical-rctx1")
+	handle, err := DeriveHistoricalReviewRepositoryContextHandle(t.Context(), repo, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !validReviewRepositoryContextHandle(handle) || strings.Contains(handle, repo) {
-		t.Fatalf("handle %q is not opaque", handle)
-	}
-	resolved, err := ResolveReviewRepositoryContext(context.Background(), handle, binding)
-	if err != nil || resolved != repo {
-		t.Fatalf("resolved = %q, %v; want %q", resolved, err, repo)
-	}
-
-	path, err := reviewRepositoryContextPath(handle)
+	before, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".gentle-ai", "review-contexts", "v1", handle+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		t.Fatalf("context record = %v, %v", info, err)
+	root, resolved, err := ResolveHistoricalReviewRepositoryContextBinding(t.Context(), handle)
+	if err != nil || root != repo || resolved != binding {
+		t.Fatalf("historical rctx1 resolution = %q, %#v, %v", root, resolved, err)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		t.Fatalf("context record mode = %o, want 600", info.Mode().Perm())
+	if _, err := ResolveReviewRepositoryContext(t.Context(), repo, handle, binding); err == nil {
+		t.Fatal("current lifecycle resolver accepted historical rctx1")
 	}
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var record reviewRepositoryContextFile
-	if err := json.Unmarshal(payload, &record); err != nil || record.RepositoryRoot != repo {
-		t.Fatalf("private record repository root = %q, %v; want %q", record.RepositoryRoot, err, repo)
+	after, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".gentle-ai", "review-contexts", "v1", handle+".json"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("historical rctx1 read changed locator bytes: %v", err)
 	}
 }
 
-func TestReviewRepositoryContextRedactsTargetedValidationDerivationCause(t *testing.T) {
-	repo := t.TempDir()
-	cause := &GitCommandError{
-		Args: []string{"-C", repo, "diff"}, ExitCode: 128,
-		Cause: errors.New("targeted validation derivation failed"), Output: repo,
-	}
-	err := &reviewRepositoryContextTargetedValidationError{cause: cause}
-	if strings.Contains(err.Error(), repo) || err.Error() != "review repository context is stale or has no live matching authority" {
-		t.Fatalf("public derivation error = %q", err)
-	}
-	if !errors.Is(err, cause.Cause) {
-		t.Fatal("targeted validation derivation cause is not reachable with errors.Is")
-	}
-	var gitError *GitCommandError
-	if !errors.As(err, &gitError) || gitError != cause {
-		t.Fatalf("targeted validation derivation cause = %#v", gitError)
-	}
-}
-
-func TestReviewRepositoryContextRejectsTamperedExpiredAndWrongBindings(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-bindings")
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
+func TestRctx2HandleIsAnOpaqueDigestThatCarriesNoPath(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "rctx2-opaque")
+	record, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wrong := range []ReviewRepositoryContextBinding{
-		{LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: "sha256:" + strings.Repeat("b", 64)},
-		{LineageID: binding.LineageID, TargetIdentity: "sha256:" + strings.Repeat("b", 64), Revision: binding.Revision},
-		{LineageID: "wrong-lineage", TargetIdentity: binding.TargetIdentity, Revision: binding.Revision},
-	} {
-		if _, err := ResolveReviewRepositoryContext(context.Background(), handle, wrong); err == nil {
-			t.Fatalf("wrong binding resolved: %#v", wrong)
+	binding := ReviewRepositoryContextBinding{
+		LineageID:      record.State.LineageID,
+		TargetIdentity: record.State.InitialSnapshot.Identity,
+		Revision:       record.State.CapturePhaseRevision,
+	}
+	handle, err := deriveReviewRepositoryContextV2Token(t.Context(), fixture.store.repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The capability is declared as review.opaque_repository_context and the
+	// handle is relayed on command lines and through host logs, so a reader who
+	// holds it must learn nothing about the filesystem it names.
+	if !validReviewRepositoryContextV2Handle(handle) {
+		t.Fatalf("rctx2 handle is not a canonical digest: %q", handle)
+	}
+	if len(handle) != len(reviewRepositoryContextV2HandlePrefix)+reviewRepositoryContextV2DigestBytes {
+		t.Fatalf("rctx2 handle = %d bytes, want a fixed-width digest", len(handle))
+	}
+	identity := reviewRepositoryIdentityRecord{}
+	if lease, leaseErr := OpenRepositoryIdentityLease(t.Context(), fixture.store.repo); leaseErr == nil {
+		live := lease.Identity()
+		identity = reviewRepositoryIdentityRecord{RepositoryRoot: live.RepositoryRoot, GitCommonDir: live.GitCommonDir, GitDir: live.GitDir}
+	}
+	for _, secret := range []string{identity.RepositoryRoot, identity.GitCommonDir, identity.GitDir, os.Getenv("HOME"), `C:\\`} {
+		if secret == "" {
+			continue
+		}
+		if strings.Contains(handle, secret) {
+			t.Fatalf("rctx2 handle is not opaque: %q leaks %q", handle, secret)
 		}
 	}
+	// A digest is only opaque if it cannot be decoded back into its preimage.
+	// base64 and hex are the two shapes a reader would try first.
+	if decoded, decodeErr := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(handle, reviewRepositoryContextV2HandlePrefix)); decodeErr == nil {
+		if json.Valid(decoded) {
+			t.Fatalf("rctx2 handle decodes to structured data: %s", decoded)
+		}
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(handle, reviewRepositoryContextV2HandlePrefix))
+	if err != nil || len(raw) != sha256.Size || json.Valid(raw) {
+		t.Fatalf("rctx2 handle is not a bare sha256 digest: %q", handle)
+	}
+}
 
-	path, err := reviewRepositoryContextPath(handle)
+func TestRctx2HandleResolvesAgainstTheCallerRepositoryWithoutMutation(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "rctx2-round-trip")
+	before, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := os.ReadFile(path)
+	binding := ReviewRepositoryContextBinding{
+		LineageID:      before.State.LineageID,
+		TargetIdentity: before.State.InitialSnapshot.Identity,
+		Revision:       before.State.CapturePhaseRevision,
+	}
+	stateBefore, err := os.ReadFile(fixture.store.StatePath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var record reviewRepositoryContextFile
-	if err := json.Unmarshal(payload, &record); err != nil {
+	handle, err := deriveReviewRepositoryContextV2Token(t.Context(), fixture.store.repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, resolved, err := resolveReviewRepositoryContextV2Token(t.Context(), fixture.store.repo, handle, binding)
+	if err != nil || root != fixture.store.repo || resolved != binding {
+		t.Fatalf("initial rctx2 resolution = root %q, binding %#v, error %v", root, resolved, err)
+	}
+	stateAfterResolve, err := os.ReadFile(fixture.store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stateAfterResolve) != string(stateBefore) {
+		t.Fatal("rctx2 resolution mutated compact authority")
+	}
+
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	afterCapture, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCapture.Revision == before.Revision || afterCapture.State.CapturePhaseRevision != binding.Revision {
+		t.Fatalf("capture did not advance only Rn: before=%#v after=%#v", before, afterCapture)
+	}
+	root, resolved, err = resolveReviewRepositoryContextV2Token(t.Context(), fixture.store.repo, handle, binding)
+	if err != nil || root != fixture.store.repo || resolved != binding {
+		t.Fatalf("rctx2 resolution after sibling Rn advance = root %q, binding %#v, error %v", root, resolved, err)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".gentle-ai", "review-contexts")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rctx2 core created a v1 locator: %v", err)
+	}
+}
+
+func TestRctx2HandleRefusesTamperAndConfinementWithoutMutation(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "rctx2-refusals")
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ReviewRepositoryContextBinding{
+		LineageID:      record.State.LineageID,
+		TargetIdentity: record.State.InitialSnapshot.Identity,
+		Revision:       record.State.CapturePhaseRevision,
+	}
+	handle, err := deriveReviewRepositoryContextV2Token(t.Context(), fixture.store.repo, binding)
+	if err != nil {
 		t.Fatal(err)
 	}
 	other := initSnapshotRepo(t)
-	record.RepositoryRoot = other
-	tampered, err := json.Marshal(record)
-	if err != nil || os.WriteFile(path, append(tampered, '\n'), 0o600) != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("tampered repository identity resolved")
-	}
+	digest := strings.TrimPrefix(handle, reviewRepositoryContextV2HandlePrefix)
 
-	// Restore the exact record, then advance authority. The old revision-bound
-	// handle must expire without granting access to the new state.
-	if err := os.WriteFile(path, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := CompactAuthoritativeStore(context.Background(), repo, binding.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	next := current.State
-	if err := next.Invalidate("expire repository context"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(current.Revision, "review/invalidate", next); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("expired repository context resolved after authority revision changed")
+	// Every case supplies a repository and a binding the handle does not commit
+	// to. The digest, not a self-reported path, is what has to catch them.
+	for _, tt := range []struct {
+		name    string
+		repo    string
+		handle  string
+		binding ReviewRepositoryContextBinding
+	}{
+		{name: "unknown prefix", handle: "rctx3_" + digest},
+		{name: "malformed alphabet", handle: reviewRepositoryContextV2HandlePrefix + strings.Repeat("%", reviewRepositoryContextV2DigestBytes)},
+		{name: "uppercase digest", handle: reviewRepositoryContextV2HandlePrefix + strings.ToUpper(digest)},
+		{name: "truncated digest", handle: reviewRepositoryContextV2HandlePrefix + digest[:len(digest)-1]},
+		{name: "oversized digest", handle: handle + "a"},
+		{name: "wrong repository", repo: other},
+		{name: "traversal", repo: fixture.store.repo + string(filepath.Separator) + ".."},
+		{name: "wrong lineage", binding: ReviewRepositoryContextBinding{LineageID: "rctx2-wrong-lineage", TargetIdentity: binding.TargetIdentity, Revision: binding.Revision}},
+		{name: "wrong target", binding: ReviewRepositoryContextBinding{LineageID: binding.LineageID, TargetIdentity: hash("rctx2-wrong-target"), Revision: binding.Revision}},
+		{name: "stale phase", binding: ReviewRepositoryContextBinding{LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: hash("rctx2-stale-phase")}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidateRepo := tt.repo
+			if candidateRepo == "" {
+				candidateRepo = fixture.store.repo
+			}
+			candidate := tt.handle
+			if candidate == "" {
+				candidate = handle
+			}
+			candidateBinding := tt.binding
+			if candidateBinding == (ReviewRepositoryContextBinding{}) {
+				candidateBinding = binding
+			}
+			before, err := os.ReadFile(fixture.store.StatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, actual, err := resolveReviewRepositoryContextV2Token(t.Context(), candidateRepo, candidate, candidateBinding)
+			if err == nil || root != "" || actual != (ReviewRepositoryContextBinding{}) {
+				t.Fatalf("invalid rctx2 token resolved root %q, binding %#v, error %v", root, actual, err)
+			}
+			if strings.Contains(err.Error(), fixture.store.repo) || strings.Contains(err.Error(), other) {
+				t.Fatalf("rctx2 refusal leaked repository identity: %q", err)
+			}
+			after, err := os.ReadFile(fixture.store.StatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatal("invalid rctx2 token mutated compact authority")
+			}
+		})
 	}
 }
 
-func TestReviewRepositoryContextRejectsUnsafeStorageAndDoesNotTraverseAboveHome(t *testing.T) {
-	home := t.TempDir()
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(home, 0o755); err != nil {
-			t.Fatal(err)
-		}
+func TestRctx2HandleRejectsMovedWorktree(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "rctx2-moved-worktree")
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
+	binding := ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	}
+	handle, err := deriveReviewRepositoryContextV2Token(t.Context(), fixture.store.repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := fixture.store.repo + "-moved"
+	if err := os.Rename(fixture.store.repo, moved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Rename(moved, fixture.store.repo); err != nil {
+			t.Errorf("restore moved worktree: %v", err)
+		}
+	})
+	root, resolved, err := resolveReviewRepositoryContextV2Token(t.Context(), moved, handle, binding)
+	if err == nil || root != "" || resolved != (ReviewRepositoryContextBinding{}) {
+		t.Fatalf("moved worktree resolved root %q, binding %#v, error %v", root, resolved, err)
+	}
+	if strings.Contains(err.Error(), fixture.store.repo) || strings.Contains(err.Error(), moved) {
+		t.Fatalf("moved-worktree refusal leaked a repository path: %q", err)
+	}
+}
+
+func historicalReviewRepositoryContextFixture(t *testing.T, lineage string) (string, ReviewRepositoryContextBinding) {
+	t.Helper()
+	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so the Windows-only readers
+	// of this fixture would otherwise resolve the real user profile.
 	t.Setenv("USERPROFILE", home)
 	repo := initSnapshotRepo(t)
-	record, _ := pristineReviewingFixture(t, repo, "repository-context-private")
-	binding := ReviewRepositoryContextBinding{LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision}
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
-	if err != nil {
-		t.Fatal(err)
+	record, _ := pristineReviewingFixture(t, repo, lineage)
+	binding := ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(home)
-		if err != nil || info.Mode().Perm() != 0o755 {
-			t.Fatalf("HOME mode changed above private root: %v, %v", info, err)
-		}
-	}
-	if err := ensurePrivateLocatorDirectory(home, filepath.Join(home, "..", "escape")); err == nil {
-		t.Fatal("private directory helper accepted path outside HOME")
-	}
+	return repo, binding
+}
 
+func DeriveHistoricalReviewRepositoryContextHandle(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
+	identity, err := reviewRepositoryIdentity(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	handle := reviewRepositoryContextHandle(binding, identity)
 	path, err := reviewRepositoryContextPath(handle)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
-	if runtime.GOOS == "windows" {
-		return
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(repo, path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("symlinked private context record resolved")
-	}
-}
-
-func TestReviewRepositoryContextRejectsMissingMalformedOversizedAndTerminalRecords(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-invalid-records")
-	handle, err := DeriveReviewRepositoryContextHandle(context.Background(), repo, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("missing repository context record resolved")
-	}
-	if _, err := PublishReviewRepositoryContext(context.Background(), repo, binding); err != nil {
-		t.Fatal(err)
-	}
-	path, err := reviewRepositoryContextPath(handle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"schema":"gentle-ai.review-repository-context/v1","unknown":true}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("malformed repository context record resolved")
-	}
-	if err := os.WriteFile(path, make([]byte, reviewRepositoryLocatorMaxBytes+1), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("oversized repository context record resolved")
-	}
-	if err := os.WriteFile(path, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := CompactAuthoritativeStore(context.Background(), repo, binding.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	terminal := current.State
-	if err := terminal.Invalidate("terminal context must expire"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace(current.Revision, "review/invalidate", terminal); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("terminal repository context record resolved")
-	}
-}
-
-func TestReviewRepositoryContextRejectsSymlinkedProviderDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink fixture requires POSIX semantics")
-	}
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-symlink-directory")
-	home, err := reviewRepositoryContextHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Join(home, ".gentle-ai")
-	if err := os.Mkdir(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(repo, filepath.Join(root, "review-contexts")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := PublishReviewRepositoryContext(context.Background(), repo, binding); err == nil {
-		t.Fatal("publication accepted a symlinked provider directory")
-	}
-}
-
-func TestReviewRepositoryContextPublicationConvergesAndRejectsUnsafeEntries(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-concurrent")
-	const publishers = 12
-	handles := make(chan string, publishers)
-	errs := make(chan error, publishers)
-	var group sync.WaitGroup
-	for range publishers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
-			handles <- handle
-			errs <- err
-		}()
-	}
-	group.Wait()
-	close(handles)
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent publication: %v", err)
-		}
-	}
-	var handle string
-	for candidate := range handles {
-		if handle == "" {
-			handle = candidate
-		} else if candidate != handle {
-			t.Fatalf("concurrent handles = %q and %q", handle, candidate)
-		}
-	}
-	if resolved, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err != nil || resolved != repo {
-		t.Fatalf("concurrent context resolved = %q, %v", resolved, err)
-	}
-	upperSuffix := reviewRepositoryContextHandlePrefix + strings.ToUpper(strings.TrimPrefix(handle, reviewRepositoryContextHandlePrefix))
-	if ValidateReviewRepositoryContextHandle(upperSuffix) == nil {
-		t.Fatal("non-canonical uppercase repository context handle was accepted")
-	}
-
-	path, err := reviewRepositoryContextPath(handle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-			t.Fatal("executable repository context record resolved")
-		}
-		if err := os.Chmod(path, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(path, 0o700); err != nil {
-		t.Fatalf("replace context with directory: %v", err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), handle, binding); err == nil {
-		t.Fatal("directory context record resolved")
-	}
-}
-
-func TestReviewRepositoryContextPublicationSyncFailureIsRetrySafe(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-sync-retry")
-	originalSync := syncReviewDirectory
-	t.Cleanup(func() { syncReviewDirectory = originalSync })
-	var synced []string
-	failPublishedDirectory := true
-	syncReviewDirectory = func(path string) error {
-		synced = append(synced, filepath.Clean(path))
-		if failPublishedDirectory && strings.HasSuffix(filepath.Clean(path), filepath.Join("review-contexts", "v1")) {
-			return errors.New("injected repository-context directory sync failure")
-		}
-		return nil
-	}
-
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
-	if err == nil {
-		t.Fatal("fresh repository-context publication ignored its directory sync failure")
-	}
-	if handle != "" {
-		t.Fatalf("failed publication returned handle %q", handle)
-	}
-	failPublishedDirectory = false
-	handle, err = PublishReviewRepositoryContext(context.Background(), repo, binding)
-	if err != nil {
-		t.Fatalf("retry after interrupted publication: %v", err)
-	}
-	path, err := reviewRepositoryContextPath(handle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if payload, err := readReviewRepositoryContext(path); err != nil || len(payload) == 0 {
-		t.Fatalf("retry did not reopen and verify the immutable destination: %v", err)
-	}
-	home, err := reviewRepositoryContextHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantSyncs := []string{
-		home,
-		filepath.Join(home, ".gentle-ai"),
-		filepath.Join(home, ".gentle-ai", "review-contexts"),
-		filepath.Join(home, ".gentle-ai", "review-contexts", "v1"),
-	}
-	for _, want := range wantSyncs {
-		if !slices.Contains(synced, filepath.Clean(want)) {
-			t.Fatalf("publication never synced %q; calls = %v", want, synced)
-		}
-	}
-}
-
-func TestReviewRepositoryContextRejectsBroadProviderDirectoryWithoutChmod(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX permission assertion")
-	}
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-broad-directory")
-	home, err := reviewRepositoryContextHome()
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Join(home, ".gentle-ai")
-	if err := os.Mkdir(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	broad := filepath.Join(root, "review-contexts")
-	if err := os.Mkdir(broad, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := PublishReviewRepositoryContext(context.Background(), repo, binding); err == nil {
-		t.Fatal("publication accepted a broadly accessible provider directory")
-	}
-	info, err := os.Stat(broad)
-	if err != nil || info.Mode().Perm() != 0o755 {
-		t.Fatalf("publication changed broad directory mode: %v, %v", info, err)
-	}
-}
-
-func TestReviewRepositoryContextDistinguishesLinkedWorktreesAndRejectsCommonDirMismatch(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-worktree")
-	linked := filepath.Join(t.TempDir(), "linked")
-	if err := runSnapshotGit(repo, "worktree", "add", "-b", "repository-context-linked", linked, "HEAD"); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runSnapshotGit(repo, "worktree", "remove", "--force", linked) })
-	mainHandle, err := DeriveReviewRepositoryContextHandle(context.Background(), repo, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	linkedHandle, err := DeriveReviewRepositoryContextHandle(context.Background(), linked, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if linkedHandle == mainHandle {
-		t.Fatal("linked worktree reused the primary worktree repository identity")
-	}
-
-	if _, err := PublishReviewRepositoryContext(context.Background(), repo, binding); err != nil {
-		t.Fatal(err)
-	}
-	other := initSnapshotRepo(t)
-	fake := reviewRepositoryIdentityRecord{
-		RepositoryRoot: repo,
-		GitCommonDir:   filepath.Join(other, ".git"),
-		GitDir:         filepath.Join(other, ".git"),
-	}
-	fake.RepositoryIdentity = reviewRepositoryIdentityHash(fake)
-	fakeHandle := reviewRepositoryContextHandle(binding, fake)
-	fakePath, err := reviewRepositoryContextPath(fakeHandle)
-	if err != nil {
-		t.Fatal(err)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
 	}
 	record := reviewRepositoryContextFile{
-		Schema: ReviewRepositoryContextSchema, Handle: fakeHandle,
-		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
-		RepositoryIdentity: fake.RepositoryIdentity, RepositoryRoot: fake.RepositoryRoot,
-		GitCommonDir: fake.GitCommonDir, GitDir: fake.GitDir,
+		Schema: ReviewRepositoryContextSchema, Handle: handle, LineageID: binding.LineageID,
+		TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
 	}
 	payload, err := json.Marshal(record)
-	if err != nil || os.WriteFile(fakePath, append(payload, '\n'), 0o600) != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveReviewRepositoryContext(context.Background(), fakeHandle, binding); err == nil {
-		t.Fatal("repository context with a mismatched Git common directory resolved")
-	}
-}
-
-func TestReviewRepositoryContextHonorsCancellationAndHashesWindowsPaths(t *testing.T) {
-	repo, binding := reviewRepositoryContextFixture(t, "repository-context-cancel")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := PublishReviewRepositoryContext(ctx, repo, binding); err == nil {
-		t.Fatal("cancelled publication succeeded")
-	}
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
-	resolveCtx, resolveCancel := context.WithCancel(context.Background())
-	resolveCancel()
-	if _, err := ResolveReviewRepositoryContext(resolveCtx, handle, binding); err == nil {
-		t.Fatal("cancelled resolution succeeded")
+	if err := os.WriteFile(path, append(payload, '\n'), 0o600); err != nil {
+		return "", err
 	}
-	identity := reviewRepositoryIdentityRecord{
-		RepositoryRoot: `C:\\Users\\alice\\repo`,
-		GitCommonDir:   `C:\\Users\\alice\\repo\\.git`,
-		GitDir:         `C:\\Users\\alice\\repo\\.git`,
-	}
-	identity.RepositoryIdentity = reviewRepositoryIdentityHash(identity)
-	windowsHandle := reviewRepositoryContextHandle(binding, identity)
-	if !validReviewRepositoryContextHandle(windowsHandle) || strings.Contains(windowsHandle, `C:\\`) {
-		t.Fatalf("Windows repository context is not opaque: %q", windowsHandle)
-	}
-}
-
-func reviewRepositoryContextFixture(t *testing.T, lineage string) (string, ReviewRepositoryContextBinding) {
-	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "base\nreviewed change\n")
-	record, _ := pristineReviewingFixture(t, repo, lineage)
-	return repo, ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
-	}
+	return handle, nil
 }

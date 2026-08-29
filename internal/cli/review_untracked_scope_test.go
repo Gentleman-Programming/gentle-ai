@@ -120,7 +120,14 @@ func TestReviewerLensContextOmitsUndeclaredUntrackedBytes(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, started := startWithUnrelatedUntrackedCredential(t, "untracked-scope-delivery")
 
-	block := lensContextBlock(t, started.RepositoryContext.Handle, started.SelectedLenses[0])
+	block := lensContextBlock(t, []string{
+		"--cwd", repo,
+		"--cwd", repo,
+		"--repository-context", started.RepositoryContext.Handle,
+		"--lineage", started.LineageID,
+		"--target", started.RepositoryContext.TargetIdentity,
+		"--expected-revision", started.RepositoryContext.Revision,
+	}, started.SelectedLenses[0])
 
 	if strings.Contains(block, unrelatedCredentialMarker) {
 		t.Fatal("delivered reviewer context carries the contents of an undeclared untracked file")

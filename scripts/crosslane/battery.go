@@ -43,11 +43,14 @@ type capturedEnvelope struct {
 // lineageScope is the Go-issued authority binding a lane received at START.
 // The lineage is immutable; revision and target advance only from native STATUS.
 type lineageScope struct {
-	Lineage       string
-	Revision      string
-	Target        string
-	BaseRef       string
-	CommittedOnly bool
+	Lineage string
+	// Revision is the live authority Rn used only by mutation/recovery checks.
+	Revision string
+	// CaptureRevision is stable Pn used by every capture/materialization binding.
+	CaptureRevision string
+	Target          string
+	BaseRef         string
+	CommittedOnly   bool
 }
 
 type battery struct {
@@ -197,6 +200,8 @@ func (b *battery) runTransitionExecution(source, repo string, env []string, exec
 		args = []string{"review", "repair"}
 	case "review.validate":
 		args = []string{"review", "validate"}
+	case "review.acknowledge-approved":
+		args = []string{"review", "acknowledge-approved"}
 	default:
 		return nil, "unsupported provider transition operation", 1
 	}
@@ -216,9 +221,9 @@ func (b *battery) runTransitionExecution(source, repo string, env []string, exec
 
 func (b *battery) rememberStarted(repo, target string, start map[string]any) error {
 	context := getMap(start, "repository_context")
-	scope := lineageScope{Lineage: operationLineage(start), Revision: getString(context, "revision"), Target: getString(context, "target_identity")}
-	if scope.Lineage == "" || scope.Revision == "" || scope.Target == "" || scope.Target != target {
-		return fmt.Errorf("START omitted the exact authority lineage/revision/target")
+	scope := lineageScope{Lineage: operationLineage(start), CaptureRevision: getString(context, "revision"), Target: getString(context, "target_identity")}
+	if scope.Lineage == "" || scope.CaptureRevision == "" || scope.Target == "" || scope.Target != target {
+		return fmt.Errorf("START omitted the exact authority lineage/capture-phase/target")
 	}
 	b.lineages[repo] = scope
 	return nil
@@ -238,6 +243,9 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 		return fmt.Errorf("STATUS no longer matches the started authority lineage/revision/target")
 	}
 	scope.Revision, scope.Target = getString(authority, "revision"), target
+	if phase := getString(doc, "repository_context", "revision"); phase != "" {
+		scope.CaptureRevision = phase
+	}
 	b.lineages[repo] = scope
 	if input := collectInput(doc); input != nil {
 		args := argumentValues(input)
@@ -245,8 +253,12 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 		if correctionTarget := getString(doc, "validation_request", "correction_target_identity"); correctionTarget != "" {
 			expectedTarget = correctionTarget
 		}
-		if args["lineage"] != scope.Lineage || args["expected-revision"] != scope.Revision || args["target"] != expectedTarget {
-			return fmt.Errorf("collect slot does not match the started authority lineage/revision/target")
+		expectedRevision := scope.Revision
+		if operation := getString(input, "capture_operation"); strings.HasPrefix(operation, "review.capture") || operation == "external.run_provider_role" {
+			expectedRevision = scope.CaptureRevision
+		}
+		if args["lineage"] != scope.Lineage || args["expected-revision"] != expectedRevision || args["target"] != expectedTarget {
+			return fmt.Errorf("collect slot does not match the started authority lineage/Pn-or-Rn/target")
 		}
 	}
 	return nil
@@ -525,31 +537,84 @@ func operationLineage(doc map[string]any) string {
 	return getString(doc, "lineage_id")
 }
 
-func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finalized map[string]any) bool {
+func (b *battery) acknowledgeApproved(lane, name, repo, agent string, env []string, finalized map[string]any) bool {
 	scope, found := b.lineages[repo]
 	result := getMap(finalized, "result")
 	if result == nil {
 		result = finalized
 	}
-	if !found || operationState(finalized) != "approved" || getString(result, "lineage_id") != scope.Lineage || !strings.Contains(getString(result, "action"), "burned") {
-		b.fail(lane, name, "terminal capture did not report approved+burn for the exact lineage")
+	acknowledgement := getMap(result, "acknowledgement")
+	if !found || operationState(finalized) != "approved" || getString(result, "lineage_id") != scope.Lineage ||
+		getString(acknowledgement, "operation") != "review.acknowledge-approved" {
+		b.fail(lane, name, "terminal capture did not report an exact pending acknowledgement for the started lineage")
 		return false
 	}
 	for _, field := range []string{"receipt", "receipt_path", "authority", "next_transition"} {
 		if _, present := result[field]; present {
-			b.fail(lane, name, "burned terminal retained "+field)
+			b.fail(lane, name, "pending terminal retained "+field)
 			return false
 		}
 	}
+	if _, token, ok := crosslaneAcknowledgementTokens(acknowledgement); !ok {
+		b.fail(lane, name, "terminal acknowledgement did not carry its exact five bound arguments")
+		return false
+	} else if len(token) != 64 {
+		b.fail(lane, name, "terminal acknowledgement token is not a canonical 256-bit value")
+		return false
+	}
+
+	status, stderr, code := b.statusEnv(repo, agent, env)
+	statusAcknowledgement := getMap(status, "next_transition", "execute")
+	if code != 0 || getString(status, "next_transition", "kind") != "execute" ||
+		getString(status, "next_transition", "reason_code") != "approved_acknowledgement_required" ||
+		!sameCrosslaneExecution(acknowledgement, statusAcknowledgement) {
+		b.fail(lane, name, fmt.Sprintf("restart acknowledgement exit=%d reason=%q exact=%t %s", code,
+			getString(status, "next_transition", "reason_code"), sameCrosslaneExecution(acknowledgement, statusAcknowledgement), firstLine(stderr)))
+		return false
+	}
+
+	wrong := cloneCrosslaneExecution(statusAcknowledgement)
+	_, token, ok := crosslaneAcknowledgementTokens(wrong)
+	if !ok {
+		b.fail(lane, name, "restart acknowledgement could not be cloned for wrong-binding refusal")
+		return false
+	}
+	wrongToken := strings.Repeat("0", 64)
+	if wrongToken == token {
+		wrongToken = strings.Repeat("1", 64)
+	}
+	wrongArguments := getSlice(wrong, "arguments")
+	wrongArgument, _ := wrongArguments[4].(map[string]any)
+	wrongArgument["value"] = wrongToken
+	wrongArgument["token"] = "--token=" + wrongToken
+	if _, wrongStderr, wrongCode := b.runTransitionExecution("acknowledgement-wrong-binding", repo, env, wrong); wrongCode == 0 {
+		b.fail(lane, name, "wrong acknowledgement binding unexpectedly burned authority: "+firstLine(wrongStderr))
+		return false
+	}
+	afterWrong, afterWrongStderr, afterWrongCode := b.statusEnv(repo, agent, env)
+	if afterWrongCode != 0 || !sameCrosslaneExecution(acknowledgement, getMap(afterWrong, "next_transition", "execute")) {
+		b.fail(lane, name, fmt.Sprintf("wrong acknowledgement changed the pending continuation: exit=%d %s", afterWrongCode, firstLine(afterWrongStderr)))
+		return false
+	}
+
+	if _, acknowledgeStderr, acknowledgeCode := b.runTransitionExecution("acknowledgement", repo, env, statusAcknowledgement); acknowledgeCode != 0 {
+		b.fail(lane, name, fmt.Sprintf("exact acknowledgement exit=%d %s", acknowledgeCode, firstLine(acknowledgeStderr)))
+		return false
+	}
+	if _, replayStderr, replayCode := b.runTransitionExecution("acknowledgement-replay", repo, env, statusAcknowledgement); replayCode == 0 {
+		b.fail(lane, name, "replayed acknowledgement unexpectedly succeeded: "+firstLine(replayStderr))
+		return false
+	}
+
 	delete(b.lineages, repo)
 	for _, gate := range []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"} {
-		doc, stderr, code := b.runJSONEnv("gate", repo, env,
+		doc, gateStderr, gateCode := b.runJSONEnv("gate", repo, env,
 			"review", "validate", "--cwd", repo, "--contract", reviewContract, "--gate", gate)
 		gateResult := getMap(doc, "result")
-		if code != 0 || getString(gateResult, "result") != "invalidated" || getString(gateResult, "delivery") != "unmanaged" ||
+		if gateCode != 0 || getString(gateResult, "result") != "invalidated" || getString(gateResult, "delivery") != "unmanaged" ||
 			getString(gateResult, "action") != "repository-policy" {
-			b.fail(lane, name, fmt.Sprintf("%s exit=%d result=%q delivery=%q action=%q %s", gate, code,
-				getString(gateResult, "result"), getString(gateResult, "delivery"), getString(gateResult, "action"), firstLine(stderr)))
+			b.fail(lane, name, fmt.Sprintf("%s exit=%d result=%q delivery=%q action=%q %s", gate, gateCode,
+				getString(gateResult, "result"), getString(gateResult, "delivery"), getString(gateResult, "action"), firstLine(gateStderr)))
 			return false
 		}
 		allowed, _ := gateResult["allowed"].(bool)
@@ -558,6 +623,41 @@ func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finaliz
 			return false
 		}
 	}
-	b.pass(lane, name, "approved authority burned; five delivery gates are invalidated/unmanaged repository policy")
+	b.pass(lane, name, "approved authority replayed one exact acknowledgement before burn; five delivery gates are invalidated/unmanaged repository policy")
 	return true
+}
+
+func crosslaneAcknowledgementTokens(execution map[string]any) ([]string, string, bool) {
+	arguments := getSlice(execution, "arguments")
+	if len(arguments) != 5 {
+		return nil, "", false
+	}
+	wantNames := []string{"cwd", "lineage", "target", "expected-revision", "token"}
+	tokens := make([]string, len(wantNames))
+	for index, name := range wantNames {
+		argument, ok := arguments[index].(map[string]any)
+		if !ok || getString(argument, "name") != name || getString(argument, "value") == "" || getString(argument, "token") == "" {
+			return nil, "", false
+		}
+		tokens[index] = getString(argument, "token")
+	}
+	return tokens, getString(arguments[4].(map[string]any), "value"), true
+}
+
+func cloneCrosslaneExecution(execution map[string]any) map[string]any {
+	payload, err := json.Marshal(execution)
+	if err != nil {
+		return nil
+	}
+	clone := map[string]any{}
+	if err := json.Unmarshal(payload, &clone); err != nil {
+		return nil
+	}
+	return clone
+}
+
+func sameCrosslaneExecution(want, got map[string]any) bool {
+	wantPayload, wantErr := json.Marshal(want)
+	gotPayload, gotErr := json.Marshal(got)
+	return wantErr == nil && gotErr == nil && bytes.Equal(wantPayload, gotPayload)
 }

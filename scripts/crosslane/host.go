@@ -210,7 +210,7 @@ func (b *battery) hostMediumCandidate(lane, name string) (string, bool) {
 // host lane. Compiled runtimes (codex) run the provider-rendered argv, which
 // makes Go spawn the real reviewer process; the pi host relay routes through
 // the installed gentle-pi relay implementation instead.
-func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[string]any) bool {
+func (b *battery) hostCaptureLens(lane, repo, agent string, env []string, input map[string]any) bool {
 	if hasArgument(input, "materialize") {
 		return b.runPiRelaySlot(lane, repo, input)
 	}
@@ -225,7 +225,7 @@ func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[str
 	b.pass(lane, "reviewer capture admitted", "real reviewer process produced an admitted native capture")
 	switch operationState(capture) {
 	case "approved":
-		b.burnApproved(lane, "lifecycle burned", repo, "", env, capture)
+		b.acknowledgeApproved(lane, "lifecycle acknowledged and burned", repo, agent, env, capture)
 		return false
 	case "correction_required":
 		b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, capture)
@@ -248,7 +248,7 @@ func (b *battery) hostCorrectionReentry(lane, check, repo string, env []string, 
 
 // hostFollowToReceipt follows negotiated transitions to the terminal burn.
 func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
-	const check = "lifecycle burned"
+	const check = "lifecycle acknowledged and burned"
 	for step := 0; step < hostStepBudget; step++ {
 		statusDoc, statusStderr, _ := b.statusEnv(repo, agent, env)
 		kind := getString(statusDoc, "next_transition", "kind")
@@ -262,7 +262,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 			}
 			switch operationState(doc) {
 			case "approved":
-				b.burnApproved(lane, check, repo, agent, env, doc)
+				b.acknowledgeApproved(lane, check, repo, agent, env, doc)
 				return
 			case "correction_required":
 				b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, doc)
@@ -273,7 +273,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 			operation, _ := input["capture_operation"].(string)
 			switch operation {
 			case "review.capture-result":
-				if !b.hostCaptureLens(lane, repo, env, input) {
+				if !b.hostCaptureLens(lane, repo, agent, env, input) {
 					return
 				}
 			case "review.capture-refuter", "review.capture-validation":
@@ -288,7 +288,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 				}
 				switch operationState(roleDoc) {
 				case "approved":
-					b.burnApproved(lane, check, repo, agent, env, roleDoc)
+					b.acknowledgeApproved(lane, check, repo, agent, env, roleDoc)
 					return
 				case "correction_required":
 					b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, roleDoc)

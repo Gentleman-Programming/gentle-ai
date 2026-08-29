@@ -140,8 +140,8 @@ func TestReadReviewRepositoryContextStopsAfterNonSharingOpenFailure(t *testing.T
 
 func privateReviewRepositoryContextPath(t *testing.T, lineage string) string {
 	t.Helper()
-	repo, binding := reviewRepositoryContextFixture(t, lineage)
-	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
+	repo, binding := historicalReviewRepositoryContextFixture(t, lineage)
+	handle, err := DeriveHistoricalReviewRepositoryContextHandle(context.Background(), repo, binding)
 	if err != nil {
 		t.Fatal(err)
 	}

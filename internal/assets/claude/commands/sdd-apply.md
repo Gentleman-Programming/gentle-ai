@@ -52,4 +52,4 @@ Return control to the parent orchestrator. Apply itself never routes to review â
 
 {{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
 
-Approval burns its exact review authority before returning. Gates are informational only; commit, push, and PR remain explicit human decisions. Never auto-launch Judgment Day.
+Approval returns one exact pending acknowledgement continuation. Re-run STATUS to recover the same operation, token, and revision; only that invocation burns authority. Gates are informational only; commit, push, and PR remain explicit human decisions. Never auto-launch Judgment Day.
