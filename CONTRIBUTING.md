@@ -184,6 +184,10 @@ Run the battery before merging changes that touch a review-lifecycle surface (fa
 
 The sibling `gentle-pi` repository carries its own battery: `pnpm test:cross-lane` in [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi).
 
+### Manual Live-Agent Bench
+
+The manual live-agent bench runs one installed Claude Code, Codex, Pi, or OpenCode client in a real terminal against a fresh temporary Go fixture. It may spend model usage and requires RDD to already be on; it is not CI and never enables RDD automatically. See [Manual live-agent bench](docs/testing/manual-agent-bench.md) for prerequisites, the sequential scenario matrix, operator observations, and the deterministic stub test.
+
 ### Benchmark Validation
 
 [`bench/`](bench/README.md) is a separate Go module, so root-module tests do not validate it. For benchmark-module changes, run these commands from `bench/`:
