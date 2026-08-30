@@ -41,6 +41,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - Compare specs first, design second, task completion third.
 - Do not fix issues; report them for the orchestrator/user.
 - Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
+- Never author the `not_applicable` verdict. That state is emitted by native Go for a candidate proven to owe no execution, and your having been launched at all means verification was required. Writing it yourself would claim an absence you did not establish.
 - Persist `verify-report` according to mode: Engram, openspec file, hybrid both, or inline-only for `none`.
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
@@ -146,6 +147,7 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 - Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.
 - Return ordinary verification evidence with the result. Terminal reviewer closure remains capture-owned and informational.
 - Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
+- Never author the `not_applicable` verdict. That state is emitted by native Go for a candidate proven to owe no execution, and your having been launched at all means verification was required. Writing it yourself would claim an absence you did not establish.
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
 - Return minimal report
 
