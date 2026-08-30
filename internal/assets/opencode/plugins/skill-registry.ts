@@ -131,9 +131,9 @@ export const SkillRegistryPlugin: Plugin = async (input) => {
 
   // Don't await — keep OpenCode startup responsive. The command is
   // fingerprint-cached, so normal startup stays cheap.
+  const outerCwd = input.worktree || input.directory || process.cwd()
   refreshSkillRegistry().catch((err) => {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`[skill-registry] unexpected refresh error for "${cwd}": ${singleLine(message)}`)
+    console.error(describeRefreshFailure(err, outerCwd))
   })
 
   return {}
