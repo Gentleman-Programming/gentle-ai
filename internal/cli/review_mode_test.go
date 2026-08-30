@@ -86,6 +86,90 @@ func TestReviewModeDisableGlobalWinsOverEveryRepository(t *testing.T) {
 	}
 }
 
+func TestReviewModeGlobalScopeWorksFromNonGitDirectory(t *testing.T) {
+	home := reviewModeHome(t)
+	nonGit := t.TempDir()
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", nonGit, "--json"}, &output); err != nil {
+		t.Fatalf("unset global status from non-Git cwd error = %v\n%s", err, output.String())
+	}
+	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOff ||
+		before.Status.Source != reviewtransaction.RDDModeSourceDefault ||
+		before.Status.Global != reviewtransaction.RDDModeUnset || before.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("unset global status from non-Git cwd = %#v", before.Status)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", nonGit, "--scope", "global", "--json"}, &output); err != nil {
+		t.Fatalf("global enable from non-Git cwd error = %v\n%s", err, output.String())
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Operation != "enable" || result.Scope != reviewModeScopeGlobal ||
+		result.Status.Effective != reviewtransaction.RDDModeOn ||
+		result.Status.Source != reviewtransaction.RDDModeSourceGlobal ||
+		result.Status.Global != reviewtransaction.RDDModeOn ||
+		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("global enable from non-Git cwd = %#v", result)
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read error = %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) || persisted.RDDModeRecordedAt == nil {
+		t.Fatalf("global enable did not persist an explicit on: %#v", persisted)
+	}
+	if entries, err := os.ReadDir(nonGit); err != nil || len(entries) != 0 {
+		t.Fatalf("global enable touched non-Git cwd: entries=%v err=%v", entries, err)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", nonGit, "--json"}, &output); err != nil {
+		t.Fatalf("global status from non-Git cwd error = %v\n%s", err, output.String())
+	}
+	status := decodeReviewModeResult(t, output.Bytes())
+	if status.Operation != "status" || status.Scope != reviewModeScopeBoth ||
+		status.Status.Effective != reviewtransaction.RDDModeOn ||
+		status.Status.Source != reviewtransaction.RDDModeSourceGlobal ||
+		status.Status.Global != reviewtransaction.RDDModeOn ||
+		status.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("global status from non-Git cwd = %#v", status)
+	}
+}
+
+func TestReviewModeCloneScopeOutsideGitFailsBeforeWriting(t *testing.T) {
+	home := reviewModeHome(t)
+	nonGit := t.TempDir()
+
+	var output bytes.Buffer
+	err := RunReviewMode([]string{"disable", "--cwd", nonGit, "--scope", "clone", "--json"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "clone-local review mode requires a Git repository") ||
+		!strings.Contains(err.Error(), "--cwd") || !strings.Contains(err.Error(), "--scope global") ||
+		strings.Contains(err.Error(), "fatal:") || strings.Contains(err.Error(), "git rev-parse") || strings.Contains(err.Error(), "exit code 128") {
+		t.Fatalf("clone disable outside Git error = %v", err)
+	}
+	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		t.Fatalf("clone disable outside Git lost its typed no-repository classification: %v", err)
+	}
+	if _, readErr := state.Read(home); !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("clone disable outside Git mutated global state: %v", readErr)
+	}
+	if entries, readErr := os.ReadDir(nonGit); readErr != nil || len(entries) != 0 {
+		t.Fatalf("clone disable outside Git touched cwd: entries=%v err=%v", entries, readErr)
+	}
+}
+
+func TestReviewModeRepositoryRequiredRefusalDoesNotDependOnGitStderrLanguage(t *testing.T) {
+	localized := &reviewtransaction.GitCommandError{Args: []string{"rev-parse", "--show-toplevel"}, ExitCode: 128, Output: "fatal: no es un repositorio Git"}
+	refusal := reviewModeRepositoryRequiredRefusal(localized)
+	if refusal == nil || !reviewtransaction.ReviewRootResolutionReportsNoRepository(refusal) {
+		t.Fatalf("localized no-repository error was not classified: %v", refusal)
+	}
+	if strings.Contains(refusal.Error(), localized.Output) {
+		t.Fatalf("localized Git stderr reached the operator refusal: %v", refusal)
+	}
+}
+
 func TestWriteGlobalRDDModeSerializesWithInstallStateAndPreservesFreshFields(t *testing.T) {
 	home := reviewModeHome(t)
 	lock, err := reviewtransaction.AcquireAuthorityFileLock(installStateLockPath(home))

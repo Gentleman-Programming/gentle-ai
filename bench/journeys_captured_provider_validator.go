@@ -44,7 +44,7 @@ func capturedProviderValidatorJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j122-rejected-provider-validator-starts-fresh-high-risk-review",
+			ID:     "j123-rejected-provider-validator-starts-fresh-high-risk-review",
 			Review: reviewOptedIn,
 			Title:  "#3799: a rejected validator leaves a changed normal candidate for a fresh high-risk review",
 			Source: "#3799 Boundary B: inline actionable rejection evidence is terminal for its exact authority; a normal candidate edit receives only selectorless STATUS/START and all four new lenses",

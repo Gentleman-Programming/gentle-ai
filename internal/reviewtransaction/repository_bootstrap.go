@@ -47,6 +47,14 @@ func PrepareReviewRepositoryRoot(ctx context.Context, workspace string) (string,
 	return (SnapshotBuilder{Repo: workspace}).ResolveRepositoryRoot(ctx)
 }
 
+// ReviewRootResolutionReportsNoRepository reports the bounded Git discovery
+// failure for a cwd outside any repository. It lets higher-level command
+// surfaces decide whether repository identity was truly required instead of
+// matching localized Git stderr text.
+func ReviewRootResolutionReportsNoRepository(err error) bool {
+	return reviewRootResolutionReportsNoRepository(err)
+}
+
 func reviewRootResolutionReportsNoRepository(err error) bool {
 	return reviewGitCommandExited128(err, "rev-parse", "--show-toplevel")
 }

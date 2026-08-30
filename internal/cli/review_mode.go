@@ -123,7 +123,31 @@ func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDMo
 		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Effective: reviewtransaction.RDDModeOff}, err
 	}
 	status, err := reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	if err != nil && reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return globalOnlyReviewModeStatus(global), nil
+	}
 	return status, reviewModeUnreadable(ctx, repo, global, err)
+}
+
+func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtransaction.RDDModeStatus {
+	status := reviewtransaction.RDDModeStatus{
+		Schema:     reviewtransaction.RDDModeStatusSchema,
+		Global:     reviewtransaction.RDDModeUnset,
+		CloneLocal: reviewtransaction.RDDModeUnset,
+		Effective:  reviewtransaction.RDDModeOff,
+		Source:     reviewtransaction.RDDModeSourceDefault,
+	}
+	switch strings.TrimSpace(global.Value) {
+	case string(reviewtransaction.RDDModeOn):
+		status.Global = reviewtransaction.RDDModeOn
+		status.Effective = reviewtransaction.RDDModeOn
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	case string(reviewtransaction.RDDModeOff):
+		status.Global = reviewtransaction.RDDModeOff
+		status.Effective = reviewtransaction.RDDModeOff
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	}
+	return status
 }
 
 // ReviewModeUnreadableScope names one kill-switch source whose persisted value
@@ -255,6 +279,21 @@ func reviewModeUnsafePathRefusal(err error) error {
 	return nil
 }
 
+type reviewModeRepositoryRequiredError struct{ Cause error }
+
+func (err *reviewModeRepositoryRequiredError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeRepositoryRequiredError) Error() string {
+	return "clone-local review mode requires a Git repository; rerun the original command with --cwd pointing at the intended repository, or use `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global` for machine-wide state"
+}
+
+func reviewModeRepositoryRequiredRefusal(err error) error {
+	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return nil
+	}
+	return &reviewModeRepositoryRequiredError{Cause: err}
+}
+
 func reviewModeCommandsByVerb(commands []string, verb string) []string {
 	selected := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -283,6 +322,9 @@ func reviewModeUnreadable(
 	}
 	if unsafePath := reviewModeUnsafePathRefusal(err); unsafePath != nil {
 		return unsafePath
+	}
+	if repoRequired := reviewModeRepositoryRequiredRefusal(err); repoRequired != nil {
+		return repoRequired
 	}
 	scopes := make([]ReviewModeUnreadableScope, 0, 2)
 	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
