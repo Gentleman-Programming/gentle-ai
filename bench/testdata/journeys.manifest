@@ -21,6 +21,7 @@ j120-welcome-tui-runs-under-a-real-tty
 j121-rdd-tui-controls-global-mode
 j122-global-review-mode-from-non-git-cwd
 j123-rejected-provider-validator-starts-fresh-high-risk-review
+j124-sdd-attempt-reset-after-selected-untracked-lands
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
 j17-bare-repository

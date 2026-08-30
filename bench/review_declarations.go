@@ -121,6 +121,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
 	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
 	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
+	"j124-sdd-attempt-reset-after-selected-untracked-lands":                     reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
