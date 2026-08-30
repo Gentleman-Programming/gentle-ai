@@ -106,7 +106,7 @@ export MANUAL_AGENT_BENCH_REAL_GENTLE="$real_gentle"
 cat >"$shim_dir/gentle-ai" <<'EOF'
 #!/usr/bin/env bash
 printf 'rdd BEGIN ' >>"$MANUAL_AGENT_BENCH_EVENTS"; printf '%q ' "$@" >>"$MANUAL_AGENT_BENCH_EVENTS"; printf '\n' >>"$MANUAL_AGENT_BENCH_EVENTS"
-"$MANUAL_AGENT_BENCH_REAL_GENTLE" "$@"; status=$?
+if "$MANUAL_AGENT_BENCH_REAL_GENTLE" "$@"; then status=0; else status=$?; fi
 printf 'rdd END %s ' "$status" >>"$MANUAL_AGENT_BENCH_EVENTS"; printf '%q ' "$@" >>"$MANUAL_AGENT_BENCH_EVENTS"; printf '\n' >>"$MANUAL_AGENT_BENCH_EVENTS"
 [[ $status == 0 && ${1:-} == review && ${2:-} == acknowledge-approved ]] && printf 'rdd ACK %s\n' "$(sha256sum "$MANUAL_AGENT_BENCH_FIXTURE/calc/add.go" | cut -d' ' -f1)" >>"$MANUAL_AGENT_BENCH_EVENTS"
 exit "$status"
@@ -115,9 +115,20 @@ chmod +x "$shim_dir/gentle-ai"
 
 injector="$work/inject-defect.sh"
 export MANUAL_AGENT_BENCH_FIXTURE="$fixture"
+archive_valid() {
+  local a n f
+  for a in "$MANUAL_AGENT_BENCH_FIXTURE"/openspec/changes/archive/????-??-??-*; do
+    [[ -d $a && ${a##*/} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-.+ ]] || continue; n=${a##*/}; n=${n:11}
+    [[ ! -e "$MANUAL_AGENT_BENCH_FIXTURE/openspec/changes/$n" && -s $a/state.yaml && -s $a/proposal.md && -s $a/design.md && -s $a/tasks.md && -s $a/verify-report.md && -s $a/archive-report.md ]] || continue
+    compgen -G "$a/specs/*/spec.md" >/dev/null || continue
+    for f in "$a"/proposal.md "$a"/specs/*/spec.md "$a"/tasks.md "$a"/verify-report.md; do grep -Eiq '(^|[^[:alnum:]_])add([^[:alnum:]_]|$)' "$f" || continue 2; done
+    ! grep -Eq '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$a/tasks.md" && grep -Eiq '(^|[^[:alnum:]_])(pass|passed|success|successful|verified)([^[:alnum:]_]|$)' "$a/verify-report.md" && return
+  done
+  return 1; }; export -f archive_valid
 cat >"$injector" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ ${MANUAL_AGENT_BENCH_SCENARIO:-} != sdd-rdd-fix ]] || archive_valid || { printf 'inject refused: complete SDD archive required\n' >>"$MANUAL_AGENT_BENCH_EVENTS"; exit 1; }
 if ! go test -C "$MANUAL_AGENT_BENCH_FIXTURE" ./... -count=1; then
   printf 'inject refused: prerequisites failed\n' >>"$MANUAL_AGENT_BENCH_EVENTS"
   exit 1
@@ -126,18 +137,6 @@ printf 'package calc\n\nfunc Add(a, b int) int { return a - b }\n' >"$MANUAL_AGE
 printf 'inject planted deterministic defect\n' >>"$MANUAL_AGENT_BENCH_EVENTS"
 EOF
 chmod +x "$injector"
-
-archive_valid() {
-  local a n f
-  for a in "$fixture"/openspec/changes/archive/????-??-??-*; do
-    [[ -d $a && ${a##*/} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-.+ ]] || continue; n=${a##*/}; n=${n:11}
-    [[ ! -e "$fixture/openspec/changes/$n" && -s $a/state.yaml && -s $a/proposal.md && -s $a/design.md && -s $a/tasks.md && -s $a/verify-report.md && -s $a/archive-report.md ]] || continue
-    compgen -G "$a/specs/*/spec.md" >/dev/null || continue
-    for f in "$a"/proposal.md "$a"/specs/*/spec.md "$a"/tasks.md "$a"/verify-report.md; do grep -Eiq '(^|[^[:alnum:]_])add([^[:alnum:]_]|$)' "$f" || continue 2; done
-    ! grep -Eq '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$a/tasks.md" && grep -Eiq '(^|[^[:alnum:]_])(pass|passed|success|successful|verified)([^[:alnum:]_]|$)' "$a/verify-report.md" && return
-  done
-  return 1
-}
 prompt="You are the only implementation runtime. Work in the current tiny Go fixture. Never commit, push, add a remote, open a PR, launch background agents, or bypass native prompts. Keep all work foreground."
 if [[ $scenario == direct-* ]]; then
   prompt+=" Implement Add(a, b) correctly and run go test ./... -count=1. Do not use SDD or create OpenSpec artifacts."; phase='implementation and uncached tests'
@@ -179,9 +178,9 @@ else
   [[ ! -e $fixture/openspec ]] || die 'direct scenario created OpenSpec artifacts'
 fi
 if [[ $scenario == *-rdd-fix ]]; then
-  injected=$(grep -n '^inject planted' "$evidence/events" | head -1 | cut -d: -f1)
+  injected=$(grep -n '^inject planted deterministic defect$' "$evidence/events" | head -1 | cut -d: -f1); injector_events=$(grep -Ec '^inject ' "$evidence/events" || true); planted_events=$(grep -Ec '^inject planted deterministic defect$' "$evidence/events" || true)
   reviewed=$(grep -n '^rdd END 0 review start ' "$evidence/events" | head -1 | cut -d: -f1)
-  [[ -n $injected && -n $reviewed && $injected -lt $reviewed ]] || die 'injector did not precede successful review start'
+  [[ $injector_events -eq 1 && $planted_events -eq 1 && -n $injected && -n $reviewed && $injected -lt $reviewed ]] || die 'injector must plant exactly one defect before successful review start'
 fi
 printf 'manual agent bench completed: %s / %s\n' "$agent" "$scenario"
 success=1

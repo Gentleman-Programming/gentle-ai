@@ -26,12 +26,12 @@ printf '%s\0' "$name" "$@" >>"$MANUAL_AGENT_BENCH_STUB_LOG"
 body='return a + b'; [[ ${MANUAL_AGENT_BENCH_STUB_CONSTANT:-0} == 1 ]] && body='return 5'
 printf 'package calc\n\nfunc Add(a, b int) int { %s }\n' "$body" > calc/add.go
 go test ./... -count=1
-if [[ $MANUAL_AGENT_BENCH_SCENARIO == sdd-* ]]; then
+if [[ $MANUAL_AGENT_BENCH_SCENARIO == sdd-* ]]; then [[ ${MANUAL_AGENT_BENCH_STUB_EARLY_INJECT:-0} != 1 ]] || "$MANUAL_AGENT_BENCH_INJECTOR"
   d=openspec/changes/archive/2025-01-01-test-change; mkdir -p "$d/specs/fixture"
   [[ ${MANUAL_AGENT_BENCH_STUB_BAD_ARCHIVE:-0} == 1 ]] && : >"$d/archive-report.md" || { for f in state.yaml proposal.md design.md tasks.md verify-report.md archive-report.md; do printf 'Add behavior\n' >"$d/$f"; done; printf 'Add behavior\n' >"$d/specs/fixture/spec.md"; [[ ${MANUAL_AGENT_BENCH_STUB_GARBAGE_ARCHIVE:-0} == 1 ]] || { printf -- '- [x] Implement Add\n' >"$d/tasks.md"; printf 'Add verified: PASS\n' >"$d/verify-report.md"; }; }
   if [[ ${MANUAL_AGENT_BENCH_STUB_NO_ATTEMPTS:-0} != 1 ]]; then for unit in apply verify; do gentle-ai sdd-attempt acquire --work-unit "$unit" || [[ ${MANUAL_AGENT_BENCH_STUB_ATTEMPT_FAIL:-0} == 1 ]]; gentle-ai sdd-attempt settle --work-unit "$unit" || [[ ${MANUAL_AGENT_BENCH_STUB_ATTEMPT_FAIL:-0} == 1 ]]; done; fi
 fi
-if [[ $MANUAL_AGENT_BENCH_SCENARIO == *-rdd-fix ]]; then "$MANUAL_AGENT_BENCH_INJECTOR"; fi
+if [[ $MANUAL_AGENT_BENCH_SCENARIO == *-rdd-fix ]]; then "$MANUAL_AGENT_BENCH_INJECTOR"; [[ ${MANUAL_AGENT_BENCH_STUB_SECOND_INJECT:-0} != 1 ]] || { printf 'package calc\n\nfunc Add(a, b int) int { return a + b }\n' > calc/add.go; "$MANUAL_AGENT_BENCH_INJECTOR"; printf 'package calc\n\nfunc Add(a, b int) int { return a + b }\n' > calc/add.go; }; fi
 if [[ ${MANUAL_AGENT_BENCH_STUB_NO_REVIEW:-0} != 1 ]]; then
   gentle-ai review status --cwd "$PWD" --contract gentle-ai.review-integration/v2 --next-transition
   [[ ${MANUAL_AGENT_BENCH_STUB_REVIEW:-full} == status ]] || { gentle-ai review start --cwd "$PWD"; [[ $MANUAL_AGENT_BENCH_SCENARIO == *-rdd-fix && ${MANUAL_AGENT_BENCH_STUB_POST_ACK_FIX:-0} != 1 ]] && printf 'package calc\n\nfunc Add(a, b int) int { return a + b }\n' > calc/add.go; gentle-ai review acknowledge-approved --lineage test || true; }
@@ -51,7 +51,7 @@ run() {
   local agent=$1 scenario=$2 keep=${3:-1}
   local -a args=(--test-mode --agent "$agent" --scenario "$scenario")
   [[ $keep == 1 ]] && args+=(--keep-work)
-  PATH="$test_root/bin:$PATH" TMPDIR="$test_root" MANUAL_AGENT_BENCH_TEST_ROOT="$test_root" \
+  env SHELLOPTS=braceexpand:errexit:nounset:pipefail PATH="$test_root/bin:$PATH" TMPDIR="$test_root" MANUAL_AGENT_BENCH_TEST_ROOT="$test_root" \
     MANUAL_AGENT_BENCH_STUB_LOG="$test_root/runtime.argv" \
     MANUAL_AGENT_BENCH_TEST_RM_LOG="$test_root/cleanup.argv" "$bench" "${args[@]}"
 }
@@ -97,7 +97,7 @@ assert_fixture() {
 
 if grep -E 'go test .*\.\/\.\.' "$bench" "$0" | grep -qv -- '-count=1'; then red 'load-bearing fixture test permits cache'; fi
 help_output=$(PATH="$test_root/bin:$PATH" "$bench" --help)
-grep -Fq -- '--scenario' <<<"$help_output" || fail "help omits scenario"
+grep -Fq -- '--scenario' <<<"$help_output" || fail "help omits scenario"; grep -Fq 'effective Go 1.22+ toolchain' "$repo_root/docs/testing/manual-agent-bench.md" || red 'documentation omits the effective Go 1.22+ toolchain prerequisite'
 if PATH="$test_root/bin:$PATH" "$bench" --test-mode --agent nope --scenario direct-correct >/dev/null 2>&1; then
   fail "invalid agent was accepted"
 fi
@@ -119,7 +119,7 @@ done; done
 if MANUAL_AGENT_BENCH_STUB_CONSTANT=1 run claude direct-correct >/dev/null 2>&1; then red 'constant implementation accepted'; else :; fi
 if MANUAL_AGENT_BENCH_STUB_BAD_ARCHIVE=1 run pi sdd-correct >/dev/null 2>&1; then red 'incomplete SDD archive accepted'; else :; fi
 if MANUAL_AGENT_BENCH_STUB_REVIEW=status run claude direct-correct >/dev/null 2>&1; then red 'review status alone accepted'; else :; fi
-if MANUAL_AGENT_BENCH_STUB_ACK_FAIL=1 run claude direct-correct >/dev/null 2>&1; then red 'nonzero RDD acknowledgement accepted'; else :; fi
+if failed_ack_output=$(MANUAL_AGENT_BENCH_STUB_ACK_FAIL=1 run claude direct-correct); then red 'nonzero RDD acknowledgement accepted'; else failed_ack_work=$(work_root "$failed_ack_output"); [[ -d $failed_ack_work && $(grep -Ec '^rdd END 1 review acknowledge-approved ' "$failed_ack_work/evidence/events" || true) -eq 1 ]] || red 'nonzero RDD acknowledgement omitted END evidence under inherited errexit'; fi
 if MANUAL_AGENT_BENCH_STUB_NO_ATTEMPTS=1 run pi sdd-correct >/dev/null 2>&1; then red 'SDD archive without attempts accepted'; else :; fi
 if MANUAL_AGENT_BENCH_STUB_ATTEMPT_FAIL=1 run pi sdd-correct >/dev/null 2>&1; then red 'failed SDD attempts accepted'; else :; fi
 if MANUAL_AGENT_BENCH_STUB_GARBAGE_ARCHIVE=1 run pi sdd-correct >/dev/null 2>&1; then red 'semantic-free SDD archive accepted'; else :; fi
@@ -128,6 +128,7 @@ ext_head=$(sha256sum "$external/.git/HEAD"); ext_config=$(sha256sum "$external/.
 if hostile_output=$(GIT_DIR="$external/.git" GIT_INDEX_FILE="$external/.git/index" run claude direct-correct); then hostile_work=$(work_root "$hostile_output"); [[ -d $hostile_work && $ext_head == "$(sha256sum "$external/.git/HEAD")" && $ext_config == "$(sha256sum "$external/.git/config")" && $ext_index == "$(sha256sum "$external/.git/index")" ]] || red 'hostile Git selection changed external repository or broke fixture'
 else red 'hostile Git selection prevented fixture run'; fi
 if MANUAL_AGENT_BENCH_STUB_POST_ACK_FIX=1 run claude direct-rdd-fix >/dev/null 2>&1; then red 'post-acknowledgement implementation fix accepted'; else :; fi
+if MANUAL_AGENT_BENCH_STUB_SECOND_INJECT=1 run claude direct-rdd-fix >/dev/null 2>&1; then red 'multiple injector events accepted'; else :; fi; if early_output=$(MANUAL_AGENT_BENCH_STUB_EARLY_INJECT=1 run pi sdd-rdd-fix); then red 'early SDD injection was accepted'; fi; early_work=$(work_root "$early_output"); if [[ -d $early_work && ! -e $early_work/fixture/openspec ]] && ! grep -Fq 'inject planted deterministic defect' "$early_work/evidence/events" && grep -Fq 'inject refused: complete SDD archive required' "$early_work/evidence/events"; then :; else red 'early SDD injection did not refuse before archive creation'; fi
 if output=$(run claude direct-correct 0); then
   read -r cleanup_cmd flag root extra <"$test_root/cleanup.argv" || true; [[ $cleanup_cmd == /bin/rm && $flag == -rf && $root == "$test_root"/manual-agent-bench.* && -z $extra ]] || fail "cleanup did not own exactly one work root"
 else
