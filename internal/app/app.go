@@ -363,6 +363,15 @@ func resolveSkillRegistryDirs(cwd string) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("resolve cwd: %w", err)
 		}
+	} else {
+		// An explicit --cwd may be relative (e.g. "."). Normalize it to an
+		// absolute path so skill-registry list/refresh scope the same project
+		// identity whether the caller passes "." or "$PWD".
+		var err error
+		cwd, err = filepath.Abs(cwd)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve cwd: %w", err)
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
