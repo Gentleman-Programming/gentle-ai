@@ -101,7 +101,18 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 			return runtimeBeginAdmissionResult{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 		}
-		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+		// #3842: the terminal capture replays the RECORDED selection, which
+		// the user may have legitimately committed since the last settle, so
+		// reconcile it against the current index first — a committed path then
+		// replays as zero drift or as ordinary candidate drift, never as a
+		// capture failure. The request-vs-recorded comparison below
+		// deliberately stays against the recorded list: what the caller must
+		// re-request is the scope the ledger holds, exactly as acquired.
+		var intended []string
+		intended, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err == nil {
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
+		}
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}

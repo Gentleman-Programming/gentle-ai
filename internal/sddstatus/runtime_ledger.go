@@ -893,6 +893,18 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// review freezes -- tracked changes plus whatever the user put in the
 		// index. Sweeping the worktree here would make drift detection and
 		// review disagree about what the candidate even is.
+		//
+		// #3842: the resolved selection can still carry begin-time paths the
+		// work unit committed mid-attempt (a settle-time declaration is
+		// validated against the current inventory, but the undeclared branches
+		// return the begin selection as recorded), so reconcile it against the
+		// current index before capture. The finish record below carries the
+		// reconciled list, because that is the selection this settlement's
+		// overlay actually used.
+		intendedUntracked, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, intendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
+		}
 		snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
 			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: active.BeginCandidateTree,
 			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intendedUntracked,
@@ -1110,7 +1122,15 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 		if err != nil {
 			return runtimeRecord{}, err
 		}
-		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree, active.IntendedUntracked)
+		// #3842: reconcile the replayed selection against the DESTINATION
+		// worktree's index — that is where the capture below actually runs,
+		// and a linked worktree's checked-out branch may already track paths
+		// the source recorded as untracked at begin time.
+		intendedUntracked, err := runtimeReplayedIntendedUntracked(ctx, request.DestinationWorktree, active.IntendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture delegated SDD runtime candidate before handoff: %w", err)
+		}
+		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree, intendedUntracked)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture delegated SDD runtime candidate before handoff: %w", err)
 		}
@@ -1302,7 +1322,14 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 		return true
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+	// #3842: reconcile the replayed selection first — a selected path the user
+	// has since committed would otherwise fail the capture and this probe
+	// would answer false exactly when the commit made reset the right exit.
+	intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+	if err != nil {
+		return false
+	}
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 	if err != nil {
 		return false
 	}
@@ -1322,7 +1349,13 @@ func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context,
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+	// #3842: same replay reconciliation as the reset probe, and for the same
+	// fail-closed reason — a reconcile error is a capture that could not run.
+	intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+	if err != nil {
+		return false
+	}
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 	if err != nil {
 		return false
 	}
@@ -1404,6 +1437,14 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			return runtimeRecord{}, ErrRuntimeResetNotAllowed
 		}
 		last := status.Attempts[len(status.Attempts)-1]
+		// #3842: the recorded selection is a historical replay by reset time —
+		// the completed work unit's selected paths are ordinarily committed by
+		// now — so reconcile it once against the current index and feed the
+		// same reconciled list to both captures below.
+		intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
+		}
 		if !status.DecisionRequired && !status.Complete {
 			// The only remaining structurally-permitted scope is a terminal
 			// failed/interrupted attempt with budget still available: begin
@@ -1411,7 +1452,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			// begin is actually blocked by candidate drift. Otherwise an
 			// elective early reset would launder the per-objective budget
 			// (CumulativeAttempts resets to zero on every reset).
-			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 			if driftErr != nil {
 				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
 			}
@@ -1419,7 +1460,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 				return runtimeRecord{}, store.runtimeZeroDriftResetRefusal(status)
 			}
 		}
-		snapshot, err := captureRuntimeCandidate(ctx, store.Repo, last.IntendedUntracked)
+		snapshot, err := captureRuntimeCandidate(ctx, store.Repo, intended)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
 		}
@@ -1485,7 +1526,15 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		last := status.Attempts[len(status.Attempts)-1]
-		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+		// #3842: reconcile the replayed selection once and feed the SAME
+		// reconciled list to this drift capture and the fresh capture below,
+		// so the CandidateTree comparability contract between them holds over
+		// one selection rather than two.
+		intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", err)
+		}
+		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 		if driftErr != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", driftErr)
 		}
@@ -1527,7 +1576,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 		// on it exactly because there is zero drift -- so this second capture
 		// is provably the same underlying content the drift check just
 		// verified, not a fresh unguarded read.
-		fresh, err := captureRuntimeCandidate(ctx, store.Repo, last.IntendedUntracked)
+		fresh, err := captureRuntimeCandidate(ctx, store.Repo, intended)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective rescope: %w", err)
 		}
@@ -2911,6 +2960,27 @@ func validHarnessDisposition(disposition HarnessDisposition) bool {
 // compact boundary unclassified the way both of them did before #2114.
 func wrapRuntimeCandidateUnavailable(stage string, cause error) error {
 	return fmt.Errorf("%w %s: %w", ErrRuntimeCandidateUnavailable, stage, cause)
+}
+
+// runtimeReplayedIntendedUntracked reconciles a HISTORICAL intended-untracked
+// selection against the repository's current index before it is replayed into
+// a candidate capture (#3842). The ledger records the selection at
+// acquire/begin time, but the user legitimately commits the selected paths as
+// the ordinary end of a work unit — sometimes as the work unit itself — and a
+// verbatim replay of the recorded list then trips the snapshot builder's
+// "already tracked" refusal on every later capture: reset, rescope, settle,
+// handoff, and the read-only admissibility probes all dead-end. A path that
+// became tracked is already part of the ordinary candidate (its bytes live in
+// HEAD/index/worktree), so dropping it from the overlay keeps the candidate
+// tree byte-identical: a bare landing of the selection replays as zero drift,
+// and any further edit reads as ordinary candidate drift — exactly the
+// distinction the reset/rescope split already routes on. Only replayed
+// history passes through here: fresh caller-supplied selections stay strict,
+// and the immutable records themselves keep the selection exactly as
+// acquired.
+func runtimeReplayedIntendedUntracked(ctx context.Context, repo string, recorded []string) ([]string, error) {
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	return builder.StillUntrackedIntended(ctx, recorded)
 }
 
 func captureRuntimeCandidate(ctx context.Context, repo string, intendedUntracked []string) (reviewtransaction.Snapshot, error) {
