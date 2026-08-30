@@ -216,6 +216,10 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			continue
 		}
 		state := candidate.compact.State
+		if request.LineageID == "" && (compactRejectedTargetedValidatorTerminalForChangedTarget(state, live) ||
+			compactHistoricalFailedValidator(state) && compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)) {
+			continue
+		}
 		if request.LineageID != "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection != ProjectionStaged &&
 			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			eligible, pendingSlots, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
@@ -384,6 +388,26 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	}
+}
+
+// compactRejectedTargetedValidatorTerminalForChangedTarget recognizes only a
+// canonical evidence-bearing rejected validator terminal. Rebuild verifies the
+// admitted request/evidence binding; absent or malformed evidence stays in the
+// ordinary escalation path instead of being excluded from status candidates.
+func compactRejectedTargetedValidatorTerminalForChangedTarget(state CompactState, live Snapshot) bool {
+	if !compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live) {
+		return false
+	}
+	request, err := RebuildAdmittedTargetedValidationRequest(state, state.CapturePhaseRevision)
+	if err != nil {
+		return false
+	}
+	value, found := state.AdmittedRoleResult(CompactRoleTargetedValidator, state.CapturePhaseRevision, request.CorrectionTargetIdentity, request.RequestHash)
+	if !found {
+		return false
+	}
+	validator, err := decodeCompactAdmittedTargetedValidatorValue(value)
+	return err == nil && validator.Outcome == "failed"
 }
 
 // explicitReviewingCompactCandidate admits a drifted reviewing authority only
