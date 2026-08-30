@@ -646,8 +646,53 @@ func TestInjectClaudeCodeDefaultDenyRulesApplied(t *testing.T) {
 	}
 }
 
-// TestInjectOpenCodePreservesExistingDenyRules ensures that user-managed read deny
-// entries already present in settings.json are not removed when the overlay is applied.
+func TestInjectOpenCodeInstallsSensitivePathGuardWithoutRewritingUserPlugins(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"plugin":["user-plugin.ts"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := Inject(home, opencodeAdapter())
+	if err != nil || !first.Changed {
+		t.Fatalf("first Inject() = %#v, %v", first, err)
+	}
+	guard, err := os.ReadFile(OpenCodeSensitivePathGuardPath(home))
+	if err != nil || !strings.Contains(string(guard), `"tool.execute.before"`) {
+		t.Fatalf("guard = %q, error = %v", guard, err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(content, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings["plugin"].([]any); len(got) != 1 || got[0] != "user-plugin.ts" {
+		t.Fatalf("user plugins = %#v", got)
+	}
+	permission := settings["permission"].(map[string]any)
+	for _, section := range []string{"grep", "removed-grep"} {
+		if _, exists := permission[section]; exists {
+			t.Fatalf("ignored permission.%s policy installed", section)
+		}
+	}
+	for _, pattern := range []string{"* *.env*", "* '*.env'*", `* "*.env"*`, "* **/secrets/**", "* **/*.pem"} {
+		if got := permission["bash"].(map[string]any)[pattern]; got != "deny" {
+			t.Errorf("bash %q = %q, want deny", pattern, got)
+		}
+	}
+	second, err := Inject(home, opencodeAdapter())
+	if err != nil || second.Changed {
+		t.Fatalf("second Inject() = %#v, %v", second, err)
+	}
+}
+
 func TestInjectOpenCodePreservesExistingDenyRules(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")

@@ -3,8 +3,10 @@ package permissions
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -60,7 +62,7 @@ var claudeCodeOverlayJSON = []byte(`{
 }
 `)
 
-// openCodeOverlayJSON uses the OpenCode "permission" key with bash/read granularity.
+// openCodeOverlayJSON uses OpenCode's permission key; Bash patterns match commands.
 var openCodeOverlayJSON = []byte(`{
   "permission": {
     "bash": {
@@ -70,7 +72,20 @@ var openCodeOverlayJSON = []byte(`{
       "git push": "ask",
       "git push --force *": "ask",
       "git rebase *": "ask",
-      "git reset --hard *": "ask"
+      "git reset --hard *": "ask",
+      "* *.env*": "deny",
+      "* '*.env'*": "deny",
+      "* \"*.env\"*": "deny",
+      "* **/.env*": "deny",
+      "* **/secrets/**": "deny",
+      "* **/credentials.json": "deny",
+      "* **/.ssh/**": "deny",
+      "* **/.credentials/**": "deny",
+      "* **/Library/Keychains/**": "deny",
+      "* **/.aws/credentials": "deny",
+      "* **/.config/gh/hosts.yml": "deny",
+      "* **/*.pem": "deny",
+      "* **/*.key": "deny"
     },
     "read": {
       "*": "allow",
@@ -152,6 +167,12 @@ func agentOverlay(id model.AgentID) []byte {
 	}
 }
 
+const openCodeSensitivePathGuardAsset = "opencode/plugins/opencode-sensitive-path-guard.ts"
+
+func OpenCodeSensitivePathGuardPath(homeDir string) string {
+	return filepath.Join(homeDir, ".config", "opencode", "plugins", "opencode-sensitive-path-guard.ts")
+}
+
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
@@ -167,8 +188,41 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if err != nil {
 		return InjectionResult{}, err
 	}
+	result := InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}
+	if adapter.Agent() != model.AgentOpenCode {
+		return result, nil
+	}
 
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+	changed, err := installOpenCodeSensitivePathGuard(homeDir)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	result.Changed = result.Changed || changed
+	result.Files = append(result.Files, OpenCodeSensitivePathGuardPath(homeDir))
+	return result, nil
+}
+
+func installOpenCodeSensitivePathGuard(homeDir string) (bool, error) {
+	content, err := assets.Read(openCodeSensitivePathGuardAsset)
+	if err != nil {
+		return false, fmt.Errorf("read embedded OpenCode sensitive-path guard: %w", err)
+	}
+	path := OpenCodeSensitivePathGuardPath(homeDir)
+	existing, err := os.ReadFile(path)
+	if err == nil {
+		if string(existing) == content {
+			return false, nil
+		}
+		return false, fmt.Errorf("refuse to overwrite modified OpenCode sensitive-path guard %q", path)
+	}
+	if !os.IsNotExist(err) {
+		return false, fmt.Errorf("read OpenCode sensitive-path guard %q: %w", path, err)
+	}
+	writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+	if err != nil {
+		return false, err
+	}
+	return writeResult.Changed, nil
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

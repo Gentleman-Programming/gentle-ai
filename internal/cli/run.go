@@ -2328,6 +2328,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if p := permissions.TargetPath(homeDir, adapter); p != "" {
 				paths = append(paths, p)
 			}
+			if adapter.Agent() == model.AgentOpenCode {
+				paths = append(paths, permissions.OpenCodeSensitivePathGuardPath(homeDir))
+			}
 		case model.ComponentGGA:
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))

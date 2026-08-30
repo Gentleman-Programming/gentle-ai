@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -366,6 +367,66 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 	}
 	if got, err := os.ReadFile(logoPath); err != nil || string(got) != "// managed logo" {
 		t.Fatalf("OpenCode logo = %q, %v", got, err)
+	}
+}
+
+func TestComponentOperationsPermissionsOpenCodeSensitivePathGuardOwnership(t *testing.T) {
+	for _, tt := range []struct {
+		name, content string
+		managed       bool
+	}{
+		{name: "managed guard removed", managed: true},
+		{name: "modified guard preserved", content: "user modified guard"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter, _ := svc.registry.Get(model.AgentOpenCode)
+			guardPath := permissions.OpenCodeSensitivePathGuardPath(home)
+			if tt.managed {
+				if _, err := permissions.Inject(home, adapter); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.MkdirAll(filepath.Dir(guardPath), 0o755); err != nil {
+				t.Fatal(err)
+			} else if err := os.WriteFile(guardPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			userPlugin := filepath.Join(filepath.Dir(guardPath), "user-plugin.ts")
+			if err := os.WriteFile(userPlugin, []byte("user plugin"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			ops, targets, err := svc.componentOperations(adapter, model.ComponentPermission)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(targets, guardPath) {
+				t.Fatalf("permission targets = %v, missing %q", targets, guardPath)
+			}
+			for _, op := range ops {
+				if op.path != guardPath && !tt.managed {
+					continue
+				}
+				_, _, err := op.apply(op.path)
+				if (err != nil) != !tt.managed {
+					t.Fatalf("op.apply(%q) error = %v", op.path, err)
+				}
+			}
+			if tt.managed {
+				if _, err := os.Stat(guardPath); !os.IsNotExist(err) {
+					t.Fatalf("managed guard should be removed: %v", err)
+				}
+			} else if got, err := os.ReadFile(guardPath); err != nil || string(got) != tt.content {
+				t.Fatalf("modified guard = %q, err = %v", got, err)
+			}
+			if got, err := os.ReadFile(userPlugin); err != nil || string(got) != "user plugin" {
+				t.Fatalf("user plugin = %q, err = %v", got, err)
+			}
+		})
 	}
 }
 

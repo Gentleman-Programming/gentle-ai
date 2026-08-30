@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -687,6 +688,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				ops = append(ops, rewriteJSONFile(path, jsonPath{"permissions"}))
 			case model.AgentOpenCode:
 				ops = append(ops, rewriteJSONFile(path, jsonPath{"permission"}))
+				guardPath := permissions.OpenCodeSensitivePathGuardPath(homeDir)
+				targets = append(targets, guardPath)
+				ops = append(ops, removeManagedOpenCodeSensitivePathGuard(guardPath), removeDirIfEmpty(filepath.Dir(guardPath)))
 			case model.AgentGeminiCLI:
 				ops = append(ops, rewriteJSONFile(path, jsonPath{"general", "defaultApprovalMode"}))
 			case model.AgentVSCodeCopilot:
@@ -1323,6 +1327,33 @@ func isManagedContext7ServerJSON(content []byte) bool {
 		strings.HasPrefix(args[1], "--package=@upstash/context7-mcp@") &&
 		args[2] == "--" &&
 		args[3] == "context7-mcp"
+}
+
+func removeManagedOpenCodeSensitivePathGuard(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			data, err := os.ReadFile(path)
+			if os.IsNotExist(err) {
+				return false, false, nil
+			}
+			if err != nil {
+				return false, false, err
+			}
+			managed, err := assets.Read("opencode/plugins/opencode-sensitive-path-guard.ts")
+			if err != nil {
+				return false, false, fmt.Errorf("read embedded OpenCode sensitive-path guard: %w", err)
+			}
+			if string(data) != managed {
+				return false, false, fmt.Errorf("refuse to remove modified OpenCode sensitive-path guard %q", path)
+			}
+			if err := os.Remove(path); err != nil {
+				return false, false, err
+			}
+			return true, true, nil
+		},
+	}
 }
 
 func removeFile(path string) operation {
