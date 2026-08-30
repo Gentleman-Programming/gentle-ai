@@ -47,6 +47,78 @@ func TestFacadeValidationRejectsInconclusiveEvidence(t *testing.T) {
 
 // A genuinely failed check with observed evidence is a real verdict and must
 // keep flowing into escalation unchanged.
+func TestTargetedValidatorEvidenceRejectsDigestAndBindingMismatch(t *testing.T) {
+	request := reviewtransaction.TargetedValidationRequest{
+		RequestHash:              "sha256:" + strings.Repeat("1", 64),
+		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
+	}
+	result := facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria:     facadeValidationCheck{Passed: false, Evidence: []string{"the corrected candidate still fails the original criterion"}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"the correction introduced no unrelated regression"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	}
+	native := reviewtransaction.ScopedValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria: reviewtransaction.ValidationCheck{
+			Passed: result.OriginalCriteria.Passed, EvidenceHash: facadeValueHash("original-criteria", result.OriginalCriteria),
+		},
+		CorrectionRegression: reviewtransaction.ValidationCheck{
+			Passed: result.CorrectionRegression.Passed, EvidenceHash: facadeValueHash("correction-regression", result.CorrectionRegression),
+		},
+		FollowUps: result.FollowUps,
+	}
+	evidence := reviewProviderTargetedValidatorEvidence(result)
+	if err := evidence.Validate(request, native); err != nil {
+		t.Fatalf("valid targeted-validator evidence rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*reviewtransaction.CompactTargetedValidatorEvidence)
+	}{
+		{name: "digest", mutate: func(value *reviewtransaction.CompactTargetedValidatorEvidence) {
+			value.OriginalCriteria.Evidence[0] = "different observation"
+		}},
+		{name: "binding", mutate: func(value *reviewtransaction.CompactTargetedValidatorEvidence) {
+			value.CorrectionTargetIdentity = "sha256:" + strings.Repeat("4", 64)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := evidence
+			candidate.OriginalCriteria.Evidence = append([]string(nil), evidence.OriginalCriteria.Evidence...)
+			tt.mutate(&candidate)
+			if err := candidate.Validate(request, native); err == nil {
+				t.Fatal("mismatched targeted-validator evidence was admitted")
+			}
+		})
+	}
+}
+
+func TestTargetedValidatorCaptureRejectsOutcomeOnlyTerminalFailureBeforeAuthorityMutation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureAdmittedTargetedValidatorResult(t.Context(), reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
+		ExpectedRequest: request, Payload: []byte(`{"outcome":"failed"}`),
+		Complete: func(*reviewtransaction.CompactState) error { return nil },
+	}); err == nil {
+		t.Fatal("outcome-only terminal failed capture was admitted")
+	}
+	after, err := store.Load()
+	if err != nil || after.Revision != before.Revision || len(after.State.AdmittedRoleResults) != len(before.State.AdmittedRoleResults) {
+		t.Fatalf("outcome-only terminal capture mutated authority: before=%#v after=%#v err=%v", before, after, err)
+	}
+}
+
 func TestFacadeValidationKeepsGenuineFailedVerdicts(t *testing.T) {
 	request := reviewtransaction.TargetedValidationRequest{
 		RequestHash:              "sha256:" + strings.Repeat("1", 64),

@@ -1076,11 +1076,11 @@ func (state CompactState) CompactReviewView() (CompactReviewView, error) {
 				entry.CapturePhaseRevision != state.CapturePhaseRevision {
 				return CompactReviewView{}, invalidCompactReviewView("targeted-validator tuple is ambiguous or mismatched")
 			}
-			outcome, err := decodeCompactAdmittedTargetedValidatorValue(value)
+			admitted, err := decodeCompactAdmittedTargetedValidatorValue(value)
 			if err != nil {
 				return CompactReviewView{}, fmt.Errorf("decode active admitted targeted validator: %w", err)
 			}
-			view.TargetedValidatorOutcome = outcome
+			view.TargetedValidatorOutcome = admitted.Outcome
 		}
 	}
 	refuterByID := map[string]EvidenceResult{}

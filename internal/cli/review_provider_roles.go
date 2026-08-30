@@ -118,7 +118,8 @@ type compactProviderRefuterResult struct {
 }
 
 type compactProviderTargetedValidatorResult struct {
-	Outcome string `json:"outcome"`
+	Outcome  string                                             `json:"outcome"`
+	Evidence reviewtransaction.CompactTargetedValidatorEvidence `json:"evidence"`
 }
 
 type reviewProviderEvidence struct {
@@ -237,7 +238,12 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, correction)
+	var request reviewtransaction.TargetedValidationRequest
+	if state.State == reviewtransaction.StateEscalated {
+		request, err = reviewtransaction.RebuildAdmittedTargetedValidationRequest(state, revision)
+	} else {
+		request, err = reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, correction)
+	}
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
@@ -512,28 +518,69 @@ func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, s
 		}
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
-	outcome := "failed"
-	if native.OriginalCriteria.Passed && native.CorrectionRegression.Passed {
-		outcome = "passed"
-	}
-	payload, err := canonicalProviderRoleResult(compactProviderTargetedValidatorResult{Outcome: outcome})
+	evidence := reviewProviderTargetedValidatorEvidence(result)
+	payload, err := canonicalProviderRoleResult(compactProviderTargetedValidatorResult{
+		Outcome: reviewProviderTargetedValidatorOutcome(native), Evidence: evidence,
+	})
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
-	if err := store.CaptureAdmittedTargetedValidatorResult(ctx, reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
-		ExpectedRequest: request.ValidationRequest, Payload: payload,
-	}); err != nil {
+	capture := reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
+		ExpectedRequest: request.ValidationRequest, Payload: payload, Evidence: &evidence, Validation: &native,
+	}
+	if reviewProviderTargetedValidatorOutcome(native) == "failed" {
+		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
+		if err != nil {
+			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		}
+		complete, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildCorrectedCandidate(ctx, state.InitialSnapshot, correction)
+		if err != nil {
+			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		}
+		capture.Complete = func(next *reviewtransaction.CompactState) error {
+			return next.CompleteCorrectionVerification(correction, actual, native, complete)
+		}
+	}
+	if err := store.CaptureAdmittedTargetedValidatorResult(ctx, capture); err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
 	current, err := store.LoadContext(ctx)
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
-	closure, err := closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
+	if reviewProviderTargetedValidatorOutcome(native) == "passed" {
+		closure, err := closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
+		if err != nil {
+			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		}
+		return result, native, closure, nil
+	}
+	closure, err := newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
 	return result, native, closure, nil
+}
+
+func reviewProviderTargetedValidatorEvidence(result facadeValidationResult) reviewtransaction.CompactTargetedValidatorEvidence {
+	return reviewtransaction.CompactTargetedValidatorEvidence{
+		TargetedValidationRequestHash: result.TargetedValidationRequestHash,
+		CorrectionTargetIdentity:      result.CorrectionTargetIdentity,
+		OriginalCriteria: reviewtransaction.CompactTargetedValidatorCheckEvidence{
+			Passed: result.OriginalCriteria.Passed, Evidence: append([]string(nil), result.OriginalCriteria.Evidence...),
+		},
+		CorrectionRegression: reviewtransaction.CompactTargetedValidatorCheckEvidence{
+			Passed: result.CorrectionRegression.Passed, Evidence: append([]string(nil), result.CorrectionRegression.Evidence...),
+		},
+		FollowUps: append([]reviewtransaction.FollowUp{}, result.FollowUps...),
+	}
+}
+
+func reviewProviderTargetedValidatorOutcome(validation reviewtransaction.ScopedValidationResult) string {
+	if validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
+		return "passed"
+	}
+	return "failed"
 }
 
 func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, _ string, state reviewtransaction.CompactState, revision string) (string, error) {
@@ -565,6 +612,9 @@ func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, _ st
 }
 
 func reviewProviderTargetedValidatorCorrection(ctx context.Context, repo string, state reviewtransaction.CompactState) (reviewtransaction.Snapshot, error) {
+	if state.State == reviewtransaction.StateEscalated && len(state.CorrectionAttempts) > 0 {
+		return state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot, nil
+	}
 	if state.State != reviewtransaction.StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() {
 		return reviewtransaction.Snapshot{}, errors.New("provider targeted validator request requires an open correction") // refusal:by-design world-action: validator evidence applies only to one open forecasted correction
 	}

@@ -877,16 +877,48 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		Operation string                  `json:"operation"`
 		State     reviewtransaction.State `json:"state"`
 		Action    string                  `json:"action"`
+		Evidence  json.RawMessage         `json:"targeted_validator_evidence"`
 	}
 	if err := json.Unmarshal(terminalOutput.Bytes(), &terminal); err != nil {
 		t.Fatal(err)
 	}
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateEscalated ||
-		!strings.Contains(terminal.Action, "rejected") {
+		!strings.Contains(terminal.Action, "rejected") || len(terminal.Evidence) == 0 {
 		t.Fatalf("rejected validator terminal result = %#v", terminal)
 	}
 	after, err := store.Load()
 	if err != nil || after.State.State != reviewtransaction.StateEscalated || after.State.OriginalCriteria == nil || after.State.OriginalCriteria.Passed {
 		t.Fatalf("rejected validator authority = %#v, %v", after, err)
+	}
+	beforeReplay := after.Revision
+
+	var replayOutput bytes.Buffer
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+		"--agent", string(model.AgentPi),
+		"--execute=true",
+	}, &replayOutput); err != nil {
+		t.Fatalf("replay rejected targeted validator: %v\\n%s", err, replayOutput.String())
+	}
+	var replay reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, replayOutput.Bytes(), &replay)
+	replayEvidence, err := json.Marshal(replay.TargetedValidatorEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var canonicalEvidence bytes.Buffer
+	if err := json.Compact(&canonicalEvidence, terminal.Evidence); err != nil {
+		t.Fatal(err)
+	}
+	if replay.Schema != reviewLastEventClosureSchema || replay.Operation != terminal.Operation || replay.State != terminal.State || replay.Action != terminal.Action || !bytes.Equal(replayEvidence, canonicalEvidence.Bytes()) {
+		t.Fatalf("replayed rejected validator closure = %#v, want %#v", replay, terminal)
+	}
+	afterReplay, err := store.Load()
+	if err != nil || afterReplay.Revision != beforeReplay {
+		t.Fatalf("replayed rejected validator capture mutated authority = %#v, %v", afterReplay, err)
 	}
 }

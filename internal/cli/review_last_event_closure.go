@@ -16,15 +16,16 @@ const reviewLastEventClosureSchema = "gentle-ai.review-last-event-closure/v1"
 const reviewApprovedLastEventAcknowledgementAction = "the approved review completed on the last admitted event and awaits its exact acknowledgement"
 
 type reviewLastEventClosureResult struct {
-	Schema             string                                `json:"schema"`
-	Operation          string                                `json:"operation"`
-	LineageID          string                                `json:"lineage_id"`
-	State              reviewtransaction.State               `json:"state"`
-	Action             string                                `json:"action"`
-	AdvisoryFindings   *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings,omitempty"`
-	StatusContinuation *ReviewTransitionExecution            `json:"status_continuation,omitempty"`
-	Acknowledgement    *ReviewTransitionExecution            `json:"acknowledgement,omitempty"`
-	StoreRevision      string                                `json:"store_revision"`
+	Schema                    string                                              `json:"schema"`
+	Operation                 string                                              `json:"operation"`
+	LineageID                 string                                              `json:"lineage_id"`
+	State                     reviewtransaction.State                             `json:"state"`
+	Action                    string                                              `json:"action"`
+	TargetedValidatorEvidence *reviewtransaction.CompactTargetedValidatorEvidence `json:"targeted_validator_evidence,omitempty"`
+	AdvisoryFindings          *reviewtransaction.AdvisoryFindingSet               `json:"advisory_findings,omitempty"`
+	StatusContinuation        *ReviewTransitionExecution                          `json:"status_continuation,omitempty"`
+	Acknowledgement           *ReviewTransitionExecution                          `json:"acknowledgement,omitempty"`
+	StoreRevision             string                                              `json:"store_revision"`
 }
 
 func reviewApprovedAcknowledgementTransition(repo string, acknowledgement reviewtransaction.ApprovedCompactAcknowledgement) *ReviewTransitionExecution {
@@ -119,6 +120,37 @@ func closeCorrectionOnCapturedValidator(
 		return nil, fmt.Errorf("targeted validator capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection
 	}
 	return result, nil
+}
+
+// newCorrectionCapturedValidatorClosure returns the terminal evidence already
+// admitted with a rejected validator capture. It never performs another store
+// mutation, so an exact replay returns the same canonical closure.
+func newCorrectionCapturedValidatorClosure(repo string, state reviewtransaction.CompactState, revision string, request reviewtransaction.TargetedValidationRequest) (*reviewLastEventClosureResult, error) {
+	if err := reviewtransaction.ValidateTargetedValidationRequest(request); err != nil ||
+		state.State != reviewtransaction.StateEscalated || len(state.CorrectionAttempts) == 0 {
+		return nil, errors.New("targeted validator closure does not bind an escalated correction") // refusal:by-design human-authority: a terminal validator closure without its bound correction requires authority inspection
+	}
+	attempt := state.CorrectionAttempts[len(state.CorrectionAttempts)-1]
+	if request.RequestHash != attempt.TargetedValidationRequestHash || request.CorrectionTargetIdentity != attempt.CorrectionTargetIdentity {
+		return nil, errors.New("targeted validator closure request does not bind the terminal correction") // refusal:by-design human-authority: an unbound terminal validator closure requires authority inspection
+	}
+	evidence, found, err := state.AdmittedTargetedValidatorEvidence(request.ExpectedRevision, request.CorrectionTargetIdentity, request.RequestHash)
+	if err != nil || !found {
+		return nil, errors.New("targeted validator closure has no canonical rejection evidence") // refusal:by-design human-authority: missing terminal evidence requires authority inspection
+	}
+	validation := reviewtransaction.ScopedValidationResult{
+		LedgerIDs: append([]string(nil), state.FixFindingIDs...), FollowUps: evidence.FollowUps,
+		OriginalCriteria: attempt.OriginalCriteria, CorrectionRegression: attempt.CorrectionRegression,
+		TargetedValidationRequestHash: attempt.TargetedValidationRequestHash, CorrectionTargetIdentity: attempt.CorrectionTargetIdentity,
+	}
+	if err := evidence.Validate(request, validation); err != nil || validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
+		return nil, errors.New("targeted validator closure evidence does not match its rejected verdict") // refusal:by-design human-authority: inconsistent rejection evidence requires authority inspection
+	}
+	return &reviewLastEventClosureResult{
+		Schema: reviewLastEventClosureSchema, Operation: "review/capture-validation", LineageID: state.LineageID,
+		State: state.State, Action: "the targeted validator rejected the correction; maintainer action is informational",
+		TargetedValidatorEvidence: &evidence, AdvisoryFindings: reviewtransaction.AdvisoryFindingSetFor(state), StoreRevision: revision,
+	}, nil
 }
 
 // reviewLastCapturedLensClosureSuperseded recognizes a sibling capture that
