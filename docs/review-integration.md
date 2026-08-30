@@ -51,7 +51,7 @@ An exact replay of an active START can return `replayed`. A genuinely new START 
 
 ### 3. Bound calls drive the transaction
 
-Every later STATUS and bound capture call for this transaction carries the exact captured lineage, revision, and target tokens. The parent routes only from that transaction's returned `next_transition`:
+A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:
 
 | Transition | Parent action |
 | --- | --- |

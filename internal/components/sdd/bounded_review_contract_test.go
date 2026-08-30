@@ -46,7 +46,8 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
-		"exact captured lineage, revision, and target tokens",
+		"run that provider-issued command verbatim",
+		"exact tokens each returned transition names",
 		"Route only from that transaction's returned `next_transition`",
 		"Forecast is informational; route only from `next_transition`",
 		"query the same exact-lineage STATUS",
@@ -237,7 +238,7 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		"orchestrator": {
 			"Selectorless STATUS only preflights the current worktree candidate",
 			"Invoke only the returned START operation and its ordered tokens unchanged",
-			"Every later STATUS and collection call",
+			"every later STATUS and collection call",
 			"For `execute`", "For `collect`", "For `stop`",
 		},
 		"post-apply": {
