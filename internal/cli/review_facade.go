@@ -1847,7 +1847,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			if !negotiated {
 				return encodeReviewJSON(stdout, legacyResult)
 			}
-			negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, nil, nil, *contract)
+			negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, nil, nil, nil, *contract)
 			if err != nil {
 				return err
 			}
@@ -1875,7 +1875,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContextHandle,
 			Revision: record.State.CapturePhaseRevision, TargetIdentity: snapshot.Identity,
 		}
-		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, repositoryContext, *contract)
+		// The reviewing start/v4 envelope publishes its own exact re-entry
+		// (issue #3894): the consumer runs this returned STATUS invocation
+		// verbatim instead of hand-assembling selectors the CLI would refuse.
+		var nextTransition *ReviewNextTransition
+		if *contract == ReviewIntegrationContractV2 {
+			nextTransition = reviewStartStatusContinuation(record.State, record.State.CapturePhaseRevision, model.AgentID(strings.TrimSpace(*runtimeAgent)))
+		}
+		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, repositoryContext, nextTransition, *contract)
 		if err != nil {
 			return &reviewStartContextError{AuthoritySelected: true, LineageID: record.State.LineageID, StoreRevision: record.Revision, Cause: err}
 		}

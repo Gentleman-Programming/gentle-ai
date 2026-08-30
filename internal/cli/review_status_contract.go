@@ -1160,7 +1160,7 @@ func (transition ReviewNextTransition) Validate() error {
 		if transition.Collect != nil || transition.Execute == nil || transition.Execute.Arguments == nil || len(transition.Execute.Preconditions) == 0 || !validReviewCapabilitySHA256(transition.Execute.Binding.TargetIdentity) {
 			return errors.New("execution transition is incomplete")
 		}
-		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" && transition.Execute.Operation != "review.acknowledge-approved" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
+		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.status" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" && transition.Execute.Operation != "review.acknowledge-approved" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
 			return errors.New("execution transition operation or binding is invalid")
 		}
 		if transition.Execute.Binding.RepositoryContext != "" && reviewtransaction.ValidateReviewRepositoryContextHandle(transition.Execute.Binding.RepositoryContext) != nil {
@@ -1326,6 +1326,48 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		for _, argument := range execution.Arguments {
 			if argument.Token != reviewTransitionArgumentToken(argument) {
 				return errors.New("approved acknowledgement transition token is invalid") // refusal:by-design world-action: the published acknowledgement command must execute exactly its bound arguments
+			}
+		}
+	case "review.status":
+		// The reviewing START continuation (issue #3894): the provider-issued
+		// re-entry must be mechanically executable, so every argument row is a
+		// real tokenized flag and the scope selectors echo byte-identically in
+		// selector_arguments — a consumer replays them without re-deriving any
+		// spelling. It never carries --cwd: a negotiated START payload
+		// publishes no filesystem path, and the caller runs the command in the
+		// repository it already holds.
+		required := []string{"contract", "next-transition", "lineage"}
+		if _, present := arguments["agent"]; present {
+			required = append(required, "agent")
+		}
+		wantSelectors := []ReviewTransitionArgument{}
+		for _, argument := range execution.Arguments {
+			switch argument.Name {
+			case "base-ref", "committed-only", "projection", "workspace-overlay":
+				wantSelectors = append(wantSelectors, argument)
+			}
+		}
+		if execution.SelectorArguments == nil || len(wantSelectors) == 0 || !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
+			return errors.New("review status transition selectors are invalid") // refusal:by-design world-action: only a provider code fix can echo the frozen scope selectors exactly
+		}
+		base, hasBase := arguments["base-ref"]
+		committed, hasCommitted := arguments["committed-only"]
+		projection, hasProjection := arguments["projection"]
+		overlay, hasOverlay := arguments["workspace-overlay"]
+		validProjection := projection == string(reviewtransaction.ProjectionWorkspace) || projection == string(reviewtransaction.ProjectionStaged)
+		committedScope := hasBase && hasCommitted && committed == "true" && !hasOverlay && !hasProjection
+		overlayScope := hasBase && hasOverlay && overlay == "true" && !hasCommitted &&
+			(!hasProjection || projection == string(reviewtransaction.ProjectionStaged))
+		currentScope := !hasBase && !hasCommitted && !hasOverlay && hasProjection && validProjection
+		if !exact(required, wantSelectors) || !committedScope && !overlayScope && !currentScope ||
+			arguments["contract"] != ReviewIntegrationContractV2 || arguments["next-transition"] != "true" ||
+			arguments["lineage"] != execution.Binding.LineageID || hasBase && !validReviewGitTree(base) ||
+			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateReviewing)}) {
+			return errors.New("review status transition binding is invalid") // refusal:by-design world-action: only a provider code fix can bind the exact reviewing re-entry
+		}
+		for _, argument := range execution.Arguments {
+			if argument.Token != reviewTransitionArgumentToken(argument) {
+				return errors.New("review status transition token is invalid") // refusal:by-design world-action: the published continuation must execute exactly its bound arguments
 			}
 		}
 	case "review.validate":

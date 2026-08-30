@@ -95,6 +95,57 @@
         }
       }
     },
+    "start_status_execution": {
+      "allOf": [
+        {"$ref": "#/$defs/standard_execution"},
+        {"not": {"required": ["artifacts"]}}
+      ],
+      "type": "object",
+      "required": ["operation", "command", "arguments", "selector_arguments", "preconditions", "binding"],
+      "properties": {
+        "operation": {"const": "review.status"},
+        "command": {"type": "string", "pattern": "^gentle-ai review status(?: |$)"},
+        "arguments": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 7,
+          "items": {
+            "allOf": [{"$ref": "#/$defs/executable_transition_argument"}],
+            "type": "object",
+            "properties": {"name": {"enum": ["contract", "next-transition", "lineage", "agent", "base-ref", "committed-only", "projection", "workspace-overlay"]}}
+          },
+          "allOf": [
+            {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "contract"}, "value": {"const": "gentle-ai.review-integration/v2"}}}, "minContains": 1, "maxContains": 1},
+            {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "next-transition"}, "value": {"const": "true"}}}, "minContains": 1, "maxContains": 1},
+            {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "lineage"}, "value": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}}}, "minContains": 1, "maxContains": 1}
+          ]
+        },
+        "selector_arguments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "allOf": [{"$ref": "#/$defs/executable_transition_argument"}],
+            "type": "object",
+            "properties": {"name": {"enum": ["base-ref", "committed-only", "projection", "workspace-overlay"]}}
+          }
+        },
+        "preconditions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [
+            {"type": "object", "additionalProperties": false, "required": ["name", "value"], "properties": {"name": {"const": "state"}, "value": {"const": "reviewing"}}}
+          ],
+          "items": false
+        },
+        "binding": {
+          "allOf": [{"$ref": "transition-binding.schema.json"}],
+          "type": "object",
+          "required": ["lineage_id", "revision", "target_identity"]
+        }
+      }
+    },
     "approved_acknowledgement_execution": {
       "type": "object",
       "additionalProperties": false,

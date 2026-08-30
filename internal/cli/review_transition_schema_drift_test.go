@@ -144,7 +144,7 @@ func TestV2TransitionSchemasAcceptProviderPayloadsAndRejectDrift(t *testing.T) {
 	}), &startOutput); err != nil {
 		t.Fatalf("approved START: %v\n%s", err, startOutput.String())
 	}
-	startSchema := compileWholePublishedReviewSchema(t, "v2", "start.schema.json")
+	startSchema := compileWholePublishedReviewSchema(t, "v2", "start-v4.schema.json")
 	validatePublishedReviewSchema(t, startSchema, startOutput.Bytes())
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, startOutput.Bytes(), &started)

@@ -115,7 +115,7 @@ func TestNegotiatedReviewStartUsesCurrentV2ActionVocabulary(t *testing.T) {
 	for _, action := range []string{"created", "replayed"} {
 		t.Run(action, func(t *testing.T) {
 			start := ReviewFacadeStartResult{Action: action, LineageID: "current-v2-action", RiskLevel: reviewtransaction.RiskMedium, SelectedLenses: []string{reviewtransaction.LensReliability}, Projection: reviewtransaction.ProjectionWorkspace, ChangedFiles: 1, ChangedLines: 20, CorrectionBudget: 10}
-			result, err := newReviewIntegrationStartResult(start, assessment, "", &contextResult, nil)
+			result, err := newReviewIntegrationStartResult(start, assessment, "", &contextResult, nil, nil)
 			if err != nil || result.Action != action || result.RiskLevel != reviewtransaction.RiskMedium || !reflect.DeepEqual(result.SelectedLenses, start.SelectedLenses) {
 				t.Fatalf("v2 START action %q = %#v, error %v", action, result, err)
 			}
