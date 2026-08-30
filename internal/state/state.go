@@ -143,6 +143,10 @@ type InstallState struct {
 	// persisted separately from the OpenCode field because each key is part of
 	// an independent state contract.
 	PiBackgroundIntent model.PiBackgroundIntent `json:"pi_background_subagents,omitempty"`
+
+	// LastSyncedAt records when this home directory last completed a
+	// successful sync. Nil for state files written before this field was added.
+	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 }
 
 // UnmarshalJSON preserves whether the persisted persona field was present.
@@ -254,6 +258,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 		BackgroundIntent:   existing.BackgroundIntent,
 		PiBackgroundIntent: existing.PiBackgroundIntent,
+		LastSyncedAt:       existing.LastSyncedAt,
 	}
 }
 

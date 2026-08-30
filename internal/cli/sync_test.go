@@ -5247,8 +5247,15 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	}
 	expected := before
 	expected.InstalledBinaryVersion = AppVersion
+	expected.LastSyncedAt = after.LastSyncedAt
 	if !reflect.DeepEqual(after, expected) {
-		t.Fatalf("CLI sync changed persisted state beyond the version stamp:\nafter:  %#v\nbefore: %#v", after, expected)
+		t.Fatalf("CLI sync changed persisted state beyond the version and last-synced stamps:\nafter:  %#v\nbefore: %#v", after, expected)
+	}
+	if after.LastSyncedAt == nil {
+		t.Fatal("sync did not stamp LastSyncedAt")
+	}
+	if delta := time.Since(*after.LastSyncedAt); delta < 0 || delta > 30*time.Second {
+		t.Errorf("LastSyncedAt = %v, expected within 30s of now", after.LastSyncedAt)
 	}
 }
 
