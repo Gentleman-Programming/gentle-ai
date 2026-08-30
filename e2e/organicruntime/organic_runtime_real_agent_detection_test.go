@@ -135,8 +135,8 @@ func TestOrganicCodexWorkspaceInstructionsAreDiscoverable(t *testing.T) {
 	}
 }
 
-// prepareOrganicCodexHome creates an isolated Codex home linked to an existing
-// auth.json without copying or exposing credential contents in test output.
+// prepareOrganicCodexHome creates an isolated Codex home with a copy of an
+// existing auth.json without exposing credential contents in test output.
 func prepareOrganicCodexHome(t *testing.T) string {
 	t.Helper()
 	authPath := ""
@@ -152,9 +152,21 @@ func prepareOrganicCodexHome(t *testing.T) string {
 	if err != nil || info.IsDir() {
 		t.Skipf("native Codex discovery skipped: Codex authentication source is unavailable at %s", authPath)
 	}
+	authContents, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Skipf("native Codex discovery skipped: Codex authentication source cannot be read at %s", authPath)
+	}
 	codexHome := t.TempDir()
-	if err := os.Symlink(authPath, filepath.Join(codexHome, "auth.json")); err != nil {
-		t.Fatalf("isolate Codex authentication source: %v", err)
+	destination := filepath.Join(codexHome, "auth.json")
+	if err := os.WriteFile(destination, authContents, 0o600); err != nil {
+		t.Fatalf("copy Codex authentication source: %v", err)
+	}
+	destinationInfo, err := os.Stat(destination)
+	if err != nil {
+		t.Fatalf("verify isolated Codex authentication source: %v", err)
+	}
+	if !destinationInfo.Mode().IsRegular() || destinationInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("isolated Codex authentication source has unexpected file mode %s", destinationInfo.Mode())
 	}
 	return codexHome
 }
