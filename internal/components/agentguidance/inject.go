@@ -75,6 +75,7 @@ func InjectRoutingForWorkspace(targetDir string, agent model.AgentID) (Result, e
 	return injectRouting(targetDir, agent, true)
 }
 
+// injectRouting renders and delivers routing guidance for the requested scope.
 func injectRouting(targetDir string, agent model.AgentID, workspace bool) (Result, error) {
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
@@ -148,16 +149,17 @@ type routingDelivery struct {
 	paths        []string
 }
 
+// workspacePromptAdapter exposes an adapter's workspace-level prompt file.
+type workspacePromptAdapter interface {
+	WorkspaceSystemPromptFile(string) string
+}
+
 // resolveRoutingDelivery selects the delivery strategy and its target paths.
 //
 // It fails closed on anything that would make the guidance unreachable, because
 // an unreachable target is exactly the failure this component exists to
 // prevent — and reporting a path the injector cannot write is the same defect
 // seen from the backup side.
-type workspacePromptAdapter interface {
-	WorkspaceSystemPromptFile(string) string
-}
-
 func resolveRoutingDelivery(targetDir string, agent model.AgentID, workspace bool) (routingDelivery, error) {
 	if strings.TrimSpace(targetDir) == "" {
 		return routingDelivery{}, fmt.Errorf("%w: %q", ErrInvalidTarget, targetDir)

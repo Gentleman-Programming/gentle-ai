@@ -1007,6 +1007,8 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	}
 }
 
+// TestBackupTargetsWorkspaceCodexUsesRootAGENTS verifies workspace Codex
+// backups target the root AGENTS.md file.
 func TestBackupTargetsWorkspaceCodexUsesRootAGENTS(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

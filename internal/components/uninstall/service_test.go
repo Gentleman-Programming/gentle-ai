@@ -1207,6 +1207,8 @@ func TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoO
 	}
 }
 
+// TestComponentOperationsSDD_CodexKeepsGlobalAGENTSRoute verifies global SDD
+// uninstall does not remove the workspace Codex route.
 func TestComponentOperationsSDD_CodexKeepsGlobalAGENTSRoute(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

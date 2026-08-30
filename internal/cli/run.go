@@ -863,6 +863,8 @@ type agentRoutingGuidanceStep struct {
 
 func (s agentRoutingGuidanceStep) ID() string { return s.id }
 
+// Run removes retired routing rules and installs current guidance for the
+// configured agent and scope.
 func (s agentRoutingGuidanceStep) Run() error {
 	adapter, err := agents.NewAdapter(s.agent)
 	if err != nil {
@@ -2545,6 +2547,7 @@ type postApplyVerificationInput struct {
 	State        *runtimeState
 }
 
+// runPostApplyVerification builds checks for files expected after installation.
 func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(input.Resolved.Agents)

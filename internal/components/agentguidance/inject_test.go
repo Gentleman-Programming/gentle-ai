@@ -194,6 +194,8 @@ func TestInjectRoutingPreservesUnmanagedUserContent(t *testing.T) {
 	}
 }
 
+// TestInjectRoutingForWorkspaceUsesRootAGENTSAndPreservesContent verifies
+// workspace Codex guidance uses the root file without losing user content.
 func TestInjectRoutingForWorkspaceUsesRootAGENTSAndPreservesContent(t *testing.T) {
 	t.Parallel()
 

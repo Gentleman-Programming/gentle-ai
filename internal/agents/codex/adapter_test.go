@@ -132,6 +132,8 @@ func TestInstallCommand(t *testing.T) {
 	}
 }
 
+// TestConfigPathsCrossPlatform verifies Codex configuration paths use the
+// expected layout on the current platform.
 func TestConfigPathsCrossPlatform(t *testing.T) {
 	a := NewAdapter()
 	home := "/tmp/home"
