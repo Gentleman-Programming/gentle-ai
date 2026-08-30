@@ -382,3 +382,41 @@ func TestResolveModelRoutingExecutable_ReStat(t *testing.T) {
 		t.Fatal("runner should not be called after re-stat")
 	}
 }
+
+func TestDefaultModelRoutingRunner_InheritedStdoutCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inherited stdout behavior is POSIX-specific")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "leaky.sh")
+	// Spawn a background child that inherits stdout and sleeps; the
+	// direct shell exits quickly but the child keeps the pipe open.
+	// Without closing StdoutPipe on context cancel, io.ReadAll would
+	// block until the child exits (~10s) even though the context is done.
+	content := "#!/bin/sh\nsleep 10 &\necho hello\n"
+	must(t, os.WriteFile(script, []byte(content), 0o755))
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := defaultModelRoutingRunner(ctx, script, []byte(`{}`))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("expected context cancellation error, got nil (elapsed %v)", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) && !errors.Is(ctx.Err(), context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("expected context cancellation, got err=%v ctxErr=%v (elapsed %v)", err, ctx.Err(), elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("runner blocked on inherited stdout; elapsed %v exceeds 2s budget (pipe close did not unblock ReadAll)", elapsed)
+	}
+	// Verify normal (non-leaky) execution still works after the fix.
+	scriptOK := filepath.Join(dir, "ok.sh")
+	must(t, os.WriteFile(scriptOK, []byte("#!/bin/sh\necho '{\"contract\":\"gentle-pi.model-routing/v1\",\"ok\":true}'\n"), 0o755))
+	out, code, err := defaultModelRoutingRunner(context.Background(), scriptOK, []byte(`{}`))
+	if err != nil || code != 0 {
+		t.Fatalf("ok script failed: err=%v code=%d out=%q", err, code, string(out))
+	}
+	if !strings.Contains(string(out), "gentle-pi.model-routing") {
+		t.Fatalf("unexpected output %q", string(out))
+	}
+}

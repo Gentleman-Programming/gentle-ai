@@ -45,14 +45,42 @@ func defaultModelRoutingRunner(ctx context.Context, bin string, req []byte) ([]b
 		return nil, 0, err
 	}
 	limit := int64(MaxModelRoutingResponseBytes + 1)
-	out, err := io.ReadAll(io.LimitReader(stdout, limit))
-	if err != nil {
+	type readRes struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan readRes, 1)
+	go func() {
+		data, rerr := io.ReadAll(io.LimitReader(stdout, limit))
+		ch <- readRes{data, rerr}
+	}()
+	var out []byte
+	var readErr error
+	select {
+	case <-runCtx.Done():
+		// Close the pipe reader to unblock io.ReadAll when a child process
+		// has inherited stdout and keeps it open after the direct command is
+		// killed by context cancellation. Without this, ReadAll blocks on EOF
+		// even though the parent context is done.
+		_ = stdout.Close()
+		// Drain the reader goroutine to avoid leak, then reap the direct child.
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+		}
+		_ = cmd.Wait()
+		return nil, 0, runCtx.Err()
+	case res := <-ch:
+		out = res.data
+		readErr = res.err
+	}
+	if readErr != nil {
 		cancel()
 		_ = cmd.Wait()
 		if runCtx.Err() != nil {
 			return nil, 0, runCtx.Err()
 		}
-		return nil, 0, err
+		return nil, 0, readErr
 	}
 	if int64(len(out)) > int64(MaxModelRoutingResponseBytes) {
 		cancel()
