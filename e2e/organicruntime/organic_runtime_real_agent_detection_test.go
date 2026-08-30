@@ -102,10 +102,15 @@ func TestOrganicCodexWorkspaceInstructionsAreDiscoverable(t *testing.T) {
 	}
 	workspace := t.TempDir()
 	home := t.TempDir()
+	codexHome := prepareOrganicCodexHome(t)
+	codexEnvironment := append(organicEnvironment(home), "CODEX_HOME="+codexHome)
+	if err := os.MkdirAll(filepath.Join(home, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
 		t.Fatal(err)
 	}
-	if _, stderr, err := runOrganicCommand(t, organicBinary, workspace, organicEnvironment(home), "install", "--agent", "codex", "--scope", "workspace", "--components", "permissions"); err != nil {
+	if _, stderr, err := runOrganicCommand(t, organicBinary, workspace, codexEnvironment, "install", "--agent", "codex", "--scope", "workspace", "--components", "permissions"); err != nil {
 		t.Fatalf("Codex workspace install: %v\nstderr:\n%s", err, stderr)
 	}
 	rootAgents := filepath.Join(workspace, "AGENTS.md")
@@ -119,7 +124,7 @@ func TestOrganicCodexWorkspaceInstructionsAreDiscoverable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "codex", "exec", "--cd", workspace, "--sandbox", "read-only", "--ephemeral", "--ignore-user-config", "--color", "never", "Without opening or searching the filesystem, report only the first Markdown heading from project instructions automatically loaded before this prompt. State whether this repository supplied project instructions.")
-	cmd.Env = organicEnvironment(home)
+	cmd.Env = codexEnvironment
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("native Codex discovery smoke: %v\noutput:\n%s", err, output)
@@ -128,4 +133,28 @@ func TestOrganicCodexWorkspaceInstructionsAreDiscoverable(t *testing.T) {
 	if !strings.Contains(text, "implementation routing") || !strings.Contains(text, "supplied project instructions") {
 		t.Fatalf("native Codex did not report the repository AGENTS.md instructions:\n%s", output)
 	}
+}
+
+// prepareOrganicCodexHome creates an isolated Codex home linked to an existing
+// auth.json without copying or exposing credential contents in test output.
+func prepareOrganicCodexHome(t *testing.T) string {
+	t.Helper()
+	authPath := ""
+	if configuredHome := os.Getenv("CODEX_HOME"); configuredHome != "" {
+		authPath = filepath.Join(configuredHome, "auth.json")
+	} else if userHome, err := os.UserHomeDir(); err == nil {
+		authPath = filepath.Join(userHome, ".codex", "auth.json")
+	}
+	if authPath == "" {
+		t.Skip("native Codex discovery skipped: no usable Codex authentication source")
+	}
+	info, err := os.Stat(authPath)
+	if err != nil || info.IsDir() {
+		t.Skipf("native Codex discovery skipped: Codex authentication source is unavailable at %s", authPath)
+	}
+	codexHome := t.TempDir()
+	if err := os.Symlink(authPath, filepath.Join(codexHome, "auth.json")); err != nil {
+		t.Fatalf("isolate Codex authentication source: %v", err)
+	}
+	return codexHome
 }

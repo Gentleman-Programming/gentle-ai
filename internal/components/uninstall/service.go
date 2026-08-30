@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -735,8 +736,15 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
 			ops = append(ops, rewriteMarkdownFile(path, func(content string) (string, bool) {
-				return removeMarkdownSections(content, "sdd-orchestrator", "strict-tdd-mode")
+				return removeMarkdownSections(content, "sdd-orchestrator", "strict-tdd-mode", agentguidance.RoutingSectionID)
 			}))
+			if adapter.Agent() == model.AgentCodex && s.workspaceDir != "" {
+				workspacePath := filepath.Join(s.workspaceDir, "AGENTS.md")
+				targets = append(targets, workspacePath)
+				ops = append(ops, rewriteMarkdownFile(workspacePath, func(content string) (string, bool) {
+					return removeMarkdownSections(content, agentguidance.RoutingSectionID)
+				}))
+			}
 		}
 		if adapter.SupportsSlashCommands() {
 			commandsDir := adapter.CommandsDir(homeDir)

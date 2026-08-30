@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -1207,9 +1208,9 @@ func TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoO
 	}
 }
 
-// TestComponentOperationsSDD_CodexKeepsGlobalAGENTSRoute verifies global SDD
-// uninstall does not remove the workspace Codex route.
-func TestComponentOperationsSDD_CodexKeepsGlobalAGENTSRoute(t *testing.T) {
+// TestComponentOperationsSDD_CodexRemovesBothAGENTSRoutes verifies global and
+// workspace uninstall remove only their managed routing sections.
+func TestComponentOperationsSDD_CodexRemovesBothAGENTSRoutes(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 	svc, err := NewService(homeDir, workspaceDir, "dev")
@@ -1221,16 +1222,44 @@ func TestComponentOperationsSDD_CodexKeepsGlobalAGENTSRoute(t *testing.T) {
 		t.Fatal("codex adapter not found in registry")
 	}
 
-	_, targets, err := svc.componentOperations(adapter, model.ComponentSDD)
+	globalPath := filepath.Join(homeDir, ".codex", "AGENTS.md")
+	workspacePath := filepath.Join(workspaceDir, "AGENTS.md")
+	const userContent = "# User rules\n\nKeep this content.\n"
+	for path := range map[string]struct{}{globalPath: {}, workspacePath: {}} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := agentguidance.InjectRouting(homeDir, model.AgentCodex); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agentguidance.InjectRoutingForWorkspace(workspaceDir, model.AgentCodex); err != nil {
+		t.Fatal(err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentSDD)
 	if err != nil {
 		t.Fatalf("componentOperations() error = %v", err)
 	}
-	global := filepath.Join(homeDir, ".codex", "AGENTS.md")
-	if !slices.Contains(targets, global) {
-		t.Fatalf("componentOperations() targets missing global Codex route %q; got %v", global, targets)
+	if !slices.Contains(targets, globalPath) || !slices.Contains(targets, workspacePath) {
+		t.Fatalf("componentOperations() targets = %v, want global and workspace routes", targets)
 	}
-	if slices.Contains(targets, filepath.Join(workspaceDir, "AGENTS.md")) || slices.Contains(targets, filepath.Join(workspaceDir, ".codex", "AGENTS.md")) {
-		t.Fatalf("global uninstall unexpectedly targeted workspace Codex route: %v", targets)
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("op.apply(%q) error = %v", op.path, err)
+		}
+	}
+	for _, path := range []string{globalPath, workspacePath} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", path, err)
+		}
+		if !strings.Contains(string(got), userContent) || strings.Contains(string(got), agentguidance.RoutingSectionID) {
+			t.Fatalf("Codex route cleanup changed user content or left managed content in %q: %s", path, got)
+		}
 	}
 }
 
