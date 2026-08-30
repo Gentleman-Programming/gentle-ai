@@ -46,7 +46,10 @@ func (c *ModelRoutingClient) do(ctx context.Context, op string, payload json.Raw
 	if c.Bin == "" {
 		return nil, &RoutingError{Kind: "missing", Path: c.Bin}
 	}
-	data, _ := json.Marshal(wireRequest{Contract: modelRoutingContract, Op: op, Payload: payload})
+	data, err := json.Marshal(wireRequest{Contract: modelRoutingContract, Op: op, Payload: payload})
+	if err != nil {
+		return nil, &RoutingError{Kind: "invalid-json", Path: c.Bin, Cause: err}
+	}
 	if len(data) > MaxModelRoutingResponseBytes {
 		return nil, &RoutingError{Kind: "invalid-json", Cause: errors.New("request too large")}
 	}

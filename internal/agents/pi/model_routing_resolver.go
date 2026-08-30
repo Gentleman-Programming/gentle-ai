@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,25 +30,46 @@ func defaultModelRoutingRunner(ctx context.Context, bin string, req []byte) ([]b
 	if err := reStatBin(bin); err != nil {
 		return nil, 0, err
 	}
-	cmd := exec.CommandContext(ctx, bin)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, bin)
 	cmd.Stdin = bytes.NewReader(req)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
-		}
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return out.Bytes(), ee.ExitCode(), nil
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := cmd.Start(); err != nil {
+		if runCtx.Err() != nil {
+			return nil, 0, runCtx.Err()
 		}
 		return nil, 0, err
 	}
-	b := out.Bytes()
-	if len(b) > MaxModelRoutingResponseBytes {
+	limit := int64(MaxModelRoutingResponseBytes + 1)
+	out, err := io.ReadAll(io.LimitReader(stdout, limit))
+	if err != nil {
+		cancel()
+		_ = cmd.Wait()
+		if runCtx.Err() != nil {
+			return nil, 0, runCtx.Err()
+		}
+		return nil, 0, err
+	}
+	if int64(len(out)) > int64(MaxModelRoutingResponseBytes) {
+		cancel()
+		_ = cmd.Wait()
 		return nil, 0, &RoutingError{Kind: "invalid-json", Cause: errors.New("response too large")}
 	}
-	return b, 0, nil
+	if err := cmd.Wait(); err != nil {
+		if runCtx.Err() != nil {
+			return nil, 0, runCtx.Err()
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return out, ee.ExitCode(), nil
+		}
+		return nil, 0, err
+	}
+	return out, 0, nil
 }
 func reStatBin(p string) error {
 	fi, err := os.Stat(p)
@@ -114,8 +136,9 @@ func readSourceFromFile(p string) string {
 		return ""
 	}
 	for _, v := range piPackagesAsSlice(o["packages"]) {
-		if s, ok := v.(string); ok && (strings.HasPrefix(s, "npm:") || strings.HasPrefix(s, "git:") || strings.HasPrefix(s, "local:")) {
-			return s
+		identity := piPackageIdentity(v)
+		if strings.HasPrefix(identity, "npm:") || strings.HasPrefix(identity, "git:") || strings.HasPrefix(identity, "local:") {
+			return identity
 		}
 	}
 	return ""
