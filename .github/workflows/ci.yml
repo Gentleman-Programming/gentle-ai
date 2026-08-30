@@ -400,8 +400,8 @@ jobs:
         # real Claude Code / OpenCode detection.
         shell: pwsh
         run: |
-          $tests = go test -tags real_agent_e2e -list '^TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents') {
+          $tests = go test -tags real_agent_e2e -list '^(TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents|TestOrganicCodexWorkspaceInstructionsAreDiscoverable)$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents' -or $tests -notcontains 'TestOrganicCodexWorkspaceInstructionsAreDiscoverable') {
             throw 'Real-agent detection E2E is missing'
           }
 

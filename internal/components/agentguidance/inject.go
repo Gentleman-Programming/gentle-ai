@@ -117,6 +117,7 @@ func RoutingPathsForWorkspace(targetDir string, agent model.AgentID) ([]string, 
 	return routingPaths(targetDir, agent, true)
 }
 
+// routingPaths resolves the files InjectRouting writes for the requested scope.
 func routingPaths(targetDir string, agent model.AgentID, workspace bool) ([]string, error) {
 	delivery, err := resolveRoutingDelivery(targetDir, agent, workspace)
 	if err != nil {

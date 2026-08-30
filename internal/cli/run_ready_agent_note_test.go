@@ -21,10 +21,12 @@ func TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents(t *testing.T) {
 		agents     []model.AgentID
 		wantClaude bool
 		wantOpen   bool
+		wantCodex  bool
 	}{
 		{name: "opencode only", agents: []model.AgentID{model.AgentOpenCode}, wantClaude: false, wantOpen: true},
 		{name: "claude only", agents: []model.AgentID{model.AgentClaudeCode}, wantClaude: true, wantOpen: false},
-		{name: "both", agents: []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}, wantClaude: true, wantOpen: true},
+		{name: "codex only", agents: []model.AgentID{model.AgentCodex}, wantCodex: true},
+		{name: "all runnable agents", agents: []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex}, wantClaude: true, wantOpen: true, wantCodex: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -34,11 +36,15 @@ func TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents(t *testing.T) {
 			updated := withPostInstallNotes(report, resolved)
 			hasClaude := strings.Contains(updated.FinalNote, "`claude`")
 			hasOpenCode := strings.Contains(updated.FinalNote, "`opencode`")
+			hasCodex := strings.Contains(updated.FinalNote, "`codex`")
 			if hasClaude != tt.wantClaude {
 				t.Fatalf("FinalNote names claude = %v, want %v: %q", hasClaude, tt.wantClaude, updated.FinalNote)
 			}
 			if hasOpenCode != tt.wantOpen {
 				t.Fatalf("FinalNote names opencode = %v, want %v: %q", hasOpenCode, tt.wantOpen, updated.FinalNote)
+			}
+			if hasCodex != tt.wantCodex {
+				t.Fatalf("FinalNote names codex = %v, want %v: %q", hasCodex, tt.wantCodex, updated.FinalNote)
 			}
 		})
 	}

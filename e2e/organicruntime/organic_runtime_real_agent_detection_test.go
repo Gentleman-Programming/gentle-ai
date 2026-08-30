@@ -30,8 +30,11 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents proves the
@@ -89,5 +92,40 @@ func TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestOrganicCodexWorkspaceInstructionsAreDiscoverable verifies native Codex discovers workspace instructions.
+func TestOrganicCodexWorkspaceInstructionsAreDiscoverable(t *testing.T) {
+	if os.Getenv("GENTLE_AI_CODEX_DISCOVERY_E2E") != "1" {
+		t.Skip("set GENTLE_AI_CODEX_DISCOVERY_E2E=1 to run the authenticated native Codex discovery smoke test")
+	}
+	workspace := t.TempDir()
+	home := t.TempDir()
+	if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, err := runOrganicCommand(t, organicBinary, workspace, organicEnvironment(home), "install", "--agent", "codex", "--scope", "workspace", "--components", "permissions"); err != nil {
+		t.Fatalf("Codex workspace install: %v\nstderr:\n%s", err, stderr)
+	}
+	rootAgents := filepath.Join(workspace, "AGENTS.md")
+	if _, err := os.Stat(rootAgents); err != nil {
+		t.Fatalf("workspace Codex instructions missing at repository root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".codex", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("workspace Codex instructions stranded in .codex/AGENTS.md (stat err = %v)", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "codex", "exec", "--cd", workspace, "--sandbox", "read-only", "--ephemeral", "--ignore-user-config", "--color", "never", "Without opening or searching the filesystem, report only the first Markdown heading from project instructions automatically loaded before this prompt. State whether this repository supplied project instructions.")
+	cmd.Env = organicEnvironment(home)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native Codex discovery smoke: %v\noutput:\n%s", err, output)
+	}
+	text := strings.ToLower(string(output))
+	if !strings.Contains(text, "implementation routing") || !strings.Contains(text, "supplied project instructions") {
+		t.Fatalf("native Codex did not report the repository AGENTS.md instructions:\n%s", output)
 	}
 }

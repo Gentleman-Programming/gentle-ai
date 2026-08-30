@@ -445,6 +445,7 @@ var readyAgentRunCommands = []struct {
 }{
 	{model.AgentClaudeCode, "claude"},
 	{model.AgentOpenCode, "opencode"},
+	{model.AgentCodex, "codex"},
 }
 
 // withReadyAgentRunNote replaces the generic verify.ReadyMessage with one
