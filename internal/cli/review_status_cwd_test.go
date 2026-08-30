@@ -9,6 +9,12 @@ import (
 	"testing"
 )
 
+// Selector-free STATUS (`--cwd` without explicit Git selectors) must resolve
+// the enclosing repository root wherever inside it the caller stands: nested
+// directories and safe symlinks report the same authority entries as the root.
+// It also pins #3880: an unversioned workspace bootstraps local Git and reports
+// an empty authority list, while a nested independent repository never
+// inherits the parent's lineages.
 func TestReviewStatusSelectorFreeResolvesRepositoryRoot(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
