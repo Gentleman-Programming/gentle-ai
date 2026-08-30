@@ -3,12 +3,15 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -37,8 +40,25 @@ type compactAdmittedRefuterValue struct {
 	Results []EvidenceResult `json:"results"`
 }
 
+type CompactTargetedValidatorCheckEvidence struct {
+	Passed   bool     `json:"passed"`
+	Evidence []string `json:"evidence"`
+}
+
+// CompactTargetedValidatorEvidence is the canonical observed evidence for one
+// conclusive validator verdict. It remains in the admitted role value so a
+// terminal rejection can be replayed without reconstructing provider output.
+type CompactTargetedValidatorEvidence struct {
+	TargetedValidationRequestHash string                                `json:"targeted_validation_request_hash"`
+	CorrectionTargetIdentity      string                                `json:"correction_target_identity"`
+	OriginalCriteria              CompactTargetedValidatorCheckEvidence `json:"original_criteria"`
+	CorrectionRegression          CompactTargetedValidatorCheckEvidence `json:"correction_regression"`
+	FollowUps                     []FollowUp                            `json:"follow_ups"`
+}
+
 type compactAdmittedTargetedValidatorValue struct {
-	Outcome string `json:"outcome"`
+	Outcome  string                            `json:"outcome"`
+	Evidence *CompactTargetedValidatorEvidence `json:"evidence,omitempty"`
 }
 
 func decodeCompactAdmittedReviewerValue(value []byte) (compactAdmittedReviewerResult, error) {
@@ -71,12 +91,54 @@ func decodeCompactAdmittedRefuterValue(value []byte) ([]EvidenceResult, error) {
 	return append([]EvidenceResult(nil), payload.Results...), nil
 }
 
-func decodeCompactAdmittedTargetedValidatorValue(value []byte) (string, error) {
+func decodeCompactAdmittedTargetedValidatorValue(value []byte) (compactAdmittedTargetedValidatorValue, error) {
 	var payload compactAdmittedTargetedValidatorValue
 	if err := decodeCompactAdmittedRoleValue(value, &payload); err != nil || payload.Outcome != "passed" && payload.Outcome != "failed" {
-		return "", errors.New("admitted targeted-validator value is invalid") // refusal:by-design world-action: an immutable validator value must be replaced by its provider
+		return compactAdmittedTargetedValidatorValue{}, errors.New("admitted targeted-validator value is invalid") // refusal:by-design world-action: an immutable validator value must be replaced by its provider
 	}
-	return payload.Outcome, nil
+	return payload, nil
+}
+
+func compactTargetedValidatorEvidenceHashForDomain(domain string, check CompactTargetedValidatorCheckEvidence) string {
+	payload, _ := json.Marshal(check)
+	sum := sha256.Sum256(append([]byte("gentle-ai.facade-"+domain+"/v1\x00"), payload...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (evidence CompactTargetedValidatorEvidence) Validate(request TargetedValidationRequest, validation ScopedValidationResult) error {
+	if evidence.TargetedValidationRequestHash != request.RequestHash || evidence.CorrectionTargetIdentity != request.CorrectionTargetIdentity ||
+		evidence.OriginalCriteria.Passed != validation.OriginalCriteria.Passed || evidence.CorrectionRegression.Passed != validation.CorrectionRegression.Passed ||
+		evidence.FollowUps == nil || !reflect.DeepEqual(evidence.FollowUps, validation.FollowUps) ||
+		compactTargetedValidatorEvidenceHashForDomain("original-criteria", evidence.OriginalCriteria) != validation.OriginalCriteria.EvidenceHash ||
+		compactTargetedValidatorEvidenceHashForDomain("correction-regression", evidence.CorrectionRegression) != validation.CorrectionRegression.EvidenceHash {
+		return errors.New("admitted targeted-validator evidence does not match its request and digests") // refusal:by-design world-action: exact validator evidence must bind the provider-issued request before it can consume correction authority
+	}
+	for _, check := range []CompactTargetedValidatorCheckEvidence{evidence.OriginalCriteria, evidence.CorrectionRegression} {
+		if len(check.Evidence) == 0 {
+			return errors.New("admitted targeted-validator evidence is empty") // refusal:by-design operator-knowledge: provide concrete observations for both validator checks
+		}
+		for _, item := range check.Evidence {
+			if strings.TrimSpace(item) == "" {
+				return errors.New("admitted targeted-validator evidence is not concrete") // refusal:by-design operator-knowledge: replace empty validator evidence with observed facts
+			}
+		}
+	}
+	return nil
+}
+
+// AdmittedTargetedValidatorEvidence reads one current canonical validator
+// value, refusing legacy outcome-only entries when actionable evidence is
+// required by a terminal rejection closure.
+func (state CompactState) AdmittedTargetedValidatorEvidence(phase, targetIdentity, requestHash string) (CompactTargetedValidatorEvidence, bool, error) {
+	value, found := state.AdmittedRoleResult(CompactRoleTargetedValidator, phase, targetIdentity, requestHash)
+	if !found {
+		return CompactTargetedValidatorEvidence{}, false, nil
+	}
+	admitted, err := decodeCompactAdmittedTargetedValidatorValue(value)
+	if err != nil || admitted.Evidence == nil {
+		return CompactTargetedValidatorEvidence{}, true, errors.New("admitted targeted-validator value has no actionable evidence") // refusal:by-design human-authority: a terminal rejection missing immutable evidence requires authority inspection
+	}
+	return *admitted.Evidence, true, nil
 }
 
 func decodeCompactAdmittedRoleValue(value []byte, target any) error {
@@ -452,6 +514,7 @@ func (store CompactStore) mergeAdmittedNonLensRoleResult(
 	payload []byte,
 	prepare func(CompactState) error,
 	validateCurrent func(CompactState) error,
+	complete func(*CompactState) error,
 ) error {
 	if ctx == nil {
 		return errors.New("capture admitted provider role result context is nil") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
@@ -542,6 +605,11 @@ func (store CompactStore) mergeAdmittedNonLensRoleResult(
 		}
 		return leftEntry.SelectedOrder < rightEntry.SelectedOrder
 	})
+	if complete != nil {
+		if err := complete(&next); err != nil {
+			return err
+		}
+	}
 	_, recordPayload, err := makeCompactRecord(next)
 	if err != nil {
 		return err
@@ -617,7 +685,7 @@ func (store CompactStore) CaptureAdmittedRefuterResult(ctx context.Context, requ
 				return errors.New("refuter capture binding does not match the current reviewing authority") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 			}
 			return nil
-		},
+		}, nil,
 	)
 }
 
@@ -631,17 +699,43 @@ type CompactAdmittedRefuterResultRequest struct {
 }
 
 // CompactAdmittedTargetedValidatorResultRequest contains one conclusive
-// targeted-validator value. Rejected values are represented only by the bounded
-// hash-only attempt ledger.
+// targeted-validator value. Evidence and Complete are optional only for legacy
+// internal callers; new terminal captures require both to preserve observed
+// rejection evidence and close under the same authority write.
 type CompactAdmittedTargetedValidatorResultRequest struct {
 	ExpectedRequest    TargetedValidationRequest
 	Payload            []byte
+	Evidence           *CompactTargetedValidatorEvidence
+	Validation         *ScopedValidationResult
 	PreparePublication func(CompactState, TargetedValidationRequest) error
+	Complete           func(*CompactState) error
 }
 
 func (store CompactStore) CaptureAdmittedTargetedValidatorResult(ctx context.Context, request CompactAdmittedTargetedValidatorResultRequest) error {
 	if err := ValidateTargetedValidationRequest(request.ExpectedRequest); err != nil {
 		return err
+	}
+	if request.Evidence == nil || request.Validation == nil {
+		admitted, err := decodeCompactAdmittedTargetedValidatorValue(request.Payload)
+		if err != nil {
+			return err
+		}
+		if request.Complete != nil || admitted.Outcome == "failed" {
+			return errors.New("terminal targeted-validator capture requires canonical evidence and validation") // refusal:by-design world-action: terminal validator authority must retain its digest-bound verdict before it can advance
+		}
+	}
+	if request.Evidence != nil || request.Validation != nil {
+		if request.Evidence == nil || request.Validation == nil {
+			return errors.New("admitted targeted-validator evidence and validation must be supplied together") // refusal:by-design world-action: a conclusive validator capture must retain evidence and its digest-bound verdict together
+		}
+		if err := request.Evidence.Validate(request.ExpectedRequest, *request.Validation); err != nil {
+			return err
+		}
+		admitted, err := decodeCompactAdmittedTargetedValidatorValue(request.Payload)
+		if err != nil || admitted.Evidence == nil || !reflect.DeepEqual(*admitted.Evidence, *request.Evidence) ||
+			admitted.Outcome != targetedValidatorOutcome(*request.Validation) {
+			return errors.New("admitted targeted-validator payload does not match canonical evidence") // refusal:by-design world-action: validator evidence must be canonically bound before it can enter compact authority
+		}
 	}
 	return store.mergeAdmittedNonLensRoleResult(ctx, CompactRoleTargetedValidator,
 		request.ExpectedRequest.ExpectedRevision, request.ExpectedRequest.CorrectionTargetIdentity, request.ExpectedRequest.RequestHash, request.Payload,
@@ -652,14 +746,59 @@ func (store CompactStore) CaptureAdmittedTargetedValidatorResult(ctx context.Con
 			return request.PreparePublication(state, request.ExpectedRequest)
 		},
 		func(state CompactState) error {
-			if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil ||
-				state.CapturePhaseRevision != request.ExpectedRequest.ExpectedRevision ||
+			if state.CapturePhaseRevision != request.ExpectedRequest.ExpectedRevision ||
 				state.InitialSnapshot.Identity != request.ExpectedRequest.TargetIdentity {
 				return errors.New("targeted validator capture binding does not match the current open correction authority") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 			}
+			if state.State == StateEscalated {
+				if _, found := state.AdmittedRoleResult(CompactRoleTargetedValidator, request.ExpectedRequest.ExpectedRevision, request.ExpectedRequest.CorrectionTargetIdentity, request.ExpectedRequest.RequestHash); found {
+					return nil
+				}
+			}
+			if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil {
+				return errors.New("targeted validator capture binding does not match the current open correction authority") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+			}
 			return nil
-		},
+		}, request.Complete,
 	)
+}
+
+func targetedValidatorOutcome(validation ScopedValidationResult) string {
+	if validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
+		return "passed"
+	}
+	return "failed"
+}
+
+// RebuildAdmittedTargetedValidationRequest reconstructs only an already
+// admitted terminal validator request, allowing an exact rejected capture to
+// replay its canonical closure without reopening correction authority.
+func RebuildAdmittedTargetedValidationRequest(state CompactState, revision string) (TargetedValidationRequest, error) {
+	if err := state.Validate(); err != nil {
+		return TargetedValidationRequest{}, err
+	}
+	if state.State != StateEscalated || revision != state.CapturePhaseRevision || len(state.CorrectionAttempts) == 0 {
+		return TargetedValidationRequest{}, errors.New("admitted targeted-validator replay requires an escalated correction authority") // refusal:by-design operator-knowledge: replay only the exact rejected capture emitted by the active authority
+	}
+	attempt := state.CorrectionAttempts[len(state.CorrectionAttempts)-1]
+	request, err := targetedValidationRequestForCorrection(state, revision, attempt.Snapshot)
+	if err != nil {
+		return TargetedValidationRequest{}, err
+	}
+	evidence, found, err := state.AdmittedTargetedValidatorEvidence(revision, request.CorrectionTargetIdentity, request.RequestHash)
+	if err != nil || !found {
+		return TargetedValidationRequest{}, errors.New("admitted targeted-validator replay has no canonical evidence") // refusal:by-design human-authority: an escalated terminal capture missing its exact evidence requires authority inspection
+	}
+	validation := ScopedValidationResult{
+		LedgerIDs: append([]string(nil), state.FixFindingIDs...), FollowUps: evidence.FollowUps,
+		OriginalCriteria: attempt.OriginalCriteria, CorrectionRegression: attempt.CorrectionRegression,
+		TargetedValidationRequestHash: attempt.TargetedValidationRequestHash, CorrectionTargetIdentity: attempt.CorrectionTargetIdentity,
+	}
+	if request.RequestHash != attempt.TargetedValidationRequestHash || request.CorrectionTargetIdentity != attempt.CorrectionTargetIdentity ||
+		evidence.Validate(request, validation) != nil {
+		return TargetedValidationRequest{}, errors.New("admitted targeted-validator replay does not bind the terminal correction") // refusal:by-design human-authority: inconsistent terminal validator evidence requires authority inspection
+	}
+	return request, nil
 }
 
 // RecordInconclusiveTargetedValidatorAttempt appends one hash-only non-verdict
