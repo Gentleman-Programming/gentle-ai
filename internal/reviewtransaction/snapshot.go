@@ -978,16 +978,24 @@ func bootstrapUnversionedWorkspace(ctx context.Context, workspace string, resolv
 	return true, nil
 }
 
+// ancestorGitLstat is the lookup seam for ancestor `.git` entries so tests can
+// pin the fail-closed decision without a real permission failure, which root
+// CI containers would silently forgive.
+var ancestorGitLstat = os.Lstat
+
 // ancestorHoldsGitEntry reports whether any strict ancestor directory of the
 // workspace holds a `.git` entry. Reaching this check with an ancestor entry
 // proves that entry unusable -- usable ancestor metadata would have made
 // `rev-parse --show-toplevel` succeed and no bootstrap decision would run --
 // so callers must refuse instead of initializing a nested repository beneath
 // broken metadata. Lstat mirrors the workspace-level check: a `.git` symlink
-// counts as an entry even if its target is gone.
+// counts as an entry even if its target is gone, and any lookup error other
+// than "does not exist" counts as an entry too, so an unreadable ancestor
+// fails closed instead of letting `git init` run beneath an entry it could
+// not inspect.
 func ancestorHoldsGitEntry(workspace string) bool {
 	for dir := filepath.Dir(workspace); ; dir = filepath.Dir(dir) {
-		if _, statErr := os.Lstat(filepath.Join(dir, ".git")); statErr == nil {
+		if _, statErr := ancestorGitLstat(filepath.Join(dir, ".git")); !os.IsNotExist(statErr) {
 			return true
 		}
 		if parent := filepath.Dir(dir); parent == dir {

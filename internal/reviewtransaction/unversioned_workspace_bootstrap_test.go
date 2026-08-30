@@ -138,6 +138,31 @@ func TestResolveRepositoryRootRefusesBootstrapUnderCorruptAncestorMetadata(t *te
 	}
 }
 
+// A `.git` lookup on an ancestor that fails with anything other than "does
+// not exist" must count as present metadata: falling through would let the
+// bootstrap run `git init` beneath an ancestor entry it could not inspect.
+// The seam stubs EACCES because a real permission failure is invisible to
+// root CI containers.
+func TestAncestorHoldsGitEntryFailsClosedOnLookupError(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := ancestorGitLstat
+	t.Cleanup(func() { ancestorGitLstat = orig })
+	ancestorGitLstat = func(name string) (os.FileInfo, error) {
+		if filepath.Base(name) == ".git" {
+			return nil, &os.PathError{Op: "lstat", Path: name, Err: os.ErrPermission}
+		}
+		return orig(name)
+	}
+
+	if !ancestorHoldsGitEntry(workspace) {
+		t.Fatal("ancestorHoldsGitEntry() = false under a non-ENOENT .git lookup error, want fail-closed true")
+	}
+}
+
 // Present-but-invalid Git metadata must fail with the original error and keep
 // the invalid entry byte-for-byte intact: the bootstrap never overwrites.
 func TestResolveRepositoryRootRefusesInvalidGitMetadata(t *testing.T) {
