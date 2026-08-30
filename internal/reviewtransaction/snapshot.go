@@ -947,12 +947,16 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 //
 // The bootstrap is deliberately narrow. It fires only when root resolution
 // failed as a Git command failure while no `.git` entry exists at the
-// workspace: `rev-parse --show-toplevel` walks ancestor directories, so its
-// failure with no `.git` here proves no ancestor holds a repository either.
-// A bare repository keeps its own refusal, and a workspace whose `.git` entry
-// exists but does not resolve carries present-but-invalid metadata that the
-// bootstrap must never overwrite. `git init` alone stages nothing, commits
-// nothing, and configures no remote.
+// workspace and no ancestor directory holds a `.git` entry either. A bare
+// repository keeps its own refusal, and a workspace whose `.git` entry exists
+// but does not resolve carries present-but-invalid metadata that the
+// bootstrap must never overwrite. An ancestor `.git` entry refuses too: a
+// failing `rev-parse --show-toplevel` cannot distinguish "no ancestor holds a
+// repository" from "ancestor metadata is present but corrupt" -- both
+// surface as a Git command failure -- and initializing beneath broken
+// metadata would carve an unintended nested repository whose scope boundary
+// silently differs from the one the ancestor declares. `git init` alone
+// stages nothing, commits nothing, and configures no remote.
 func bootstrapUnversionedWorkspace(ctx context.Context, workspace string, resolveErr error) (bool, error) {
 	var bare *BareRepositoryError
 	if errors.As(resolveErr, &bare) {
@@ -965,10 +969,31 @@ func bootstrapUnversionedWorkspace(ctx context.Context, workspace string, resolv
 	if _, statErr := os.Lstat(filepath.Join(workspace, ".git")); !os.IsNotExist(statErr) {
 		return false, nil
 	}
+	if ancestorHoldsGitEntry(workspace) {
+		return false, nil
+	}
 	if _, initErr := runGit(ctx, workspace, nil, nil, "init"); initErr != nil {
 		return false, fmt.Errorf("local Git bootstrap for the unversioned workspace failed: %w", initErr)
 	}
 	return true, nil
+}
+
+// ancestorHoldsGitEntry reports whether any strict ancestor directory of the
+// workspace holds a `.git` entry. Reaching this check with an ancestor entry
+// proves that entry unusable -- usable ancestor metadata would have made
+// `rev-parse --show-toplevel` succeed and no bootstrap decision would run --
+// so callers must refuse instead of initializing a nested repository beneath
+// broken metadata. Lstat mirrors the workspace-level check: a `.git` symlink
+// counts as an entry even if its target is gone.
+func ancestorHoldsGitEntry(workspace string) bool {
+	for dir := filepath.Dir(workspace); ; dir = filepath.Dir(dir) {
+		if _, statErr := os.Lstat(filepath.Join(dir, ".git")); statErr == nil {
+			return true
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return false
+		}
+	}
 }
 
 func canonicalRepositoryPath(path string) (string, error) {

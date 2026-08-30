@@ -102,6 +102,42 @@ func TestResolveRepositoryRootKeepsUnbornRepositoryUntouched(t *testing.T) {
 	}
 }
 
+// An ancestor's corrupt `.git` entry must not be silently bypassed by a
+// bootstrap `git init`. `rev-parse --show-toplevel` fails identically for "no
+// repository anywhere" and "ancestor repository metadata corrupt", so the
+// guard has to inspect the ancestor chain itself: initializing beneath broken
+// metadata would carve an unintended nested repository whose scope boundary
+// silently differs from the one the ancestor declares.
+func TestResolveRepositoryRootRefusesBootstrapUnderCorruptAncestorMetadata(t *testing.T) {
+	root := canonicalTempDir(t)
+	workspace := filepath.Join(root, "workspace", "nested")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancestorGit := filepath.Join(root, "workspace", ".git")
+	if err := os.WriteFile(ancestorGit, []byte("not a git directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(ancestorGit)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resRoot, resolveErr := (SnapshotBuilder{Repo: workspace}).ResolveRepositoryRoot(context.Background()); resolveErr == nil {
+		t.Fatalf("ResolveRepositoryRoot() = %q, want a refusal under corrupt ancestor metadata", resRoot)
+	}
+	if _, statErr := os.Lstat(filepath.Join(workspace, ".git")); !os.IsNotExist(statErr) {
+		t.Fatal("bootstrap must not initialize a nested repository beneath corrupt ancestor metadata")
+	}
+	after, err := os.ReadFile(ancestorGit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("corrupt ancestor .git was modified: before %q after %q", before, after)
+	}
+}
+
 // Present-but-invalid Git metadata must fail with the original error and keep
 // the invalid entry byte-for-byte intact: the bootstrap never overwrites.
 func TestResolveRepositoryRootRefusesInvalidGitMetadata(t *testing.T) {
