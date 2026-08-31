@@ -317,12 +317,39 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 
 	changes := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != "archive" {
+		if entry.IsDir() && entry.Name() != "archive" && entry.Name() != "active" &&
+			!openSpecChangeContainer(filepath.Join(workspaceRoot, "openspec", "changes", entry.Name())) {
 			changes = append(changes, entry.Name())
 		}
 	}
 	sort.Strings(changes)
 	return changes, nil
+}
+
+// openSpecChangeContainer reports whether a directory under openspec/changes
+// is a container of changes rather than a change (#2317): it holds no SDD
+// artifact itself while a subdirectory does, the legacy `active/` layout. An
+// empty scaffold keeps its historical standing as a candidate, and a marker
+// that fails to stat for any reason other than not existing counts as present.
+func openSpecChangeContainer(changeRoot string) bool {
+	holdsArtifact := func(dir string) bool {
+		for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs", "spec.md", "verify-report.md", "state.yaml", "exploration.md"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); !errors.Is(err, os.ErrNotExist) {
+				return true
+			}
+		}
+		return false
+	}
+	entries, err := os.ReadDir(changeRoot)
+	if err != nil || holdsArtifact(changeRoot) {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && holdsArtifact(filepath.Join(changeRoot, entry.Name())) {
+			return true
+		}
+	}
+	return false
 }
 
 // selectableOpenSpecChanges filters exploration-only directories out of the
@@ -1647,7 +1674,22 @@ func countTaskProgress(tasksPath string) (TaskProgress, error) {
 
 func countTaskProgressText(content string) TaskProgress {
 	var progress TaskProgress
+	fence := ""
 	for _, line := range strings.Split(content, "\n") {
+		// #2480: a checkbox row inside a ``` or ~~~ fence is an example. A fence
+		// closes on a same-character run at least as long as the opener, alone.
+		if run := fencedCodeRun(line); run != "" {
+			switch {
+			case fence == "":
+				fence = run
+			case run[0] == fence[0] && len(run) >= len(fence) && strings.TrimSpace(line) == run:
+				fence = ""
+			}
+			continue
+		}
+		if fence != "" {
+			continue
+		}
 		matches := taskCheckbox.FindStringSubmatch(line)
 		if len(matches) == 0 {
 			continue
@@ -1661,6 +1703,20 @@ func countTaskProgressText(content string) TaskProgress {
 	}
 	progress.AllComplete = progress.Total > 0 && progress.Pending == 0
 	return progress
+}
+
+// fencedCodeRun returns the leading run of three or more backticks or tildes
+// that opens or closes a fenced code block, or "" when the line is not a fence.
+func fencedCodeRun(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	if trimmed == "" || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return ""
+	}
+	run := strings.TrimLeft(trimmed, string(trimmed[0]))
+	if len(trimmed)-len(run) < 3 {
+		return ""
+	}
+	return trimmed[:len(trimmed)-len(run)]
 }
 
 func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress, changeName string) blockerReasons {
