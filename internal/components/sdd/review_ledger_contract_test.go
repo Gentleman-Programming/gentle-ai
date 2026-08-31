@@ -698,8 +698,12 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// next_transition.execute(review.status) re-entry (+187 rendered
 		// characters in each row): the old sentence told consumers to pass a
 		// revision selector the CLI refuses. Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_676, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_021, maxCharacters: 30_063},
+		// wantChars then grew by 137 per case (15_676 -> 15_813 / 28_021 -> 28_158)
+		// when #3946 made review acknowledge-approved print its
+		// gentle-ai.review-acknowledged/v1 envelope and the contract told
+		// orchestrators to report the burn from it. Deliberate, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_813, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_158, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
