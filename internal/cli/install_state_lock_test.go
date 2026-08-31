@@ -15,7 +15,7 @@ import (
 
 func TestPersistSyncManagedAssetStateReReadsLatestStateAfterLockContention(t *testing.T) {
 	home := t.TempDir()
-	held, err := reviewtransaction.AcquireAuthorityFileLock(installStateLockPath(home))
+	held, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestPersistSyncManagedAssetStateRefusesCorruptLatestState(t *testing.T) {
 
 func TestPersistInstallStateMergesExplicitAgentsFromLatestState(t *testing.T) {
 	home := t.TempDir()
-	held, err := reviewtransaction.AcquireAuthorityFileLock(installStateLockPath(home))
+	held, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,5 +100,36 @@ func TestInstallStateLockAcceptsSymlinkedHome(t *testing.T) {
 	}
 	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) || persisted.RDDModeRecordedAt == nil {
 		t.Fatalf("symlinked-home enable did not persist under the real home: %#v", persisted)
+	}
+}
+
+func mustInstallStateLockPath(t *testing.T, home string) string {
+	t.Helper()
+	lockPath, err := installStateLockPath(home)
+	if err != nil {
+		t.Fatalf("install state lock path: %v", err)
+	}
+	return lockPath
+}
+
+// The lock is a function of the resolved home alone, not of filesystem state.
+func TestInstallStateLockPathIsStableAcrossStateDirectoryCreation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory symlinks need elevated privileges on Windows")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	before := mustInstallStateLockPath(t, link)
+	if err := os.MkdirAll(filepath.Dir(state.Path(real)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if after := mustInstallStateLockPath(t, link); after != before || after != state.Path(real)+".lock" {
+		t.Fatalf("lock path depends on filesystem state: before %s, after %s", before, after)
+	}
+	if _, err := installStateLockPath(filepath.Join(real, "missing-home")); err == nil {
+		t.Fatal("a home that does not resolve must fail closed instead of guessing a lock path")
 	}
 }
