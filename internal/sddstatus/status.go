@@ -1405,7 +1405,7 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 			AllowedEditRoots: append([]string{workspaceRoot}, grantedRoots...),
 		},
 		Relationships: Relationships{
-			DependsOn:               []string{},
+			DependsOn:               openSpecStateDependsOn(store, changeRoot),
 			Supersedes:              []string{},
 			Amends:                  []string{},
 			ConflictsWith:           []string{},

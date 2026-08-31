@@ -2247,9 +2247,13 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 		"gentle-ai sdd-attempt settle",
 		"state: proceed",
 		"opaque `token`",
-		"successor-lineage",
-		"the bound lineage remains its own successor",
 		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
+		// #3696: the settle invocation is spelled out with every flag the CLI
+		// requires; an elided `...` sent orchestrators into a flag-by-flag
+		// refusal loop, and `--successor-lineage` never existed on settle.
+		"--outcome <passed|failed>", "--evidence-revision <sha256>", "--diagnosis \"<proven-diagnosis>\"",
+		"--harness-disposition <reused|invalidated>", "--cleanup-evidence \"<evidence>\"", "--process-evidence \"<evidence>\"",
+		"--outcome interrupted", "omit `--evidence-revision`", "--remediates-evidence-revision <sha256>",
 		"status|begin|finish|reset",
 		"never automatic",
 		causalFailureDisclosure,
@@ -2264,6 +2268,9 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			if !strings.Contains(section, want) {
 				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
 			}
+		}
+		if strings.Contains(section, "--successor-lineage") {
+			t.Fatalf("%s names --successor-lineage, which gentle-ai sdd-attempt settle does not define", path)
 		}
 		last := -1
 		for _, label := range []string{

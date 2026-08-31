@@ -471,7 +471,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// runtime orchestrator: the native surface resolves the declared store, so
 	// the actor no longer determines or branches on it. Kilo renders through the
 	// OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "45b63ab97aad4a5f31b20bf834a43d1df25a5521db2e8008473cb99ebaaa593f"
+	// #3696 spells out every required `sdd-attempt settle` flag in the shared
+	// Native Runtime Attempt Authority section and drops `--successor-lineage`,
+	// a flag settle never defined. Kilo renders that shared section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "a11b382c8a804da09937205c418c65a64eddbc1f4ced28549c613d566db9ba33"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

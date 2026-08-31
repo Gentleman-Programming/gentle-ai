@@ -68,6 +68,21 @@ func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 	}
 }
 
+// #2828: the help never said what the first line must be, so a report that
+// opened with a BOM, a `yml` tag, or a heading was refused with no way to
+// learn the contract from the command itself.
+func TestRunSDDVerifyValidateHelpNamesTheFenceContract(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
+	}
+	for _, want := range []string{"first non-empty line must be ```yaml", "yml", "UTF-8 BOM"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help omits the fence contract %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestRunSDDVerifyValidateHelpExcludesMissingReviewSkipProtocol(t *testing.T) {
 	var output bytes.Buffer
 	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
