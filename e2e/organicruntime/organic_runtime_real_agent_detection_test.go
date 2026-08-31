@@ -149,7 +149,7 @@ func prepareOrganicCodexHome(t *testing.T) string {
 		t.Skip("native Codex discovery skipped: no usable Codex authentication source")
 	}
 	info, err := os.Stat(authPath)
-	if err != nil || info.IsDir() {
+	if err != nil || !info.Mode().IsRegular() {
 		t.Skipf("native Codex discovery skipped: Codex authentication source is unavailable at %s", authPath)
 	}
 	authContents, err := os.ReadFile(authPath)
