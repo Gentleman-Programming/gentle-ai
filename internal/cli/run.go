@@ -2580,9 +2580,37 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	if hasComponent(input.Resolved.OrderedComponents, model.ComponentEngram) {
 		checks = append(checks, engramHealthChecks(input.State)...)
 	}
+	if hasComponent(input.Resolved.OrderedComponents, model.ComponentGGA) {
+		checks = append(checks, ggaAliasCollisionCheck(input.HomeDir)...)
+	}
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+}
+
+func ggaAliasCollisionCheck(homeDir string) []verify.Check {
+	return []verify.Check{
+		{
+			ID:          "verify:gga:alias-collision",
+			Description: "gga shorthand is not overridden by zsh/bash alias",
+			Soft:        true,
+			Run: func(ctx context.Context) error {
+				zshrcPath := filepath.Join(homeDir, ".zshrc")
+				data, err := os.ReadFile(zshrcPath)
+				if err != nil {
+					if os.IsNotExist(err) {
+						return nil
+					}
+					return err
+				}
+				content := string(data)
+				if strings.Contains(content, "plugins=(") && strings.Contains(content, "git") && !strings.Contains(content, "unalias gga") {
+					return fmt.Errorf("Oh-My-Zsh 'git' plugin detected which overrides 'gga' alias. Add 'unalias gga' at the end of your ~/.zshrc file.")
+				}
+				return nil
+			},
+		},
+	}
 }
 
 func isLegacyOpenCodeBackgroundAgentsPlugin(path string) bool {

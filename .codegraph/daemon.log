@@ -1,0 +1,314 @@
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 7411, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (SIGTERM; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 3689, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 10261, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 3 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 13839, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 1 file(s) changed since last run
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 777, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 2 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 20091, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 28 file(s) changed since last run
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 156518, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 11 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 160674, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 166450, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 701, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 11 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 1150, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 21 file(s) changed since last run
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 1102, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 34 file(s) changed since last run
+[CodeGraph daemon] Shutting down (SIGTERM; clients=0).
+[CodeGraph daemon] Another daemon (pid 1102) already holds the lock; exiting.
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 38772, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 5 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 53786, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 793, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 4 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 807, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 21 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 4583, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 76 file(s) changed since last run
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 793, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 8062, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 4 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 15981, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 47456, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (SIGTERM; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 1990, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 32 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 760, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 3629, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 4838, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 43772, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 4786, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 2 file(s) changed since last run
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: write EPIPE
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: write EPIPE
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: write EPIPE
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: write EPIPE
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 63689, v1.2.0). Idle timeout 300000ms.
+[CodeGraph daemon] Another daemon (pid 63689) already holds the lock; exiting.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 1658, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 784, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 39414, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 4 file(s) changed since last run
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 861, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: write EPIPE
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 859, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 75 file(s) changed since last run
+[CodeGraph daemon] Shutting down (SIGTERM; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 707, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 75 file(s) changed since last run
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: write EPIPE
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] socket error: read ECONNRESET
+[CodeGraph daemon] Shutting down (SIGTERM; clients=0).
+[CodeGraph daemon] Socket /mnt/c/Users/Cobies/Desktop/Proyectos/COLAB/gentle-ai/.codegraph/daemon.sock unusable (ENOTSUP); relocating to /tmp/codegraph-01a7e2ba758bd579.sock.
+[CodeGraph daemon] Listening on /tmp/codegraph-01a7e2ba758bd579.sock (pid 961, v1.2.0). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher disabled — project is on a WSL2 /mnt/ drive, where recursive fs.watch is too slow to be reliable. The graph will not auto-update; run `codegraph sync` (or install the git sync hooks via `codegraph init`) to refresh.
+[CodeGraph MCP] Query pool: up to 15 worker thread(s) for concurrent reads.
+[CodeGraph MCP] Caught up 2 file(s) changed since last run
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=2).
