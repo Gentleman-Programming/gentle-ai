@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -60,49 +61,6 @@ func TestNextTransitionV1ApprovedPendingAcknowledgementIsNotTerminalStop(t *test
 	assertApprovedAcknowledgementTransition(t, transition.Execute, repo, started.LineageID, pending.TargetIdentity, pending.ExpectedRevision)
 }
 
-// TestStartStatusContinuationCarriesCwd is issue #3932: the review.status
-// re-entry a reviewing START emits must bind the repository START received,
-// exactly as the START and acknowledgement emissions do. Without --cwd a
-// caller whose process cwd is another repository silently preflights that
-// repository instead of resuming the frozen lineage.
-func TestStartStatusContinuationCarriesCwd(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc Candidate() int { return 5 }\n", 0o644)
-	started := runNegotiatedReviewStart(t, repo, "continuation-cwd")
-	execution := startStatusContinuationExecution(t, started, []ReviewTransitionArgument{
-		{Name: "projection", Value: string(reviewtransaction.ProjectionWorkspace)},
-	})
-	if len(execution.Arguments) == 0 || execution.Arguments[0].Name != "cwd" || execution.Arguments[0].Value != repo {
-		t.Fatalf("START continuation arguments = %#v, want a leading --cwd=%s row", execution.Arguments, repo)
-	}
-
-	// Run the emitted command from an unrelated repository: the continuation
-	// must still bind the repository START froze, never the process cwd.
-	elsewhere := initReviewCLIRepo(t)
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(elsewhere); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(previous) }()
-	fields := strings.Fields(execution.Command)
-	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" || fields[2] != "status" {
-		t.Fatalf("continuation command = %q", execution.Command)
-	}
-	var statusOutput bytes.Buffer
-	if err := RunReview(fields[2:], &statusOutput); err != nil {
-		t.Fatalf("continuation STATUS from another cwd: %v\n%s", err, statusOutput.String())
-	}
-	var status ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
-	if status.Authority == nil || status.Authority.LineageID != started.LineageID || status.Authority.State != reviewtransaction.StateReviewing {
-		t.Fatalf("continuation STATUS from another cwd bound authority %#v, want lineage %q reviewing", status.Authority, started.LineageID)
-	}
-}
-
 // TestNegotiatedStatusOverlayWithoutBaseRefIsInvalidRequestWithCause is issue
 // #3935: a selector combination STATUS cannot honor is the caller's request to
 // fix, so the negotiated envelope must say invalid_request with the cause and
@@ -125,5 +83,66 @@ func TestNegotiatedStatusOverlayWithoutBaseRefIsInvalidRequestWithCause(t *testi
 	if !strings.Contains(failure.Cause, "--workspace-overlay") || !strings.Contains(failure.Cause, "--base-ref") ||
 		!strings.Contains(failure.Cause, "gentle-ai review status") {
 		t.Fatalf("overlay-without-base cause = %q, want the exact flag combination and the runnable STATUS continuation", failure.Cause)
+	}
+}
+
+// TestNegotiatedStatusWithUnknownLineageFailsClosedFromForeignRepository is
+// issue #3932: the review.status re-entry START emits binds its lineage
+// through the opaque repository context START already published. Run from a
+// process cwd inside an unrelated repository, it must fail closed with a typed
+// refusal naming the lineage and the repository searched, never fall back to
+// a fresh-target preflight of that repository. The same command from the
+// owning repository resumes the reviewing authority.
+func TestNegotiatedStatusWithUnknownLineageFailsClosedFromForeignRepository(t *testing.T) {
+	reviewEnabledHome(t)
+	owner := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, owner, "candidate.go", "package candidate\n\nfunc Candidate() int { return 6 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, owner, "continuation-foreign-cwd")
+	execution := startStatusContinuationExecution(t, started, []ReviewTransitionArgument{
+		{Name: "projection", Value: string(reviewtransaction.ProjectionWorkspace)},
+	})
+	if binding := execution.Arguments[3]; binding.Name != "repository-context" || started.RepositoryContext == nil || binding.Value != started.RepositoryContext.Handle {
+		t.Fatalf("START continuation binding row = %#v, want the published repository context handle", execution.Arguments)
+	}
+	fields := strings.Fields(execution.Command)
+
+	foreign := initReviewCLIRepo(t)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(foreign); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(previous) }()
+	var foreignOutput bytes.Buffer
+	err = RunReview(fields[2:], &foreignOutput)
+	if err == nil {
+		t.Fatalf("continuation from a foreign repository succeeded instead of failing closed:\n%s", foreignOutput.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, foreignOutput.Bytes())
+	if failure.Operation != "review.status" || failure.Code != reviewIntegrationInvalidRequestCode || failure.NextAction != "correct_request" ||
+		!strings.Contains(failure.Cause, started.LineageID) || !strings.Contains(failure.Cause, "gentle-ai review status --cwd") {
+		t.Fatalf("foreign-cwd continuation failure = %#v, want invalid_request naming the lineage and the --cwd continuation", failure)
+	}
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) || !strings.Contains(preflight.Error(), foreign) {
+		t.Fatalf("foreign-cwd refusal = %v, want it to name the searched repository %s", err, foreign)
+	}
+	if occupied, err := reviewtransaction.ExactReviewLineageOccupied(context.Background(), foreign, started.LineageID); err != nil || occupied {
+		t.Fatalf("foreign repository lineage occupancy = %v, %v; the refusal must create nothing", occupied, err)
+	}
+
+	if err := os.Chdir(owner); err != nil {
+		t.Fatal(err)
+	}
+	var ownerOutput bytes.Buffer
+	if err := RunReview(fields[2:], &ownerOutput); err != nil {
+		t.Fatalf("continuation from the owning repository: %v\n%s", err, ownerOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, ownerOutput.Bytes(), &status)
+	if status.Authority == nil || status.Authority.LineageID != started.LineageID || status.Authority.State != reviewtransaction.StateReviewing {
+		t.Fatalf("owning-repository continuation authority = %#v, want lineage %q reviewing", status.Authority, started.LineageID)
 	}
 }

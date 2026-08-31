@@ -29,6 +29,9 @@ func startStatusContinuationExecution(t *testing.T, started ReviewIntegrationSta
 	execution := transition.Execute
 	tokens := make([]string, 0, len(execution.Arguments))
 	for _, argument := range execution.Arguments {
+		if argument.Name == "cwd" {
+			t.Fatalf("START continuation published a filesystem path argument: %#v", execution.Arguments)
+		}
 		if argument.Token != "--"+argument.Name+"="+argument.Value {
 			t.Fatalf("START continuation token %#v is not its literal --name=value form", argument)
 		}
@@ -37,13 +40,13 @@ func startStatusContinuationExecution(t *testing.T, started ReviewIntegrationSta
 	if execution.Command != "gentle-ai review status "+strings.Join(tokens, " ") {
 		t.Fatalf("START continuation command %q does not execute exactly its arguments %v", execution.Command, tokens)
 	}
-	for index, name := range []string{"cwd", "contract", "next-transition", "lineage"} {
+	for index, name := range []string{"contract", "next-transition", "lineage", "repository-context"} {
 		if execution.Arguments[index].Name != name {
 			t.Fatalf("START continuation argument order = %#v", execution.Arguments)
 		}
 	}
-	if execution.Arguments[0].Value == "" || execution.Arguments[1].Value != ReviewIntegrationContractV2 || execution.Arguments[2].Value != "true" ||
-		execution.Arguments[3].Value != started.LineageID {
+	if execution.Arguments[0].Value != ReviewIntegrationContractV2 || execution.Arguments[1].Value != "true" ||
+		execution.Arguments[2].Value != started.LineageID || started.RepositoryContext == nil || execution.Arguments[3].Value != started.RepositoryContext.Handle {
 		t.Fatalf("START continuation binding rows = %#v", execution.Arguments)
 	}
 	tokenizedSelectors := reviewTokenizedTransitionArguments(wantSelectors)
@@ -160,8 +163,9 @@ func TestOpenCodeRunsTheStartStatusContinuationVerbatim(t *testing.T) {
 		t.Fatalf("declared runtime row = %#v", execution.Arguments)
 	}
 
-	// The continuation carries --cwd (issue #3932); running it with the
-	// repository as the process working directory must still work verbatim.
+	// The continuation names no --cwd (a negotiated START publishes no
+	// filesystem path), so the shipped contract says to run it with the
+	// repository as the process working directory.
 	fields := strings.Fields(execution.Command)
 	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" || fields[2] != "status" {
 		t.Fatalf("continuation command = %q", execution.Command)

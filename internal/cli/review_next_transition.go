@@ -636,16 +636,18 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 // invocation for the frozen scope, rendered from frozen authority facts
 // rather than a caller's remembered selector spelling. Its scope selectors
 // are echoed as byte-identical tokenized rows in selector_arguments so a
-// consumer replays them without re-deriving any spelling. It carries the
-// --cwd START received (issue #3932), exactly as the START and acknowledgement
-// emissions do: without it a caller whose process cwd is another repository
-// silently preflights that repository instead of resuming this lineage.
-func reviewStartStatusContinuation(repo string, state reviewtransaction.CompactState, revision string, runtime model.AgentID) *ReviewNextTransition {
+// consumer replays them without re-deriving any spelling. It deliberately
+// carries no --cwd token: a negotiated START payload publishes no filesystem
+// path, and the caller runs the command in the repository it already holds.
+// It does carry the opaque repository context START published (issue #3932),
+// so a process cwd that does not hold this lineage fails closed instead of
+// silently preflighting a fresh target in whatever repository it found.
+func reviewStartStatusContinuation(state reviewtransaction.CompactState, revision string, runtime model.AgentID, repositoryContext string) *ReviewNextTransition {
 	arguments := []ReviewTransitionArgument{
-		{Name: "cwd", Value: repo},
 		{Name: "contract", Value: ReviewIntegrationContractV2},
 		{Name: "next-transition", Value: "true"},
 		{Name: "lineage", Value: state.LineageID},
+		{Name: "repository-context", Value: repositoryContext},
 	}
 	if runtime != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
