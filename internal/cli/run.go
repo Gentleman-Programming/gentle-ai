@@ -1495,10 +1495,16 @@ func (s componentApplyStep) Run() error {
 					return installErr
 				}
 				// engram was auto-added as an sdd dependency, not requested. Its
-				// failure must not abort the components the user asked for: wire
-				// the config as usual and report the missing binary as a warning
-				// with its own install command (#3725).
+				// failure must not abort the components the user asked for, and
+				// no configuration may point at a binary that does not exist:
+				// report the missing binary as a warning with its own install
+				// command and leave the engram step entirely (#3725).
 				fmt.Fprintf(os.Stderr, "WARNING: engram could not be installed: %v\nInstall it with `%s`.\n", installErr, engramInstallCommand(s.agents))
+				if s.state != nil {
+					s.state.engramVersionResolved = true
+					s.state.engramVersionErr = installErr
+				}
+				return nil
 			}
 		} else if shouldRefreshWindowsEngram(s.profile, installedPath, pathEnvEntries(s.profile)) {
 			binaryPath, err := engramDownloadFn(s.profile)
@@ -2545,6 +2551,13 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	seenPath := make(map[string]struct{})
 	var uniqueFilePaths []string
 	for _, component := range input.Resolved.OrderedComponents {
+		if component == model.ComponentEngram && !input.Selection.HasComponent(model.ComponentEngram) &&
+			input.State != nil && input.State.engramVersionErr != nil {
+			// An auto-added engram that could not be installed wrote nothing
+			// (#3725); its health check below carries the warning and the
+			// install command, so its files are not required here.
+			continue
+		}
 		for _, path := range componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
 			if path == "" {
 				continue

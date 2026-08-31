@@ -717,6 +717,9 @@ func TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T
 	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); err != nil {
 		t.Fatalf("requested sdd component did not land: %v", err)
 	}
+	if raw, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil && strings.Contains(string(raw), "\"engram\"") {
+		t.Fatalf("engram MCP configuration was written for a binary that does not exist:\n%s", raw)
+	}
 	const wantCommand = "gentle-ai install --agent claude-code --components engram"
 	for _, check := range result.Verify.Checks {
 		if check.Status == verify.CheckStatusWarning && strings.Contains(check.Error, wantCommand) {
