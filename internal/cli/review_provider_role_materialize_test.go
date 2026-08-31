@@ -624,3 +624,23 @@ func recordHasAdmittedRole(state reviewtransaction.CompactState, role reviewtran
 	}
 	return false
 }
+
+// TestRefuterRequestCarriesTheFindingClaimText is #3482: the compiled refuter
+// batch listed each inferential finding as finding_id plus proof locations
+// only, so the refuter had no proposition to corroborate or refute and could
+// honestly return nothing but inconclusive, which escalates every lineage.
+func TestRefuterRequestCarriesTheFindingClaimText(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, _, record, handle := piRefuterReview(t)
+	handle = rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	var prompt bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", string(model.AgentPi), "--materialize=true"), &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt.String(), `"finding_id":"R3-001"`) || !strings.Contains(prompt.String(), `"claim":"candidate failure"`) {
+		t.Fatalf("refuter request omits the finding's claim text; the refuter can only return inconclusive:\n%s", prompt.String())
+	}
+}
