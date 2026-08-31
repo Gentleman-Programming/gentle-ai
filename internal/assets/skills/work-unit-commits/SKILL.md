@@ -30,7 +30,7 @@ Use it for:
 | Tell a story | A reviewer should understand why each commit exists from its diff and message. |
 | Future PR-ready | Each commit should be a candidate chained PR when the change grows. |
 | SDD workload guard | If SDD tasks forecast a >400-line change, group commits into chained PR slices before implementation. |
-| Budget is not code-golf | Never shrink a diff by deleting comments, blank lines, docs, or tests, or by compressing code, to fit the 400-line budget. Slice by work unit or report the overage. |
+| Budget is not code-golf | Never shrink a diff by deleting comments, blank lines, docs, or tests, or by compressing code, to fit the review budget (400 by default, or the session `review_budget_lines`). Slice by work unit or report the overage. |
 
 ## Work Unit Checklist
 
