@@ -714,7 +714,7 @@ func startCompactAuthorityWithoutFacadeChecks(t *testing.T, repo, lineage string
 	}
 	request, err := prepareReviewFacadeCompactAtomicStart(t.Context(), repo, lineage, "", reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	}, snapshot, assessment, assessment.ChangedLines, lenses)
+	}, snapshot, assessment, assessment.ChangedLines, lenses, "")
 	if err != nil {
 		t.Fatal(err)
 	}

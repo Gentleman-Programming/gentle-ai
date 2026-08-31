@@ -116,6 +116,9 @@ type Start struct {
 	RiskLevel            RiskLevel
 	SelectedLenses       []string
 	OriginalChangedLines *int
+	// RuntimeAgent is the validated runtime identity START was bound to, or
+	// empty on the manual/non-agent route. It is frozen with the lineage.
+	RuntimeAgent string
 }
 
 type LensResult struct {

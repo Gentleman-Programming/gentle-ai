@@ -35,7 +35,7 @@ func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
 	}
 	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, "", "", reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	}, snapshot, assessment, assessment.ChangedLines, lenses)
+	}, snapshot, assessment, assessment.ChangedLines, lenses, "")
 	if err != nil {
 		t.Fatalf("prepare facade review compact atomic fixture: %v", err)
 	}

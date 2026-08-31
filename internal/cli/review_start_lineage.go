@@ -62,3 +62,30 @@ func reviewAtomicStartLineage(ctx context.Context, root, targetIdentity string) 
 	sum := sha256.Sum256(append([]byte("gentle-ai.review-start-lineage/v3\x00"), payload...))
 	return "review-" + hex.EncodeToString(sum[:])[:reviewDerivedStartLineageDigits], nil
 }
+
+// reviewPendingAcknowledgementLineage names the derived START lineage when it
+// holds an approved authority for exactly this target whose acknowledgement is
+// still pending. It opens that single store and nothing else: a missing store
+// or a damaged record is no pending acknowledgement, while an operational
+// failure on the candidate's own record still fails closed.
+func reviewPendingAcknowledgementLineage(ctx context.Context, root, targetIdentity string) (string, error) {
+	lineage, err := reviewAtomicStartLineage(ctx, root, targetIdentity)
+	if err != nil {
+		return "", err
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return "", err
+	}
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		if reviewtransaction.IsCompactAuthorityOperationalFailure(err) {
+			return "", err
+		}
+		return "", nil
+	}
+	if pending, present := reviewtransaction.PendingApprovedCompactAcknowledgement(record); present && pending.TargetIdentity == targetIdentity {
+		return lineage, nil
+	}
+	return "", nil
+}
