@@ -170,6 +170,9 @@ type RefuterClaim struct {
 	FindingID        string `json:"finding_id"`
 	SnapshotIdentity string `json:"snapshot_identity"`
 	Proof            string `json:"proof"`
+	// Claim is the finding's own assertion. Without it the refuter has no
+	// proposition to corroborate or refute (issue #3482).
+	Claim string `json:"claim,omitempty"`
 }
 
 type EvidenceRoute struct {

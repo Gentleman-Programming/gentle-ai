@@ -694,6 +694,33 @@ func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) (
 	return paths, intendedUntrackedInventoryDigest(paths), nil
 }
 
+// StillUntracked keeps the entries of a frozen intended-untracked declaration
+// that the index does not carry yet (issue #3759). A declared path committed
+// after the declaration froze is no longer untracked: the current-changes
+// target already covers it, so replaying it would only trip the
+// "already tracked" refusal in buildCurrentChanges.
+func (builder SnapshotBuilder) StillUntracked(ctx context.Context, declared []string) ([]string, error) {
+	remaining := []string{}
+	if len(declared) == 0 {
+		return remaining, nil
+	}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	trackedOutput, err := runGitInventory(ctx, root, "ls-files", "--cached", "-z", "--")
+	if err != nil {
+		return nil, err
+	}
+	tracked := nulSeparatedPathSet(trackedOutput)
+	for _, path := range declared {
+		if _, isTracked := tracked[path]; !isTracked {
+			remaining = append(remaining, path)
+		}
+	}
+	return remaining, nil
+}
+
 // ValidateIntendedUntrackedSelection proves paths remain eligible in STATUS's inventory.
 func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
 	paths, digest, err := builder.IntendedUntrackedInventory(ctx)

@@ -45,8 +45,14 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-func continuationFor(cwd string) string {
-	return "gentle-ai sdd-status --cwd " + shellQuote(cwd) + " --json"
+// continuationFor names the change when the caller knows it (#2790): with two
+// active changes the selector-less form only answers select-change.
+func continuationFor(cwd, change string) string {
+	selector := ""
+	if change != "" {
+		selector = shellQuote(change) + " "
+	}
+	return "gentle-ai sdd-status " + selector + "--cwd " + shellQuote(cwd) + " --json"
 }
 
 func encode(payload handoffPayload) string {
@@ -60,7 +66,7 @@ func encode(payload handoffPayload) string {
 
 // Handoff renders the typed terminal failure for one classified phase result.
 // An admitted result has no handoff and returns the empty string.
-func Handoff(class Class, phase, cwd, taskModel string) string {
+func Handoff(class Class, phase, cwd, change, taskModel string) string {
 	code := class.FailureCode()
 	if code == "" {
 		return ""
@@ -71,7 +77,7 @@ func Handoff(class Class, phase, cwd, taskModel string) string {
 	}
 	payload := handoffPayload{
 		SchemaName: handoffSchema, Status: "blocked", Code: code, Phase: phase,
-		Summary: summary, Continuation: continuationFor(cwd),
+		Summary: summary, Continuation: continuationFor(cwd, change),
 	}
 	if routeToken.MatchString(taskModel) {
 		payload.TaskModel = taskModel
@@ -82,12 +88,12 @@ func Handoff(class Class, phase, cwd, taskModel string) string {
 // DispatchLatched renders the refusal a later launch receives after an earlier
 // phase failed in the same session. That launch never dispatched, so it names
 // the phase it requested alongside the phase and code that actually failed.
-func DispatchLatched(requested, latchedPhase, latchedCode, cwd string) string {
+func DispatchLatched(requested, latchedPhase, latchedCode, cwd, change string) string {
 	return encode(handoffPayload{
 		SchemaName: handoffSchema, Status: "blocked", Code: "sdd_task_dispatch_latched",
 		Phase: requested, LatchedPhase: latchedPhase, LatchedCode: latchedCode,
 		Summary:      fmt.Sprintf("%s was not dispatched. Earlier in this session %s returned %s, and SDD launches stay latched afterwards so a failed phase is never silently retried and no later phase advances on top of it. No provider call, no subagent, and no artifact write happened for this launch, so it produced no new evidence about the original failure.", requested, latchedPhase, latchedCode),
-		Continuation: continuationFor(cwd),
+		Continuation: continuationFor(cwd, change),
 		Exit:         "Inspect the artifact state the original failure left, surface it to the user, and start a new session to launch SDD phases again. Relaunching in this session cannot dispatch.",
 	})
 }
