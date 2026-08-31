@@ -304,6 +304,8 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if adapterErr != nil {
 			return reviewPreflightError(adapterErr)
 		}
+		// --agent is refused together with --preflight above, so this branch
+		// never runs under preflight and its preservation needs no guard.
 		admitted, rawPayload, err = reviewProviderCaptureWithOneCorrection(ctx, reviewProviderCapture{
 			root: root, runtime: providerRuntime, adapter: adapter, state: state, frozen: frozen, subject: subject,
 		}, request.Invocation)
@@ -319,7 +321,8 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if err != nil {
 			// A host-submitted result gets no corrective re-invocation, since
 			// the host owns the reviewer, but its rejected bytes are preserved
-			// the same way. --preflight persists nothing, as documented.
+			// the same way. This is the only branch --preflight can reach, and
+			// --preflight persists nothing, as documented.
 			if *preflight {
 				return reviewPreflightError(err)
 			}

@@ -274,3 +274,23 @@ func TestRawInputCapturePreservesRejectedResultWithoutInvokingProvider(t *testin
 		assertRejectedEnvelope(t, envelope, record.State.LineageID, lens, 1, invalid)
 	}
 }
+
+func TestProviderCaptureRefusesPreflightBeforeInvocationOrPreservation(t *testing.T) {
+	repo, binding, record, _ := newCandidateInspectionReview(t, "candidate\n", false)
+	prompts := recordingProviderAdapter(t,
+		func() ([]byte, error) {
+			t.Fatal("--preflight must refuse before the provider is invoked")
+			return nil, nil
+		},
+	)
+	err := RunReviewCaptureResult(append(binding, "--agent", string(model.AgentClaudeCode), "--preflight"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--agent cannot be combined with --preflight") {
+		t.Fatalf("preflight with a provider runtime = %v", err)
+	}
+	if len(*prompts) != 0 {
+		t.Fatalf("provider reviewer invocations = %d, want none", len(*prompts))
+	}
+	if _, statErr := os.Stat(rejectedResultsDir(t, repo, record.State.LineageID)); !os.IsNotExist(statErr) {
+		t.Fatalf("preflight preserved a rejected result: %v", statErr)
+	}
+}
