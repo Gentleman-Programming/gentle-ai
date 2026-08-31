@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -90,6 +91,40 @@ func PendingApprovedCompactAcknowledgement(record CompactRecord) (ApprovedCompac
 		return ApprovedCompactAcknowledgement{}, false
 	}
 	return approvedCompactAcknowledgementForRecord(record), true
+}
+
+// PendingApprovedCompactLineageForTarget names the approved compact lineage
+// whose current snapshot identity is exactly the live target identity and
+// whose acknowledgement is still pending. A selectorless negotiated STATUS
+// preflights the live worktree candidate without consulting sibling
+// authority, so a zero-lens START that already closed approved was reported
+// unrelated and its START reoffered, which the store then refused with
+// atomic_start_conflict (#3900). Only the exact identity admits: a damaged
+// record is skipped like every other status read, an operational failure
+// still fails closed, and no state is written.
+func PendingApprovedCompactLineageForTarget(ctx context.Context, repo, targetIdentity string) (string, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	lineages := []string{}
+	for _, store := range stores {
+		record, loadErr := store.LoadContext(ctx)
+		if loadErr != nil {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
+				return "", loadErr
+			}
+			continue
+		}
+		if pending, present := PendingApprovedCompactAcknowledgement(record); present && pending.TargetIdentity == targetIdentity {
+			lineages = append(lineages, record.State.LineageID)
+		}
+	}
+	if len(lineages) == 0 {
+		return "", nil
+	}
+	sort.Strings(lineages)
+	return lineages[0], nil
 }
 
 // CommitApprovedCompactAcknowledgement publishes an approved terminal state and
