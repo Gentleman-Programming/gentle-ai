@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -695,6 +696,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
 	nextTransition := flags.Bool("next-transition", false, "include the optional canonical native next transition in negotiated output")
 	lineage := flags.String("lineage", "", "optional explicit lineage selector for negotiated target status")
+	repositoryContextHandle := flags.String("repository-context", "", "opaque repository context START published for the lineage being resumed")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
 	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
 	baseTree := flags.String("base-tree", "", "optional negotiated resolved immutable overlay base tree")
@@ -755,25 +757,29 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		selectedBaseRef := strings.TrimSpace(*baseRef)
 		selectedBaseTree := strings.TrimSpace(*baseTree)
+		// Issue #3935: a selector combination STATUS cannot honor is the
+		// caller's request to correct, so each refusal is typed invalid_request
+		// with its cause; a bare error collapsed into the read-only catch-all
+		// whose "retry" could never succeed.
 		if *committedOnly && (selectedBaseRef == "" || *workspaceOverlay) {
-			return errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+			return reviewPreflightError(errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`"))
 		}
 		if selectedBaseRef != "" && committedOnlyProvided && !*committedOnly && !*workspaceOverlay {
-			return errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+			return reviewPreflightError(errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`"))
 		}
 		stagedRecoveryOverlay := *workspaceOverlay && selectedProjection == reviewtransaction.ProjectionStaged
 		if *workspaceOverlay && stagedRecoveryOverlay && (selectedBaseRef == "" || selectedBaseTree != "") {
-			return errors.New("staged --workspace-overlay requires exactly --base-ref")
+			return reviewPreflightError(errors.New("review status --workspace-overlay --projection staged requires exactly --base-ref and no --base-tree; rerun `gentle-ai review status --base-ref <ref> --workspace-overlay --projection staged`"))
 		}
 		if *workspaceOverlay && !stagedRecoveryOverlay &&
 			((selectedBaseRef == "") == (selectedBaseTree == "") || selectedProjection != reviewtransaction.ProjectionWorkspace) {
-			return errors.New("--workspace-overlay requires exactly one of --base-ref or --base-tree with workspace projection")
+			return reviewPreflightError(errors.New("review status --workspace-overlay requires exactly one of --base-ref or --base-tree with --projection workspace; rerun `gentle-ai review status --base-ref <ref> --workspace-overlay`"))
 		}
 		if !*workspaceOverlay && selectedBaseTree != "" {
-			return errors.New("--base-tree requires --workspace-overlay")
+			return reviewPreflightError(errors.New("review status --base-tree requires --workspace-overlay; rerun `gentle-ai review status --base-tree <tree> --workspace-overlay`"))
 		}
 		if selectedBaseTree != "" && !validReviewGitTree(selectedBaseTree) {
-			return errors.New("--base-tree requires an exact Git tree object ID")
+			return reviewPreflightError(errors.New("review status --base-tree requires an exact Git tree object ID; rerun `gentle-ai review status --base-tree <tree> --workspace-overlay` with the frozen tree ID"))
 		}
 		root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 		if err != nil {
@@ -834,6 +840,18 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
 			}
 		}
+		// Issue #3932: a continuation START issued carries the opaque
+		// repository context, so it is a resume of an existing lineage, never
+		// a pre-named fresh START. A process cwd that does not hold that
+		// lineage fails closed instead of preflighting a fresh target there.
+		if requestedContext := strings.TrimSpace(*repositoryContextHandle); requestedContext != "" {
+			if requestedLineage == "" || !*nextTransition || reviewtransaction.ValidateReviewRepositoryContextHandle(requestedContext) != nil {
+				return reviewPreflightError(errors.New("review status --repository-context is only valid with --next-transition and the --lineage START issued it for; rerun the exact continuation `gentle-ai review status --contract gentle-ai.review-integration/v2 --next-transition --lineage <lineage> --repository-context <handle>` START returned"))
+			}
+			if !requestedLineageOccupied {
+				return reviewPreflightError(fmt.Errorf("review lineage %q is not held by repository %s; rerun the same command from the repository that owns the lineage, or name it: `gentle-ai review status --cwd <repository> --contract %s --next-transition --lineage %s --repository-context %s`", requestedLineage, root, *contract, requestedLineage, requestedContext))
+			}
+		}
 		if *nextTransition && (requestedLineage == "" || !requestedLineageOccupied) {
 			// A free exact selector starts independently. Freeze its target without
 			// consulting sibling authority; START then creates or replays only this
@@ -856,9 +874,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
-		if native.Decision.FrozenReviewing {
-			// Explicit reviewing resume keeps the immutable scope that the reviewer
-			// artifacts bind, rather than asking live workspace drift to select one.
+		// Explicit reviewing resume keeps the immutable scope that the reviewer
+		// artifacts bind, rather than asking live workspace drift to select one.
+		// The same holds when the live target still equals the frozen one: an
+		// exclude declaration froze no intended path, so it is indistinguishable
+		// from an undeclared scope and STATUS used to ask for it again on every
+		// re-entry (#3120). The reviewing authority already holds that decision.
+		if native.Decision.FrozenReviewing ||
+			native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.State == reviewtransaction.StateReviewing &&
+				native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact && !intendedScope.Declared {
 			intendedScope = reviewIntendedUntrackedScope{
 				Intended: append([]string{}, native.Projection.IntendedUntracked...), Declared: true,
 			}
@@ -1135,7 +1159,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
-	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
@@ -1307,7 +1331,14 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		}
 		intended = append(intended, scope.Intended...)
 	case currentChangesSuccessor && predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges:
-		intended = append(intended, predecessorRecord.State.InitialSnapshot.IntendedUntracked...)
+		// Issue #3759: a declared path committed since the predecessor froze
+		// is tracked now and already inside the current-changes target, so
+		// replaying it would only refuse as "already tracked".
+		remaining, inheritErr := builder.StillUntracked(context.Background(), predecessorRecord.State.InitialSnapshot.IntendedUntracked)
+		if inheritErr != nil {
+			return inheritErr
+		}
+		intended = append(intended, remaining...)
 	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
@@ -1405,6 +1436,10 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 			return reviewUnchangedApprovedScopeRefusal(err, explicitCwd, *predecessor, *expected, *successor)
 		case reviewtransaction.RecoveryPredecessorNotInvalidated(err):
 			return reviewNotInvalidatedPredecessorRefusal(err, explicitCwd, *predecessor, *expected, *successor, predecessorRecord.State.State)
+		case errors.Is(err, reviewtransaction.ErrCompactRecoveryAuthorizationInexact) && authorizationProvided:
+			if _, derivable := reviewSelfRecoveryShapeForRecover(predecessorRecord.State.State, snapshot.Identity != predecessorRecord.State.InitialSnapshot.Identity); derivable {
+				return reviewInexactRecoveryAuthorizationRefusal(err, *predecessor, *expected, *successor, *disposition, reviewRecoverSelectorTokens(flags))
+			}
 		}
 		return err
 	}
@@ -1427,6 +1462,39 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 func reviewUnchangedRecoveryRefusal(cause error, cwd, predecessor, expected, successor, disposition string) error {
 	return fmt.Errorf("%w: the candidate is byte-identical to the escalated predecessor, so this successor would carry the exact content whose verification failed and there is nothing to re-review; change the candidate first (apply the fix that verification asked for, and stage it if you review the staged projection), then re-run: %s",
 		cause, reviewRecoverCommand(cwd, predecessor, expected, successor, disposition))
+}
+
+// reviewInexactRecoveryAuthorizationRefusal explains why a supplied
+// maintainer authorization did not bind and names what runs (#3099, #2910).
+//
+// The refusal stays exactly as strict: a binding is accepted only when it names
+// the successor target this command derived, and that target follows the
+// selectors given to this command, not the ones a status query was given. What
+// it never said is the shape a binding has, or that this recovery shape does
+// not need one: the command derives actor, reason, and binding itself, so the
+// continuation is the same invocation without the three flags. This refusal is
+// relayed verbatim into machine envelopes, so it stays path-free and the
+// continuation runs with the repository as the working directory.
+func reviewInexactRecoveryAuthorizationRefusal(cause error, predecessor, expected, successor, disposition string, selectors []string) error {
+	return fmt.Errorf("%w: an accepted binding is the LF-joined text `gentle-ai.review-recovery-authorization/v1` followed by one key=value line each for predecessor_lineage, predecessor_revision, target_identity (the successor target this command derived, echoed above), actor, and reason; a target derived by a status query with different selectors never binds here. This recovery shape derives its own binding, so omit --maintainer-authorization, --actor, and --reason and, with the repository as the working directory, re-run: %s",
+		cause, strings.Join(append([]string{reviewRecoverCommand("", predecessor, expected, successor, disposition)}, selectors...), " "))
+}
+
+// reviewRecoverSelectorTokens re-renders the target selectors this recover was
+// given, so a printed re-run derives the same successor target.
+func reviewRecoverSelectorTokens(flags *flag.FlagSet) []string {
+	tokens := []string{}
+	flags.Visit(func(value *flag.Flag) {
+		switch value.Name {
+		case "projection", "base-ref", "committed-only", "workspace-overlay", "release-scope", "untracked-scope", "expected-untracked-inventory":
+			tokens = append(tokens, "--"+value.Name+"="+value.Value.String())
+		case "intended-untracked":
+			for _, path := range *value.Value.(*reviewRepeatedPathFlag) {
+				tokens = append(tokens, "--intended-untracked="+path)
+			}
+		}
+	})
+	return tokens
 }
 
 // reviewRecoverCommand renders one literal `gentle-ai review recover`
@@ -1880,7 +1948,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// verbatim instead of hand-assembling selectors the CLI would refuse.
 		var nextTransition *ReviewNextTransition
 		if *contract == ReviewIntegrationContractV2 {
-			nextTransition = reviewStartStatusContinuation(record.State, record.State.CapturePhaseRevision, model.AgentID(strings.TrimSpace(*runtimeAgent)))
+			nextTransition = reviewStartStatusContinuation(record.State, record.State.CapturePhaseRevision, model.AgentID(strings.TrimSpace(*runtimeAgent)), repositoryContextHandle)
 		}
 		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, repositoryContext, nextTransition, *contract)
 		if err != nil {

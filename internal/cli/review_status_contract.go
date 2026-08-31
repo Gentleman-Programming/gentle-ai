@@ -1340,8 +1340,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		// selector_arguments — a consumer replays them without re-deriving any
 		// spelling. It never carries --cwd: a negotiated START payload
 		// publishes no filesystem path, and the caller runs the command in the
-		// repository it already holds.
-		required := []string{"contract", "next-transition", "lineage"}
+		// repository it already holds. The opaque repository context row
+		// (issue #3932) lets STATUS fail closed from a foreign process cwd.
+		required := []string{"contract", "next-transition", "lineage", "repository-context"}
 		if _, present := arguments["agent"]; present {
 			required = append(required, "agent")
 		}
@@ -1367,6 +1368,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		if !exact(required, wantSelectors) || !committedScope && !overlayScope && !currentScope ||
 			arguments["contract"] != ReviewIntegrationContractV2 || arguments["next-transition"] != "true" ||
 			arguments["lineage"] != execution.Binding.LineageID || hasBase && !validReviewGitTree(base) ||
+			reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
 			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateReviewing)}) {
 			return errors.New("review status transition binding is invalid") // refusal:by-design world-action: only a provider code fix can bind the exact reviewing re-entry
 		}

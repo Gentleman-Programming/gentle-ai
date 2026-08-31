@@ -146,7 +146,7 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
-		"fixtures/start-v4.fixture.json":          "1e91073e93ba93c433da7459bd984a74993484ba10d5bba069d7d436f1e8fb12",
+		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
 		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
 		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
 	}
@@ -175,7 +175,9 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
-		"schemas/transition-execution.schema.json":   "1294235c146a1cd61043b194fff65cc3fabc486dd76241463609b4c9333d05d0",
+		// issue #3932: start_status_execution carries the opaque
+		// repository-context row, so a foreign process cwd fails closed.
+		"schemas/transition-execution.schema.json":   "3743a16d915f5d95be047af1f0454f342aa4c3eb7bcb0d8991f81ae3b89873c1",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
