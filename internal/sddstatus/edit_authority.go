@@ -129,16 +129,6 @@ func sameRepositoryEditRoot(path string) string {
 // line: backticked tokens that contain a path separator (which subsumes
 // `../` prefixes and absolute paths). Tokens with whitespace are commands or
 // prose, and URL-like tokens are references, not filesystem targets.
-func pathLikeTokens(line string) []string {
-	var tokens []string
-	for _, match := range backtickedSpan.FindAllStringSubmatch(line, -1) {
-		if pathLikeToken(match[1]) {
-			tokens = append(tokens, match[1])
-		}
-	}
-	return tokens
-}
-
 // pathLikeToken reports whether one backticked token reads as a path: no
 // whitespace, no URL scheme, and at least one separator.
 func pathLikeToken(token string) bool {
