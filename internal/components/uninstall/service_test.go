@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -1330,5 +1331,49 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 	}
 	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
+	}
+}
+
+// TestComponentOperationsSDD_OpenCodeRemovesManagedPluginsUnderXDGConfigHome
+// pins #3219 for uninstall: the plugin writer resolves the OpenCode config
+// directory through the adapter, so uninstall must look in the same place.
+func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginsUnderXDGConfigHome(t *testing.T) {
+	homeDir := t.TempDir()
+	xdg := filepath.Join(homeDir, ".xdg")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	pluginDir := filepath.Join(xdg, "opencode", "plugins")
+	managed := append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(model.AgentOpenCode)...)
+	for _, name := range managed {
+		path := filepath.Join(pluginDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("managed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	applySDDOpenCodeOperations(t, svc, adapter)
+
+	for _, name := range managed {
+		path := filepath.Join(pluginDir, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed plugin %q should be removed; stat err = %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode")); !os.IsNotExist(err) {
+		t.Fatalf("uninstall touched ~/.config/opencode although XDG_CONFIG_HOME is set (stat err = %v)", err)
 	}
 }

@@ -794,12 +794,11 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 			ops = append(ops, rewriteOpenCodeSDDSettings(path, defaultPlan, paths...))
 
-			pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
-			for _, pluginPath := range []string{
-				filepath.Join(pluginDir, "background-agents.ts"),
-				filepath.Join(pluginDir, "model-variants.ts"),
-				filepath.Join(pluginDir, "skill-registry.ts"),
-			} {
+			// The SDD plugin writer resolves the config directory through the
+			// adapter and owns the plugin list; uninstall must match it (#3219).
+			pluginDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+			for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+				pluginPath := filepath.Join(pluginDir, name)
 				targets = append(targets, pluginPath)
 				ops = append(ops, removeFile(pluginPath))
 			}

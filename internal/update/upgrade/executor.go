@@ -248,8 +248,13 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(theme.VisualThemePaths(homeDir, adapter)...)
 	case model.AgentOpenCode:
 		add(theme.VisualThemePaths(homeDir, adapter)...)
+		// The SDD plugin writer resolves the config directory through the
+		// adapter and owns the plugin list; the snapshot must match it (#3219).
+		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+		for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+			add(filepath.Join(pluginsDir, name))
+		}
 		add(
-			filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)
