@@ -4,76 +4,71 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"slices"
 	"strings"
 )
 
-// baseAdvanceIdentity is the fixed identity of the throwaway commits that
-// wrap a tree for merge-tree. Fixed dates keep the wrapper content-addressed:
-// the same base advance always mints the same object instead of new garbage.
+// baseAdvanceIdentity is the fixed identity of the wrapper commits merge-tree
+// needs; fixed dates make the same advance mint the same object every time.
 var baseAdvanceIdentity = []string{
 	"GIT_AUTHOR_NAME=gentle-ai", "GIT_AUTHOR_EMAIL=gentle-ai@localhost", "GIT_AUTHOR_DATE=@0 +0000",
 	"GIT_COMMITTER_NAME=gentle-ai", "GIT_COMMITTER_EMAIL=gentle-ai@localhost", "GIT_COMMITTER_DATE=@0 +0000",
 }
 
-// HeadCommit resolves HEAD to its full commit ID. An unborn HEAD resolves to
-// the empty string rather than an error.
+// defaultBranchRefs is the offline resolution order for the default branch;
+// the first one that resolves is the base and nothing else ever is.
+var defaultBranchRefs = []string{"refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master"}
+
+// HeadCommit resolves HEAD to its full commit ID; an unborn HEAD resolves to "".
 func (builder SnapshotBuilder) HeadCommit(ctx context.Context) (string, error) {
 	output, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
-	if err != nil {
-		if gitExitCode(err) == 1 {
-			return "", nil
-		}
-		return "", err
+	var commandErr *GitCommandError
+	if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+		return "", nil
 	}
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSpace(string(output)), err
 }
 
 // AuthoredChangedLines counts the lines the candidate changed against the
-// snapshot's base tree, excluding a base advance that entered HEAD after
-// sinceCommit (#2536). A base advance is what another branch contributed:
-// commits that entered HEAD since sinceCommit and are also reachable from a
-// branch other than the one being worked on, whether they arrived by merge,
-// fast-forward, or rebase. Each such contribution is re-applied onto the base
-// tree as a three-way merge, so the diff that remains is what the candidate
-// authored on top of the advanced base. A path the merge cannot resolve keeps
-// its charge against the original base tree. An empty sinceCommit charges the
-// plain base-to-candidate diff.
+// snapshot's base tree, excluding the base advance that entered HEAD after
+// sinceCommit (#2536): the default-branch commits HEAD gained since then, by
+// merge, fast-forward, or rebase. The advance is re-applied onto the base
+// tree as a three-way merge, so the remaining diff is what the candidate
+// authored on top of it; a path the merge cannot resolve keeps its charge
+// against the original base tree. Only the default branch is a base, so no
+// other ref, including one at the attempt's own commits, reduces the charge.
+// The exclusion is best effort: an empty sinceCommit, no resolvable default
+// branch, or any failure while measuring (an object store refusing the
+// wrapper objects included) charges the plain base-to-candidate diff.
 func (builder SnapshotBuilder) AuthoredChangedLines(ctx context.Context, snapshot Snapshot, sinceCommit string) (int, error) {
-	if sinceCommit == "" {
-		return builder.ChangedLines(ctx, snapshot)
+	if sinceCommit != "" {
+		if lines, measured := builder.baseAdvancedChangedLines(ctx, snapshot, sinceCommit); measured {
+			return lines, nil
+		}
 	}
-	tips, err := builder.baseAdvanceTips(ctx, sinceCommit)
+	return builder.ChangedLines(ctx, snapshot)
+}
+
+func (builder SnapshotBuilder) baseAdvancedChangedLines(ctx context.Context, snapshot Snapshot, sinceCommit string) (int, bool) {
+	tip := builder.defaultBranchAdvanceTip(ctx, sinceCommit)
+	if tip == "" {
+		return 0, false
+	}
+	base, conflicted, err := builder.advanceBase(ctx, snapshot.BaseTree, sinceCommit, tip)
 	if err != nil {
-		return 0, err
-	}
-	base := snapshot.BaseTree
-	conflicted := map[string]struct{}{}
-	for _, tip := range tips {
-		advanced, unresolved, err := builder.advanceBase(ctx, base, sinceCommit, tip)
-		if err != nil {
-			return 0, err
-		}
-		base = advanced
-		for _, path := range unresolved {
-			conflicted[path] = struct{}{}
-		}
-	}
-	if base == snapshot.BaseTree {
-		return builder.ChangedLines(ctx, snapshot)
+		return 0, false
 	}
 	paths, err := builder.changedPaths(ctx, base, snapshot.CandidateTree)
 	if err != nil {
-		return 0, err
+		return 0, false
 	}
 	stats, err := builder.DiffStats(ctx, Snapshot{BaseTree: base, CandidateTree: snapshot.CandidateTree, Paths: paths})
 	if err != nil {
-		return 0, err
+		return 0, false
 	}
 	if len(conflicted) != 0 {
 		beginStats, err := builder.DiffStats(ctx, snapshot)
 		if err != nil {
-			return 0, err
+			return 0, false
 		}
 		merged := make([]DiffStat, 0, len(stats)+len(conflicted))
 		for _, stat := range stats {
@@ -88,70 +83,50 @@ func (builder SnapshotBuilder) AuthoredChangedLines(ctx context.Context, snapsho
 		}
 		stats = merged
 	}
-	return CountChangedLines(stats)
+	lines, err := CountChangedLines(stats)
+	return lines, err == nil
 }
 
-// baseAdvanceTips finds, for every branch other than the one HEAD is on (and
-// its remote counterparts, which carry the same authored work once pushed),
-// the newest commit of that branch inside HEAD, and keeps the independent
-// ones that entered HEAD after sinceCommit.
-func (builder SnapshotBuilder) baseAdvanceTips(ctx context.Context, sinceCommit string) ([]string, error) {
-	enteredOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-list", sinceCommit+"..HEAD")
-	if err != nil {
-		return nil, err
-	}
-	entered := strings.Fields(string(enteredOutput))
-	if len(entered) == 0 {
-		return nil, nil
-	}
-	branchOutput, _ := runGit(ctx, builder.Repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
-	branch := strings.TrimSpace(string(branchOutput))
-	refsOutput, err := runGit(ctx, builder.Repo, nil, nil, "for-each-ref", "--format=%(refname)", "--no-merged="+sinceCommit, "refs/heads", "refs/remotes")
-	if err != nil {
-		return nil, err
-	}
-	tips := make([]string, 0, 4)
-	for _, ref := range strings.Fields(string(refsOutput)) {
-		if branch != "" && (ref == "refs/heads/"+branch || strings.HasPrefix(ref, "refs/remotes/") && strings.HasSuffix(ref, "/"+branch)) {
+// defaultBranchAdvanceTip is the newest default-branch commit inside HEAD,
+// provided it entered HEAD after sinceCommit; otherwise "". When HEAD is the
+// default branch itself there is no base to advance from: its commits are the
+// attempt's own.
+func (builder SnapshotBuilder) defaultBranchAdvanceTip(ctx context.Context, sinceCommit string) string {
+	headOutput, _ := runGit(ctx, builder.Repo, nil, nil, "symbolic-ref", "--quiet", "HEAD")
+	headRef := strings.TrimSpace(string(headOutput))
+	for _, ref := range defaultBranchRefs {
+		if _, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
 			continue
+		}
+		if target, err := runGit(ctx, builder.Repo, nil, nil, "symbolic-ref", "--quiet", ref); err == nil {
+			ref = strings.TrimSpace(string(target))
+		}
+		if headRef != "" && strings.TrimPrefix(headRef, "refs/heads/") == ref[strings.LastIndex(ref, "/")+1:] {
+			return ""
 		}
 		output, err := runGit(ctx, builder.Repo, nil, nil, "merge-base", "HEAD", ref)
 		if err != nil {
-			if gitExitCode(err) == 1 {
-				continue
-			}
-			return nil, err
+			return ""
 		}
 		tip := strings.TrimSpace(string(output))
-		if slices.Contains(entered, tip) && !slices.Contains(tips, tip) {
-			tips = append(tips, tip)
+		if _, err := runGit(ctx, builder.Repo, nil, nil, "merge-base", "--is-ancestor", tip, sinceCommit); err == nil {
+			return ""
 		}
+		return tip
 	}
-	if len(tips) < 2 {
-		return tips, nil
-	}
-	output, err := runGit(ctx, builder.Repo, nil, nil, append([]string{"merge-base", "--independent"}, tips...)...)
-	if err != nil {
-		return nil, err
-	}
-	return strings.Fields(string(output)), nil
+	return ""
 }
 
-// advanceBase re-applies one base advance onto base: the changes from the
+// advanceBase re-applies the base advance onto base: the changes from the
 // merge base of sinceCommit and tip up to tip, merged three-way onto base. It
-// returns the advanced tree and the paths the merge left unresolved. Unrelated
-// histories have nothing to re-apply and return base unchanged.
-func (builder SnapshotBuilder) advanceBase(ctx context.Context, base, sinceCommit, tip string) (string, []string, error) {
+// returns the advanced tree and the paths the merge left unresolved.
+func (builder SnapshotBuilder) advanceBase(ctx context.Context, base, sinceCommit, tip string) (string, map[string]struct{}, error) {
 	mergeBase, err := runGit(ctx, builder.Repo, nil, nil, "merge-base", sinceCommit, tip)
 	if err != nil {
-		if gitExitCode(err) == 1 {
-			return base, nil, nil
-		}
 		return "", nil, err
 	}
-	// merge-tree merges commits, so the base tree travels inside a wrapper
-	// commit whose one parent is the merge base; that parent is what makes
-	// merge-tree find the same three-way base a live merge would.
+	// merge-tree merges commits: the base tree travels inside a wrapper commit
+	// whose parent is the merge base, so merge-tree finds the three-way base.
 	wrapper, err := runGit(ctx, builder.Repo, baseAdvanceIdentity, nil, "commit-tree", base, "-p", strings.TrimSpace(string(mergeBase)), "-m", "gentle-ai attempt base advance")
 	if err != nil {
 		return "", nil, err
@@ -165,8 +140,7 @@ func (builder SnapshotBuilder) advanceBase(ctx context.Context, base, sinceCommi
 		output = []byte(commandErr.Stdout)
 	}
 	parts := bytes.Split(output, []byte{0})
-	tree := strings.TrimSpace(string(parts[0]))
-	unresolved := make([]string, 0, len(parts)-1)
+	unresolved := make(map[string]struct{}, len(parts)-1)
 	for _, part := range parts[1:] {
 		if len(part) == 0 {
 			continue
@@ -175,15 +149,7 @@ func (builder SnapshotBuilder) advanceBase(ctx context.Context, base, sinceCommi
 		if err != nil {
 			return "", nil, err
 		}
-		unresolved = append(unresolved, logicalPath)
+		unresolved[logicalPath] = struct{}{}
 	}
-	return tree, unresolved, nil
-}
-
-func gitExitCode(err error) int {
-	var commandErr *GitCommandError
-	if errors.As(err, &commandErr) {
-		return commandErr.ExitCode
-	}
-	return -1
+	return strings.TrimSpace(string(parts[0])), unresolved, nil
 }

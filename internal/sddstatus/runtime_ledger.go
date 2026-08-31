@@ -591,12 +591,10 @@ type runtimeBeginEvent struct {
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
 	BeginWorktree     string `json:"begin_worktree,omitempty"`
 	EffectiveWorktree string `json:"effective_worktree,omitempty"`
-	// BeginHead is the commit HEAD resolved to at Begin (#2536). Finish
-	// charges only the lines the attempt authored, so it must know which
-	// merges entered HEAD after this point; the recorded candidate trees carry
-	// content, not history, and cannot answer that. Empty for records written
-	// before the field existed and for an unborn HEAD: both charge the plain
-	// begin-tree diff exactly as before.
+	// BeginHead is the commit HEAD resolved to at Begin (#2536): Finish needs
+	// it to tell which default-branch commits entered HEAD afterwards, which
+	// the recorded trees (content, not history) cannot answer. Empty for older
+	// records and an unborn HEAD, both of which charge the plain diff as before.
 	BeginHead string `json:"begin_head,omitempty"`
 }
 
@@ -673,8 +671,7 @@ type runtimeReplay struct {
 	Status        RuntimeStatus
 	Requests      map[string]runtimeRequestReceipt
 	AttemptTokens map[int]string
-	// ActiveBeginHead is the active attempt's recorded BeginHead, kept off the
-	// projected status because only Finish's line charge consumes it.
+	// ActiveBeginHead is the active attempt's BeginHead; only Finish reads it.
 	ActiveBeginHead string
 	// Instance carries the store's ForInstance identity into replay (#2540
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
@@ -958,10 +955,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
 		}
-		// #2536: a base advance merged into the worktree during the attempt
-		// sits inside the begin-to-finish range, and it is candidate identity,
-		// not authored work. The charge re-applies those merges onto the begin
-		// tree first and counts only what the attempt wrote on top.
+		// #2536: a default-branch advance taken during the attempt sits inside
+		// the begin-to-finish range but is not authored work, so it is
+		// re-applied onto the begin tree before the charge is counted.
 		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).AuthoredChangedLines(ctx, snapshot, replay.ActiveBeginHead)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)

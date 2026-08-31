@@ -5,13 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-// baseAdvanceRepo is the #2536 shape: main holds a.txt, feature branches off
-// it, and the attempt on feature will see main advance by a 500-line file and
-// a rewrite of a.txt line one while it runs.
+// baseAdvanceRepo is the #2536 shape: main holds a.txt and feature branches
+// off it; advanceMain then grows main by a 500-line file and a.txt line one.
 func baseAdvanceRepo(t *testing.T) (repo string, write func(name, content string)) {
 	t.Helper()
 	repo = initReviewCLIRepo(t)
@@ -39,6 +39,7 @@ func advanceMain(t *testing.T, repo string, write func(name, content string)) {
 	runReviewCLIGit(t, repo, "checkout", "-q", "feature")
 }
 
+// beginThenFinishPassed runs begin, between, and a passed finish; it returns the charge.
 func beginThenFinishPassed(t *testing.T, repo, change string, between func()) int {
 	t.Helper()
 	started := runSDDAttemptStatus(t, []string{
@@ -52,7 +53,7 @@ func beginThenFinishPassed(t *testing.T, repo, change string, between func()) in
 		"--outcome", "passed", "--evidence-revision", cliAttemptHash('a'), "--harness-disposition", "reused",
 		"--diagnosis", "focused checks passed", "--cleanup-evidence", "cleanup completed", "--process-evidence", "no descendants",
 	})
-	if len(finished.Attempts) != 1 || finished.DecisionRequired {
+	if len(finished.Attempts) != 1 {
 		t.Fatalf("finish CLI status = %#v", finished)
 	}
 	return finished.Attempts[0].ChangedLines
@@ -121,5 +122,66 @@ func TestRunSDDAttemptBeginRefusesZeroBudgets(t *testing.T) {
 	status := runSDDAttemptStatus(t, args)
 	if status.Objective == nil || status.Objective.MaxChangedLines != 200 || status.Objective.MaxAttempts != 2 {
 		t.Fatalf("absent budgets did not default: %#v", status.Objective)
+	}
+}
+
+// TestRunSDDAttemptFinishIgnoresRefsThatAreNotTheDefaultBranch pins that only
+// the default branch is a base: a branch at the attempt's own tip does not
+// subtract the attempt's committed work from the charge.
+func TestRunSDDAttemptFinishIgnoresRefsThatAreNotTheDefaultBranch(t *testing.T) {
+	repo, write := baseAdvanceRepo(t)
+	changed := beginThenFinishPassed(t, repo, "tmp-ref", func() {
+		write("authored.txt", strings.Repeat("authored line\n", 20))
+		runReviewCLIGit(t, repo, "add", "authored.txt")
+		runReviewCLIGit(t, repo, "commit", "-qm", "authored")
+		runReviewCLIGit(t, repo, "branch", "tmp")
+	})
+	if changed != 20 {
+		t.Fatalf("a non-default ref at the attempt tip changed the charge: changed_lines=%d", changed)
+	}
+}
+
+// TestRunSDDAttemptFinishChargesDetachedHeadLikeAttached pins that a detached
+// HEAD charges what the attached shape charges: the default-branch advance is
+// excluded and the attempt's own commit is charged.
+func TestRunSDDAttemptFinishChargesDetachedHeadLikeAttached(t *testing.T) {
+	repo, write := baseAdvanceRepo(t)
+	runReviewCLIGit(t, repo, "checkout", "-q", "--detach")
+	changed := beginThenFinishPassed(t, repo, "detached", func() {
+		advanceMain(t, repo, write)
+		runReviewCLIGit(t, repo, "checkout", "-q", "--detach", "feature")
+		runReviewCLIGit(t, repo, "merge", "-q", "--no-edit", "main")
+		write("authored.txt", strings.Repeat("authored line\n", 20))
+		runReviewCLIGit(t, repo, "add", "authored.txt")
+		runReviewCLIGit(t, repo, "commit", "-qm", "authored")
+		write("a.txt", "ONE\ntwo\nTHREE\n")
+	})
+	if changed != 22 {
+		t.Fatalf("detached HEAD charged differently from attached: changed_lines=%d", changed)
+	}
+}
+
+// TestRunSDDAttemptFinishDegradesToPlainChargeWhenObjectsAreUnwritable pins
+// that the exclusion never fails a settlement: when the object store refuses
+// the re-applied advance, Finish records the plain begin-tree charge (504)
+// instead of leaving the attempt active.
+func TestRunSDDAttemptFinishDegradesToPlainChargeWhenObjectsAreUnwritable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory write permissions do not restrict this process")
+	}
+	repo, write := baseAdvanceRepo(t)
+	objects := filepath.Join(repo, ".git", "objects")
+	lines := beginThenFinishPassed(t, repo, "unwritable", func() {
+		advanceMain(t, repo, write)
+		runReviewCLIGit(t, repo, "merge", "-q", "--no-edit", "main")
+		write("a.txt", "ONE\ntwo\nTHREE\n")
+		runReviewCLIGit(t, repo, "commit", "-qam", "authored")
+		if err := exec.Command("chmod", "-R", "a-w", objects).Run(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = exec.Command("chmod", "-R", "u+w", objects).Run() })
+	})
+	if lines != 504 {
+		t.Fatalf("unwritable objects did not degrade to the plain charge: changed_lines=%d", lines)
 	}
 }

@@ -561,8 +561,7 @@ func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int
 	if !ok {
 		return new(int)
 	}
-	// The optional budgets default at the flag, so an explicit zero reaches
-	// the ledger's range check instead of reading as "not given" (#1947).
+	// Budgets default at the flag so an explicit zero reaches the range check (#1947).
 	value := 0
 	switch name {
 	case "max-attempts":
