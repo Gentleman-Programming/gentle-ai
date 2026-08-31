@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -856,9 +857,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
-		if native.Decision.FrozenReviewing {
-			// Explicit reviewing resume keeps the immutable scope that the reviewer
-			// artifacts bind, rather than asking live workspace drift to select one.
+		// Explicit reviewing resume keeps the immutable scope that the reviewer
+		// artifacts bind, rather than asking live workspace drift to select one.
+		// The same holds when the live target still equals the frozen one: an
+		// exclude declaration froze no intended path, so it is indistinguishable
+		// from an undeclared scope and STATUS used to ask for it again on every
+		// re-entry (#3120). The reviewing authority already holds that decision.
+		if native.Decision.FrozenReviewing ||
+			native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.State == reviewtransaction.StateReviewing &&
+				native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact && !intendedScope.Declared {
 			intendedScope = reviewIntendedUntrackedScope{
 				Intended: append([]string{}, native.Projection.IntendedUntracked...), Declared: true,
 			}
@@ -1405,6 +1412,10 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 			return reviewUnchangedApprovedScopeRefusal(err, explicitCwd, *predecessor, *expected, *successor)
 		case reviewtransaction.RecoveryPredecessorNotInvalidated(err):
 			return reviewNotInvalidatedPredecessorRefusal(err, explicitCwd, *predecessor, *expected, *successor, predecessorRecord.State.State)
+		case errors.Is(err, reviewtransaction.ErrCompactRecoveryAuthorizationInexact) && authorizationProvided:
+			if _, derivable := reviewSelfRecoveryShapeForRecover(predecessorRecord.State.State, snapshot.Identity != predecessorRecord.State.InitialSnapshot.Identity); derivable {
+				return reviewInexactRecoveryAuthorizationRefusal(err, *predecessor, *expected, *successor, *disposition, reviewRecoverSelectorTokens(flags))
+			}
 		}
 		return err
 	}
@@ -1427,6 +1438,39 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 func reviewUnchangedRecoveryRefusal(cause error, cwd, predecessor, expected, successor, disposition string) error {
 	return fmt.Errorf("%w: the candidate is byte-identical to the escalated predecessor, so this successor would carry the exact content whose verification failed and there is nothing to re-review; change the candidate first (apply the fix that verification asked for, and stage it if you review the staged projection), then re-run: %s",
 		cause, reviewRecoverCommand(cwd, predecessor, expected, successor, disposition))
+}
+
+// reviewInexactRecoveryAuthorizationRefusal explains why a supplied
+// maintainer authorization did not bind and names what runs (#3099, #2910).
+//
+// The refusal stays exactly as strict: a binding is accepted only when it names
+// the successor target this command derived, and that target follows the
+// selectors given to this command, not the ones a status query was given. What
+// it never said is the shape a binding has, or that this recovery shape does
+// not need one: the command derives actor, reason, and binding itself, so the
+// continuation is the same invocation without the three flags. This refusal is
+// relayed verbatim into machine envelopes, so it stays path-free and the
+// continuation runs with the repository as the working directory.
+func reviewInexactRecoveryAuthorizationRefusal(cause error, predecessor, expected, successor, disposition string, selectors []string) error {
+	return fmt.Errorf("%w: an accepted binding is the LF-joined text `gentle-ai.review-recovery-authorization/v1` followed by one key=value line each for predecessor_lineage, predecessor_revision, target_identity (the successor target this command derived, echoed above), actor, and reason; a target derived by a status query with different selectors never binds here. This recovery shape derives its own binding, so omit --maintainer-authorization, --actor, and --reason and, with the repository as the working directory, re-run: %s",
+		cause, strings.Join(append([]string{reviewRecoverCommand("", predecessor, expected, successor, disposition)}, selectors...), " "))
+}
+
+// reviewRecoverSelectorTokens re-renders the target selectors this recover was
+// given, so a printed re-run derives the same successor target.
+func reviewRecoverSelectorTokens(flags *flag.FlagSet) []string {
+	tokens := []string{}
+	flags.Visit(func(value *flag.Flag) {
+		switch value.Name {
+		case "projection", "base-ref", "committed-only", "workspace-overlay", "release-scope", "untracked-scope", "expected-untracked-inventory":
+			tokens = append(tokens, "--"+value.Name+"="+value.Value.String())
+		case "intended-untracked":
+			for _, path := range *value.Value.(*reviewRepeatedPathFlag) {
+				tokens = append(tokens, "--intended-untracked="+path)
+			}
+		}
+	})
+	return tokens
 }
 
 // reviewRecoverCommand renders one literal `gentle-ai review recover`
