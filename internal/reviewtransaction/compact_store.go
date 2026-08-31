@@ -213,7 +213,7 @@ type CompactAtomicStartConflictError struct {
 }
 
 func (err *CompactAtomicStartConflictError) Error() string {
-	return fmt.Sprintf("compact atomic START conflicts with active lineage %q at %s", err.LineageID, err.Field)
+	return fmt.Sprintf("compact atomic START conflicts with active lineage %q on immutable field %q", err.LineageID, err.Field)
 }
 
 // CompactAtomicStartCorruptionError reports an unreadable exact compact

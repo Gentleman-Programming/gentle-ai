@@ -146,7 +146,7 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
-		"fixtures/start-v4.fixture.json":          "1e91073e93ba93c433da7459bd984a74993484ba10d5bba069d7d436f1e8fb12",
+		"fixtures/start-v4.fixture.json":          "3f7c22b53a68d78a18f79bc41aebe105bcef2e8398d53537a74457f8ab888ae7",
 		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
 		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
 	}
@@ -175,7 +175,9 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
-		"schemas/transition-execution.schema.json":   "1294235c146a1cd61043b194fff65cc3fabc486dd76241463609b4c9333d05d0",
+		// issue #3932: start_status_execution carries the --cwd row START
+		// received, so the re-entry binds its repository from any process cwd.
+		"schemas/transition-execution.schema.json":   "31e75dc5866d1a40fd40cb1a6971b183df3b805220351573dc094eabf4a45007",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {

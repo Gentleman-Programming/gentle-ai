@@ -99,8 +99,13 @@
     "reason_code": "review_status_required",
     "execute": {
       "operation": "review.status",
-      "command": "gentle-ai review status --contract=gentle-ai.review-integration/v2 --next-transition=true --lineage=review-start-fixture --projection=workspace",
+      "command": "gentle-ai review status --cwd=/workspace/repository --contract=gentle-ai.review-integration/v2 --next-transition=true --lineage=review-start-fixture --projection=workspace",
       "arguments": [
+        {
+          "name": "cwd",
+          "value": "/workspace/repository",
+          "token": "--cwd=/workspace/repository"
+        },
         {
           "name": "contract",
           "value": "gentle-ai.review-integration/v2",

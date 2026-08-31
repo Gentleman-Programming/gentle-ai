@@ -398,7 +398,19 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".gentle-ai", "review-contexts")); !os.IsNotExist(err) {
 		t.Fatalf("START persisted a retired repository-context locator: %v", err)
 	}
-	if bytes.Contains(first.Bytes(), []byte(repo)) || bytes.Contains(first.Bytes(), []byte(filepath.Join(repo, ".git"))) {
+	// The repository context stays opaque: the only repository path a
+	// reviewing START publishes is the --cwd binding of its own review.status
+	// re-entry (issue #3932), never a context locator.
+	var published map[string]json.RawMessage
+	if err := json.Unmarshal(first.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	delete(published, "next_transition")
+	withoutContinuation, err := json.Marshal(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(withoutContinuation, []byte(repo)) || bytes.Contains(withoutContinuation, []byte(filepath.Join(repo, ".git"))) {
 		t.Fatalf("negotiated START leaked a repository path: %s", first.String())
 	}
 	root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), repo, started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{

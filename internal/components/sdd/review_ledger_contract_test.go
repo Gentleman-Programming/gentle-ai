@@ -706,8 +706,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// when #3946 made review acknowledge-approved print its
 		// gentle-ai.review-acknowledged/v1 envelope and the contract told
 		// orchestrators to report the burn from it. Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_813, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_158, maxCharacters: 30_063},
+		// +42 per case (15_813 -> 15_855 / 28_158 -> 28_200) when #3928 named
+		// the root status `action` field informational: callers route only on
+		// next_transition. Deliberate, not drift; the ceilings are unchanged.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_855, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_200, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

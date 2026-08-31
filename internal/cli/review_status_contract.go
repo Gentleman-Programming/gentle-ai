@@ -1333,10 +1333,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		// re-entry must be mechanically executable, so every argument row is a
 		// real tokenized flag and the scope selectors echo byte-identically in
 		// selector_arguments — a consumer replays them without re-deriving any
-		// spelling. It never carries --cwd: a negotiated START payload
-		// publishes no filesystem path, and the caller runs the command in the
-		// repository it already holds.
-		required := []string{"contract", "next-transition", "lineage"}
+		// spelling. It carries the --cwd START received (issue #3932) so the
+		// re-entry binds that repository from any process cwd.
+		required := []string{"cwd", "contract", "next-transition", "lineage"}
 		if _, present := arguments["agent"]; present {
 			required = append(required, "agent")
 		}
@@ -1360,7 +1359,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			(!hasProjection || projection == string(reviewtransaction.ProjectionStaged))
 		currentScope := !hasBase && !hasCommitted && !hasOverlay && hasProjection && validProjection
 		if !exact(required, wantSelectors) || !committedScope && !overlayScope && !currentScope ||
-			arguments["contract"] != ReviewIntegrationContractV2 || arguments["next-transition"] != "true" ||
+			arguments["cwd"] == "" || arguments["contract"] != ReviewIntegrationContractV2 || arguments["next-transition"] != "true" ||
 			arguments["lineage"] != execution.Binding.LineageID || hasBase && !validReviewGitTree(base) ||
 			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateReviewing)}) {
 			return errors.New("review status transition binding is invalid") // refusal:by-design world-action: only a provider code fix can bind the exact reviewing re-entry

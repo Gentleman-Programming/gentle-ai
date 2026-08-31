@@ -755,25 +755,29 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		selectedBaseRef := strings.TrimSpace(*baseRef)
 		selectedBaseTree := strings.TrimSpace(*baseTree)
+		// Issue #3935: a selector combination STATUS cannot honor is the
+		// caller's request to correct, so each refusal is typed invalid_request
+		// with its cause; a bare error collapsed into the read-only catch-all
+		// whose "retry" could never succeed.
 		if *committedOnly && (selectedBaseRef == "" || *workspaceOverlay) {
-			return errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+			return reviewPreflightError(errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`"))
 		}
 		if selectedBaseRef != "" && committedOnlyProvided && !*committedOnly && !*workspaceOverlay {
-			return errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+			return reviewPreflightError(errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`"))
 		}
 		stagedRecoveryOverlay := *workspaceOverlay && selectedProjection == reviewtransaction.ProjectionStaged
 		if *workspaceOverlay && stagedRecoveryOverlay && (selectedBaseRef == "" || selectedBaseTree != "") {
-			return errors.New("staged --workspace-overlay requires exactly --base-ref")
+			return reviewPreflightError(errors.New("review status --workspace-overlay --projection staged requires exactly --base-ref and no --base-tree; rerun `gentle-ai review status --base-ref <ref> --workspace-overlay --projection staged`"))
 		}
 		if *workspaceOverlay && !stagedRecoveryOverlay &&
 			((selectedBaseRef == "") == (selectedBaseTree == "") || selectedProjection != reviewtransaction.ProjectionWorkspace) {
-			return errors.New("--workspace-overlay requires exactly one of --base-ref or --base-tree with workspace projection")
+			return reviewPreflightError(errors.New("review status --workspace-overlay requires exactly one of --base-ref or --base-tree with --projection workspace; rerun `gentle-ai review status --base-ref <ref> --workspace-overlay`"))
 		}
 		if !*workspaceOverlay && selectedBaseTree != "" {
-			return errors.New("--base-tree requires --workspace-overlay")
+			return reviewPreflightError(errors.New("review status --base-tree requires --workspace-overlay; rerun `gentle-ai review status --base-tree <tree> --workspace-overlay`"))
 		}
 		if selectedBaseTree != "" && !validReviewGitTree(selectedBaseTree) {
-			return errors.New("--base-tree requires an exact Git tree object ID")
+			return reviewPreflightError(errors.New("review status --base-tree requires an exact Git tree object ID; rerun `gentle-ai review status --base-tree <tree> --workspace-overlay` with the frozen tree ID"))
 		}
 		root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 		if err != nil {
@@ -1880,7 +1884,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// verbatim instead of hand-assembling selectors the CLI would refuse.
 		var nextTransition *ReviewNextTransition
 		if *contract == ReviewIntegrationContractV2 {
-			nextTransition = reviewStartStatusContinuation(record.State, record.State.CapturePhaseRevision, model.AgentID(strings.TrimSpace(*runtimeAgent)))
+			nextTransition = reviewStartStatusContinuation(root, record.State, record.State.CapturePhaseRevision, model.AgentID(strings.TrimSpace(*runtimeAgent)))
 		}
 		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, repositoryContext, nextTransition, *contract)
 		if err != nil {

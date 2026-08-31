@@ -212,7 +212,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 	bindingTarget := status.TargetIdentity
 	if status.Authority.State == reviewtransaction.StateValidating || status.Authority.State == reviewtransaction.StateCorrectionRequired ||
-		status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+		status.Authority.State == reviewtransaction.StateApproved && input.Acknowledgement != nil {
 		// Correction-plan capture is bound to the severe reviewer event's frozen
 		// candidate, never to a live correction candidate STATUS may be
 		// projecting. Targeted validation replaces this value with its own
@@ -224,7 +224,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	if status.Authority.CapturePhaseRevision != "" {
 		captureBinding.Revision = status.Authority.CapturePhaseRevision
 	}
-	if status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+	// The pending acknowledgement is the lineage's own next step, not a v2
+	// feature (issue #3940): gating it on the contract sent every v1 caller to
+	// native_stop_required one step before the burn it was asked to perform.
+	if status.Authority.State == reviewtransaction.StateApproved && input.Acknowledgement != nil {
 		acknowledgement := *input.Acknowledgement
 		if acknowledgement.LineageID != binding.LineageID || acknowledgement.TargetIdentity != binding.TargetIdentity || acknowledgement.ExpectedRevision != binding.Revision {
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
@@ -633,11 +636,13 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 // invocation for the frozen scope, rendered from frozen authority facts
 // rather than a caller's remembered selector spelling. Its scope selectors
 // are echoed as byte-identical tokenized rows in selector_arguments so a
-// consumer replays them without re-deriving any spelling. It deliberately
-// carries no --cwd token: a negotiated START payload publishes no filesystem
-// path, and the caller runs the command in the repository it already holds.
-func reviewStartStatusContinuation(state reviewtransaction.CompactState, revision string, runtime model.AgentID) *ReviewNextTransition {
+// consumer replays them without re-deriving any spelling. It carries the
+// --cwd START received (issue #3932), exactly as the START and acknowledgement
+// emissions do: without it a caller whose process cwd is another repository
+// silently preflights that repository instead of resuming this lineage.
+func reviewStartStatusContinuation(repo string, state reviewtransaction.CompactState, revision string, runtime model.AgentID) *ReviewNextTransition {
 	arguments := []ReviewTransitionArgument{
+		{Name: "cwd", Value: repo},
 		{Name: "contract", Value: ReviewIntegrationContractV2},
 		{Name: "next-transition", Value: "true"},
 		{Name: "lineage", Value: state.LineageID},
