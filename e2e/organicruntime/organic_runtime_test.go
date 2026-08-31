@@ -729,7 +729,15 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 		t.Fatalf("OpenCode version = %q, want %q (error %v)", strings.TrimSpace(string(version)), pinnedOpenCodeVersion, err)
 	}
 
-	harness := newOrganicHarness(t)
+	host := newOrganicHarness(t)
+	target := filepath.Join(t.TempDir(), "opencode-review-target")
+	if _, err := organicGitOutput(t.Context(), host.repo.worktree, "worktree", "add", "--quiet", "-b", "opencode-runtime-target", target, "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = organicGitOutput(context.Background(), host.repo.worktree, "worktree", "remove", "--force", target)
+	})
+	harness := &organicHarness{t: t, repo: organicRepository{worktree: target}, home: host.home}
 	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
 	const lineage = "opencode-current-session-poison"
 	_ = organicProviderStart(t, harness, lineage, "opencode")
@@ -910,8 +918,8 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.CommandContext(context, wrapper, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
-	command.Dir = harness.repo.worktree
+	command := exec.CommandContext(context, wrapper, "run", "--format", "json", "--dir", host.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
+	command.Dir = host.repo.worktree
 	command.Env = append(harness.environment(),
 		"OPENCODE_CONFIG_DIR="+configDirectory,
 		"OPENCODE_CONFIG_CONTENT="+string(config),
@@ -955,6 +963,9 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 	harness.assertReviewAcknowledgedAndBurned(lineage, organicFinalizeResult{
 		LineageID: lineage, State: organicStateApproved, Acknowledgement: acknowledgement,
 	})
+	if status := organicProviderStatus(t, host, lineage, "opencode"); status.Authority.LineageID != "" {
+		t.Fatalf("A-hosted OpenCode transport retained B authority: %#v", status.Authority)
+	}
 }
 
 // TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently exercises the real

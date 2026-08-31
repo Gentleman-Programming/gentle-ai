@@ -428,6 +428,59 @@ func ResolveReviewRepositoryContextBinding(ctx context.Context, repo, handle str
 	return root, resolved, nil
 }
 
+// ResolveReviewRepositoryContextBindingFromHost resolves a provider-issued rctx2
+// handle from the host worktree that launched a review task. It searches only
+// Git-registered worktrees that share the host's common directory; no
+// caller-authored target path participates in this discovery.
+func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil || !validReviewRepositoryContextV2Handle(handle) {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	hostLease, err := OpenRepositoryIdentityLease(ctx, host)
+	if err != nil || hostLease.Validate(ctx) != nil {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	hostIdentity := hostLease.Identity()
+	worktrees, err := linkedWorktreeDirectories(ctx, hostIdentity.RepositoryRoot)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
+	}
+
+	type match struct {
+		root    string
+		binding ReviewRepositoryContextBinding
+	}
+	var matches []match
+	for _, worktree := range worktrees {
+		lease, err := OpenRepositoryIdentityLease(ctx, worktree)
+		if err != nil || lease.Validate(ctx) != nil {
+			return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		}
+		identity := lease.Identity()
+		if identity.GitCommonDir != hostIdentity.GitCommonDir {
+			continue
+		}
+		root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, identity.RepositoryRoot, handle, binding)
+		if err != nil {
+			continue
+		}
+		duplicate := false
+		for _, existing := range matches {
+			duplicate = existing.root == root
+			if duplicate {
+				break
+			}
+		}
+		if !duplicate {
+			matches = append(matches, match{root: root, binding: resolved})
+		}
+	}
+	if err := hostLease.Validate(ctx); err != nil || len(matches) != 1 {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	}
+	return matches[0].root, matches[0].binding, nil
+}
+
 func resolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
 	if !strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix) {
 		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2

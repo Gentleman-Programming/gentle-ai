@@ -312,47 +312,25 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
-	// The transport runs inside the repository it reviews, and it takes no
-	// flags, so the process cwd is the independent source the provider-issued
-	// context digest is checked against.
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: "."}).ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
-	}
-	store, record, err := discoverCompactFacadeReview(ctx, root, binding.LineageID, false)
-	if err != nil {
-		// A host frame naming a lineage this repository does not hold is a
-		// tampered binding, not an unavailable materialization.
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lineage does not match live compact review authority")
-	}
 	requested := reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
 	}
-	contextBinding, contextErr := requested, error(nil)
-	if _, resolved, err := reviewtransaction.ResolveReviewRepositoryContextBinding(ctx, root, binding.RepositoryContext, requested); err == nil {
-		contextBinding = resolved
-	} else {
-		// The digest commits to one exact repository and binding, so a mismatch
-		// is a tampered frame. Let the binding validator below name the field
-		// the live authority disagrees with instead of collapsing every tamper
-		// into one generic materialization failure.
-		contextErr = err
-		contextBinding = reviewtransaction.ReviewRepositoryContextBinding{
-			LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity,
-			Revision: record.State.CapturePhaseRevision,
-		}
-		if record.State.State != reviewtransaction.StateReviewing {
-			contextBinding.TargetIdentity = record.State.CurrentSnapshot.Identity
-		}
+	// OpenCode exposes the host process cwd but not the Task target cwd. Resolve
+	// the opaque binding only through Git's registered sibling worktrees, then
+	// keep all authority, materialization, and capture operations on that root.
+	root, contextBinding, err := reviewtransaction.ResolveReviewRepositoryContextBindingFromHost(ctx, ".", binding.RepositoryContext, requested)
+	if err != nil {
+		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
+	}
+	store, record, err := discoverCompactFacadeReview(ctx, root, binding.LineageID, false)
+	if err != nil {
+		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lineage does not match live compact review authority")
 	}
 	if err := validateReviewProviderTaskAuthorityBinding(ReviewTransitionBinding{
 		LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
 		RepositoryContext: binding.RepositoryContext,
 	}, contextBinding, record); err != nil {
 		return openCodeTransportSession{}, err
-	}
-	if contextErr != nil {
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
 	}
 	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 		return openCodeTransportSession{}, openCodeTransportAuthorityUnavailable(err)
