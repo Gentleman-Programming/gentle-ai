@@ -75,8 +75,14 @@ var (
 	// continuation: the reset it refers to needs six flags the message never
 	// listed, and it is itself refused when the candidate has not drifted.
 	ErrRuntimeObjectiveChange = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone   = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
-	ErrRuntimeNoObjective     = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeObjectiveDone names the successor route (#3884): a complete
+	// objective continues through acquire with a different --work-unit, and
+	// rescope refuses it, so pointing at status alone left callers circling.
+	ErrRuntimeObjectiveDone = errors.New("SDD runtime objective is complete; it continues through a successor objective, so run " +
+		"`gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id \"<unique-request-id>\" --work-unit \"<a different label>\" " +
+		"--evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>` with a different --work-unit (rescope applies only " +
+		"to an objective that is not complete); " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeResetNotAllowed named a STATE and no continuation, which is the
 	// same defect class as the sentinels above: an operator holding it knows
 	// what is refused and not one command that moves. The state it named was
@@ -1521,6 +1527,11 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 		objective := status.Objective
 		if objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
+		}
+		// A complete objective is refused by the sentinel that names its
+		// successor (#3884), not by the generic structural refusal.
+		if status.Complete {
+			return runtimeRecord{}, ErrRuntimeObjectiveDone
 		}
 		if !runtimeObjectiveRescopeStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
