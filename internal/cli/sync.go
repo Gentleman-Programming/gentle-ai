@@ -1562,6 +1562,9 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		persistedPersona = persistedState.Persona
 		applyResolvedPersona(&selection, persistedPersona)
 	}
+	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
+		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, persistedState, selection.SDDMode)
+	}
 
 	// Migrate a persisted legacy alias BEFORE any early return: a no-agent
 	// no-op sync and a failing pipeline must still leave state.json remapped,
@@ -1799,11 +1802,7 @@ func RunSync(args []string) (SyncResult, error) {
 		selection.KiroModelAssignments = m
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
-		m := make(map[string]model.ModelAssignment, len(persistedState.ModelAssignments))
-		for k, v := range persistedState.ModelAssignments {
-			m[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
-		}
-		selection.ModelAssignments = m
+		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, persistedState, selection.SDDMode)
 	}
 	if selection.CodexOrchestratorAssignment == nil && persistedState.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(persistedState.CodexOrchestratorAssignment)
@@ -1888,6 +1887,34 @@ func RunSync(args []string) (SyncResult, error) {
 	}
 	result.DryRun = false
 	return result, nil
+}
+
+func restoreOpenCodeModelAssignmentsFromState(homeDir string, persistedState state.InstallState, sddMode model.SDDModeID) map[string]model.ModelAssignment {
+	if len(persistedState.ModelAssignments) == 0 {
+		return nil
+	}
+	presence := map[string]opencodeactivation.AssignmentPresence{}
+	settingsPath := effectiveOpenCodeSettingsPath(homeDir, opencodeagent.NewAdapter())
+	if settingsPath != "" {
+		if _, err := os.Stat(settingsPath); err == nil {
+			snapshot, err := opencodeactivation.ResolveEffectiveConfig(filepath.Dir(settingsPath))
+			if err == nil && snapshot.Path == settingsPath {
+				presence = snapshot.Assignments
+			}
+		}
+	}
+
+	assignments := make(map[string]model.ModelAssignment, len(persistedState.ModelAssignments))
+	for k, v := range persistedState.ModelAssignments {
+		if current, exists := presence[k]; exists && current.Present && (!current.Cleared || sddMode == model.SDDModeMulti) {
+			continue
+		}
+		assignments[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
+	}
+	if len(assignments) == 0 {
+		return nil
+	}
+	return assignments
 }
 
 // zeroAgentSyncNoOp reports whether a sync without agents has no compatible

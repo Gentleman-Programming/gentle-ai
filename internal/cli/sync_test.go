@@ -885,6 +885,139 @@ func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	}
 }
 
+func TestRunSyncPreservesCurrentOpenCodeAssignmentOverStaleState(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`// effective user config
+{
+  "agent": {
+    "sdd-apply": {
+      "mode": "subagent",
+      "model": "anthropic/claude-current",
+      "variant": "high"
+    }
+  },
+}
+`))
+	persisted := state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentSDD},
+		SDDMode:             model.SDDModeMulti,
+		Persona:             string(model.PersonaNeutral),
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+		},
+	}
+	if err := state.Write(home, persisted); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	changedFiles := []string{}
+	step := componentSyncStep{
+		component: model.ComponentSDD,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		selection: model.Selection{
+			SDDMode:          model.SDDModeMulti,
+				ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
+		},
+		changedFiles: &changedFiles,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	if !containsPath(changedFiles, settingsPath) {
+		t.Fatalf("ChangedFiles = %v, want effective opencode.jsonc", changedFiles)
+	}
+	settings := readOpenCodeAgentMap(t, settingsPath)
+	applyAgent := settings["sdd-apply"].(map[string]any)
+	if got := applyAgent["model"]; got != "anthropic/claude-current" {
+		t.Fatalf("sdd-apply model = %v, want current OpenCode assignment", got)
+	}
+	if got := applyAgent["variant"]; got != "high" {
+		t.Fatalf("sdd-apply variant = %v, want high", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("sync must not create opencode.json when opencode.jsonc is effective; stat err = %v", err)
+	}
+}
+
+func TestRunSyncPreservesClearedOpenCodeAssignmentOverStaleState(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`// effective user config
+{
+  "model": "openai/gpt-root",
+  "agent": {
+    "sdd-apply": {
+      "mode": "subagent"
+    }
+  },
+}
+`))
+	persisted := state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentSDD},
+		SDDMode:             model.SDDModeMulti,
+		Persona:             string(model.PersonaNeutral),
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+		},
+	}
+	if err := state.Write(home, persisted); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	changedFiles := []string{}
+	step := componentSyncStep{
+		component: model.ComponentSDD,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		selection: model.Selection{
+			SDDMode:          model.SDDModeMulti,
+				ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
+		},
+		changedFiles: &changedFiles,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	settings := readOpenCodeAgentMap(t, settingsPath)
+	applyAgent := settings["sdd-apply"].(map[string]any)
+	if _, exists := applyAgent["model"]; exists {
+		t.Fatalf("cleared sdd-apply assignment was restored from stale state: %v", applyAgent)
+	}
+	initAgent := settings["sdd-init"].(map[string]any)
+	if got := initAgent["model"]; got != "openai/gpt-root" {
+		t.Fatalf("new SDD agent model = %v, want root model fallback to still apply", got)
+	}
+}
+
+func readOpenCodeAgentMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v\n%s", path, err, content)
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing agent map: %v", path, root)
+	}
+	return agents
+}
+
 func TestSyncRollbackRestoresOpenCodeSettingsAfterManagedToolsCleanup(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")

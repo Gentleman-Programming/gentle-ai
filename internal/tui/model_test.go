@@ -1429,6 +1429,24 @@ func withModelPickerSettingsPath(t *testing.T, settingsPath string) {
 	})
 }
 
+func withModelPickerWorkingDir(t *testing.T, dir string) {
+	t.Helper()
+	originalWorkingDir := modelPickerWorkingDir
+	modelPickerWorkingDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() {
+		modelPickerWorkingDir = originalWorkingDir
+	})
+}
+
+func withModelPickerCatalogDiscoverer(t *testing.T, discover screens.RuntimeCatalogDiscoverer) {
+	t.Helper()
+	originalDiscoverer := modelPickerCatalogDiscoverer
+	modelPickerCatalogDiscoverer = discover
+	t.Cleanup(func() {
+		modelPickerCatalogDiscoverer = originalDiscoverer
+	})
+}
+
 // TestSDDModeMultiShowsRuntimeModelPicker verifies that selecting SDDModeMulti
 // opens the runtime model picker before catalog discovery completes.
 func TestSDDModeMultiShowsRuntimeModelPicker(t *testing.T) {
@@ -1477,6 +1495,65 @@ func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
 	}
 	if state.Selection.ModelAssignments != nil {
 		t.Fatalf("ModelAssignments = %v, want nil defaults", state.Selection.ModelAssignments)
+	}
+}
+
+func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.jsonc")
+	settings := `{
+  // Custom provider configured only in the effective OpenCode file.
+  "provider": {
+    "custom-cloud": {
+      "name": "Custom Cloud",
+      "models": {
+        "custom-reasoner": {
+          "name": "Custom Reasoner",
+          "tool_call": true,
+        },
+      },
+    },
+  },
+}`
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
+		t.Fatalf("write opencode.jsonc: %v", err)
+	}
+	withModelPickerWorkingDir(t, dir)
+	withModelPickerCatalogDiscoverer(t, func(_ context.Context, projectDir string) (map[string]opencode.Provider, error) {
+		if projectDir != dir {
+			t.Fatalf("projectDir = %q, want %q", projectDir, dir)
+		}
+		return map[string]opencode.Provider{
+			"runtime-ai": {ID: "runtime-ai", Name: "Runtime AI", Models: map[string]opencode.Model{
+				"runtime-tool": {ID: "runtime-tool", Name: "Runtime Tool", ToolCall: true},
+			}},
+		}, nil
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 1
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("screen = %v, want ScreenModelPicker", state.Screen)
+	}
+	if cmd == nil {
+		t.Fatal("Configure OpenCode models did not start runtime catalog discovery")
+	}
+
+	updated, _ = state.Update(cmd())
+	state = updated.(Model)
+	entries := screens.ProviderEntries(state.ModelPicker)
+	gotProviders := make(map[string]int, len(entries))
+	for _, entry := range entries {
+		gotProviders[entry.ID] = entry.ModelCount
+	}
+	if gotProviders["runtime-ai"] != 1 || gotProviders["custom-cloud"] != 1 {
+		t.Fatalf("provider entries = %+v, want runtime-ai and custom-cloud with one selectable model each", entries)
+	}
+	if got := state.ModelPicker.SDDModels["custom-cloud"][0].ID; got != "custom-reasoner" {
+		t.Fatalf("custom-cloud selectable model = %q, want custom-reasoner", got)
 	}
 }
 

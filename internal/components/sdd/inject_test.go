@@ -3401,6 +3401,69 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeWritesExistingJSONCConfig(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	configDir := filepath.Join(home, ".config", "opencode")
+	jsoncPath := filepath.Join(configDir, "opencode.jsonc")
+	jsonPath := filepath.Join(configDir, "opencode.json")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(config dir) error = %v", err)
+	}
+	seed := `// user-owned OpenCode config
+{
+  "username": "jsonc-user",
+  "agent": {
+    "sdd-apply": {
+      "mode": "subagent"
+    }
+  },
+}
+`
+	if err := os.WriteFile(jsoncPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.jsonc) error = %v", err)
+	}
+
+	result, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		OpenCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Inject(opencode jsonc) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(opencode jsonc) changed = false")
+	}
+	if _, err := os.Stat(jsonPath); !os.IsNotExist(err) {
+		t.Fatalf("Inject must not create opencode.json when opencode.jsonc is effective; stat err = %v", err)
+	}
+
+	content, err := os.ReadFile(jsoncPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.jsonc) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(updated opencode.jsonc) error = %v\n%s", err, content)
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.jsonc missing agent map")
+	}
+	applyAgent, ok := agents["sdd-apply"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode.jsonc missing sdd-apply agent: %v", agents)
+	}
+	if got := applyAgent["model"]; got != "openai/gpt-5-mini" {
+		t.Fatalf("sdd-apply model = %v, want openai/gpt-5-mini", got)
+	}
+	if root["username"] != "jsonc-user" {
+		t.Fatalf("updated opencode.jsonc lost existing username: %v", root)
+	}
+}
+
 func TestInjectOpenCodeMultiModeWithCustomAgentModelAssignment(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()

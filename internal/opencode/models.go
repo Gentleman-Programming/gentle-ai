@@ -43,6 +43,7 @@ type Model struct {
 type Provider struct {
 	ID     string           `json:"id"`
 	Name   string           `json:"name"`
+	URL    string           `json:"url,omitempty"`
 	Models map[string]Model `json:"models"`
 }
 

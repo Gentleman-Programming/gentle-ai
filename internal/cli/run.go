@@ -2218,7 +2218,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(targetDir))...)
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if p := adapter.SettingsPath(targetDir); p != "" {
+				if p := effectiveOpenCodeSettingsPath(targetDir, adapter); p != "" {
 					paths = append(paths, p, opencodedefault.OwnershipPath(p))
 				}
 				paths = append(paths, openCodeSDDPluginPaths(adapter, targetDir)...)
@@ -2367,6 +2367,20 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 	}
 
 	return paths
+}
+
+func effectiveOpenCodeSettingsPath(targetDir string, adapter agents.Adapter) string {
+	settingsPath := adapter.SettingsPath(targetDir)
+	if adapter.Agent() != model.AgentOpenCode || settingsPath == "" {
+		return settingsPath
+	}
+	for _, name := range []string{"opencode.jsonc", "opencode.json"} {
+		candidate := filepath.Join(filepath.Dir(settingsPath), name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return settingsPath
 }
 
 func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {

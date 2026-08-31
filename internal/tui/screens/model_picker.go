@@ -78,13 +78,14 @@ type ModelPickerRow struct {
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers         map[string]opencode.Provider
-	AvailableIDs      []string                    // provider IDs with tool_call-capable models
-	SDDModels         map[string][]opencode.Model // provider ID -> SDD-capable models
-	ConfigWarning     string
-	CatalogStatus     RuntimeCatalogStatus
-	CatalogRequestID  uint64
-	CatalogProjectDir string
+	Providers           map[string]opencode.Provider
+	ConfiguredProviders map[string]opencode.Provider
+	AvailableIDs        []string                    // provider IDs with tool_call-capable models
+	SDDModels           map[string][]opencode.Model // provider ID -> SDD-capable models
+	ConfigWarning       string
+	CatalogStatus       RuntimeCatalogStatus
+	CatalogRequestID    uint64
+	CatalogProjectDir   string
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -162,7 +163,7 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 			state.CatalogStatus = RuntimeCatalogFailed
 			return state
 		}
-		state.Providers = discovery.Providers
+		state.Providers = opencode.MergeConfiguredCatalog(discovery.Providers, state.ConfiguredProviders)
 		state.refreshRuntimeModels()
 		state.CatalogStatus = RuntimeCatalogReady
 		if len(state.AvailableIDs) == 0 {

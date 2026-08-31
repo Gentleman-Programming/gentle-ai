@@ -4949,14 +4949,26 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 func (m *Model) initializeModelPicker() tea.Cmd {
 	m.runtimeCatalogDiscoveryRequest++
 	requestID := m.runtimeCatalogDiscoveryRequest
-	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
 	projectDir, err := modelPickerWorkingDir()
 	if err != nil {
+		m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
 		m.ModelPicker.CatalogRequestID = requestID
 		return func() tea.Msg {
 			return screens.RuntimeCatalogDiscoveryMsg{RequestID: requestID, Err: errors.New("working directory unavailable")}
 		}
 	}
+	settingsPath := modelPickerSettingsPath()
+	var configuredProviders map[string]opencode.Provider
+	if snapshot, err := opencode.ResolveEffectiveConfig(projectDir); err == nil {
+		configuredProviders = snapshot.Providers
+		if snapshot.Path != "" {
+			settingsPath = snapshot.Path
+		} else if snapshot.WritePath != "" {
+			settingsPath = snapshot.WritePath
+		}
+	}
+	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(settingsPath, modelPickerCatalogDiscoverer)
+	m.ModelPicker.ConfiguredProviders = configuredProviders
 	return m.ModelPicker.StartRuntimeCatalogDiscovery(requestID, projectDir)
 }
 

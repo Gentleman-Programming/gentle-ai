@@ -385,7 +385,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	var defaultPlan *opencodedefault.InstallPlan
 	if adapter.Agent() == model.AgentOpenCode {
 		var err error
-		defaultPlan, err = opencodedefault.PrepareInstall(adapter.SettingsPath(homeDir))
+		defaultPlan, err = opencodedefault.PrepareInstall(openCodeSettingsPath(homeDir, adapter))
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -544,7 +544,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-		settingsPath := adapter.SettingsPath(homeDir)
+		settingsPath := openCodeSettingsPath(homeDir, adapter)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
@@ -854,7 +854,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// opposite failure mode can also occur (in-memory buffer stale but
 	// disk has the correct content).
 	if adapter.Agent() == model.AgentOpenCode {
-		settingsPath := adapter.SettingsPath(homeDir)
+		settingsPath := openCodeSettingsPath(homeDir, adapter)
 		settingsText := string(mergedSettingsBytes)
 
 		// Fallback: if in-memory bytes are empty but the merge succeeded
@@ -928,6 +928,20 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func openCodeSettingsPath(homeDir string, adapter agents.Adapter) string {
+	settingsPath := adapter.SettingsPath(homeDir)
+	if adapter.Agent() != model.AgentOpenCode || settingsPath == "" {
+		return settingsPath
+	}
+	for _, name := range []string{"opencode.jsonc", "opencode.json"} {
+		candidate := filepath.Join(filepath.Dir(settingsPath), name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return settingsPath
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -2281,8 +2295,8 @@ func openCodeSettingsHasShare(settingsPath string) bool {
 		return false
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(content, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
 		return false
 	}
 	_, exists := root["share"]
@@ -3082,8 +3096,8 @@ func readOpenCodeRootModel(path string) (string, error) {
 		return "", fmt.Errorf("read opencode root model from %q: %w", path, err)
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return "", nil
 	}
 
@@ -3104,8 +3118,8 @@ func readExistingAgentModels(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("read existing agent keys from %q: %w", path, err)
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return map[string]bool{}, nil
 	}
 
