@@ -84,37 +84,21 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	}
 }
 
-func TestReviewCapabilitiesV23MatchesConformanceFixture(t *testing.T) {
+func TestReviewCapabilitiesV23ArtifactRemainsReadable(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.3.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(t.TempDir(), "gentle-ai-fixture")
-	if err := os.WriteFile(executable, []byte(capabilityFixtureExecutable), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	restore := stubReviewCapabilityIdentity(t, executable)
-	defer restore()
-	var output bytes.Buffer
-	if err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV2}, &output); err != nil {
-		t.Fatal(err)
-	}
-	var got, want ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(fixture, &want); err != nil {
+	var got ReviewCapabilitiesResult
+	if err := json.Unmarshal(fixture, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
 		t.Fatalf("v2.3 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("v2.3 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
-	}
 	if got.Schema != ReviewIntegrationCapabilitiesSchemaV23 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 3}) ||
 		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
-		t.Fatalf("v2.3 capabilities runtime surface = %#v", got)
+		t.Fatalf("v2.3 capabilities artifact surface = %#v", got)
 	}
 	if !slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV4) || slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV3) {
 		t.Fatalf("v2.3 capabilities must advertise start/v4 instead of start/v3: %v", got.Schemas)
@@ -249,7 +233,7 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeGit ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV23 {
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV24 {
 		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)
