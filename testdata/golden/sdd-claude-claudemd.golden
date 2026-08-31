@@ -192,6 +192,12 @@ After exact acknowledgement burns terminal `approved` authority, the review life
 
 Historical compatibility commands may read older artifacts manually, but they are never the ordinary lifecycle and never restore delivery authority.
 
+### Concurrent Reviewer Group (MANDATORY)
+
+When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.
+
+Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot.
+
 #### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.

@@ -65,6 +65,17 @@ const (
 	openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
 		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
 		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
+
+	// concurrentReviewerGroupContract is the transport-neutral counterpart of
+	// the OpenCode block above for every other registered review runtime. The
+	// native side has always permitted this: STATUS offers every uncaptured
+	// lens in one collect.inputs set, all captures in a phase share one
+	// CapturePhaseRevision, and admission is a brief lock-owned CAS merge —
+	// only the absence of this direction made those parents serialize four
+	// reviewer runs that are independent by contract (issue #3989).
+	concurrentReviewerGroupContract = "### Concurrent Reviewer Group (MANDATORY)\n\n" +
+		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
+		"Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 )
 
 // boundedReviewContract is the shared contract as any consumer sees it: the
@@ -86,10 +97,13 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 
 func boundedReviewContractFor(agent model.AgentID) string {
 	contract := selectReviewerCaptureTransport(boundedReviewContractSource(), agent)
-	if agent != model.AgentOpenCode {
-		return contract
+	switch {
+	case agent == model.AgentOpenCode:
+		return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+	case reviewerprovider.RegisteredRuntime(agent):
+		return contract + "\n\n" + concurrentReviewerGroupContract
 	}
-	return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+	return contract
 }
 
 const (

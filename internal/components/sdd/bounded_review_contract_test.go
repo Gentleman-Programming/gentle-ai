@@ -375,20 +375,29 @@ func TestOpenCodeOrchestratorAddsOnlyOneConcurrentReviewerGroupContract(t *testi
 		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
 		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 
+	const concurrentReviewerGroupContract = "### Concurrent Reviewer Group (MANDATORY)\n\n" +
+		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
+		"Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
+
 	for _, test := range []struct {
-		name  string
-		agent model.AgentID
-		count int
+		name          string
+		agent         model.AgentID
+		openCodeCount int
+		genericCount  int
 	}{
-		{name: "opencode", agent: model.AgentOpenCode, count: 1},
-		{name: "claude", agent: model.AgentClaudeCode},
-		{name: "codex", agent: model.AgentCodex},
+		{name: "opencode", agent: model.AgentOpenCode, openCodeCount: 1},
+		{name: "claude", agent: model.AgentClaudeCode, genericCount: 1},
+		{name: "codex", agent: model.AgentCodex, genericCount: 1},
 		{name: "kilocode", agent: model.AgentKilocode},
-		{name: "generic", agent: model.AgentPi},
+		{name: "generic", agent: model.AgentPi, genericCount: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := strings.Count(renderSDDOrchestratorAsset(test.agent), openCodeConcurrentReviewerGroupContract); got != test.count {
-				t.Fatalf("rendered %s concurrent reviewer group contract count = %d, want %d", test.name, got, test.count)
+			rendered := renderSDDOrchestratorAsset(test.agent)
+			if got := strings.Count(rendered, openCodeConcurrentReviewerGroupContract); got != test.openCodeCount {
+				t.Fatalf("rendered %s OpenCode concurrent reviewer group contract count = %d, want %d", test.name, got, test.openCodeCount)
+			}
+			if got := strings.Count(rendered, concurrentReviewerGroupContract); got != test.genericCount {
+				t.Fatalf("rendered %s concurrent reviewer group contract count = %d, want %d", test.name, got, test.genericCount)
 			}
 		})
 	}
