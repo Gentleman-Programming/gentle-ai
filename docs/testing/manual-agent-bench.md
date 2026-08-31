@@ -40,10 +40,10 @@ done
 | --- | --- |
 | `direct-correct` | Implement `Add`, run uncached tests, then complete RDD without SDD. |
 | `direct-rdd-fix` | First reach a correct uncached state; the external injector plants `a - b` immediately before RDD. |
-| `sdd-correct` | Plan first, implement only during apply, then verify, sync, prove archive completion, and complete RDD. |
-| `sdd-rdd-fix` | Complete SDD while correct, then inject the defect after archive and before RDD; this post-SDD mutation is not an SDD verification escape. |
+| `sdd-correct` | Plan first with `openspec` storage, implement only during apply, then verify, sync, prove archive completion, and complete RDD. |
+| `sdd-rdd-fix` | Complete SDD with `openspec` storage while correct, then inject the defect after archive and before RDD; this post-SDD mutation is not an SDD verification escape. |
 
-Defect scenarios expose a harness-owned injector outside the fixture through `MANUAL_AGENT_BENCH_INJECTOR`. It runs tests before changing only `calc/add.go`, records its event outside the candidate, and fails unchanged when the correct state is absent; `sdd-rdd-fix` also refuses before mutation until the complete archive exists. The runtime must not repair that change before RDD sees it.
+SDD scenarios require `openspec` artifact storage because the harness validates the dated archive on disk. Defect scenarios expose a harness-owned injector outside the fixture through `MANUAL_AGENT_BENCH_INJECTOR`. It runs tests before changing only `calc/add.go`, records its event outside the candidate, and fails unchanged when the correct state is absent; `sdd-rdd-fix` also refuses before mutation until the complete archive exists. The runtime must not repair that change before RDD sees it.
 
 ## Observe and verify
 
