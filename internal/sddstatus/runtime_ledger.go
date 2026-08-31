@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,8 +76,14 @@ var (
 	// continuation: the reset it refers to needs six flags the message never
 	// listed, and it is itself refused when the candidate has not drifted.
 	ErrRuntimeObjectiveChange = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone   = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
-	ErrRuntimeNoObjective     = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeObjectiveDone names the successor route (#3884): a complete
+	// objective continues through acquire with a different --work-unit, and
+	// rescope refuses it, so pointing at status alone left callers circling.
+	ErrRuntimeObjectiveDone = errors.New("SDD runtime objective is complete; it continues through a successor objective, so run " +
+		"`gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id \"<unique-request-id>\" --work-unit \"<a different label>\" " +
+		"--evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>` with a different --work-unit (rescope applies only " +
+		"to an objective that is not complete); " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeResetNotAllowed named a STATE and no continuation, which is the
 	// same defect class as the sentinels above: an operator holding it knows
 	// what is refused and not one command that moves. The state it named was
@@ -128,7 +135,20 @@ var (
 	// refusal as the cause, because that cause is the only thing that knows
 	// the runnable repository exit. This sentinel classifies; the cause
 	// continues.
-	ErrRuntimeCandidateUnavailable    = errors.New("SDD runtime candidate could not be captured from the repository")                        // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
+	ErrRuntimeCandidateUnavailable = errors.New("SDD runtime candidate could not be captured from the repository") // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
+	// ErrRuntimeUndeclaredUntracked classifies every
+	// settlementUntrackedSelection refusal (#3881): the attempt authority is
+	// intact and unmutated, and what refused is the settlement's untracked
+	// ruling -- missing for files the attempt created (#3806's headline
+	// case), made against a stale inventory, naming a path outside the
+	// eligible inventory, narrowing a begin selection, or offered to a legacy
+	// record that has no inventory to accept one against. Every exit is a
+	// corrected rerun of settle/finish, so the caller can always continue;
+	// left unclassified these fell through to compactMutationFailure's opaque
+	// authority_failure default, which its own contract reserves for what its
+	// name says. Like its siblings it never travels alone: every wrap keeps
+	// the refusal text that names the runnable continuation.
+	ErrRuntimeUndeclaredUntracked     = errors.New("SDD runtime settlement requires an untracked ruling this request does not carry")        // refusal:by-design operator-knowledge: only the caller can choose whether to select or exclude the eligible untracked paths, and every wrap names the exact settle/finish rerun that carries that choice
 	ErrRuntimeHandoffSource           = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
@@ -201,13 +221,14 @@ type RuntimeObjective struct {
 }
 
 type RuntimeAttempt struct {
-	Ordinal                int      `json:"ordinal"`
-	ObjectiveID            string   `json:"objective_id"`
-	ObjectiveGeneration    int      `json:"objective_generation"`
-	WorkUnit               string   `json:"work_unit"`
-	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
-	BeginCandidateTree     string   `json:"begin_candidate_tree"`
-	IntendedUntracked      []string `json:"intended_untracked,omitempty"`
+	Ordinal                    int      `json:"ordinal"`
+	ObjectiveID                string   `json:"objective_id"`
+	ObjectiveGeneration        int      `json:"objective_generation"`
+	WorkUnit                   string   `json:"work_unit"`
+	BeginCandidateIdentity     string   `json:"begin_candidate_identity"`
+	BeginCandidateTree         string   `json:"begin_candidate_tree"`
+	IntendedUntracked          []string `json:"intended_untracked,omitempty"`
+	EligibleUntrackedInventory string   `json:"eligible_untracked_inventory,omitempty"`
 	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
 	// ran under (#2296 part 1). It is empty for every chain recorded before
 	// this field existed — that emptiness IS the legacy signal, so replay and
@@ -374,6 +395,15 @@ type FinishAttemptRequest struct {
 	CleanupEvidence            string             `json:"cleanup_evidence"`
 	ProcessEvidence            string             `json:"process_evidence"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
+
+	// A settle-time declaration about untracked files this attempt created.
+	// Both are omitempty so a request that declares nothing marshals exactly
+	// as it did before the fields existed, which keeps every legacy finish
+	// request digest byte-identical without a second hashing shape.
+	// IntendedUntracked is nil when nothing was declared and non-nil (possibly
+	// empty, from --untracked-scope=exclude) when something was.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	ExpectedUntrackedInventory string    `json:"expected_untracked_inventory,omitempty"`
 }
 
 type HandoffAttemptRequest struct {
@@ -546,6 +576,14 @@ type runtimeBeginEvent struct {
 	// A nil pointer preserves records written before candidate provenance was
 	// introduced; a non-nil empty slice is a modern, explicit empty selection.
 	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
+	// EligibleUntrackedInventory is the digest of the whole eligible untracked
+	// inventory this attempt began against -- what the caller saw when they
+	// declared. IntendedUntracked records only what they SELECTED, so without
+	// this the finish guard cannot tell a path the caller deliberately left
+	// out from one the attempt created afterwards (#3806). A nil pointer is a
+	// record written before the field existed, and the guard stays silent for
+	// it rather than re-asking a decision it cannot read.
+	EligibleUntrackedInventory *string `json:"eligible_untracked_inventory,omitempty"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -609,6 +647,14 @@ type runtimeFinishEvent struct {
 	ProcessEvidence            string             `json:"process_evidence"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+
+	// IntendedUntracked is the selection this settlement actually overlaid,
+	// which is the begin selection unless the caller declared a new one here.
+	// DeclaredUntrackedInventory is the digest they declared against; it is
+	// empty exactly when they declared nothing, which is how replay knows
+	// whether the request carried a selection of its own.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	DeclaredUntrackedInventory string    `json:"declared_untracked_inventory,omitempty"`
 }
 
 type runtimeRequestReceipt struct {
@@ -632,6 +678,9 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
+		if abs, absErr := filepath.Abs(repo); absErr == nil && !workspaceHasGitMetadata(abs) {
+			return RuntimeStore{}, &RuntimeRepositoryRequiredError{Workspace: abs, Cause: err}
+		}
 		return RuntimeStore{}, err
 	}
 	workspace, err := filepath.Abs(repo)
@@ -650,6 +699,20 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
 }
+
+// RuntimeRepositoryRequiredError refuses to open the runtime attempt ledger
+// outside a Git repository (#2612, #3202): its authority lives in the Git
+// common directory, so there is nowhere to keep it until one exists.
+type RuntimeRepositoryRequiredError struct {
+	Workspace string
+	Cause     error
+}
+
+func (err *RuntimeRepositoryRequiredError) Error() string {
+	return fmt.Sprintf("the SDD runtime attempt ledger needs a Git repository because its authority lives in the Git common directory, and %s is not inside one; run `git init` in that workspace (or run from the repository that contains it), then rerun the same `gentle-ai sdd-attempt` command", err.Workspace)
+}
+
+func (err *RuntimeRepositoryRequiredError) Unwrap() error { return err.Cause }
 
 func validRuntimeChange(change string) bool {
 	return len(change) <= 96 && runtimeChangePattern.MatchString(change)
@@ -771,12 +834,16 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			objectiveID = status.Objective.ID
 		}
 		intendedUntracked := slices.Clone(snapshot.IntendedUntracked)
+		_, eligibleInventory, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).IntendedUntrackedInventory(ctx)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("%w while reading the eligible untracked inventory this attempt begins against: %w", ErrRuntimeCandidateUnavailable, err)
+		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-			IntendedUntracked: &intendedUntracked,
-			BeginWorktree:     store.Workspace, EffectiveWorktree: store.Workspace,
+			IntendedUntracked: &intendedUntracked, EligibleUntrackedInventory: &eligibleInventory,
+			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -808,10 +875,15 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, errors.New("interrupted attempts must omit evidence_revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
 		}
 		// Check the effective binding before candidate capture or line charging.
-		if active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
+		// A vanished bound worktree (#2661) admits only an interrupted settle.
+		bound, boundMissing := runtimeBoundWorktree(*active)
+		if boundMissing && request.Outcome != AttemptInterrupted {
+			return runtimeRecord{}, store.runtimeMissingWorktreeRefusal(ErrRuntimeWorktreeMismatch, *active, bound)
+		}
+		if !boundMissing && active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeEffectiveWorktreeMismatchRefusal(*active)
 		}
-		if active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
+		if !boundMissing && active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
 		// Failed-evidence remediation is an SDD-only invariant. The immutable
@@ -835,13 +907,39 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if request.Outcome == AttemptPassed && chainHasFailedEvidence && !evidenceRemediation {
 			return runtimeRecord{}, fmt.Errorf("passing correction for failed verification %q requires --remediates-evidence-revision %q; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence, chainFailedEvidence)
 		}
+		// The candidate is the begin tree overlaid with tracked changes, the
+		// index, and a selection of untracked paths. The selection made at
+		// begin was a decision about what already existed then, so a file the
+		// attempt itself created is in none of those and settling over it
+		// records the attempt's own product as no change at all (#3806). This
+		// resolves which selection this settlement overlays, and refuses while
+		// the caller can still act when the answer is nobody's decision yet.
+		if boundMissing {
+			return runtimeMissingWorktreeInterruptedRecord(status, *active, request)
+		}
+		intendedUntracked, declaredInventory, err := store.settlementUntrackedSelection(ctx, *active, request)
+		if err != nil {
+			return runtimeRecord{}, err
+		}
 		// Issue #2394: the runtime candidate is the same declared candidate
 		// review freezes -- tracked changes plus whatever the user put in the
 		// index. Sweeping the worktree here would make drift detection and
 		// review disagree about what the candidate even is.
+		//
+		// #3842: the resolved selection can still carry begin-time paths the
+		// work unit committed mid-attempt (a settle-time declaration is
+		// validated against the current inventory, but the undeclared branches
+		// return the begin selection as recorded), so reconcile it against the
+		// current index before capture. The finish record below carries the
+		// reconciled list, because that is the selection this settlement's
+		// overlay actually used.
+		intendedUntracked, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, intendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
+		}
 		snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
 			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: active.BeginCandidateTree,
-			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: active.IntendedUntracked,
+			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intendedUntracked,
 		})
 		if err != nil {
 			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
@@ -884,9 +982,89 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
 			ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, changedLines),
+			IntendedUntracked:          &intendedUntracked,
+			DeclaredUntrackedInventory: declaredInventory,
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
+}
+
+// runtimeUndeclaredUntrackedListLimit bounds the paths a single refusal spells
+// out. The eligible inventory is unbounded, and a refusal nobody can read is
+// one nobody acts on.
+const runtimeUndeclaredUntrackedListLimit = 10
+
+// settlementUntrackedSelection answers which untracked paths this settlement
+// overlays onto the begin tree, and returns the inventory digest the caller
+// declared against (empty when they declared nothing).
+//
+// The question only has a new answer when the attempt created eligible
+// untracked files. Everything else the caller already ruled on: a path they
+// selected at begin is candidate bytes, and a path they saw in that same
+// inventory and did not select, they left out on purpose. Comparing today's
+// inventory against the one recorded at begin is what separates the two, and
+// it is why the begin record carries that digest at all.
+func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest) ([]string, string, error) {
+	if active.EligibleUntrackedInventory == "" {
+		// A record written before the begin inventory was captured cannot say
+		// what the caller saw, so no decision can honestly be demanded of them
+		// now and none may be accepted either.
+		if request.IntendedUntracked != nil {
+			return nil, "", fmt.Errorf("%w: this attempt began before settle-time untracked declarations existed, so it has no inventory to declare against; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` without --untracked-scope", ErrRuntimeUndeclaredUntracked)
+		}
+		return active.IntendedUntracked, "", nil
+	}
+	inventory, digest, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w while reading the eligible untracked inventory before settling: %w", ErrRuntimeCandidateUnavailable, err)
+	}
+	undecided := make([]string, 0, len(inventory))
+	for _, path := range inventory {
+		if !slices.Contains(active.IntendedUntracked, path) {
+			undecided = append(undecided, path)
+		}
+	}
+	if request.IntendedUntracked == nil {
+		// Nothing eligible is undecided, or the inventory is the very one the
+		// caller declared against at begin. Either way this settlement asks
+		// them nothing new.
+		if len(undecided) == 0 || digest == active.EligibleUntrackedInventory {
+			return active.IntendedUntracked, "", nil
+		}
+		return nil, "", runtimeBornDuringUntrackedRefusal(undecided, digest)
+	}
+	if request.ExpectedUntrackedInventory != digest {
+		return nil, "", fmt.Errorf("%w: this declaration was made against untracked inventory %s but the workspace now holds %s; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --expected-untracked-inventory=%s", ErrRuntimeUndeclaredUntracked, request.ExpectedUntrackedInventory, digest, digest)
+	}
+	selection := *request.IntendedUntracked
+	for _, path := range selection {
+		if !slices.Contains(inventory, path) {
+			return nil, "", fmt.Errorf("%w: intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition` to see what is eligible, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with only those paths", ErrRuntimeUndeclaredUntracked, path)
+		}
+	}
+	// A path selected at begin is already in the begin tree. Dropping it here
+	// would make the overlay subtract bytes the attempt never touched, so a
+	// settlement may widen the selection but never narrow it.
+	for _, path := range active.IntendedUntracked {
+		if slices.Contains(inventory, path) && !slices.Contains(selection, path) {
+			return nil, "", fmt.Errorf("%w: this attempt began with %q in its candidate, and a settlement cannot take it back out; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --intended-untracked=%s included", ErrRuntimeUndeclaredUntracked, path, path)
+		}
+	}
+	return selection, digest, nil
+}
+
+// runtimeBornDuringUntrackedRefusal names the eligible untracked paths nobody
+// has ruled on yet, and both ways to rule on them. Selecting one makes it
+// candidate bytes and charges its lines; excluding it leaves it out, which is
+// what today's settlement does silently and what this refusal exists to put on
+// the record instead.
+func runtimeBornDuringUntrackedRefusal(undecided []string, digest string) error {
+	listed, remainder := undecided, ""
+	if len(listed) > runtimeUndeclaredUntrackedListLimit {
+		remainder = fmt.Sprintf(" and %d more", len(listed)-runtimeUndeclaredUntrackedListLimit)
+		listed = listed[:runtimeUndeclaredUntrackedListLimit]
+	}
+	return fmt.Errorf("%w: this attempt left eligible untracked files its candidate does not include, so settling now would record them as no change at all: %s%s; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s to account them, or --untracked-scope=exclude --expected-untracked-inventory=%s to leave them out on the record", ErrRuntimeUndeclaredUntracked, strings.Join(listed, ", "), remainder, digest, digest)
 }
 
 // captureFinalVerifyReport derives the final verification attestation from the
@@ -976,7 +1154,15 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 		if err != nil {
 			return runtimeRecord{}, err
 		}
-		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree, active.IntendedUntracked)
+		// #3842: reconcile the replayed selection against the DESTINATION
+		// worktree's index — that is where the capture below actually runs,
+		// and a linked worktree's checked-out branch may already track paths
+		// the source recorded as untracked at begin time.
+		intendedUntracked, err := runtimeReplayedIntendedUntracked(ctx, request.DestinationWorktree, active.IntendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture delegated SDD runtime candidate before handoff: %w", err)
+		}
+		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree, intendedUntracked)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture delegated SDD runtime candidate before handoff: %w", err)
 		}
@@ -1098,6 +1284,67 @@ func (store RuntimeStore) runtimeEffectiveWorktreeMismatchRefusal(active Runtime
 		ErrRuntimeWorktreeMismatch, active.Ordinal, pathquote.Quote(active.BeginWorktree), pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), pathquote.Quote(active.EffectiveWorktree))
 }
 
+// runtimeBoundWorktree names the worktree an active attempt is bound to and
+// whether that path has vanished from disk (#2661): a removed and pruned
+// linked worktree made every exit that named it unrunnable. Only a not-exist
+// stat counts; any other failure keeps the ordinary binding checks.
+func runtimeBoundWorktree(active RuntimeAttempt) (string, bool) {
+	bound := active.EffectiveWorktree
+	if bound == "" {
+		bound = active.BeginWorktree
+	}
+	if bound == "" {
+		return "", false
+	}
+	_, err := os.Stat(bound)
+	return bound, errors.Is(err, os.ErrNotExist)
+}
+
+// runtimeMissingWorktreeExit is the one exit for a vanished bound worktree:
+// passed and failed need evidence measured there, so only interrupted is
+// admitted, from any worktree of the repository. cwd and change arrive
+// rendered so the compact readiness surface can pass placeholders.
+func runtimeMissingWorktreeExit(active RuntimeAttempt, bound, cwd, change, token string) string {
+	return fmt.Sprintf("attempt %d is bound to worktree %s, which no longer exists on disk, so its passed or failed evidence cannot be measured; "+
+		"settle it as interrupted from any worktree of this repository with `gentle-ai sdd-attempt settle --cwd %s --change %s --token %s "+
+		"--request-id \"<unique-request-id>\" --outcome interrupted --diagnosis \"<why-the-worktree-is-gone>\" --harness-disposition invalidated "+
+		"--cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`, then follow the ledger's next_action, or have a maintainer discard "+
+		"the objective with `gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision <the revision that status prints> "+
+		"--request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`",
+		active.Ordinal, pathquote.Quote(bound), cwd, change, token, cwd, change)
+}
+
+func (store RuntimeStore) runtimeMissingWorktreeRefusal(sentinel error, active RuntimeAttempt, bound string) error {
+	return fmt.Errorf("%w: %s", sentinel, runtimeMissingWorktreeExit(active, bound, pathquote.Quote(store.Workspace), fmt.Sprintf("%q", store.Change), "\"<acquire-token>\""))
+}
+
+// runtimeAttemptActiveRefusal is ErrRuntimeAttemptActive with the vanished
+// worktree exit composed in when that is the state the caller is actually in.
+func (store RuntimeStore) runtimeAttemptActiveRefusal(active RuntimeAttempt) error {
+	if bound, missing := runtimeBoundWorktree(active); missing {
+		return store.runtimeMissingWorktreeRefusal(ErrRuntimeAttemptActive, active, bound)
+	}
+	return ErrRuntimeAttemptActive
+}
+
+// runtimeMissingWorktreeInterruptedRecord closes an attempt whose bound
+// worktree is gone on its own begin candidate with no line charge; a later
+// begin or reset measures drift against the worktree it runs from, as before.
+func runtimeMissingWorktreeInterruptedRecord(status RuntimeStatus, active RuntimeAttempt, request FinishAttemptRequest) (runtimeRecord, error) {
+	if request.IntendedUntracked != nil {
+		return runtimeRecord{}, fmt.Errorf("%w: the bound worktree no longer exists, so no untracked inventory can be declared against it; rerun `gentle-ai sdd-attempt settle` with --outcome interrupted and without --untracked-scope", ErrRuntimeUndeclaredUntracked)
+	}
+	intended := slices.Clone(active.IntendedUntracked)
+	return runtimeRecord{Operation: runtimeOperationFinish, Finish: &runtimeFinishEvent{
+		Ordinal: active.Ordinal, FinishCandidateIdentity: active.BeginCandidateIdentity, FinishCandidateTree: active.BeginCandidateTree,
+		Outcome: AttemptInterrupted, Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
+		CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+		ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, 0),
+		IntendedUntracked:          &intended,
+	}}, nil
+}
+
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
 // a refusal that names the continuation that actually clears it.
 //
@@ -1168,7 +1415,14 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 		return true
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+	// #3842: reconcile the replayed selection first — a selected path the user
+	// has since committed would otherwise fail the capture and this probe
+	// would answer false exactly when the commit made reset the right exit.
+	intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+	if err != nil {
+		return false
+	}
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 	if err != nil {
 		return false
 	}
@@ -1188,7 +1442,13 @@ func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context,
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+	// #3842: same replay reconciliation as the reset probe, and for the same
+	// fail-closed reason — a reconcile error is a capture that could not run.
+	intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+	if err != nil {
+		return false
+	}
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 	if err != nil {
 		return false
 	}
@@ -1261,7 +1521,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
+			return runtimeRecord{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 		}
 		if status.Objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
@@ -1270,6 +1530,14 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			return runtimeRecord{}, ErrRuntimeResetNotAllowed
 		}
 		last := status.Attempts[len(status.Attempts)-1]
+		// #3842: the recorded selection is a historical replay by reset time —
+		// the completed work unit's selected paths are ordinarily committed by
+		// now — so reconcile it once against the current index and feed the
+		// same reconciled list to both captures below.
+		intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
+		}
 		if !status.DecisionRequired && !status.Complete {
 			// The only remaining structurally-permitted scope is a terminal
 			// failed/interrupted attempt with budget still available: begin
@@ -1277,7 +1545,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			// begin is actually blocked by candidate drift. Otherwise an
 			// elective early reset would launder the per-objective budget
 			// (CumulativeAttempts resets to zero on every reset).
-			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 			if driftErr != nil {
 				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
 			}
@@ -1285,7 +1553,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 				return runtimeRecord{}, store.runtimeZeroDriftResetRefusal(status)
 			}
 		}
-		snapshot, err := captureRuntimeCandidate(ctx, store.Repo, last.IntendedUntracked)
+		snapshot, err := captureRuntimeCandidate(ctx, store.Repo, intended)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
 		}
@@ -1341,17 +1609,30 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
+			return runtimeRecord{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 		}
 		objective := status.Objective
 		if objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
+		// A complete objective is refused by the sentinel that names its
+		// successor (#3884), not by the generic structural refusal.
+		if status.Complete {
+			return runtimeRecord{}, ErrRuntimeObjectiveDone
+		}
 		if !runtimeObjectiveRescopeStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		last := status.Attempts[len(status.Attempts)-1]
-		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+		// #3842: reconcile the replayed selection once and feed the SAME
+		// reconciled list to this drift capture and the fresh capture below,
+		// so the CandidateTree comparability contract between them holds over
+		// one selection rather than two.
+		intended, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", err)
+		}
+		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 		if driftErr != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", driftErr)
 		}
@@ -1393,7 +1674,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 		// on it exactly because there is zero drift -- so this second capture
 		// is provably the same underlying content the drift check just
 		// verified, not a fresh unguarded read.
-		fresh, err := captureRuntimeCandidate(ctx, store.Repo, last.IntendedUntracked)
+		fresh, err := captureRuntimeCandidate(ctx, store.Repo, intended)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective rescope: %w", err)
 		}
@@ -1729,18 +2010,27 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 //
 // Condition names the failed predicate; Revision names the offending record so
 // an operator does not have to re-derive which one violated it by reading the
-// chain. Expected/actual pairs are deliberately absent: that detail is where
-// the bespoke messages came from (#3816).
+// chain; Path names its file under the Git common directory (#3938) so a
+// record an older binary admitted is a maintainer decision, not a dead end.
+// Expected/actual pairs are deliberately absent: that detail is where the
+// bespoke messages came from (#3816).
 type RuntimeRecordRejectedError struct {
 	Condition string
 	Revision  string
+	Path      string
 }
 
 func (err *RuntimeRecordRejectedError) Error() string {
 	if err.Revision == "" {
 		return fmt.Sprintf("SDD runtime record rejected (condition %s); %s", err.Condition, runtimeLedgerStatusPointer)
 	}
-	return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); %s", err.Condition, err.Revision, runtimeLedgerStatusPointer)
+	if err.Path == "" {
+		return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); %s", err.Condition, err.Revision, runtimeLedgerStatusPointer)
+	}
+	// No repair command exists here by design (human authority): nothing may
+	// rewrite or drop a published chain record; a maintainer inspects or
+	// removes the named file, then the status pointer is the read-only re-entry.
+	return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); the record file is %s; a maintainer must inspect or remove that record, then %s", err.Condition, err.Revision, err.Path, runtimeLedgerStatusPointer)
 }
 
 // rejectRuntimeRecord refuses a record that disagrees with what the authority
@@ -1751,19 +2041,21 @@ func rejectRuntimeRecord(condition string) error {
 	return &RuntimeRecordRejectedError{Condition: condition}
 }
 
-// withRuntimeRecordRevision stamps the offending revision onto a rejection once
-// the caller knows it. Unrelated errors pass through untouched.
-func withRuntimeRecordRevision(err error, revision string) error {
+// withRuntimeRecordRevision stamps the offending revision and its record file
+// onto a rejection once the caller knows them. Unrelated errors pass through
+// untouched.
+func withRuntimeRecordRevision(err error, revision string, path string) error {
 	var rejected *RuntimeRecordRejectedError
 	if err == nil || !errors.As(err, &rejected) || rejected.Revision != "" {
 		return err
 	}
-	return &RuntimeRecordRejectedError{Condition: rejected.Condition, Revision: revision}
+	return &RuntimeRecordRejectedError{Condition: rejected.Condition, Revision: revision, Path: path}
 }
 
-// applyRuntimeRecord stamps every rejection with the offending revision.
+// applyRuntimeRecord stamps every rejection with the offending revision and
+// the record file it was read from.
 func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
-	return withRuntimeRecordRevision(applyRuntimeRecordLocked(store, replay, revision, record), revision)
+	return withRuntimeRecordRevision(applyRuntimeRecordLocked(store, replay, revision, record), revision, store.recordPath(revision))
 }
 
 func applyRuntimeRecordLocked(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
@@ -1898,7 +2190,8 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
 		BeginCandidateTree: event.BeginCandidateTree, IntendedUntracked: intendedUntracked, BeginWorktree: event.BeginWorktree,
-		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
+		EligibleUntrackedInventory: runtimeOptionalString(event.EligibleUntrackedInventory),
+		EffectiveWorktree:          event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
@@ -2158,6 +2451,12 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.ProcessEvidence = event.ProcessEvidence
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
+	// A rescope successor inherits its predecessor's recorded selection, so the
+	// settled attempt must report the one it actually settled with, not the one
+	// it began with (#3806).
+	if event.IntendedUntracked != nil {
+		attempt.IntendedUntracked = slices.Clone(*event.IntendedUntracked)
+	}
 	replay.Status.ActiveAttempt = nil
 	replay.Status.CumulativeChangedLines += event.ChangedLines
 	replay.Status.LifetimeChangedLines += event.ChangedLines
@@ -2249,8 +2548,18 @@ func applyRuntimeGrantEvent(replay *runtimeReplay, event *runtimeGrantEvent) {
 	}
 }
 
+func runtimeOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func validateRuntimeBeginEvent(record runtimeRecord) error {
 	event := record.Begin
+	if event.EligibleUntrackedInventory != nil && !runtimeRevisionPattern.MatchString(*event.EligibleUntrackedInventory) {
+		return rejectRuntimeRecord("invalid_eligible_untracked_inventory")
+	}
 	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
 		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
@@ -2341,6 +2650,13 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis, HarnessDisposition: event.HarnessDisposition,
 			CleanupEvidence: event.CleanupEvidence, ProcessEvidence: event.ProcessEvidence,
 			RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
+			ExpectedUntrackedInventory: event.DeclaredUntrackedInventory,
+		}
+		// The event records the selection this settlement used; the request
+		// carried one only when the caller declared, which is exactly when the
+		// event carries the digest they declared against.
+		if event.DeclaredUntrackedInventory != "" {
+			request.IntendedUntracked = event.IntendedUntracked
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return rejectRuntimeRecord("finish_request_digest_match")
@@ -2477,12 +2793,6 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
-	if request.MaxAttempts == 0 {
-		request.MaxAttempts = DefaultRuntimeAttemptLimit
-	}
-	if request.MaxChangedLines == 0 {
-		request.MaxChangedLines = DefaultRuntimeChangedLines
-	}
 	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
 		return BeginAttemptRequest{}, fmt.Errorf("max_attempts must be within 1..%d", maximumRuntimeAttemptLimit)
 	}
@@ -2566,6 +2876,19 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	}
 	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
+	}
+	if (request.IntendedUntracked == nil) != (request.ExpectedUntrackedInventory == "") {
+		return FinishAttemptRequest{}, errors.New("an untracked declaration needs both its selection and the inventory digest it was made against; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope and --expected-untracked-inventory together")
+	}
+	if request.ExpectedUntrackedInventory != "" && !runtimeRevisionPattern.MatchString(request.ExpectedUntrackedInventory) {
+		return FinishAttemptRequest{}, errors.New("expected_untracked_inventory must be sha256:<64-lowercase-hex>; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with the digest `gentle-ai review status --next-transition` publishes")
+	}
+	if request.IntendedUntracked != nil {
+		canonical, canonicalErr := canonicalRuntimeIntendedUntracked(*request.IntendedUntracked)
+		if canonicalErr != nil {
+			return FinishAttemptRequest{}, canonicalErr
+		}
+		request.IntendedUntracked = &canonical
 	}
 	if request.RemediatesEvidenceRevision != "" {
 		// Every outcome is a truthful settlement of a declared correction
@@ -2742,6 +3065,27 @@ func wrapRuntimeCandidateUnavailable(stage string, cause error) error {
 	return fmt.Errorf("%w %s: %w", ErrRuntimeCandidateUnavailable, stage, cause)
 }
 
+// runtimeReplayedIntendedUntracked reconciles a HISTORICAL intended-untracked
+// selection against the repository's current index before it is replayed into
+// a candidate capture (#3842). The ledger records the selection at
+// acquire/begin time, but the user legitimately commits the selected paths as
+// the ordinary end of a work unit — sometimes as the work unit itself — and a
+// verbatim replay of the recorded list then trips the snapshot builder's
+// "already tracked" refusal on every later capture: reset, rescope, settle,
+// handoff, and the read-only admissibility probes all dead-end. A path that
+// became tracked is already part of the ordinary candidate (its bytes live in
+// HEAD/index/worktree), so dropping it from the overlay keeps the candidate
+// tree byte-identical: a bare landing of the selection replays as zero drift,
+// and any further edit reads as ordinary candidate drift — exactly the
+// distinction the reset/rescope split already routes on. Only replayed
+// history passes through here: fresh caller-supplied selections stay strict,
+// and the immutable records themselves keep the selection exactly as
+// acquired.
+func runtimeReplayedIntendedUntracked(ctx context.Context, repo string, recorded []string) ([]string, error) {
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	return builder.StillUntrackedIntended(ctx, recorded)
+}
+
 func captureRuntimeCandidate(ctx context.Context, repo string, intendedUntracked []string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	return builder.Build(ctx, reviewtransaction.Target{
@@ -2790,6 +3134,9 @@ func (store RuntimeStore) runtimeHandoffStatusExit() string {
 }
 
 func (store RuntimeStore) runtimeHandoffSourceRefusal(active RuntimeAttempt) error {
+	if bound, missing := runtimeBoundWorktree(active); missing {
+		return store.runtimeMissingWorktreeRefusal(ErrRuntimeHandoffSource, active, bound)
+	}
 	return fmt.Errorf("%w: attempt %d has effective worktree %s, but handoff ran from %s; %s",
 		ErrRuntimeHandoffSource, active.Ordinal, pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), store.runtimeHandoffStatusExit())
 }
@@ -3079,7 +3426,7 @@ func (store RuntimeStore) ensureDirectories() error {
 
 func (store RuntimeStore) publishRecord(revision string, payload []byte) error {
 	recordsDir := filepath.Join(store.Dir, "records")
-	path := filepath.Join(recordsDir, strings.TrimPrefix(revision, "sha256:")+".json")
+	path := store.recordPath(revision)
 	temp, err := os.CreateTemp(recordsDir, ".record-*")
 	if err != nil {
 		return err
@@ -3169,11 +3516,17 @@ func readRuntimeHead(path string) (string, bool, error) {
 	return revision, true, nil
 }
 
+// recordPath is the one derivation of a record's file under the Git common
+// directory: <common>/gentle-ai/sdd-runtime/v1/<change>/records/<sha256>.json.
+func (store RuntimeStore) recordPath(revision string) string {
+	return filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+}
+
 func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if !runtimeRevisionPattern.MatchString(revision) {
 		return runtimeRecord{}, errors.New("invalid SDD runtime record revision")
 	}
-	path := filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+	path := store.recordPath(revision)
 	payload, err := readBoundedRuntimeFile(path)
 	if err != nil {
 		return runtimeRecord{}, fmt.Errorf("load SDD runtime revision %s: %w", revision, err)
@@ -3183,8 +3536,13 @@ func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if actual != revision {
 		return runtimeRecord{}, fmt.Errorf("SDD runtime record revision mismatch: expected %s, got %s", revision, actual)
 	}
+	// #2702: unknown fields are tolerated, not refused. The sha256 revision
+	// above already pins the bytes, so a strict decode added no integrity; it
+	// only made a record with one additive field from a newer binary
+	// unreadable by every operation, reset included. The trade-off is that an
+	// older binary ignores fields it does not understand. A record whose
+	// schema version is newer than this binary's stays a typed refusal.
 	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	var record runtimeRecord
 	if err := decoder.Decode(&record); err != nil {
 		return runtimeRecord{}, fmt.Errorf("decode SDD runtime revision %s: %w", revision, err)
@@ -3193,14 +3551,64 @@ func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return runtimeRecord{}, errors.New("SDD runtime record contains multiple JSON values")
 	}
+	if runtimeRecordSchemaIsNewer(record.Schema) {
+		return runtimeRecord{}, &RuntimeRecordSchemaUnsupportedError{Revision: revision, Schema: record.Schema}
+	}
 	_, canonical, err := runtimeRecordRevision(record)
-	if err != nil || !bytes.Equal(payload, canonical) {
+	if err != nil || !runtimeRecordPayloadCanonical(payload, canonical) {
 		return runtimeRecord{}, errors.New("SDD runtime record is not canonical")
 	}
 	if record.Change != store.Change {
 		return runtimeRecord{}, errors.New("SDD runtime record change does not match store")
 	}
 	return record, nil
+}
+
+// runtimeRecordPayloadCanonical accepts the exact canonical encoding, or a
+// compact encoding whose every known top-level field is byte-identical to the
+// canonical one and which carries only additive unknown fields (#2702).
+func runtimeRecordPayloadCanonical(payload, canonical []byte) bool {
+	if bytes.Equal(payload, canonical) {
+		return true
+	}
+	var actual, expected map[string]json.RawMessage
+	if json.Unmarshal(payload, &actual) != nil || json.Unmarshal(canonical, &expected) != nil || len(actual) <= len(expected) {
+		return false
+	}
+	for key, value := range expected {
+		if !bytes.Equal(actual[key], value) {
+			return false
+		}
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, payload) != nil {
+		return false
+	}
+	compact.WriteByte('\n')
+	return bytes.Equal(compact.Bytes(), payload)
+}
+
+// runtimeRecordSchemaIsNewer reports whether a record declares a later
+// version of the runtime record schema than this binary supports.
+func runtimeRecordSchemaIsNewer(schema string) bool {
+	prefix := runtimeRecordSchema[:strings.LastIndex(runtimeRecordSchema, "/v")+2]
+	supported, err := strconv.Atoi(strings.TrimPrefix(runtimeRecordSchema, prefix))
+	if err != nil || !strings.HasPrefix(schema, prefix) {
+		return false
+	}
+	version, err := strconv.Atoi(strings.TrimPrefix(schema, prefix))
+	return err == nil && version > supported
+}
+
+// RuntimeRecordSchemaUnsupportedError refuses a runtime record written under
+// a schema version newer than this binary supports.
+type RuntimeRecordSchemaUnsupportedError struct {
+	Revision string
+	Schema   string
+}
+
+func (err *RuntimeRecordSchemaUnsupportedError) Error() string {
+	return fmt.Sprintf("SDD runtime revision %s declares \"schema\" %s, newer than this binary supports (%s); run `gentle-ai update` to install a build that reads it, then rerun the same `gentle-ai sdd-attempt` command", err.Revision, err.Schema, runtimeRecordSchema)
 }
 
 func readBoundedRuntimeFile(path string) ([]byte, error) {

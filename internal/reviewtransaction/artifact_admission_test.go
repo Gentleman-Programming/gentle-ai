@@ -646,3 +646,66 @@ func TestAdmitArtifactResolvesUnambiguousBasenameCitations(t *testing.T) {
 		}
 	})
 }
+
+// TestExtractBoundedSingleJSONObjectReportsStructuralCensus is #2791: a
+// truncated reviewer payload used to be refused with one bare sentence, so a
+// report could not say whether an array, an object, or the whole payload was
+// left open. The refusal now keeps its prefix and appends a census.
+func TestExtractBoundedSingleJSONObjectReportsStructuralCensus(t *testing.T) {
+	for _, test := range []struct {
+		name, payload, want string
+	}{
+		{
+			name:    "unclosed array inside a finding",
+			payload: `{"findings":[{"id":"R3-001","proof_refs":["x"`,
+			want:    "reviewer payload contains no complete JSON object: 2 objects opened, 0 closed; 2 arrays opened, 0 closed; scan ended at byte 42",
+		},
+		{
+			name:    "unclosed inspection object",
+			payload: `{"subject_hash":"sha256:0","inspection":{"status":"completed","paths":["a.go"]`,
+			want:    "reviewer payload contains no complete JSON object: 2 objects opened, 0 closed; 1 array opened, 1 closed; scan ended at byte 78",
+		},
+		{
+			name:    "prose only",
+			payload: "I inspected the candidate and found nothing to report.",
+			want:    "reviewer payload contains no complete JSON object: no object start was found in 54 bytes",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, decision, err := ExtractBoundedSingleJSONObject([]byte(test.payload), 4096)
+			if decision != ArtifactAdmissionIncomplete || err == nil || err.Error() != test.want {
+				t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %v; want incomplete with %q", decision, err, test.want)
+			}
+		})
+	}
+	extracted, decision, err := ExtractBoundedSingleJSONObject([]byte("done\n{\"findings\":[],\"evidence\":[\"[unclosed in string\"]}\n"), 4096)
+	if err != nil || decision != ArtifactAdmissionCompleted || string(extracted) != `{"findings":[],"evidence":["[unclosed in string"]}` {
+		t.Fatalf("complete payload = %q, %q, %v", extracted, decision, err)
+	}
+}
+
+// TestEvidenceReportsUnavailableInspectionPhrases is #1867: the phrases a
+// reviewer writes when the immutable candidate could not be read must be
+// classified as an unavailable inspection, while a completed inspection that
+// merely mentions reading stays a genuine result.
+func TestEvidenceReportsUnavailableInspectionPhrases(t *testing.T) {
+	for _, test := range []struct {
+		evidence string
+		want     bool
+	}{
+		{"Read denied on the immutable candidate tree", true},
+		{"the frozen tree was denied by filesystem policy", true},
+		{"cannot read diff for the candidate", true},
+		{"Cannot read manifest of changed paths", true},
+		{"the reviewer could not read the candidate at all", true},
+		{"unable to read the candidate tree sha256:9f2c", true},
+		{"inspection blocked by the sandbox", true},
+		{"could not be inspected with read-only Git access", true},
+		{"read the manifest and inspected every path", false},
+		{"inspected the tree: the loop still stops one entry short", false},
+	} {
+		if got := evidenceReportsUnavailableInspection(test.evidence); got != test.want {
+			t.Fatalf("evidenceReportsUnavailableInspection(%q) = %v, want %v", test.evidence, got, test.want)
+		}
+	}
+}

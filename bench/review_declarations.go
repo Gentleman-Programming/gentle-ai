@@ -98,6 +98,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j82-reviewed-superset-pre-push-allows-unpublished-subset":                  reviewOptedIn,
 	"j83-pre-pr-moving-advertised-base-binds-merge-base":                        reviewOptedIn,
 	"j84-sdd-attempt-selected-untracked-lifecycle":                              reviewOptedIn,
+	"j99-sdd-attempt-born-during-untracked-lifecycle":                           reviewOptedIn,
 	"j85-review-parse-refusals-are-preflight":                                   reviewOptedIn,
 	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt":      reviewOptedIn,
 	"j87-unmanaged-remediation-uses-chain-failed-evidence":                      reviewUntouched,
@@ -116,6 +117,11 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
 	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
 	"j119-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
+	"j120-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
+	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
+	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
+	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
+	"j124-sdd-attempt-reset-after-selected-untracked-lands":                     reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

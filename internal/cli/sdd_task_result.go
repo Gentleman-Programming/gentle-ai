@@ -35,6 +35,7 @@ func runSDDTaskResult(args []string, stdin io.Reader, stdout io.Writer) error {
 	flags.SetOutput(io.Discard)
 	phase := flags.String("phase", "", "required; SDD phase that produced the result")
 	cwd := flags.String("cwd", "", "required; repository working directory for the continuation")
+	change := flags.String("change", "", "optional; SDD change name the continuation selects")
 	input := flags.String("input", "-", "result path; use - to read stdin")
 	taskModel := flags.String("task-model", "", "optional; provider/model route that produced the result")
 	latchedPhase := flags.String("latched-phase", "", "optional; phase that failed earlier in this session")
@@ -56,14 +57,14 @@ func runSDDTaskResult(args []string, stdin io.Reader, stdout io.Writer) error {
 		if *latchedPhase == "" || *latchedCode == "" {
 			return errors.New("sdd-task-result requires both --latched-phase and --latched-code, or neither; run " + sddTaskResultUsage)
 		}
-		return errors.New(sddtaskresult.DispatchLatched(*phase, *latchedPhase, *latchedCode, *cwd))
+		return errors.New(sddtaskresult.DispatchLatched(*phase, *latchedPhase, *latchedCode, *cwd, strings.TrimSpace(*change)))
 	}
 
 	output, err := readSDDTaskResult(*input, stdin)
 	if err != nil {
 		return err
 	}
-	if handoff := sddtaskresult.Handoff(sddtaskresult.Classify(output), *phase, *cwd, *taskModel); handoff != "" {
+	if handoff := sddtaskresult.Handoff(sddtaskresult.Classify(output), *phase, *cwd, strings.TrimSpace(*change), *taskModel); handoff != "" {
 		return errors.New(handoff)
 	}
 	_, err = fmt.Fprintln(stdout, `{"status":"ok"}`)

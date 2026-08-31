@@ -376,7 +376,16 @@ func TestCheckStateJSON_ManagedConfigPathUnreadable(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Fatalf("expected warn for unreadable managed config path, got %s: %s", got.Status, got.Detail)
 	}
-	for _, want := range []string{configPath, statErr.Error(), "inspect or repair", "gentle-ai doctor"} {
+	wants := []string{configPath, "inspect or repair", "gentle-ai doctor"}
+	if runtime.GOOS == "windows" {
+		// Windows reports a file-blocked path as not-exist, so the warn is
+		// produced by the ancestor walk naming the blocking file rather than
+		// by forwarding the final lstat error.
+		wants = append(wants, configRoot)
+	} else {
+		wants = append(wants, statErr.Error())
+	}
+	for _, want := range wants {
 		if !strings.Contains(got.Detail, want) {
 			t.Fatalf("unreadable path result missing %q: %s", want, got.Detail)
 		}

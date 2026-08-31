@@ -377,6 +377,18 @@ type ReviewStoreResetDoneMsg struct {
 	Err    error
 }
 
+// ReviewModeLoadedMsg carries a read-only review-mode status resolution.
+type ReviewModeLoadedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
+// ReviewModeUpdatedMsg carries the resolved status after a global mode mutation.
+type ReviewModeUpdatedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
 type CommunityToolInstallationDoneMsg struct {
 	Results []communitytool.Result
 	Err     error
@@ -527,6 +539,8 @@ const (
 	// ScreenReviewStoreResetResult reports what was actually removed,
 	// including a partial run, and returns to Welcome on Enter.
 	ScreenReviewStoreResetResult
+	// ScreenReviewMode displays and changes the global review-mode switch.
+	ScreenReviewMode
 )
 
 type Model struct {
@@ -749,6 +763,13 @@ type Model struct {
 	ReviewStoreResetSurveyErr error
 	// ReviewStoreResetErr records the outcome of an applied reset.
 	ReviewStoreResetErr error
+	// ReviewModeCwdFn, ReviewModeStatusFn, and ReviewModeSetGlobalFn are injected
+	// so the screen can be tested without filesystem state or CLI process calls.
+	ReviewModeCwdFn       func() (string, error)
+	ReviewModeStatusFn    func(context.Context, string) (reviewtransaction.RDDModeStatus, error)
+	ReviewModeSetGlobalFn func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error)
+	ReviewModeStatus      reviewtransaction.RDDModeStatus
+	ReviewModeErr         error
 	// OpenCodePluginUninstallFn is the async uninstall runner. Returns a
 	// result and error from the 4-layer engine. Defaults to
 	// opencodeplugin.Uninstall if nil.
@@ -815,15 +836,18 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	return Model{
-		Screen:               ScreenWelcome,
-		Version:              version,
-		Selection:            selection,
-		Detection:            detection,
-		BackgroundIntent:     s.BackgroundIntent,
-		PiBackgroundIntent:   s.PiBackgroundIntent,
-		UninstallAgents:      agents,
-		UninstallComponents:  defaultUninstallComponents(),
-		UninstallEngramScope: model.EngramUninstallScopeGlobal,
+		Screen:                ScreenWelcome,
+		Version:               version,
+		Selection:             selection,
+		Detection:             detection,
+		BackgroundIntent:      s.BackgroundIntent,
+		PiBackgroundIntent:    s.PiBackgroundIntent,
+		UninstallAgents:       agents,
+		UninstallComponents:   defaultUninstallComponents(),
+		UninstallEngramScope:  model.EngramUninstallScopeGlobal,
+		ReviewModeCwdFn:       os.Getwd,
+		ReviewModeStatusFn:    cli.ReviewModeStatus,
+		ReviewModeSetGlobalFn: cli.SetGlobalReviewMode,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -1042,6 +1066,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// clone-wide removal the second keystroke of a two-keystroke
 		// sequence -- while the CLI equivalent requires typing --confirm.
 		m.Cursor = screens.ReviewStoreResetConfirmDefaultCursor(msg.Report, msg.Err)
+		return m, nil
+	case ReviewModeLoadedMsg:
+		if m.Screen != ScreenReviewMode {
+			return m, nil
+		}
+		m.OperationRunning = false
+		m.ReviewModeStatus = msg.Status
+		m.ReviewModeErr = msg.Err
+		if msg.Err != nil {
+			m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
+		}
+		return m, nil
+	case ReviewModeUpdatedMsg:
+		if m.Screen != ScreenReviewMode {
+			return m, nil
+		}
+		m.OperationRunning = false
+		m.ReviewModeErr = msg.Err
+		if msg.Err != nil {
+			return m, nil
+		}
+		m.ReviewModeStatus = msg.Status
+		m.setScreen(ScreenWelcome)
 		return m, nil
 	case ReviewStoreResetDoneMsg:
 		// Deliberately not guarded on the current screen. This message reports
@@ -1460,6 +1507,11 @@ func (m Model) View() string {
 		return screens.RenderReviewStoreResetConfirm(m.ReviewStoreResetReport, m.ReviewStoreResetSurveyErr, m.Cursor)
 	case ScreenReviewStoreResetResult:
 		return screens.RenderReviewStoreResetResult(m.ReviewStoreResetReport, m.ReviewStoreResetErr)
+	case ScreenReviewMode:
+		if m.OperationRunning {
+			return screens.RenderOperationRunning("Receipt-Driven Development", "Loading review mode...", m.SpinnerFrame)
+		}
+		return screens.RenderReviewMode(m.ReviewModeStatus, m.ReviewModeErr, m.Cursor)
 	case ScreenDeleteConfirm:
 		return screens.RenderDeleteConfirm(m.SelectedBackup, m.Cursor)
 	case ScreenDeleteResult:
@@ -1986,6 +2038,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 
 			if m.Cursor == next {
 				return m.startReviewStoreResetSurvey()
+			}
+			next++
+
+			if m.Cursor == next {
+				return m.startReviewModeLoad()
 			}
 			next++
 
@@ -2766,6 +2823,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Enter on the result screen returns to backup selection.
 		// Refresh the backup list to reflect any changes from the restore.
 		m = m.finishBackupResult(false)
+	case ScreenReviewMode:
+		options := screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr)
+		if m.Cursor != 0 || len(options) == 1 {
+			m.setScreen(ScreenWelcome)
+			return m, nil
+		}
+		m.OperationRunning = true
+		m.ReviewModeErr = nil
+		enabled := m.ReviewModeStatus.Global != reviewtransaction.RDDModeOn
+		return m, tea.Batch(m.startReviewModeUpdate(enabled), tickCmd())
 	case ScreenReviewStoreResetConfirm:
 		// Cursor 0 is "Delete permanently" only when the survey found
 		// something safe to delete; in every other state the sole option is
@@ -3155,6 +3222,42 @@ func (m Model) startOpenCodePluginUninstall() tea.Cmd {
 // read-only survey behind a spinner. The screen is entered first on purpose: a
 // survey that fails has to be reportable, and a menu entry that silently does
 // nothing is worse than one that explains itself.
+func (m Model) startReviewModeLoad() (tea.Model, tea.Cmd) {
+	m.OperationRunning = true
+	m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
+	m.ReviewModeErr = nil
+	m.setScreen(ScreenReviewMode)
+	cwd := m.ReviewModeCwdFn
+	load := m.ReviewModeStatusFn
+	return m, func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return ReviewModeLoadedMsg{Err: err}
+		}
+		if load == nil {
+			return ReviewModeLoadedMsg{Err: errors.New("review mode status is not available in this build")}
+		}
+		status, err := load(context.Background(), repo)
+		return ReviewModeLoadedMsg{Status: status, Err: err}
+	}
+}
+
+func (m Model) startReviewModeUpdate(enabled bool) tea.Cmd {
+	cwd := m.ReviewModeCwdFn
+	update := m.ReviewModeSetGlobalFn
+	return func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return ReviewModeUpdatedMsg{Err: err}
+		}
+		if update == nil {
+			return ReviewModeUpdatedMsg{Err: errors.New("review mode update is not available in this build")}
+		}
+		status, err := update(context.Background(), repo, enabled)
+		return ReviewModeUpdatedMsg{Status: status, Err: err}
+	}
+}
+
 func (m Model) startReviewStoreResetSurvey() (tea.Model, tea.Cmd) {
 	m = m.withResetReviewStoreResetState()
 	m.OperationRunning = true
@@ -4035,6 +4138,8 @@ func (m Model) optionCount() int {
 		return 0
 	case ScreenReviewStoreResetConfirm:
 		return screens.ReviewStoreResetConfirmOptionCount(m.ReviewStoreResetReport, m.ReviewStoreResetSurveyErr)
+	case ScreenReviewMode:
+		return len(screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr))
 	case ScreenReviewStoreResetResult:
 		return 0
 	case ScreenRenameBackup:

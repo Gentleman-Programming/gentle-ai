@@ -209,7 +209,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		if !strings.Contains(contract, "sdd-status/v2") {
 			t.Fatal("active status asset does not advertise v2")
 		}
-		if golden := mustReadStatusGolden(t, "sdd-claude-cmd-sdd-status.golden"); strings.Contains(golden, "sdd-status/v1") || strings.Contains(golden, "Native status v1") {
+		if golden := mustReadStatusGolden(t, "sdd-claude-cmd-gentle-sdd-status.golden"); strings.Contains(golden, "sdd-status/v1") || strings.Contains(golden, "Native status v1") {
 			t.Fatal("generated status golden still pins v1")
 		}
 	})
@@ -241,7 +241,7 @@ func TestResolveRuntimeAuthorityFailureBlocksFinalRoutingBeforeOfferingReview(t 
 			runtimeStore := mustRuntimeStore(t, repo, change)
 			if _, err := runtimeStore.Begin(context.Background(), BeginAttemptRequest{
 				RequestID: "begin-corrupt-runtime", WorkUnit: "verify", EvidenceGoal: "prove final routing",
-				MaxAttempts: 1, MaxChangedLines: 0,
+				MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 			}); err != nil {
 				t.Fatal(err)
 			}

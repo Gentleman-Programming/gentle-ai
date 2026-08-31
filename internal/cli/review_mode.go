@@ -123,7 +123,31 @@ func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDMo
 		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Effective: reviewtransaction.RDDModeOff}, err
 	}
 	status, err := reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	if err != nil && reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return globalOnlyReviewModeStatus(global), nil
+	}
 	return status, reviewModeUnreadable(ctx, repo, global, err)
+}
+
+func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtransaction.RDDModeStatus {
+	status := reviewtransaction.RDDModeStatus{
+		Schema:     reviewtransaction.RDDModeStatusSchema,
+		Global:     reviewtransaction.RDDModeUnset,
+		CloneLocal: reviewtransaction.RDDModeUnset,
+		Effective:  reviewtransaction.RDDModeOff,
+		Source:     reviewtransaction.RDDModeSourceDefault,
+	}
+	switch strings.TrimSpace(global.Value) {
+	case string(reviewtransaction.RDDModeOn):
+		status.Global = reviewtransaction.RDDModeOn
+		status.Effective = reviewtransaction.RDDModeOn
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	case string(reviewtransaction.RDDModeOff):
+		status.Global = reviewtransaction.RDDModeOff
+		status.Effective = reviewtransaction.RDDModeOff
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	}
+	return status
 }
 
 // ReviewModeUnreadableScope names one kill-switch source whose persisted value
@@ -255,6 +279,21 @@ func reviewModeUnsafePathRefusal(err error) error {
 	return nil
 }
 
+type reviewModeRepositoryRequiredError struct{ Cause error }
+
+func (err *reviewModeRepositoryRequiredError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeRepositoryRequiredError) Error() string {
+	return "clone-local review mode requires a Git repository; rerun the original command with --cwd pointing at the intended repository, or use `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global` for machine-wide state"
+}
+
+func reviewModeRepositoryRequiredRefusal(err error) error {
+	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return nil
+	}
+	return &reviewModeRepositoryRequiredError{Cause: err}
+}
+
 func reviewModeCommandsByVerb(commands []string, verb string) []string {
 	selected := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -283,6 +322,9 @@ func reviewModeUnreadable(
 	}
 	if unsafePath := reviewModeUnsafePathRefusal(err); unsafePath != nil {
 		return unsafePath
+	}
+	if repoRequired := reviewModeRepositoryRequiredRefusal(err); repoRequired != nil {
+		return repoRequired
 	}
 	scopes := make([]ReviewModeUnreadableScope, 0, 2)
 	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
@@ -425,8 +467,27 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 		reviewModeLabel(result.Status.Global),
 		reviewModeLabel(result.Status.CloneLocal),
 	)
-	if err != nil || result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+	if err != nil {
 		return err
+	}
+	if result.Operation == "enable" && result.Scope == reviewModeScopeClone &&
+		result.Status.Effective == reviewtransaction.RDDModeOff && result.Status.Source == reviewtransaction.RDDModeSourceDefault {
+		// The clone-local override can only disable, so this enable cleared an
+		// opinion and turned nothing on: the global switch was never set and
+		// still decides (issue #3972). The outcome is by design and exits 0,
+		// but a status block that stops at "off" reads as if reviews were
+		// enabled, and the next START refuses with rdd_disabled again. The
+		// JSON envelope already carries the fact as source "default", so the
+		// sentence lives on the human surface only.
+		if _, err = fmt.Fprint(
+			stdout,
+			"  note:        a clone-local override can only disable, so this cleared the clone's off opinion and the global switch still decides; run `gentle-ai review mode enable --scope global` to turn receipt-driven development on\n",
+		); err != nil {
+			return err
+		}
+	}
+	if result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+		return nil
 	}
 	// The switch is machine state. A write that reached only this build has to
 	// say so on the surface the operator actually reads, or it reports a

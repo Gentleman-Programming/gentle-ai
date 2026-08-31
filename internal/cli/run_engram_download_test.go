@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 // TestRunInstallLinuxEngramUsesDownloadNotGoInstall verifies that after the fix,
@@ -679,3 +681,50 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 
 // Make sure the engram package's DownloadLatestBinary is accessible.
 var _ = engram.DownloadLatestBinary
+
+// TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled pins #3725:
+// engram is auto-added by sdd, and when its release cannot be fetched the
+// whole pipeline exited 1 with nothing installed. The requested component must
+// land and the missing dependency must be reported as a warning naming its own
+// install command.
+func TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreDownload := engramDownloadFn
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		engramDownloadFn = restoreDownload
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		return "", errors.New("GitHub API returned HTTP 403")
+	}
+
+	result, err := RunInstall([]string{"--agent", "claude-code", "--components", "sdd"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v; an auto-added dependency must not abort the requested components", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); err != nil {
+		t.Fatalf("requested sdd component did not land: %v", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil && strings.Contains(string(raw), "\"engram\"") {
+		t.Fatalf("engram MCP configuration was written for a binary that does not exist:\n%s", raw)
+	}
+	const wantCommand = "gentle-ai install --agent claude-code --components engram"
+	for _, check := range result.Verify.Checks {
+		if check.Status == verify.CheckStatusWarning && strings.Contains(check.Error, wantCommand) {
+			return
+		}
+	}
+	t.Fatalf("no warning names %q; report = %#v", wantCommand, result.Verify)
+}

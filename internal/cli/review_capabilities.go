@@ -36,6 +36,8 @@ const ReviewIntegrationCapabilitiesSchemaV21 = "gentle-ai.review-integration.cap
 const ReviewIntegrationCapabilitiesSchemaIDV21 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.1.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV22 = "gentle-ai.review-integration.capabilities/v2.2"
 const ReviewIntegrationCapabilitiesSchemaIDV22 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.2.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV23 = "gentle-ai.review-integration.capabilities/v2.3"
+const ReviewIntegrationCapabilitiesSchemaIDV23 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.3.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -283,8 +285,8 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV22, ReviewIntegrationContractV2
-		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 2}
+		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV23, ReviewIntegrationContractV2
+		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 3}
 		for index, schema := range result.Schemas {
 			switch schema {
 			case reviewtransaction.AdmittedReviewerResultSchemaV1:
@@ -292,7 +294,7 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			case reviewtransaction.ArtifactSubjectSchemaV1:
 				result.Schemas[index] = reviewtransaction.ArtifactSubjectSchema
 			case ReviewIntegrationCapabilitiesSchema:
-				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV22
+				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV23
 			case ReviewIntegrationFailureSchema:
 				result.Schemas[index] = ReviewIntegrationFailureSchemaV2
 			case ReviewIntegrationConsentSchema:

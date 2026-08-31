@@ -209,3 +209,26 @@ func TestDisabledReviewCaptureResultEmitsTheTypedFailure(t *testing.T) {
 		t.Fatalf("capture-result failure envelope is invalid: %v", err)
 	}
 }
+
+// Issue #2981: a well-formed staged workspace-overlay STATUS with reviews off
+// failed in `pre_native` with a content-free envelope because the selector's
+// snapshot work ran before the kill switch was consulted. The plain STATUS
+// answers `stop rdd_disabled`; the overlay selector must answer the same.
+func TestDisabledReviewOverlayStatusAnswersRddDisabled(t *testing.T) {
+	repo, _ := disabledReviewRepo(t, "review-disabled-overlay")
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code",
+		"--next-transition", "--workspace-overlay", "--projection", "staged", "--base-ref", "HEAD",
+	}, &output)
+	if err != nil {
+		t.Fatalf("staged overlay STATUS while disabled failed: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "rdd_disabled" {
+		t.Fatalf("staged overlay transition while disabled = %#v, want stop rdd_disabled", status.NextTransition)
+	}
+}

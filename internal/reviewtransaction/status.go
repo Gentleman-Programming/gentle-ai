@@ -385,7 +385,17 @@ func inventoryLock(version AuthorityVersion, lineage, path string) (AuthorityLoc
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	var owner storeLockOwner
-	if err := decoder.Decode(&owner); err != nil {
+	if err := decoder.Decode(&owner); errors.Is(err, io.EOF) {
+		// An empty payload is a clean release (#2504): the holder cleared its
+		// owner record before unlocking, and the probe just proved no holder.
+		if err := unlockFile(file); err != nil {
+			lock.Problem = "release existing lock probe: " + err.Error()
+			return lock, true
+		}
+		probeHeld = false
+		lock.Status = AuthorityLockReleased
+		return lock, true
+	} else if err != nil {
 		lock.Problem = "parse lock owner: " + err.Error()
 		return lock, true
 	}

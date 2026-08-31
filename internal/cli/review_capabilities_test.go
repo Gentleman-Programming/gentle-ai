@@ -84,8 +84,8 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	}
 }
 
-func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
+func TestReviewCapabilitiesV23MatchesConformanceFixture(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.3.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,16 +107,19 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
-		t.Fatalf("v2.2 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
+		t.Fatalf("v2.3 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("v2.2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
+		t.Fatalf("v2.3 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
 	}
-	if got.Schema != ReviewIntegrationCapabilitiesSchemaV22 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 2}) ||
+	if got.Schema != ReviewIntegrationCapabilitiesSchemaV23 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 3}) ||
 		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
-		t.Fatalf("v2.2 capabilities runtime surface = %#v", got)
+		t.Fatalf("v2.3 capabilities runtime surface = %#v", got)
 	}
-	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
+	if !slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV4) || slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV3) {
+		t.Fatalf("v2.3 capabilities must advertise start/v4 instead of start/v3: %v", got.Schemas)
+	}
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.3.schema.json", ReviewIntegrationCapabilitiesSchemaIDV23, fixture)
 	var malformed map[string]any
 	if err := json.Unmarshal(fixture, &malformed); err != nil {
 		t.Fatal(err)
@@ -125,8 +128,26 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 	optional := features["optional"].([]any)
 	optional[0].(map[string]any)["requires"] = []any{"unknown_required_feature"}
 	if err := schema.Validate(malformed); err == nil {
-		t.Fatal("v2.2 schema accepted an unknown required feature")
+		t.Fatal("v2.3 schema accepted an unknown required feature")
 	}
+}
+
+func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Schema   string                     `json:"schema"`
+		Protocol ReviewCapabilitiesProtocol `json:"protocol"`
+	}
+	if err := json.Unmarshal(fixture, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.Schema != ReviewIntegrationCapabilitiesSchemaV22 || identity.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 2}) {
+		t.Fatalf("v2.2 capabilities identity = %#v", identity)
+	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
 }
 
 func TestReviewCapabilitiesV21ArtifactRemainsReadable(t *testing.T) {
@@ -211,7 +232,7 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeGit ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV22 {
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV23 {
 		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)

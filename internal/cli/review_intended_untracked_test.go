@@ -303,3 +303,32 @@ func TestConsentFollowUpPrintedPathFlagsRoundTripWindowsNativePaths(t *testing.T
 		})
 	}
 }
+
+// Issue #2895: intended-untracked refusals named `gentle-ai review status
+// --next-transition`, which the parser refuses without a negotiated contract
+// and runtime identity. The named continuation is extracted and executed.
+func TestIntendedUntrackedRefusalsNameARunnableStatusInvocation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+	digest, _ := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+	undeclared := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "runnable-inventory-undeclared"}, &bytes.Buffer{})
+	writeUndeclaredWorkspaceFile(t, repo, "added-after-status.txt", "added\n", 0o644)
+	stale := RunReviewFacadeStart(append([]string{"--cwd", repo, "--lineage", "runnable-inventory-stale"}, intendedUntrackedSelectArgs(digest, "candidate.txt")...), &bytes.Buffer{})
+	for name, err := range map[string]error{"undeclared selection": undeclared, "stale inventory": stale} {
+		if err == nil || !strings.Contains(err.Error(), "--contract "+ReviewIntegrationContractV2) {
+			t.Fatalf("%s START = %v, want a refusal naming the negotiated STATUS form", name, err)
+		}
+		start := strings.Index(err.Error(), "`gentle-ai review status")
+		rest := err.Error()[start+1:]
+		tokens := strings.Fields(rest[:strings.IndexByte(rest, '`')])[2:]
+		for index, token := range tokens {
+			tokens[index] = strings.NewReplacer("<repo>", repo, "<runtime>", "claude-code").Replace(token)
+		}
+		var output bytes.Buffer
+		if runErr := RunReview(tokens, &output); runErr != nil {
+			t.Fatalf("%s refusal named `gentle-ai review %s`, which the parser refuses: %v\n%s", name, strings.Join(tokens, " "), runErr, output.String())
+		}
+	}
+	assertNoUntrackedSelectionAuthority(t, repo)
+}

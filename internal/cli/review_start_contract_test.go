@@ -1101,10 +1101,15 @@ func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 
 func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrationStartResult {
 	t.Helper()
+	return runNegotiatedReviewStartWith(t, repo, lineage)
+}
+
+func runNegotiatedReviewStartWith(t *testing.T, repo, lineage string, extra ...string) ReviewIntegrationStartResult {
+	t.Helper()
 	var output bytes.Buffer
-	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+	if err := RunReview(boundNegotiatedStartArgs(t, append([]string{
 		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
-	}), &output); err != nil {
+	}, extra...)), &output); err != nil {
 		t.Fatal(negotiatedReviewStartFailure(err, output.String()))
 	}
 	result := decodeNegotiatedReviewStart(t, output.Bytes())
@@ -1200,6 +1205,12 @@ func writeReviewStartCandidate(t *testing.T, repo, path, contents string, mode o
 	}
 	if !tracked {
 		runReviewCLIGit(t, repo, "add", "--", path)
+		if mode&0o111 != 0 {
+			// Windows has no executable bit, so record the fixture's intent in
+			// the index: the candidate then carries the same 100755 mode git
+			// snapshots on POSIX, and risk classification stays identical.
+			runReviewCLIGit(t, repo, "update-index", "--chmod=+x", "--", path)
+		}
 	}
 }
 

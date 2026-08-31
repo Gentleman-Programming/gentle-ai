@@ -86,9 +86,93 @@ func TestReviewModeDisableGlobalWinsOverEveryRepository(t *testing.T) {
 	}
 }
 
+func TestReviewModeGlobalScopeWorksFromNonGitDirectory(t *testing.T) {
+	home := reviewModeHome(t)
+	nonGit := t.TempDir()
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", nonGit, "--json"}, &output); err != nil {
+		t.Fatalf("unset global status from non-Git cwd error = %v\n%s", err, output.String())
+	}
+	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOff ||
+		before.Status.Source != reviewtransaction.RDDModeSourceDefault ||
+		before.Status.Global != reviewtransaction.RDDModeUnset || before.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("unset global status from non-Git cwd = %#v", before.Status)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", nonGit, "--scope", "global", "--json"}, &output); err != nil {
+		t.Fatalf("global enable from non-Git cwd error = %v\n%s", err, output.String())
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Operation != "enable" || result.Scope != reviewModeScopeGlobal ||
+		result.Status.Effective != reviewtransaction.RDDModeOn ||
+		result.Status.Source != reviewtransaction.RDDModeSourceGlobal ||
+		result.Status.Global != reviewtransaction.RDDModeOn ||
+		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("global enable from non-Git cwd = %#v", result)
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read error = %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) || persisted.RDDModeRecordedAt == nil {
+		t.Fatalf("global enable did not persist an explicit on: %#v", persisted)
+	}
+	if entries, err := os.ReadDir(nonGit); err != nil || len(entries) != 0 {
+		t.Fatalf("global enable touched non-Git cwd: entries=%v err=%v", entries, err)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", nonGit, "--json"}, &output); err != nil {
+		t.Fatalf("global status from non-Git cwd error = %v\n%s", err, output.String())
+	}
+	status := decodeReviewModeResult(t, output.Bytes())
+	if status.Operation != "status" || status.Scope != reviewModeScopeBoth ||
+		status.Status.Effective != reviewtransaction.RDDModeOn ||
+		status.Status.Source != reviewtransaction.RDDModeSourceGlobal ||
+		status.Status.Global != reviewtransaction.RDDModeOn ||
+		status.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("global status from non-Git cwd = %#v", status)
+	}
+}
+
+func TestReviewModeCloneScopeOutsideGitFailsBeforeWriting(t *testing.T) {
+	home := reviewModeHome(t)
+	nonGit := t.TempDir()
+
+	var output bytes.Buffer
+	err := RunReviewMode([]string{"disable", "--cwd", nonGit, "--scope", "clone", "--json"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "clone-local review mode requires a Git repository") ||
+		!strings.Contains(err.Error(), "--cwd") || !strings.Contains(err.Error(), "--scope global") ||
+		strings.Contains(err.Error(), "fatal:") || strings.Contains(err.Error(), "git rev-parse") || strings.Contains(err.Error(), "exit code 128") {
+		t.Fatalf("clone disable outside Git error = %v", err)
+	}
+	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		t.Fatalf("clone disable outside Git lost its typed no-repository classification: %v", err)
+	}
+	if _, readErr := state.Read(home); !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("clone disable outside Git mutated global state: %v", readErr)
+	}
+	if entries, readErr := os.ReadDir(nonGit); readErr != nil || len(entries) != 0 {
+		t.Fatalf("clone disable outside Git touched cwd: entries=%v err=%v", entries, readErr)
+	}
+}
+
+func TestReviewModeRepositoryRequiredRefusalDoesNotDependOnGitStderrLanguage(t *testing.T) {
+	localized := &reviewtransaction.GitCommandError{Args: []string{"rev-parse", "--show-toplevel"}, ExitCode: 128, Output: "fatal: no es un repositorio Git"}
+	refusal := reviewModeRepositoryRequiredRefusal(localized)
+	if refusal == nil || !reviewtransaction.ReviewRootResolutionReportsNoRepository(refusal) {
+		t.Fatalf("localized no-repository error was not classified: %v", refusal)
+	}
+	if strings.Contains(refusal.Error(), localized.Output) {
+		t.Fatalf("localized Git stderr reached the operator refusal: %v", refusal)
+	}
+}
+
 func TestWriteGlobalRDDModeSerializesWithInstallStateAndPreservesFreshFields(t *testing.T) {
 	home := reviewModeHome(t)
-	lock, err := reviewtransaction.AcquireAuthorityFileLock(installStateLockPath(home))
+	lock, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
 	if err != nil {
 		t.Fatalf("acquire install state lock: %v", err)
 	}
@@ -884,4 +968,77 @@ func decodeReviewModeResult(t *testing.T, payload []byte) ReviewModeResult {
 		t.Fatalf("decode review mode result: %v\n%s", err, payload)
 	}
 	return result
+}
+
+// TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset is the
+// RED-first proof for issue #3972. The clone-local override can only disable,
+// so `enable --scope clone` on a home whose global switch is unset clears an
+// opinion this clone never held and leaves receipt-driven development off.
+// That outcome is by design and exits 0; what was missing is the sentence
+// that says the global switch decides and names the one command that turns
+// reviews on. The JSON envelope already carries that fact as `source:
+// "default"` and stays byte-for-byte the same shape, because gentle-pi decodes
+// it as an exact object and would reject a new field.
+func TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone"}, &output); err != nil {
+		t.Fatalf("clearing an absent clone override must succeed while global mode is unset: %v", err)
+	}
+	human := output.String()
+	for _, want := range []string{
+		"receipt-driven development: off (decided by default)",
+		"can only disable",
+		"gentle-ai review mode enable --scope global",
+	} {
+		if !strings.Contains(human, want) {
+			t.Fatalf("clone enable on an unset global does not say the global switch decides (%q missing):\n%s", want, human)
+		}
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable clone --json) error = %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Effective != reviewtransaction.RDDModeOff ||
+		result.Status.Source != reviewtransaction.RDDModeSourceDefault ||
+		result.Status.Global != reviewtransaction.RDDModeUnset ||
+		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("clone enable result = %#v, want off decided by default with both sources unset", result.Status)
+	}
+	var envelope struct {
+		Status map[string]json.RawMessage `json:"status"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	for key := range envelope.Status {
+		switch key {
+		case "schema", "global", "clone_local", "effective", "source", "revision", "reach":
+		default:
+			t.Fatalf("status envelope grew a field %q; gentle-pi decodes gentle-ai.rdd-mode-status/v1 as an exact object", key)
+		}
+	}
+	if strings.Contains(output.String(), "--scope global") {
+		t.Fatalf("the JSON envelope must stay unchanged; the exit is derived from source=default:\n%s", output.String())
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no-op clone enable created repository state: %v", err)
+	}
+
+	// Once the global switch is on, the same command lands on "on" and the
+	// note has nothing to say.
+	if err := RunReviewMode([]string{"enable", "--scope", "global", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable global) error = %v", err)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable clone) error = %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "receipt-driven development: on (decided by global)") || strings.Contains(got, "note:") {
+		t.Fatalf("clone enable while global is on must report on without a note:\n%s", got)
+	}
 }

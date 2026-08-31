@@ -28,7 +28,7 @@ func TestRunSDDAttemptAcquireRefusesUndeclaredEligibleUntrackedScopeBeforeToken(
 	if err == nil {
 		t.Fatalf("undeclared eligible untracked scope issued authority: %s", output.String())
 	}
-	if !strings.Contains(err.Error(), "gentle-ai review status --next-transition") || !strings.Contains(err.Error(), "gentle-ai sdd-attempt acquire") {
+	if !strings.Contains(err.Error(), reviewIntendedUntrackedInventoryCommand) || !strings.Contains(err.Error(), "gentle-ai sdd-attempt acquire") {
 		t.Fatalf("undeclared scope guidance = %q, want inventory then acquire commands", err)
 	}
 	status, statusErr := store.Status()
@@ -309,5 +309,80 @@ func TestRunSDDAttemptRejectsNestedRepositoryUntrackedScope(t *testing.T) {
 	}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "another Git repository") {
 		t.Fatalf("nested repository refusal = %v, want an untracked nested-repository refusal", err)
+	}
+}
+
+// TestRunSDDAttemptSettleDeclaresUntrackedFilesBornDuringTheAttempt drives the
+// whole of #3806 through the real CLI: an attempt that starts against a
+// workspace with nothing eligible, creates a file while it runs, and then has
+// to say what that file is before it can settle.
+func TestRunSDDAttemptSettleDeclaresUntrackedFilesBornDuringTheAttempt(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		scope        string
+		selected     []string
+		changedLines int
+	}{
+		{"select accounts the file", "select", []string{"born.txt"}, 3},
+		{"exclude leaves it out on the record", "exclude", nil, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			change := "born-during-" + test.scope
+			acquired, _ := runCompactSDDAttempt(t, []string{
+				"acquire", "--cwd", repo, "--change", change, "--request-id", "born-acquire",
+				"--work-unit", "born during", "--evidence-goal", "account what the attempt creates",
+				"--max-attempts", "2", "--max-changed-lines", "20",
+			})
+			if acquired.State != "proceed" || acquired.Token == "" {
+				t.Fatalf("clean acquire = %#v", acquired)
+			}
+			writeUndeclaredWorkspaceFile(t, repo, "born.txt", "one\ntwo\nthree\n", 0o644)
+
+			settle := []string{
+				"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "born-settle",
+				"--outcome", "passed", "--evidence-revision", "sha256:" + strings.Repeat("a", 64),
+				"--diagnosis", "work unit complete", "--harness-disposition", "invalidated",
+				"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan clean",
+			}
+			blocked, _ := runCompactSDDAttempt(t, settle)
+			if blocked.State != "blocked" || blocked.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
+				t.Fatalf("undeclared born-during settlement = %#v, want blocked/%s", blocked, sddstatus.CompactBlockUndeclaredUntracked)
+			}
+			if !strings.Contains(blocked.Exit, "born.txt") ||
+				!strings.Contains(blocked.Exit, "--untracked-scope=select") ||
+				!strings.Contains(blocked.Exit, "--untracked-scope=exclude") {
+				t.Fatalf("refusal does not name the file and both exits: %#v", blocked)
+			}
+
+			_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			declared := append(append([]string{}, settle...), "--untracked-scope", test.scope, "--expected-untracked-inventory", digest)
+			for _, path := range test.selected {
+				declared = append(declared, "--intended-untracked", path)
+			}
+			settled, _ := runCompactSDDAttempt(t, declared)
+			if settled.State != "complete" {
+				t.Fatalf("declared settlement = %#v", settled)
+			}
+			store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := store.Status()
+			if err != nil || len(status.Attempts) != 1 {
+				t.Fatalf("declared settlement did not settle one attempt: status=%#v err=%v", status, err)
+			}
+			settledAttempt := status.Attempts[0]
+			if settledAttempt.ChangedLines != test.changedLines {
+				t.Fatalf("changed lines = %d, want %d: %#v", settledAttempt.ChangedLines, test.changedLines, settledAttempt)
+			}
+			if len(settledAttempt.IntendedUntracked) != len(test.selected) ||
+				(len(test.selected) == 1 && settledAttempt.IntendedUntracked[0] != test.selected[0]) {
+				t.Fatalf("settlement provenance = %#v, want %#v", settledAttempt.IntendedUntracked, test.selected)
+			}
+		})
 	}
 }

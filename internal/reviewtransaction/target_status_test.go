@@ -608,6 +608,68 @@ func TestCompactAuthorityLockFailuresAreOperational(t *testing.T) {
 	}
 }
 
+// TestAssessTargetStatusTreatsChangedCanonicalRejectedValidatorAsUnrelated
+// proves a candidate-bound rejected validator does not govern a later normal
+// candidate edit.
+func TestAssessTargetStatusTreatsChangedCanonicalRejectedValidatorAsUnrelated(t *testing.T) {
+	repo, state := persistCanonicalRejectedValidatorAuthority(t, "status-canonical-rejection")
+	unchanged, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil || unchanged.Applicability != TargetApplicabilityCurrent || unchanged.Action != TargetStatusActionStop {
+		t.Fatalf("unchanged canonical rejected validator status = %#v, err=%v", unchanged, err)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "normal candidate after rejection\n")
+
+	status, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil || status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart ||
+		status.ActionDisposition != "" || status.LineageID != "" || state.State != StateEscalated {
+		t.Fatalf("changed canonical rejected validator status = %#v, state=%#v, err=%v", status, state, err)
+	}
+}
+
+func persistCanonicalRejectedValidatorAuthority(t *testing.T, lineage string) (string, CompactState) {
+	t.Helper()
+	repo, state, revision, store := targetedValidationRequestFixture(t, lineage, true)
+	request, err := BuildTargetedValidationRequest(context.Background(), repo, state, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := CompactTargetedValidatorEvidence{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria:     CompactTargetedValidatorCheckEvidence{Evidence: []string{"the corrected candidate still fails the original criterion"}},
+		CorrectionRegression: CompactTargetedValidatorCheckEvidence{Passed: true, Evidence: []string{"the correction introduced no unrelated regression"}},
+		FollowUps:            []FollowUp{},
+	}
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := ScopedValidationResult{
+		LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: evidence.FollowUps,
+		OriginalCriteria:              ValidationCheck{EvidenceHash: compactTargetedValidatorEvidenceHashForDomain("original-criteria", evidence.OriginalCriteria), FixDeltaHash: fixHash},
+		CorrectionRegression:          ValidationCheck{EvidenceHash: compactTargetedValidatorEvidenceHashForDomain("correction-regression", evidence.CorrectionRegression), FixDeltaHash: fixHash, Passed: true},
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+	}
+	payload, err := json.Marshal(compactAdmittedTargetedValidatorValue{Outcome: "failed", Evidence: &evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureAdmittedTargetedValidatorResult(context.Background(), CompactAdmittedTargetedValidatorResultRequest{
+		ExpectedRequest: request, Payload: payload, Evidence: &evidence, Validation: &validation,
+		Complete: func(next *CompactState) error { return next.CompleteCorrectionVerification(fix, 1, validation) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, record.State
+}
+
 // TestRecoveryStatusNamesTheDispositionRecoveryAccepts pins issue #1469 Case B:
 // every `recover` recommendation must name the --disposition that
 // ValidateCompactRecovery actually accepts, so an operator never has to guess
@@ -636,14 +698,15 @@ func TestRecoveryStatusNamesTheDispositionRecoveryAccepts(t *testing.T) {
 			t.Fatalf("contraction status = %#v, %v", status, err)
 		}
 	})
-	t.Run("historical failed validator with a changed target recovers as escalated", func(t *testing.T) {
-		repo, state, _ := persistHistoricalFailedValidatorAuthority(t, "disposition-historical")
-		writeSnapshotFile(t, repo, "tracked.txt", "changed recovery target\n")
+	t.Run("changed historical failed validator starts unrelated review", func(t *testing.T) {
+		repo, _, _ := persistHistoricalFailedValidatorAuthority(t, "disposition-historical")
+		writeSnapshotFile(t, repo, "tracked.txt", "changed normal candidate\n")
 		status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
-			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
 		})
-		if err != nil || status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
-			t.Fatalf("historical failed validator status = %#v, %v", status, err)
+		if err != nil || status.Applicability != TargetApplicabilityUnrelated || status.Action != TargetStatusActionStart ||
+			status.ActionDisposition != "" || status.LineageID != "" {
+			t.Fatalf("changed historical failed validator status = %#v, %v", status, err)
 		}
 	})
 	t.Run("invalidated authority recovers as invalidated", func(t *testing.T) {

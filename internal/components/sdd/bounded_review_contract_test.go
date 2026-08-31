@@ -46,12 +46,13 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
-		"exact captured lineage, revision, and target tokens",
+		"run that provider-issued command verbatim",
+		"exact tokens each returned transition names",
 		"Route only from that transaction's returned `next_transition`",
 		"Forecast is informational; route only from `next_transition`",
 		"query the same exact-lineage STATUS",
 		"reoffers the same bound slot",
-		"repeated `--result-artifact-file <path>`",
+		"through `--input <path|->`",
 		"Only candidate-caused severe findings block",
 		"four-lens review is long work",
 		"at-most-one bounded correction",
@@ -237,7 +238,7 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		"orchestrator": {
 			"Selectorless STATUS only preflights the current worktree candidate",
 			"Invoke only the returned START operation and its ordered tokens unchanged",
-			"Every later STATUS and collection call",
+			"every later STATUS and collection call",
 			"For `execute`", "For `collect`", "For `stop`",
 		},
 		"post-apply": {
@@ -606,7 +607,7 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 }
 
 func TestOpenCodeAndClaudeApplyCommandsUseTheAtomicLifecycle(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/sdd-apply.md"} {
+	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/gentle-sdd-apply.md"} {
 		t.Run(path, func(t *testing.T) {
 			raw := assets.MustRead(path)
 			if strings.Count(raw, authorityFirstProcedurePlaceholder) != 1 {
@@ -634,7 +635,7 @@ func TestOpenCodeAndClaudeApplyCommandsUseTheAtomicLifecycle(t *testing.T) {
 }
 
 func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-archive.md", "claude/commands/sdd-archive.md"} {
+	for _, path := range []string{"opencode/commands/sdd-archive.md", "claude/commands/gentle-sdd-archive.md"} {
 		t.Run(path, func(t *testing.T) {
 			content := assets.MustRead(path)
 			for _, required := range []string{

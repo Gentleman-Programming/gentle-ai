@@ -105,3 +105,17 @@ func TestSharedSkillFileNamesIsSortedAndReadable(t *testing.T) {
 		}
 	}
 }
+
+// Issue #2941: the shared review ledger contract prescribed
+// `--result-artifact-file` / `--result-artifact` for capture-result, flags the
+// CLI never accepts. The capture verbs take `--input <path|->` only, and
+// claude-code and codex capture in process with `--agent`.
+func TestSharedReviewLedgerContractNamesTheRealCaptureInputFlag(t *testing.T) {
+	contract := MustRead("skills/_shared/review-ledger-contract.md")
+	if strings.Contains(contract, "--result-artifact") {
+		t.Fatalf("shared review ledger contract still prescribes a --result-artifact flag the CLI does not accept")
+	}
+	if !strings.Contains(contract, "--input") {
+		t.Fatalf("shared review ledger contract never names the --input capture flag")
+	}
+}

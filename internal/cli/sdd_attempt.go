@@ -114,15 +114,28 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			}
 		}
 		if !inheritsRescopeSelection {
-			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 			if scopeErr != nil {
 				return scopeErr
 			}
 			if scope.NeedsSelection {
-				return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+				return intendedUntrackedSelectionRequired(scope, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 			}
 			intended = scope.Intended
 		}
+	}
+	// The preflight above stays a begin/acquire concern: only those operations
+	// may be refused before any authority exists. A settlement resolves a
+	// declaration when the caller makes one, and lets the ledger -- the only
+	// reader of what the attempt began against -- decide whether one was owed.
+	var settlementUntracked *[]string
+	settlementInventory := ""
+	if (operation == "finish" || operation == "settle") && declaredUntracked {
+		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		settlementUntracked, settlementInventory = &scope.Intended, scope.Digest
 	}
 	var result any
 	switch operation {
@@ -159,6 +172,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "handoff":
 		result, err = store.HandoffCompact(ctx, sddstatus.CompactHandoffRequest{
@@ -195,6 +209,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "grant":
 		// --expected-revision stays optional, unlike begin/finish/reset: the
@@ -289,6 +304,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "handoff", purpose: "Atomically move the active attempt to one linked worktree", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -345,6 +363,9 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "grant", purpose: "Record per-change edit authority for roots", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -540,7 +561,15 @@ func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int
 	if !ok {
 		return new(int)
 	}
-	return flags.Int(name, 0, definition.usage)
+	// Budgets default at the flag so an explicit zero reaches the range check (#1947).
+	value := 0
+	switch name {
+	case "max-attempts":
+		value = sddstatus.DefaultRuntimeAttemptLimit
+	case "max-changed-lines":
+		value = sddstatus.DefaultRuntimeChangedLines
+	}
+	return flags.Int(name, value, definition.usage)
 }
 
 func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sddAttemptRootList) {

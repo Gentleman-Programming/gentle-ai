@@ -6,6 +6,11 @@ import (
 	"path/filepath"
 )
 
+var sddBornDuringUntrackedCapability = &Capability{
+	Verb:  []string{"sdd-attempt", "settle"},
+	Flags: []string{"--untracked-scope", "--expected-untracked-inventory", "--intended-untracked"},
+}
+
 var sddSelectedUntrackedCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "acquire"},
 	Flags: []string{"--untracked-scope", "--expected-untracked-inventory", "--intended-untracked"},
@@ -105,6 +110,97 @@ func driveSelectedUntrackedSDDAttempt(r *journeyRun) error {
 	return nil
 }
 
+// driveBornDuringUntrackedSDDAttempt drives #3806 end to end. The attempt
+// begins against a workspace with nothing eligible, creates its implementation
+// as untracked files while it runs, and must say what they are before it can
+// settle. The settled selection is then what the rescope successor inherits,
+// which is the half of the issue a declaration-free begin used to dead-end on.
+func driveBornDuringUntrackedSDDAttempt(r *journeyRun) error {
+	acquire := r.run([]string{
+		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-born-acquire",
+		"--work-unit", "born during lifecycle", "--evidence-goal", "account files the attempt creates",
+		"--max-attempts", "2", "--max-changed-lines", "20",
+	}, false)
+	var claimed sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(acquire.Stdout), &claimed); err != nil || acquire.ExitCode != 0 || claimed.State != "proceed" || claimed.Token == "" {
+		return fmt.Errorf("clean acquire = %#v parse=%v exit=%d", claimed, err, acquire.ExitCode)
+	}
+	// The attempt's own product, created under its admitted authority.
+	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, "docs", "born.md"), "born during the attempt\n"); err != nil {
+		return err
+	}
+	settle := append([]string{
+		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", claimed.Token,
+		"--request-id", "bench-born-settle", "--outcome", "failed", "--evidence-revision", sddFailedEvidence,
+	}, sddTerminalEvidence...)
+	blocked := r.run(settle, false)
+	var refusal sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(blocked.Stdout), &refusal); err != nil || refusal.State != "blocked" {
+		return fmt.Errorf("undeclared born-during settlement = %#v parse=%v exit=%d", refusal, err, blocked.ExitCode)
+	}
+	selection, err := readStatusForContract(r, reviewContractV2)
+	if err != nil {
+		return err
+	}
+	digest := selection.argument("expected_untracked_inventory")
+	if digest == "" {
+		return fmt.Errorf("review status did not publish the canonical untracked inventory: %+v", selection.NextTransition)
+	}
+	settled := r.run(append(append([]string{}, settle...),
+		"--untracked-scope", "select", "--intended-untracked", "docs/born.md", "--expected-untracked-inventory", digest), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(settled.Stdout), &result); err != nil || settled.ExitCode != 0 || result.State != "proceed" {
+		return fmt.Errorf("declared born-during settlement = %#v parse=%v exit=%d", result, err, settled.ExitCode)
+	}
+	var status struct {
+		Revision string `json:"revision"`
+		Attempts []struct {
+			ChangedLines      int      `json:"changed_lines"`
+			IntendedUntracked []string `json:"intended_untracked"`
+		} `json:"attempts"`
+	}
+	if err := proveJSON(r.sandbox, &status, "sdd-attempt", "status", "--cwd", r.sandbox.Repo, "--change", sddChange); err != nil {
+		return err
+	}
+	if len(status.Attempts) != 1 || status.Attempts[0].ChangedLines != 1 ||
+		len(status.Attempts[0].IntendedUntracked) != 1 || status.Attempts[0].IntendedUntracked[0] != "docs/born.md" {
+		return fmt.Errorf("born-during settlement accounting = %#v", status)
+	}
+	rescoped := r.run([]string{
+		"sdd-attempt", "rescope", "--cwd", r.sandbox.Repo, "--change", sddChange, "--expected-revision", status.Revision,
+		"--request-id", "bench-born-rescope", "--work-unit", "born during continuation",
+		"--evidence-goal", "prove the successor inherits what the attempt created", "--max-attempts", "2", "--max-changed-lines", "20",
+		"--reason", "maintainer narrowed the failed born-during objective", "--actor", "bench",
+	}, false)
+	if rescoped.ExitCode != 0 {
+		return fmt.Errorf("born-during rescope = exit=%d stderr=%s", rescoped.ExitCode, firstLine(rescoped.Stderr))
+	}
+	// The half #3806 reported: this declaration-free command is the one the
+	// provider advertises, and it used to have no runnable form at all.
+	continued := r.run([]string{
+		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-born-successor",
+		"--work-unit", "born during continuation", "--evidence-goal", "prove the successor inherits what the attempt created",
+		"--max-attempts", "2", "--max-changed-lines", "20",
+	}, false)
+	var successor sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(continued.Stdout), &successor); err != nil || continued.ExitCode != 0 || successor.State != "proceed" || successor.Token == "" {
+		return fmt.Errorf("declaration-free born-during successor = %#v parse=%v exit=%d", successor, err, continued.ExitCode)
+	}
+	var continuedStatus struct {
+		ActiveAttempt *struct {
+			IntendedUntracked []string `json:"intended_untracked"`
+		} `json:"active_attempt"`
+	}
+	if err := proveJSON(r.sandbox, &continuedStatus, "sdd-attempt", "status", "--cwd", r.sandbox.Repo, "--change", sddChange); err != nil {
+		return err
+	}
+	if continuedStatus.ActiveAttempt == nil || len(continuedStatus.ActiveAttempt.IntendedUntracked) != 1 ||
+		continuedStatus.ActiveAttempt.IntendedUntracked[0] != "docs/born.md" {
+		return fmt.Errorf("born-during successor lost the settled selection: %#v", continuedStatus)
+	}
+	return nil
+}
+
 func selectedUntrackedSDDJourneys() []Journey {
 	return []Journey{{
 		ID:     "j84-sdd-attempt-selected-untracked-lifecycle",
@@ -114,6 +210,14 @@ func selectedUntrackedSDDJourneys() []Journey {
 			{Name: "fixture: runtime repository", Fixture: sddRuntimeRepo},
 			{Name: "fixture: selected untracked candidate", Fixture: sddSelectedUntrackedCandidate},
 			{Name: "acquire, settle, and prove selected-path accounting", Requires: sddSelectedUntrackedCapability, Composite: driveSelectedUntrackedSDDAttempt},
+		},
+	}, {
+		ID:     "j99-sdd-attempt-born-during-untracked-lifecycle",
+		Title:  "SDD attempt: files born during an attempt are declared, accounted, and inherited",
+		Source: "issue #3806: a settlement silently recorded the attempt's own untracked product as zero, and the rescope successor it left behind had no runnable begin",
+		Steps: []Step{
+			{Name: "fixture: runtime repository", Fixture: sddRuntimeRepo},
+			{Name: "acquire clean, create, declare at settle, and continue", Requires: sddBornDuringUntrackedCapability, Composite: driveBornDuringUntrackedSDDAttempt},
 		},
 	}}
 }

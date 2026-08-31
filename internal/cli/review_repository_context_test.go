@@ -389,7 +389,7 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	}
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, first.Bytes(), &started)
-	startSchema := compileWholePublishedReviewSchema(t, "v2", "start.schema.json")
+	startSchema := compileWholePublishedReviewSchema(t, "v2", "start-v4.schema.json")
 	validatePublishedReviewSchema(t, startSchema, first.Bytes())
 	if started.RepositoryContext == nil || started.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
 		!strings.HasPrefix(started.RepositoryContext.Handle, "rctx2_") || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) {

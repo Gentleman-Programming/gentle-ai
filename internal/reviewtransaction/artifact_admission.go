@@ -475,10 +475,15 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 	candidates := []candidate{}
 	start, depth := -1, 0
 	inString, escaped := false, false
+	// The census below is what a truncated payload reports (issue #2791): a
+	// bare "no complete object" could not say whether an array, a nested
+	// object, or the whole payload was left open, nor where the scan stopped.
+	var census jsonStructuralCensus
 	for index, value := range payload {
 		if depth == 0 {
 			if value == '{' {
 				start, depth, inString, escaped = index, 1, false, false
+				census.count(index, &census.objectsOpened)
 			}
 			continue
 		}
@@ -498,10 +503,16 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 		switch value {
 		case '"':
 			inString = true
+		case '[':
+			census.count(index, &census.arraysOpened)
+		case ']':
+			census.count(index, &census.arraysClosed)
 		case '{':
 			depth++
+			census.count(index, &census.objectsOpened)
 		case '}':
 			depth--
+			census.count(index, &census.objectsClosed)
 			if depth == 0 {
 				var object map[string]json.RawMessage
 				fragment := bytes.TrimSpace(payload[start : index+1])
@@ -513,13 +524,42 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 		}
 	}
 	if depth != 0 || len(candidates) == 0 {
-		return nil, ArtifactAdmissionIncomplete, errors.New("reviewer payload contains no complete JSON object")
+		return nil, ArtifactAdmissionIncomplete, fmt.Errorf("reviewer payload contains no complete JSON object: %s", census.describe(len(payload))) // refusal:by-design operator-knowledge: only the reviewer runtime can return one complete JSON object; the census names what it left open
 	}
 	if len(candidates) != 1 {
 		return nil, ArtifactAdmissionAmbiguous, errors.New("reviewer payload contains multiple JSON objects")
 	}
 	match := candidates[0]
 	return append([]byte(nil), bytes.TrimSpace(payload[match.start:match.end])...), ArtifactAdmissionCompleted, nil
+}
+
+// jsonStructuralCensus counts the structural tokens ExtractBoundedSingleJSONObject
+// consumed outside strings and remembers how far the scan got, so an
+// incomplete payload is refused with a diagnosis instead of a verdict.
+type jsonStructuralCensus struct {
+	objectsOpened, objectsClosed, arraysOpened, arraysClosed int
+	lastStructuralEnd                                        int
+}
+
+func (census *jsonStructuralCensus) count(index int, counter *int) {
+	*counter++
+	census.lastStructuralEnd = index + 1
+}
+
+func (census jsonStructuralCensus) describe(length int) string {
+	if census.objectsOpened == 0 {
+		return fmt.Sprintf("no object start was found in %d bytes", length)
+	}
+	return fmt.Sprintf("%s opened, %d closed; %s opened, %d closed; scan ended at byte %d",
+		pluralCount(census.objectsOpened, "object"), census.objectsClosed,
+		pluralCount(census.arraysOpened, "array"), census.arraysClosed, census.lastStructuralEnd)
+}
+
+func pluralCount(count int, noun string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 var artifactFindingID = regexp.MustCompile(`^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -793,6 +833,11 @@ func evidenceReportsUnavailableInspection(value string) bool {
 		"could not be inspected", "cannot be inspected", "can not be inspected",
 		"was not able to be inspected", "were not able to be inspected",
 		"no candidate contents were available", "no candidate content was available",
+		// Read failures reported as such (issue #1867). "read the manifest"
+		// alone would match a completed inspection, so every phrase here
+		// carries its own negation.
+		"read denied", "denied by filesystem", "cannot read diff", "cannot read manifest",
+		"could not read the candidate", "unable to read the candidate",
 	} {
 		if strings.Contains(value, phrase) {
 			return true

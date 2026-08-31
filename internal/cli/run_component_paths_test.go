@@ -207,6 +207,31 @@ func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
 	}
 }
 
+// Issue #3219: a home installed with XDG_CONFIG_HOME keeps the legacy plugin
+// under $XDG_CONFIG_HOME/opencode/plugins, and the ~/.config form stays legacy
+// while XDG is set; the classification depends on the path and XDG alone.
+func TestLegacyOpenCodeBackgroundAgentsPluginUnderXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	for _, tt := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "legacy plugin under XDG opencode config", path: filepath.Join(xdg, "opencode", "plugins", "background-agents.ts"), want: true},
+		{name: "legacy plugin under ~/.config while XDG is set", path: filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"), want: true},
+		{name: "same file under unrelated opencode directory", path: filepath.Join(home, "opencode", "plugins", "background-agents.ts"), want: false},
+		{name: "managed replacement plugin under XDG is not legacy", path: filepath.Join(xdg, "opencode", "plugins", "model-variants.ts"), want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isLegacyOpenCodeBackgroundAgentsPlugin(tt.path); got != tt.want {
+				t.Fatalf("isLegacyOpenCodeBackgroundAgentsPlugin(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLegacyOpenCodeBackgroundAgentsPluginRequiresConfigOpenCodePluginsPath(t *testing.T) {
 	home := t.TempDir()
 

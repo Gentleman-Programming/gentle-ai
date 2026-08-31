@@ -157,7 +157,14 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 			messages[tt.name] = message
 		})
 	}
-	assertPairwiseDistinct(t, messages, len(cases))
+	wantMessages := len(cases)
+	if runtime.GOOS == "windows" {
+		// blockCanonicalAuthorityWrite requires POSIX permissions, so Windows
+		// exercises only the occupied-slot root while retaining its
+		// distinct-cause proof.
+		wantMessages--
+	}
+	assertPairwiseDistinct(t, messages, wantMessages)
 }
 
 // TestOpaqueRepositoryContextCauseIsScrubbed is the other half of the contract:

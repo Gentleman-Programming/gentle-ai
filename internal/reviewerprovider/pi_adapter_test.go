@@ -100,9 +100,33 @@ func TestPiAdapterHelperProcess(t *testing.T) {
 		os.Exit(3)
 	case "empty":
 		os.Exit(0)
+	case "stdout-failure":
+		_, _ = os.Stdout.WriteString("Not logged in\nsecond line\n")
+		os.Exit(1)
 	}
 	if _, err := os.Stdout.WriteString("raw\x00pi\xffoutput"); err != nil {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// Issue #3289: a pi child that prints its reason to stdout and exits non-zero
+// must surface that reason instead of an empty tail after the exit status.
+func TestPiAdapterFailureNamesStdoutReasonWhenStderrIsEmpty(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the helper process uses POSIX argument handling")
+	}
+	t.Setenv(piAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(piAdapterHelperEnvironment, "stdout-failure")
+	adapter := &PiAdapter{
+		LookPath: func(string) (string, error) { return "pi", nil },
+		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--"}, arguments...)...)
+		},
+	}
+	raw, err := adapter.Review(context.Background(), NewInvocation([]byte("prompt")))
+	if raw != nil || err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") ||
+		!strings.Contains(err.Error(), "Not logged in") || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("Review() = %q, %v; want a single-line transport failure naming the stdout reason", raw, err)
+	}
 }

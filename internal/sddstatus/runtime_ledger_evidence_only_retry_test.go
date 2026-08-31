@@ -27,7 +27,7 @@ func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedResetAuthority(t *testing.T) {
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: "retry-begin-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedResetAuthority(t *testing.T) {
 	}
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: reset.Revision, RequestID: "retry-begin-reverification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)

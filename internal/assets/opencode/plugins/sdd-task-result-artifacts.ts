@@ -35,6 +35,30 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
 
+// #3516: OpenCode can hand a failed delegated task an empty or filesystem-root
+// cwd, and `gentle-ai sdd-status --cwd /` is refused on the Go side. A root is
+// never a repository, so it never renders as a `--cwd` value.
+function isFilesystemRoot(path: string): boolean {
+  return /^(?:[\\/]+|[A-Za-z]:[\\/]*)$/.test(path)
+}
+
+function continuationCwd(...candidates: Array<string | undefined>): string {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim() !== "" && !isFilesystemRoot(candidate.trim())) return candidate
+  }
+  return ""
+}
+
+const SDD_CWD_PLACEHOLDER_NOTE = " This session has no usable workspace path, so the continuation carries a placeholder: replace <repo> with the repository root."
+
+function continuationCommand(cwd: string): string {
+  return cwd === "" ? "gentle-ai sdd-status --cwd <repo> --json" : `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`
+}
+
+function cwdPlaceholderNote(cwd: string): string {
+  return cwd === "" ? SDD_CWD_PLACEHOLDER_NOTE : ""
+}
+
 function taskRouteModel(metadata: unknown): string | undefined {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
   const model = (metadata as Record<string, unknown>).model
@@ -51,9 +75,9 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
   const code = empty ? "sdd_task_result_empty" : "sdd_task_result_malformed"
   const taskModel = taskRouteModel(metadata)
   const guidance = "Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user."
-  const summary = empty
+  const summary = (empty
     ? `${phase} produced no task output at all. The child task returned nothing, which most often means the provider rejected the request before generation (authentication, region, or model access), the task was interrupted, or the phase genuinely wrote nothing. ${guidance}`
-    : `${phase} returned no valid task result. ${guidance}`
+    : `${phase} returned no valid task result. ${guidance}`) + cwdPlaceholderNote(cwd)
   const failure: SDDTaskFailure = {
     phase,
     code,
@@ -64,7 +88,7 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
       phase,
       ...(taskModel === undefined ? {} : { taskModel }),
       summary,
-      continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+      continuation: continuationCommand(cwd),
     }),
   }
   return Object.assign(new Error(failure.handoff), { sddFailure: failure }) as SDDTaskFailureError
@@ -78,15 +102,15 @@ function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: str
     phase: requested,
     latchedPhase: failure.phase,
     latchedCode: failure.code,
-    summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently retried and no later phase advances on top of it. No provider call, no subagent, and no artifact write happened for this launch, so it produced no new evidence about the original failure.`,
-    continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+    summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently retried and no later phase advances on top of it. No provider call, no subagent, and no artifact write happened for this launch, so it produced no new evidence about the original failure.` + cwdPlaceholderNote(cwd),
+    continuation: continuationCommand(cwd),
     exit: "Inspect the artifact state the original failure left, surface it to the user, and start a new session to launch SDD phases again. Relaunching in this session cannot dispatch.",
   }))
 }
 
 const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
   const failedSDDSessions = new Map<string, SDDTaskFailure>()
-  const cwd = worktree || directory
+  const cwd = continuationCwd(worktree, directory)
   return {
     dispose: async () => { failedSDDSessions.clear() },
     event: async ({ event }) => {

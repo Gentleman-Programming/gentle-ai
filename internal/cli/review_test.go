@@ -238,12 +238,22 @@ func assertReviewGateResult(t *testing.T, payload []byte, want reviewtransaction
 	}
 }
 
-func initReviewCLIRepo(t *testing.T) string {
+// canonicalReviewCLITempDir returns t.TempDir() in its canonical spelling.
+// Production resolvers answer with the canonical form, so a fixture that keeps
+// the raw spelling compares unequal to its own repository: on the Windows
+// runners TEMP is an 8.3 short name, and on macOS /var symlinks /private/var.
+func canonicalReviewCLITempDir(t *testing.T) string {
 	t.Helper()
-	repo, err := filepath.EvalSymlinks(t.TempDir())
+	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return dir
+}
+
+func initReviewCLIRepo(t *testing.T) string {
+	t.Helper()
+	repo := canonicalReviewCLITempDir(t)
 	runReviewCLIGit(t, repo, "init", "-q")
 	runReviewCLIGit(t, repo, "config", "user.email", "test@example.com")
 	runReviewCLIGit(t, repo, "config", "user.name", "Test")

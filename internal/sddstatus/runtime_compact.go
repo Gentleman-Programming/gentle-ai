@@ -36,6 +36,15 @@ const (
 	// was declared), so the settlement that declaration promises is
 	// structurally impossible and no token may be issued for it.
 	CompactBlockRemediationUnsatisfiable CompactBlockReason = "remediation_unsatisfiable"
+	// CompactBlockUndeclaredUntracked is the settlement-side untracked ruling
+	// block (#3881): the attempt authority is intact and unmutated, and what
+	// refused is the settlement's untracked declaration -- missing for files
+	// the attempt itself created (#3806), stale, naming an ineligible path,
+	// narrowing a begin selection, or offered to a pre-inventory legacy
+	// record. Every exit is a corrected rerun of settle/finish, so a consumer
+	// routing on this reason continues, where authority_failure would tell it
+	// to stop.
+	CompactBlockUndeclaredUntracked CompactBlockReason = "undeclared_untracked"
 )
 
 // CompactAttemptResult is the bounded orchestration projection. RuntimeStatus
@@ -107,6 +116,11 @@ type CompactSettleRequest struct {
 	ProcessEvidence    string
 
 	RemediatesEvidenceRevision string
+
+	// The settle-time untracked declaration, forwarded verbatim to Finish.
+	// Nil means the caller declared nothing.
+	IntendedUntracked          *[]string
+	ExpectedUntrackedInventory string
 }
 
 type CompactHandoffRequest struct {
@@ -175,11 +189,17 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 		if in.Request.WorkUnit != "" && runtimeObjectiveAdvanceAdmissible(in.Status, in.Request) {
 			return CompactAttemptResult{}, false
 		}
-		return CompactAttemptResult{State: CompactStateComplete}, true
+		return compactCompleteResult(in.Status, in.Request), true
 	case in.Status.DecisionRequired:
 		return compactBlocked(CompactBlockMaintainerDecision, ""), true
 	case in.Status.ActiveAttempt != nil:
-		return compactBlocked(CompactBlockActiveAttempt, activeToken), true
+		result := compactBlocked(CompactBlockActiveAttempt, activeToken)
+		// #2661: name the one settlement a vanished bound worktree admits.
+		if bound, missing := runtimeBoundWorktree(*in.Status.ActiveAttempt); missing {
+			result.Exit = runtimeMissingWorktreeExit(*in.Status.ActiveAttempt, bound, "<repo>", "<change>", activeToken)
+			result.Detail = result.Exit
+		}
+		return result, true
 	default:
 		return CompactAttemptResult{}, false
 	}
@@ -267,7 +287,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		}
 		finish, ok := compactSettleReplayRequest(replay, record, request)
 		if !ok {
-			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+			return compactBlockedWithExit(CompactBlockInvalidContinuation, compactSettleReceiptExit(record, request.RequestID)), nil
 		}
 		if _, err := store.Finish(ctx, finish); err != nil {
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
@@ -286,7 +306,9 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens, PresentedToken: request.Token,
 	})
 	if !terminal {
-		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		return compactBlockedWithExit(CompactBlockInvalidContinuation,
+			"no attempt is active for this change, so there is nothing to settle; run "+compactStatusCommand+
+				" to read the ledger, then acquire with "+compactAcquireCommand("<label>")+" before settling"), nil
 	}
 	if readiness.State != CompactStateProceed {
 		return readiness, nil
@@ -297,14 +319,24 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		ExpectedRevision: status.Revision, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
-		ProcessEvidence: request.ProcessEvidence,
+		ProcessEvidence: request.ProcessEvidence, IntendedUntracked: request.IntendedUntracked,
+		ExpectedUntrackedInventory: request.ExpectedUntrackedInventory,
 	}
 	failedEvidence, hasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
-	if request.RemediatesEvidenceRevision != "" && (!hasFailedEvidence || failedEvidence != request.RemediatesEvidenceRevision) {
-		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+	if request.RemediatesEvidenceRevision != "" && !hasFailedEvidence {
+		return compactBlockedWithExit(CompactBlockInvalidContinuation,
+			"the attempt chain holds no unremediated failed evidence, so --remediates-evidence-revision "+request.RemediatesEvidenceRevision+
+				" names nothing; run "+compactStatusCommand+" to read the chain, then rerun this settle without that flag"), nil
+	}
+	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
+		return compactBlockedWithExit(CompactBlockInvalidContinuation,
+			"the chain's unremediated failed evidence is "+failedEvidence+", not "+request.RemediatesEvidenceRevision+
+				"; run "+compactStatusCommand+" to read the chain, then rerun this settle with --remediates-evidence-revision "+failedEvidence), nil
 	}
 	if request.Outcome == AttemptPassed && hasFailedEvidence && request.RemediatesEvidenceRevision == "" {
-		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		return compactBlockedWithExit(CompactBlockInvalidContinuation,
+			"this passed settle was refused: "+runtimeSettleObligation(status)+" Run "+compactStatusCommand+
+				" to read the chain, then rerun this settle with that flag."), nil
 	}
 	finish.RemediatesEvidenceRevision = request.RemediatesEvidenceRevision
 	if _, err := store.Finish(ctx, finish); err != nil {
@@ -341,11 +373,19 @@ func normalizeCompactSettleRequest(request CompactSettleRequest) error {
 	if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" {
 		return errors.New("interrupted evidence_revision must be empty; rerun `gentle-ai sdd-attempt settle` without --evidence-revision")
 	}
+	// The token is settle's own flag (#3879): checked here so a malformed one
+	// never surfaces as finish's "expected runtime revision", a flag settle
+	// does not accept.
+	if !runtimeRevisionPattern.MatchString(request.Token) {
+		return errors.New("token must be the exact sha256:<64-lowercase-hex> value acquire returned; run " + compactStatusCommand +
+			" to read the live attempt's token, then rerun `gentle-ai sdd-attempt settle` with --token <that value>")
+	}
 	_, err := normalizeFinishAttemptRequest(FinishAttemptRequest{
 		ExpectedRevision: request.Token, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
-		ProcessEvidence: request.ProcessEvidence,
+		ProcessEvidence: request.ProcessEvidence, IntendedUntracked: request.IntendedUntracked,
+		ExpectedUntrackedInventory: request.ExpectedUntrackedInventory,
 	})
 	if err != nil {
 		return err
@@ -383,13 +423,35 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 		request.Outcome == event.Outcome && request.EvidenceRevision == event.EvidenceRevision &&
 		request.Diagnosis == event.Diagnosis && request.HarnessDisposition == event.HarnessDisposition &&
 		request.CleanupEvidence == event.CleanupEvidence && request.ProcessEvidence == event.ProcessEvidence &&
-		request.RemediatesEvidenceRevision == event.RemediatesEvidenceRevision
+		request.RemediatesEvidenceRevision == event.RemediatesEvidenceRevision &&
+		request.ExpectedUntrackedInventory == event.DeclaredUntrackedInventory &&
+		compactSettleDeclarationMatches(request.IntendedUntracked, event)
 	return FinishAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 		EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis,
 		HarnessDisposition: event.HarnessDisposition, CleanupEvidence: event.CleanupEvidence,
 		ProcessEvidence: event.ProcessEvidence, RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
+		IntendedUntracked: replayedSettleDeclaration(event), ExpectedUntrackedInventory: event.DeclaredUntrackedInventory,
 	}, matches
+}
+
+// replayedSettleDeclaration recovers the selection the original request
+// carried. The event always records the selection the settlement used, but the
+// request carried one only when the caller declared, which the recorded digest
+// is what says.
+func replayedSettleDeclaration(event *runtimeFinishEvent) *[]string {
+	if event.DeclaredUntrackedInventory == "" {
+		return nil
+	}
+	return event.IntendedUntracked
+}
+
+func compactSettleDeclarationMatches(declared *[]string, event *runtimeFinishEvent) bool {
+	replayed := replayedSettleDeclaration(event)
+	if declared == nil || replayed == nil {
+		return declared == nil && replayed == nil
+	}
+	return slices.Equal(*declared, *replayed)
 }
 
 // compactAcquireResult reconciles a committed begin whose publication the
@@ -453,6 +515,13 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	case errors.Is(err, ErrRuntimeRevisionConflict), errors.Is(err, ErrRuntimeConcurrentUpdate),
 		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt):
 		reason = CompactBlockInvalidContinuation
+	// ErrRuntimeUndeclaredUntracked is the sentinel behind every
+	// settlementUntrackedSelection refusal (#3881): the settlement needs an
+	// untracked ruling the request does not carry. Caller-actionable -- the
+	// wrapped text names the exact rerun -- so it must not report as
+	// authority_failure, which the contract reserves for what its name says.
+	case errors.Is(err, ErrRuntimeUndeclaredUntracked):
+		reason = CompactBlockUndeclaredUntracked
 	// ErrRuntimeWorktreeMismatch is the sentinel behind
 	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
 	// different linked worktree than the one Begin recorded. Left
@@ -519,7 +588,8 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 			"--expected-revision <the revision that status prints> --request-id \"<unique-request-id>\" " +
 			"--reason \"<why-the-objective-is-being-reset>\" --actor \"<actor>\"`; turning receipt-driven " +
 			"review off does not clear this, because review governs delivery of a finished change, not " +
-			"whether a work unit may open"
+			"whether a work unit may open; a base merged into the branch during the attempt is charged " +
+			"to the attempt: merge before begin or after finish, or have a maintainer reset"
 	case CompactBlockActiveAttempt:
 		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
 		// / `settle --token <t>` forms are not complete commands -- each
@@ -596,6 +666,58 @@ func runtimeSettleObligation(status RuntimeStatus) string {
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
 	exit := compactBlockedExitText(reason, token)
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token, Exit: exit, Detail: exit}
+}
+
+// compactBlockedWithExit is compactBlocked for a cause whose runnable exit is
+// narrower than its reason's fixed text (#3872): the reason vocabulary stays
+// closed so consumers keep routing, and only the exit names the real cause.
+func compactBlockedWithExit(reason CompactBlockReason, exit string) CompactAttemptResult {
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: exit, Detail: exit}
+}
+
+const compactStatusCommand = "`gentle-ai sdd-attempt status --cwd <repo> --change <change>`"
+
+const compactResetCommand = "`gentle-ai sdd-attempt reset --cwd <repo> --change <change> --expected-revision <the revision that status prints> " +
+	"--request-id \"<unique-request-id>\" --reason \"<why-the-objective-is-being-reset>\" --actor \"<actor>\"`"
+
+func compactAcquireCommand(workUnit string) string {
+	return "`gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id \"<unique-request-id>\" --work-unit \"" + workUnit +
+		"\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`"
+}
+
+// compactSettleReceiptExit names why a settle's --request-id already holds a
+// receipt that is not a replay of this settle: the caller reused acquire's id
+// (#3872's "same --request-id"), or an earlier settle with different fields.
+func compactSettleReceiptExit(record runtimeRecord, requestID string) string {
+	if record.Operation == runtimeOperationFinish {
+		return "--request-id " + requestID + " already recorded a settle with different fields; a replay must repeat that settle exactly, " +
+			"otherwise rerun this settle with a new --request-id; run " + compactStatusCommand + " to read the live attempt"
+	}
+	return "--request-id " + requestID + " already identifies this attempt's acquire; settle needs its own distinct --request-id, and reuses " +
+		"one only to replay the identical settle; run " + compactStatusCommand + " to confirm the live attempt, then rerun this settle with a new --request-id"
+}
+
+// compactCompleteResult names the successor route a completed objective
+// leaves open (#3884): acquire with a different --work-unit has been the
+// advance since v2.3.0, and nothing named it, so callers reached for rescope,
+// which a complete objective refuses.
+func compactCompleteResult(status RuntimeStatus, request BeginAttemptRequest) CompactAttemptResult {
+	workUnit := ""
+	if status.Objective != nil {
+		workUnit = status.Objective.WorkUnit
+	}
+	exit := "this change's runtime objective (" + workUnit + ") is complete; to continue with the next ordered work unit, run " +
+		compactAcquireCommand("<a different label>") + "; rescope applies only to an objective that is not complete, and reset discards this scope instead of succeeding it"
+	switch {
+	case request.WorkUnit == "":
+	case request.WorkUnit == workUnit:
+		exit += "; --work-unit \"" + request.WorkUnit + "\" restates the completed objective; choose a different label"
+	case len(status.Attempts) > 0 && status.Attempts[len(status.Attempts)-1].ChangedLineBudgetExceeded:
+		exit += "; the last attempt exceeded its changed-line budget, so no successor may advance from it; a maintainer reset is required: " + compactResetCommand
+	case len(status.Attempts) > 0 && (status.Attempts[len(status.Attempts)-1].FinishCandidateIdentity == "" || status.Attempts[len(status.Attempts)-1].FinishCandidateTree == ""):
+		exit += "; the last passed attempt recorded no finish candidate identity (a record written by an older binary), so a successor cannot bind to it; a maintainer reset is required: " + compactResetCommand
+	}
+	return CompactAttemptResult{State: CompactStateComplete, Exit: exit, Detail: exit}
 }
 
 // compactForeignAcquireToken names the exact continuation for a losing

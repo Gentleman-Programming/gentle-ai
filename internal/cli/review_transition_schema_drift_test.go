@@ -20,6 +20,7 @@ const (
 	reviewV2AcknowledgementRef        = "transition-execution.schema.json#/$defs/approved_acknowledgement_execution"
 	reviewV2ExecutionRef              = "transition-execution.schema.json"
 	reviewV2LastEventExecutionRef     = "transition-execution.schema.json#/$defs/last_event_status_execution"
+	reviewV2StartStatusExecutionRef   = "transition-execution.schema.json#/$defs/start_status_execution"
 )
 
 func TestV2TransitionSchemasStayLocalSharedAndPackaged(t *testing.T) {
@@ -29,6 +30,7 @@ func TestV2TransitionSchemasStayLocalSharedAndPackaged(t *testing.T) {
 		reviewV2TransitionBindingSchema,
 		reviewV2TransitionExecutionSchema,
 		"start.schema.json",
+		"start-v4.schema.json",
 		"status.schema.json",
 		"status-v4.schema.json",
 		"status-v5.schema.json",
@@ -57,6 +59,15 @@ func TestV2TransitionSchemasStayLocalSharedAndPackaged(t *testing.T) {
 	if got := reviewSchemaRef(t, startProperties["acknowledgement"], "START acknowledgement"); got != reviewV2AcknowledgementRef {
 		t.Fatalf("START acknowledgement ref = %q, want %q", got, reviewV2AcknowledgementRef)
 	}
+	startV4Properties := reviewSchemaObject(t, documents["start-v4.schema.json"]["properties"], "START v4 properties")
+	if got := reviewSchemaRef(t, startV4Properties["acknowledgement"], "START v4 acknowledgement"); got != reviewV2AcknowledgementRef {
+		t.Fatalf("START v4 acknowledgement ref = %q, want %q", got, reviewV2AcknowledgementRef)
+	}
+	startV4Continuation := reviewSchemaObject(t, startV4Properties["next_transition"], "START v4 next_transition")
+	continuationProperties := reviewSchemaObject(t, startV4Continuation["properties"], "START v4 next_transition properties")
+	if got := reviewSchemaRef(t, continuationProperties["execute"], "START v4 execute"); got != reviewV2StartStatusExecutionRef {
+		t.Fatalf("START v4 execute ref = %q, want %q", got, reviewV2StartStatusExecutionRef)
+	}
 	for _, name := range []string{"status.schema.json", "status-v4.schema.json", "status-v5.schema.json"} {
 		nextTransition := reviewSchemaObject(t,
 			reviewSchemaObject(t, documents[name]["$defs"], name+" $defs")["next_transition"],
@@ -81,7 +92,7 @@ func TestV2TransitionSchemasStayLocalSharedAndPackaged(t *testing.T) {
 		t.Fatalf("last-event acknowledgement ref = %q, want %q", got, reviewV2AcknowledgementRef)
 	}
 
-	for _, name := range []string{"start.schema.json", "status-v5.schema.json"} {
+	for _, name := range []string{"start.schema.json", "start-v4.schema.json", "status-v5.schema.json"} {
 		defs := reviewSchemaObject(t, documents[name]["$defs"], name+" $defs")
 		if _, exists := defs["acknowledgement_execution"]; exists {
 			t.Fatalf("%s retains a divergent acknowledgement definition", name)
@@ -144,7 +155,7 @@ func TestV2TransitionSchemasAcceptProviderPayloadsAndRejectDrift(t *testing.T) {
 	}), &startOutput); err != nil {
 		t.Fatalf("approved START: %v\n%s", err, startOutput.String())
 	}
-	startSchema := compileWholePublishedReviewSchema(t, "v2", "start.schema.json")
+	startSchema := compileWholePublishedReviewSchema(t, "v2", "start-v4.schema.json")
 	validatePublishedReviewSchema(t, startSchema, startOutput.Bytes())
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, startOutput.Bytes(), &started)

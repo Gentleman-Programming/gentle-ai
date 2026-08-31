@@ -1918,13 +1918,13 @@ func TestWelcomeMenu_UninstallOpenCodePluginEmptyTUIJSON(t *testing.T) {
 func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 10
+	m.Cursor = 11
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=10 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=11 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
@@ -1933,31 +1933,29 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 11
+	m.Cursor = 12
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=11 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=12 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has 13 items without OpenCode
-// and 14 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 14 items without OpenCode
+// and 15 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 13 options (includes dedicated OpenCode community plugins,
-	// the slice-3b "Uninstall OpenCode Plugin" shortcut, the review store reset,
-	// managed uninstall, and community tools).
+	// Without OpenCode detected: 14 options, including the review-mode entry.
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
-	if len(opts) != 13 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 13; got %v", len(opts), opts)
+	if len(opts) != 14 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 14; got %v", len(opts), opts)
 	}
-	// With OpenCode detected: 14 options (adds "OpenCode SDD Profiles").
+	// With OpenCode detected: 15 options (adds "OpenCode SDD Profiles").
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 14 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 14; got %v", len(optsWithProfiles), optsWithProfiles)
+	if len(optsWithProfiles) != 15 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 15; got %v", len(optsWithProfiles), optsWithProfiles)
 	}
 }
 

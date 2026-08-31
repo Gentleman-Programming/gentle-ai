@@ -68,7 +68,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
 	if status.ActiveAttempt != nil {
-		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		return runtimeBeginAdmissionResult{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 	}
 	// A passed objective terminates its own scope, not the change. When the
 	// request names a distinct work unit, the ordinary continuation is the
@@ -101,7 +101,18 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 			return runtimeBeginAdmissionResult{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 		}
-		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+		// #3842: the terminal capture replays the RECORDED selection, which
+		// the user may have legitimately committed since the last settle, so
+		// reconcile it against the current index first — a committed path then
+		// replays as zero drift or as ordinary candidate drift, never as a
+		// capture failure. The request-vs-recorded comparison below
+		// deliberately stays against the recorded list: what the caller must
+		// re-request is the scope the ledger holds, exactly as acquired.
+		var intended []string
+		intended, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err == nil {
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
+		}
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
@@ -185,7 +196,10 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	normalized = runtimeRescopeSuccessorRequest(status, normalized, inheritIntendedUntracked)
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
-	}); terminal && result.State == CompactStateBlocked {
+	}); terminal && result.State != CompactStateProceed {
+		// A complete verdict has no block reason, but its exit (the successor
+		// acquire, #3884) rides BlockedExit rather than a new field, so the
+		// read-only surface names the same continuation acquire does.
 		status.BlockedReason, status.BlockedExit = result.Reason, result.Exit
 		// An exhausted budget is a decision, so it asks instead of ending the
 		// conversation. The grant is the reset the ledger already admits at

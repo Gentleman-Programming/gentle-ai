@@ -1459,6 +1459,7 @@ func (s componentApplyStep) Run() error {
 	switch s.component {
 	case model.ComponentEngram:
 		engramCommand := "engram"
+		var installErr error
 		if s.channel.IsBeta() {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
@@ -1473,16 +1474,12 @@ func (s componentApplyStep) Run() error {
 				if err != nil {
 					return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 				}
-				if err := runCommandSequence(commands); err != nil {
-					return err
-				}
-			} else {
+				installErr = runCommandSequence(commands)
+			} else if binaryPath, err := engramDownloadFn(s.profile); err != nil {
 				// Linux / Windows: download the pre-built binary from GitHub Releases.
 				// No Go required — engram ships pre-built binaries.
-				binaryPath, err := engramDownloadFn(s.profile)
-				if err != nil {
-					return fmt.Errorf("download engram binary: %w", err)
-				}
+				installErr = fmt.Errorf("download engram binary: %w", err)
+			} else {
 				// Add the install directory to PATH so subsequent commands
 				// (engram setup, engram.Inject → resolveEngramCommand) can find it.
 				// On Windows this also persists the change to the user registry via PowerShell.
@@ -1492,6 +1489,22 @@ func (s componentApplyStep) Run() error {
 					fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", binDir, err)
 				}
 				engramCommand = binaryPath
+			}
+			if installErr != nil {
+				if s.selection.HasComponent(model.ComponentEngram) {
+					return installErr
+				}
+				// engram was auto-added as an sdd dependency, not requested. Its
+				// failure must not abort the components the user asked for, and
+				// no configuration may point at a binary that does not exist:
+				// report the missing binary as a warning with its own install
+				// command and leave the engram step entirely (#3725).
+				fmt.Fprintf(os.Stderr, "WARNING: engram could not be installed: %v\nInstall it with `%s`.\n", installErr, engramInstallCommand(s.agents))
+				if s.state != nil {
+					s.state.engramVersionResolved = true
+					s.state.engramVersionErr = installErr
+				}
+				return nil
 			}
 		} else if shouldRefreshWindowsEngram(s.profile, installedPath, pathEnvEntries(s.profile)) {
 			binaryPath, err := engramDownloadFn(s.profile)
@@ -1533,7 +1546,7 @@ func (s componentApplyStep) Run() error {
 		// entirely rather than run it unconditionally.
 		willAttemptSetup := false
 		for _, adapter := range adapters {
-			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
+			if installErr == nil && engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				willAttemptSetup = true
 				break
 			}
@@ -1561,7 +1574,7 @@ func (s componentApplyStep) Run() error {
 
 		attemptedSlugs := make(map[string]struct{}, len(adapters))
 		for _, adapter := range adapters {
-			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
+			if willAttemptSetup && engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				slug, _ := engram.SetupAgentSlug(adapter.Agent())
 				if _, seen := attemptedSlugs[slug]; !seen {
 					setupArgs := []string{"setup", slug}
@@ -2202,15 +2215,13 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
 			if adapter.SupportsSlashCommands() {
-				for _, command := range sdd.OpenCodeCommands() {
-					paths = append(paths, filepath.Join(adapter.CommandsDir(targetDir), command.Name+".md"))
-				}
+				paths = append(paths, sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(targetDir))...)
 			}
 			if adapter.Agent() == model.AgentOpenCode {
 				if p := adapter.SettingsPath(targetDir); p != "" {
 					paths = append(paths, p, opencodedefault.OwnershipPath(p))
 				}
-				paths = append(paths, openCodeSDDPluginPaths(targetDir)...)
+				paths = append(paths, openCodeSDDPluginPaths(adapter, targetDir)...)
 				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.
 				// These files are only written for multi-mode (SDDModeMulti), so we only
@@ -2508,13 +2519,16 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 	return paths
 }
 
-func openCodeSDDPluginPaths(targetDir string) []string {
+func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	// Legacy background-agents is removed during installation and therefore has
 	// an absence check. The retired reviewer plugin is part of the rollback
 	// snapshot but not post-apply verification because migration removes it.
-	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
+	// The plugin writer resolves the config directory through the adapter, so
+	// verification must ask the same resolver (#3219).
+	pluginsDir := filepath.Join(adapter.GlobalConfigDir(targetDir), "plugins")
+	paths := []string{filepath.Join(pluginsDir, "background-agents.ts")}
 	for _, name := range sdd.ManagedOpenCodePluginNames() {
-		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
+		paths = append(paths, filepath.Join(pluginsDir, name))
 	}
 	return paths
 }
@@ -2535,6 +2549,13 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	seenPath := make(map[string]struct{})
 	var uniqueFilePaths []string
 	for _, component := range input.Resolved.OrderedComponents {
+		if component == model.ComponentEngram && !input.Selection.HasComponent(model.ComponentEngram) &&
+			input.State != nil && input.State.engramVersionErr != nil {
+			// An auto-added engram that could not be installed wrote nothing
+			// (#3725); its health check below carries the warning and the
+			// install command, so its files are not required here.
+			continue
+		}
 		for _, path := range componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
 			if path == "" {
 				continue
@@ -2549,10 +2570,10 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 
 	for _, currentPath := range uniqueFilePaths {
 		path := currentPath
-		if isLegacyOpenCodeBackgroundAgentsPlugin(path) {
+		if isRetiredManagedPath(path) {
 			checks = append(checks, verify.Check{
 				ID:          "verify:file:" + path,
-				Description: "legacy OpenCode background agents plugin removed",
+				Description: "retired managed file removed",
 				Run: func(context.Context) error {
 					if _, err := os.Stat(path); err != nil {
 						if os.IsNotExist(err) {
@@ -2560,7 +2581,7 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 						}
 						return err
 					}
-					return fmt.Errorf("legacy OpenCode plugin still exists")
+					return fmt.Errorf("retired managed file still exists; rerun `gentle-ai sync` to finish retiring it")
 				},
 			})
 			continue
@@ -2578,22 +2599,33 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	}
 
 	if hasComponent(input.Resolved.OrderedComponents, model.ComponentEngram) {
-		checks = append(checks, engramHealthChecks(input.State)...)
+		checks = append(checks, engramHealthChecks(input.State, input.Resolved.Agents)...)
 	}
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
 
+// isRetiredManagedPath reports whether path names a managed file that install
+// and sync remove instead of write, so verification checks its absence.
+func isRetiredManagedPath(path string) bool {
+	return isLegacyOpenCodeBackgroundAgentsPlugin(path) || sdd.IsLegacyClaudeCommandPath(path)
+}
+
 func isLegacyOpenCodeBackgroundAgentsPlugin(path string) bool {
 	path = filepath.Clean(path)
 	pluginsDir := filepath.Dir(path)
 	opencodeDir := filepath.Dir(pluginsDir)
-	configDir := filepath.Dir(opencodeDir)
-	return filepath.Base(path) == "background-agents.ts" &&
-		filepath.Base(pluginsDir) == "plugins" &&
-		filepath.Base(opencodeDir) == "opencode" &&
-		filepath.Base(configDir) == ".config"
+	if filepath.Base(path) != "background-agents.ts" || filepath.Base(pluginsDir) != "plugins" || filepath.Base(opencodeDir) != "opencode" {
+		return false
+	}
+	if filepath.Base(filepath.Dir(opencodeDir)) == ".config" {
+		return true
+	}
+	// A home installed with XDG_CONFIG_HOME keeps its OpenCode config under
+	// $XDG_CONFIG_HOME/opencode instead of ~/.config/opencode (#3219).
+	xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	return filepath.IsAbs(xdgConfigHome) && opencodeDir == filepath.Join(filepath.Clean(xdgConfigHome), "opencode")
 }
 
 func hasComponent(components []model.ComponentID, target model.ComponentID) bool {
@@ -2622,7 +2654,7 @@ func containsAgent(agents []model.AgentID, target model.AgentID) bool {
 // not yet resolved) still routes through the verifyEngramVersion seam var
 // rather than calling engram.VerifyVersion() directly, so it stays fakeable
 // in tests.
-func engramHealthChecks(state *runtimeState) []verify.Check {
+func engramHealthChecks(state *runtimeState, agentIDs []model.AgentID) []verify.Check {
 	return []verify.Check{
 		{
 			ID:          "verify:engram:binary",
@@ -2630,7 +2662,7 @@ func engramHealthChecks(state *runtimeState) []verify.Check {
 			Soft:        true,
 			Run: func(context.Context) error {
 				if err := engram.VerifyInstalled(); err != nil {
-					return fmt.Errorf("%w\nIf engram was installed via `go install`, add it to PATH:\n  %s", err, engramPathGuidance(os.Getenv("SHELL")))
+					return fmt.Errorf("%w\nInstall it with `%s`.\nIf engram was installed via `go install`, add it to PATH:\n  %s", err, engramInstallCommand(agentIDs), engramPathGuidance(os.Getenv("SHELL")))
 				}
 				return nil
 			},
@@ -2652,6 +2684,12 @@ func engramHealthChecks(state *runtimeState) []verify.Check {
 			},
 		},
 	}
+}
+
+// engramInstallCommand names the install continuation for a missing engram
+// binary so the warning that reports it is actionable on its own.
+func engramInstallCommand(agentIDs []model.AgentID) string {
+	return fmt.Sprintf("gentle-ai install --agent %s --components engram", joinAgentIDs(agentIDs))
 }
 
 // antigravityCollisionCheck returns a soft verify check that warns the user

@@ -101,12 +101,14 @@ type ReviewTransitionArgument struct {
 	Value string `json:"value"`
 	// Token is the exact, literally executable argv token for this argument
 	// (e.g. "--captured-results=true"). It is populated wherever the argument
-	// really is argv: on ReviewTransitionExecution.Arguments, and on the
+	// really is argv: on ReviewTransitionExecution.Arguments, on the
 	// Arguments of a ReviewTransitionInput whose CaptureOperation names an
-	// operation this product performs (see reviewNativeCaptureVerb). It stays
-	// empty on Preconditions, which are assertions rather than argv, on
-	// SelectorArguments, which are a normalized echo of arguments already
-	// carried, and on the Arguments of an "external.*" capture operation,
+	// operation this product performs (see reviewNativeCaptureVerb), and on
+	// the SelectorArguments of a reviewing START status continuation, whose
+	// rows are byte-identical copies of already-tokenized argument rows
+	// (issue #3894). It stays empty on Preconditions, which are assertions
+	// rather than argv, on the normalized selector echoes older transitions
+	// carry, and on the Arguments of an "external.*" capture operation,
 	// which are values to hand to whoever performs it somewhere this product
 	// does not run. Name/Value stay byte-identical so existing consumers of
 	// those two fields never move.
@@ -210,7 +212,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 	bindingTarget := status.TargetIdentity
 	if status.Authority.State == reviewtransaction.StateValidating || status.Authority.State == reviewtransaction.StateCorrectionRequired ||
-		status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+		status.Authority.State == reviewtransaction.StateApproved && input.Acknowledgement != nil {
 		// Correction-plan capture is bound to the severe reviewer event's frozen
 		// candidate, never to a live correction candidate STATUS may be
 		// projecting. Targeted validation replaces this value with its own
@@ -222,7 +224,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	if status.Authority.CapturePhaseRevision != "" {
 		captureBinding.Revision = status.Authority.CapturePhaseRevision
 	}
-	if status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+	// The pending acknowledgement is the lineage's own next step, not a v2
+	// feature (issue #3940): gating it on the contract sent every v1 caller to
+	// native_stop_required one step before the burn it was asked to perform.
+	if status.Authority.State == reviewtransaction.StateApproved && input.Acknowledgement != nil {
 		acknowledgement := *input.Acknowledgement
 		if acknowledgement.LineageID != binding.LineageID || acknowledgement.TargetIdentity != binding.TargetIdentity || acknowledgement.ExpectedRevision != binding.Revision {
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
@@ -624,6 +629,63 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	}
 	arguments = append(arguments, reviewStartIntendedUntrackedArguments(intended)...)
 	return arguments
+}
+
+// reviewStartStatusContinuation is the provider-issued re-entry a reviewing
+// negotiated START carries (issue #3894): the exact follow-up STATUS
+// invocation for the frozen scope, rendered from frozen authority facts
+// rather than a caller's remembered selector spelling. Its scope selectors
+// are echoed as byte-identical tokenized rows in selector_arguments so a
+// consumer replays them without re-deriving any spelling. It deliberately
+// carries no --cwd token: a negotiated START payload publishes no filesystem
+// path, and the caller runs the command in the repository it already holds.
+// It does carry the opaque repository context START published (issue #3932),
+// so a process cwd that does not hold this lineage fails closed instead of
+// silently preflighting a fresh target in whatever repository it found.
+func reviewStartStatusContinuation(state reviewtransaction.CompactState, revision string, runtime model.AgentID, repositoryContext string) *ReviewNextTransition {
+	arguments := []ReviewTransitionArgument{
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+		{Name: "next-transition", Value: "true"},
+		{Name: "lineage", Value: state.LineageID},
+		{Name: "repository-context", Value: repositoryContext},
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
+	}
+	var selectors []ReviewTransitionArgument
+	switch state.InitialSnapshot.Kind {
+	case reviewtransaction.TargetBaseDiff:
+		selectors = []ReviewTransitionArgument{
+			{Name: "base-ref", Value: state.InitialSnapshot.BaseTree},
+			{Name: "committed-only", Value: "true"},
+		}
+	case reviewtransaction.TargetCurrentChanges:
+		// A frozen workspace snapshot stores no explicit projection; the
+		// re-entry must still name one so the consumer replays the exact scope.
+		projection := state.InitialSnapshot.Projection
+		if projection == "" {
+			projection = reviewtransaction.ProjectionWorkspace
+		}
+		selectors = []ReviewTransitionArgument{{Name: "projection", Value: string(projection)}}
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		selectors = []ReviewTransitionArgument{
+			{Name: "base-ref", Value: state.InitialSnapshot.BaseTree},
+			{Name: "workspace-overlay", Value: "true"},
+		}
+		if state.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			selectors = append(selectors, ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)})
+		}
+	default:
+		return nil
+	}
+	arguments = append(arguments, selectors...)
+	transition := reviewExecuteTransition("review_status_required", "review.status", arguments,
+		[]ReviewTransitionArgument{{Name: "state", Value: string(reviewtransaction.StateReviewing)}},
+		ReviewTransitionBinding{LineageID: state.LineageID, Revision: revision, TargetIdentity: state.InitialSnapshot.Identity}, nil,
+	)
+	tokenized := transition.Execute.Arguments
+	transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(tokenized[len(tokenized)-len(selectors):])
+	return &transition
 }
 
 func reviewRepairTransition(status ReviewTargetStatusResult, input reviewNextTransitionInput) ReviewNextTransition {

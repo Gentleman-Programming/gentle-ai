@@ -47,6 +47,7 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 		{name: "ErrRuntimeNoActiveAttempt", err: ErrRuntimeNoActiveAttempt, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeWorktreeMismatch", err: ErrRuntimeWorktreeMismatch, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockWorktreeMismatch},
 		{name: "ErrRuntimeCandidateUnavailable", err: ErrRuntimeCandidateUnavailable, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockCandidateUnavailable},
+		{name: "ErrRuntimeUndeclaredUntracked", err: ErrRuntimeUndeclaredUntracked, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockUndeclaredUntracked},
 		// Reset is the only mutation that can produce these two; Begin/Finish
 		// never do, so Acquire/Settle never route them into
 		// compactMutationFailure. They stay intentionally unclassified.
