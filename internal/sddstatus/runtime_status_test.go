@@ -334,7 +334,7 @@ func newEvidenceOnlyRuntimeRemediationFixture(t *testing.T, change string) evide
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: change + "-begin-failed-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +358,7 @@ func newEvidenceOnlyRuntimeRemediationFixture(t *testing.T, change string) evide
 	}
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: reset.Revision, RequestID: change + "-begin-remediation", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)

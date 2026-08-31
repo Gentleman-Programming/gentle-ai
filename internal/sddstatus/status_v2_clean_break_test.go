@@ -241,7 +241,7 @@ func TestResolveRuntimeAuthorityFailureBlocksFinalRoutingBeforeOfferingReview(t 
 			runtimeStore := mustRuntimeStore(t, repo, change)
 			if _, err := runtimeStore.Begin(context.Background(), BeginAttemptRequest{
 				RequestID: "begin-corrupt-runtime", WorkUnit: "verify", EvidenceGoal: "prove final routing",
-				MaxAttempts: 1, MaxChangedLines: 0,
+				MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 			}); err != nil {
 				t.Fatal(err)
 			}

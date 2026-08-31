@@ -24,7 +24,7 @@ func TestRuntimeRemediationSettlesWhenCorrectionPredatesAcquire(t *testing.T) {
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: "predates-begin-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestRuntimeRemediationSettlesWhenCorrectionPredatesAcquire(t *testing.T) {
 	appendRuntimeLedgerFile(t, repo, "expect(emptyState).toBeVisible()\n")
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: reset.Revision, RequestID: "predates-begin-correction", WorkUnit: "correction",
-		EvidenceGoal: "focused remediation", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "focused remediation", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestRuntimeRemediationRevertToFailedBytesStaysRefused(t *testing.T) {
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: "revert-begin-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)

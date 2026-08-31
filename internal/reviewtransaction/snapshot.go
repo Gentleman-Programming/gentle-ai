@@ -1677,6 +1677,10 @@ type GitCommandError struct {
 	Remote   bool
 	Cause    error
 	Output   string
+	// Stdout is what the command printed before it failed, for commands whose
+	// non-zero exit still carries an answer (merge-tree reports conflicts as
+	// exit 1 alongside the tree it wrote).
+	Stdout string
 }
 
 func (err *GitCommandError) Error() string {
@@ -1874,7 +1878,7 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 		}
 		return nil, 0, joinGitOutputOverflow(&GitCommandError{
 			Args: append([]string{}, args...), ExitCode: exitCode, Remote: remote, Cause: err,
-			Output: strings.TrimSpace(string(diagnostic)),
+			Output: strings.TrimSpace(string(diagnostic)), Stdout: string(output),
 		}, overflow)
 	}
 	if overflow != nil {
