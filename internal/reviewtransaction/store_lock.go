@@ -330,6 +330,10 @@ func (lock *storeLock) release() error {
 	if lock == nil || lock.file == nil {
 		return nil
 	}
+	// #2504: clear the owner payload while the advisory lock is still held,
+	// so no observer ever reads an exited process as the recorded holder.
+	// Kernel ownership stays the truth; the payload is only ever a hint.
+	truncateErr := lock.file.Truncate(0)
 	unlockErr := unlockFile(lock.file)
 	closeErr := lock.file.Close()
 	lock.file = nil
@@ -338,7 +342,7 @@ func (lock *storeLock) release() error {
 		maintenanceErr = lock.maintenance.Release()
 		lock.maintenance = nil
 	}
-	return errors.Join(unlockErr, closeErr, maintenanceErr)
+	return errors.Join(truncateErr, unlockErr, closeErr, maintenanceErr)
 }
 
 // secureLockRoot locates the repository's Git common directory that this

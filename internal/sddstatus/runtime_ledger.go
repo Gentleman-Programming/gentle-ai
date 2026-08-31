@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -671,6 +672,9 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
+		if abs, absErr := filepath.Abs(repo); absErr == nil && !workspaceHasGitMetadata(abs) {
+			return RuntimeStore{}, &RuntimeRepositoryRequiredError{Workspace: abs, Cause: err}
+		}
 		return RuntimeStore{}, err
 	}
 	workspace, err := filepath.Abs(repo)
@@ -689,6 +693,20 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
 }
+
+// RuntimeRepositoryRequiredError refuses to open the runtime attempt ledger
+// outside a Git repository (#2612, #3202): its authority lives in the Git
+// common directory, so there is nowhere to keep it until one exists.
+type RuntimeRepositoryRequiredError struct {
+	Workspace string
+	Cause     error
+}
+
+func (err *RuntimeRepositoryRequiredError) Error() string {
+	return fmt.Sprintf("the SDD runtime attempt ledger needs a Git repository because its authority lives in the Git common directory, and %s is not inside one; run `git init` in that workspace (or run from the repository that contains it), then rerun the same `gentle-ai sdd-attempt` command", err.Workspace)
+}
+
+func (err *RuntimeRepositoryRequiredError) Unwrap() error { return err.Cause }
 
 func validRuntimeChange(change string) bool {
 	return len(change) <= 96 && runtimeChangePattern.MatchString(change)
@@ -3424,8 +3442,13 @@ func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if actual != revision {
 		return runtimeRecord{}, fmt.Errorf("SDD runtime record revision mismatch: expected %s, got %s", revision, actual)
 	}
+	// #2702: unknown fields are tolerated, not refused. The sha256 revision
+	// above already pins the bytes, so a strict decode added no integrity; it
+	// only made a record with one additive field from a newer binary
+	// unreadable by every operation, reset included. The trade-off is that an
+	// older binary ignores fields it does not understand. A record whose
+	// schema version is newer than this binary's stays a typed refusal.
 	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	var record runtimeRecord
 	if err := decoder.Decode(&record); err != nil {
 		return runtimeRecord{}, fmt.Errorf("decode SDD runtime revision %s: %w", revision, err)
@@ -3434,14 +3457,64 @@ func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return runtimeRecord{}, errors.New("SDD runtime record contains multiple JSON values")
 	}
+	if runtimeRecordSchemaIsNewer(record.Schema) {
+		return runtimeRecord{}, &RuntimeRecordSchemaUnsupportedError{Revision: revision, Schema: record.Schema}
+	}
 	_, canonical, err := runtimeRecordRevision(record)
-	if err != nil || !bytes.Equal(payload, canonical) {
+	if err != nil || !runtimeRecordPayloadCanonical(payload, canonical) {
 		return runtimeRecord{}, errors.New("SDD runtime record is not canonical")
 	}
 	if record.Change != store.Change {
 		return runtimeRecord{}, errors.New("SDD runtime record change does not match store")
 	}
 	return record, nil
+}
+
+// runtimeRecordPayloadCanonical accepts the exact canonical encoding, or a
+// compact encoding whose every known top-level field is byte-identical to the
+// canonical one and which carries only additive unknown fields (#2702).
+func runtimeRecordPayloadCanonical(payload, canonical []byte) bool {
+	if bytes.Equal(payload, canonical) {
+		return true
+	}
+	var actual, expected map[string]json.RawMessage
+	if json.Unmarshal(payload, &actual) != nil || json.Unmarshal(canonical, &expected) != nil || len(actual) <= len(expected) {
+		return false
+	}
+	for key, value := range expected {
+		if !bytes.Equal(actual[key], value) {
+			return false
+		}
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, payload) != nil {
+		return false
+	}
+	compact.WriteByte('\n')
+	return bytes.Equal(compact.Bytes(), payload)
+}
+
+// runtimeRecordSchemaIsNewer reports whether a record declares a later
+// version of the runtime record schema than this binary supports.
+func runtimeRecordSchemaIsNewer(schema string) bool {
+	prefix := runtimeRecordSchema[:strings.LastIndex(runtimeRecordSchema, "/v")+2]
+	supported, err := strconv.Atoi(strings.TrimPrefix(runtimeRecordSchema, prefix))
+	if err != nil || !strings.HasPrefix(schema, prefix) {
+		return false
+	}
+	version, err := strconv.Atoi(strings.TrimPrefix(schema, prefix))
+	return err == nil && version > supported
+}
+
+// RuntimeRecordSchemaUnsupportedError refuses a runtime record written under
+// a schema version newer than this binary supports.
+type RuntimeRecordSchemaUnsupportedError struct {
+	Revision string
+	Schema   string
+}
+
+func (err *RuntimeRecordSchemaUnsupportedError) Error() string {
+	return fmt.Sprintf("SDD runtime revision %s declares \"schema\" %s, newer than this binary supports (%s); run `gentle-ai update` to install a build that reads it, then rerun the same `gentle-ai sdd-attempt` command", err.Revision, err.Schema, runtimeRecordSchema)
 }
 
 func readBoundedRuntimeFile(path string) ([]byte, error) {
