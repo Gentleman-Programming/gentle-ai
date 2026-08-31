@@ -114,12 +114,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			}
 		}
 		if !inheritsRescopeSelection {
-			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 			if scopeErr != nil {
 				return scopeErr
 			}
 			if scope.NeedsSelection {
-				return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+				return intendedUntrackedSelectionRequired(scope, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 			}
 			intended = scope.Intended
 		}
@@ -131,7 +131,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	var settlementUntracked *[]string
 	settlementInventory := ""
 	if (operation == "finish" || operation == "settle") && declaredUntracked {
-		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 		if scopeErr != nil {
 			return scopeErr
 		}

@@ -3950,12 +3950,12 @@ func TestInjectSkillDirectoryRemovesLegacySharedSkillMarker(t *testing.T) {
 		t.Fatalf("WriteFile(%q) error = %v", legacyMarker, err)
 	}
 
-	result, err := InjectSkillDirectory(skillDir, "")
+	result, err := InjectSkillDirectoryForAgent(skillDir, "", "")
 	if err != nil {
-		t.Fatalf("InjectSkillDirectory() error = %v", err)
+		t.Fatalf("InjectSkillDirectoryForAgent() error = %v", err)
 	}
 	if !result.Changed {
-		t.Fatal("InjectSkillDirectory() changed = false, want legacy marker cleanup to report a change")
+		t.Fatal("InjectSkillDirectoryForAgent() changed = false, want legacy marker cleanup to report a change")
 	}
 	if _, err := os.Stat(legacyMarker); !os.IsNotExist(err) {
 		t.Fatalf("legacy shared marker %q still exists or could not be checked: %v", legacyMarker, err)
@@ -3986,9 +3986,9 @@ func TestInjectSkillDirectoryRefusesToRemoveNonRegularLegacySharedMarker(t *test
 		t.Fatalf("MkdirAll(%q) error = %v", legacyMarker, err)
 	}
 
-	_, err := InjectSkillDirectory(skillDir, "")
+	_, err := InjectSkillDirectoryForAgent(skillDir, "", "")
 	if err == nil {
-		t.Fatal("InjectSkillDirectory() error = nil, want refusal to remove a non-regular legacy marker")
+		t.Fatal("InjectSkillDirectoryForAgent() error = nil, want refusal to remove a non-regular legacy marker")
 	}
 	info, statErr := os.Stat(legacyMarker)
 	if statErr != nil {
