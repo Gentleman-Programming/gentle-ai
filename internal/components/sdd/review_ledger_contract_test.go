@@ -722,8 +722,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// -23 per case (15_855 -> 15_832 / 28_200 -> 28_177) when #2941 replaced the
 		// retired capture flags with `--input` and shortened the sentence so the
 		// standard total stays under its unchanged ceiling. Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_832, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_177, maxCharacters: 30_063},
+		// +31 per case (15_832 -> 15_863 / 28_177 -> 28_208) when #3972 made the
+		// rdd_disabled continuation name the command that enables
+		// (`--scope global`): the clone form only clears a clone-local off, so
+		// the old row documented a no-op loop. Deliberate, not drift; the
+		// ceilings are unchanged and the standard row stays under 15_866.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_863, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_208, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -969,3 +969,76 @@ func decodeReviewModeResult(t *testing.T, payload []byte) ReviewModeResult {
 	}
 	return result
 }
+
+// TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset is the
+// RED-first proof for issue #3972. The clone-local override can only disable,
+// so `enable --scope clone` on a home whose global switch is unset clears an
+// opinion this clone never held and leaves receipt-driven development off.
+// That outcome is by design and exits 0; what was missing is the sentence
+// that says the global switch decides and names the one command that turns
+// reviews on. The JSON envelope already carries that fact as `source:
+// "default"` and stays byte-for-byte the same shape, because gentle-pi decodes
+// it as an exact object and would reject a new field.
+func TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone"}, &output); err != nil {
+		t.Fatalf("clearing an absent clone override must succeed while global mode is unset: %v", err)
+	}
+	human := output.String()
+	for _, want := range []string{
+		"receipt-driven development: off (decided by default)",
+		"can only disable",
+		"gentle-ai review mode enable --scope global",
+	} {
+		if !strings.Contains(human, want) {
+			t.Fatalf("clone enable on an unset global does not say the global switch decides (%q missing):\n%s", want, human)
+		}
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable clone --json) error = %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Effective != reviewtransaction.RDDModeOff ||
+		result.Status.Source != reviewtransaction.RDDModeSourceDefault ||
+		result.Status.Global != reviewtransaction.RDDModeUnset ||
+		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
+		t.Fatalf("clone enable result = %#v, want off decided by default with both sources unset", result.Status)
+	}
+	var envelope struct {
+		Status map[string]json.RawMessage `json:"status"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	for key := range envelope.Status {
+		switch key {
+		case "schema", "global", "clone_local", "effective", "source", "revision", "reach":
+		default:
+			t.Fatalf("status envelope grew a field %q; gentle-pi decodes gentle-ai.rdd-mode-status/v1 as an exact object", key)
+		}
+	}
+	if strings.Contains(output.String(), "--scope global") {
+		t.Fatalf("the JSON envelope must stay unchanged; the exit is derived from source=default:\n%s", output.String())
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no-op clone enable created repository state: %v", err)
+	}
+
+	// Once the global switch is on, the same command lands on "on" and the
+	// note has nothing to say.
+	if err := RunReviewMode([]string{"enable", "--scope", "global", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable global) error = %v", err)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable clone) error = %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, "receipt-driven development: on (decided by global)") || strings.Contains(got, "note:") {
+		t.Fatalf("clone enable while global is on must report on without a note:\n%s", got)
+	}
+}
