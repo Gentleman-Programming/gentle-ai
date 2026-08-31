@@ -714,8 +714,12 @@ func TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T
 	if !result.Verify.Ready {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); err != nil {
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	if _, err := os.Stat(claudeMD); err != nil {
 		t.Fatalf("requested sdd component did not land: %v", err)
+	}
+	if !verifyReportRequiresFile(result.Verify, claudeMD) {
+		t.Fatalf("SDD writes %s, so verification must still require it; report = %#v", claudeMD, result.Verify)
 	}
 	if raw, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil && strings.Contains(string(raw), "\"engram\"") {
 		t.Fatalf("engram MCP configuration was written for a binary that does not exist:\n%s", raw)
@@ -727,4 +731,57 @@ func TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T
 		}
 	}
 	t.Fatalf("no warning names %q; report = %#v", wantCommand, result.Verify)
+}
+
+// TestRunInstallOpenCodeMultiSDDCompletesWhenAutoAddedEngramCannotBeInstalled
+// pins issue #3975: in multi mode the SDD injector writes nothing into the
+// OpenCode AGENTS.md (the phases live in opencode.json and prompts/sdd/*), so
+// SDD must not demand that file. Before the fix the file existed only because
+// the auto-added engram step created it, and a skipped engram failed the
+// install on `verify:file:.../.config/opencode/AGENTS.md`.
+func TestRunInstallOpenCodeMultiSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restoreDownload := engramDownloadFn
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		engramDownloadFn = restoreDownload
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		return "", errors.New("GitHub API returned HTTP 403")
+	}
+
+	result, err := RunInstall([]string{"--agent", "opencode", "--components", "sdd", "--sdd-mode", "multi"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v; an auto-added dependency must not abort the requested components", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); err != nil {
+		t.Fatalf("requested sdd component did not land: %v", err)
+	}
+	agentsMD := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if verifyReportRequiresFile(result.Verify, agentsMD) {
+		t.Fatalf("SDD never writes %s for OpenCode, so verification must not require it; report = %#v", agentsMD, result.Verify)
+	}
+}
+
+// verifyReportRequiresFile reports whether the post-apply verification listed
+// path as a required file, regardless of whether that check passed.
+func verifyReportRequiresFile(report verify.Report, path string) bool {
+	for _, check := range report.Checks {
+		if check.ID == "verify:file:"+path {
+			return true
+		}
+	}
+	return false
 }
