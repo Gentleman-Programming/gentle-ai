@@ -68,7 +68,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
 	if status.ActiveAttempt != nil {
-		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		return runtimeBeginAdmissionResult{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 	}
 	// A passed objective terminates its own scope, not the change. When the
 	// request names a distinct work unit, the ordinary continuation is the
