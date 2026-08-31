@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 )
 
@@ -104,6 +106,32 @@ func TestSkillRelativeSharedLinksResolveAfterInject(t *testing.T) {
 		target := filepath.Join(skillsRoot, "_shared", filepath.FromSlash(match[1]))
 		if _, statErr := os.Stat(target); statErr != nil {
 			t.Errorf("judgment-day SKILL.md links to %q but it does not resolve on disk: %v", match[1], statErr)
+		}
+	}
+}
+
+// Issue #2846: the shared review ledger contract was raw-copied into every
+// runtime's skills/_shared, so the installed copy still carried the
+// {{GENTLE_AI_RUNTIME_AGENT_ID}} placeholder while the inline orchestrator copy
+// was rendered. The deployed shared file must bind the same runtime identity.
+func TestInjectBindsRuntimeIdentityInDeployedSharedReviewLedgerContract(t *testing.T) {
+	for agent, adapter := range map[string]agents.Adapter{"claude-code": claudeAdapter(), "opencode": opencodeAdapter()} {
+		mockNoPackageManager(t)
+		home := t.TempDir()
+		result, err := Inject(home, adapter, "")
+		if err != nil {
+			t.Fatalf("Inject(%s) error = %v", agent, err)
+		}
+		var content []byte
+		for _, file := range result.Files {
+			if strings.HasSuffix(file, filepath.Join("_shared", "review-ledger-contract.md")) {
+				if content, err = os.ReadFile(file); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if content == nil || strings.Contains(string(content), "{{") || !strings.Contains(string(content), "--agent "+agent+" --next-transition") {
+			t.Fatalf("deployed %s shared review ledger contract does not bind the runtime identity:\n%s", agent, content)
 		}
 	}
 }
