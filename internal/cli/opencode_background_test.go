@@ -257,7 +257,7 @@ func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
 		wantPolicy bool
 		wantNote   string
 	}{
-		{name: "ready", version: "1.15.11", wantStatus: "ready", wantReady: true, wantPolicy: true},
+		{name: "ready", version: "1.15.11", wantStatus: "ready", wantReady: true, wantPolicy: false, wantNote: "execution stays foreground"},
 		{name: "unsupported", version: "1.15.10", wantStatus: "unsupported", wantNote: "execution stays foreground"},
 		{name: "unknown", version: "development", wantStatus: "unknown", wantNote: "execution stays foreground"},
 	} {
@@ -696,6 +696,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 }
 
 func TestSyncReportsManagedLauncherChanges(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
 	home := syncBackgroundTestHome(t)
 	target := filepath.Join(home, "opencode-real")
 	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {

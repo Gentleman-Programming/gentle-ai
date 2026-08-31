@@ -15,6 +15,8 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
 )
@@ -75,6 +77,7 @@ var (
 	pathDirsFn          = func() []string {
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
+	pathValueFn        = func() string { return os.Getenv("PATH") }
 	osExecutableDoctor = os.Executable
 	engramProbeStdioFn = engram.ProbeStdio
 	httpGetFn          = func(url string, timeout time.Duration) (int, error) {
@@ -94,7 +97,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	installedAgents, _ := readDoctorInstalledAgents(homeDir)
+	installedState, _ := state.Read(homeDir)
+	installedAgents := installedState.InstalledAgents
 	// A state read failure (missing/malformed file) is surfaced separately by
 	// checkStateJSON. Here we fall back to an empty list so the doctor only
 	// reports the always-required core tools — preserving the first-time-install
@@ -115,22 +119,27 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
+	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn && doctorGOOS != "windows" {
+		checks = append(checks, doctor.Check{ID: doctor.CheckOpenCodeActivation, Run: func(context.Context) doctor.Result {
+			return checkManagedOpenCodeActivation(homeDir)
+		}})
+	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
 	return nil
 }
 
-// readDoctorInstalledAgents returns the agent IDs persisted in state.json.
-// An unreadable or absent state file yields a nil slice — callers must treat
-// nil/empty as "no agents selected" rather than a hard error so first-time
-// installs do not surface phantom agent-missing failures.
-func readDoctorInstalledAgents(homeDir string) ([]string, error) {
-	s, err := state.Read(homeDir)
-	if err != nil {
-		return nil, err
+func checkManagedOpenCodeActivation(homeDir string) CheckResult {
+	expected := opencode.POSIXLauncherPath(homeDir)
+	resolved, err := opencode.ResolveManagedLauncher(pathValueFn(), expected, doctorGOOS)
+	if err == nil {
+		return CheckResult{Status: CheckStatusPass, Detail: "managed OpenCode launcher resolves at " + resolved}
 	}
-	return s.InstalledAgents, nil
+	return CheckResult{
+		Status: CheckStatusFail,
+		Detail: "OpenCode background policy is on, but bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor",
+	}
 }
 
 // checkToolBinaries checks each required tool for PATH resolution and

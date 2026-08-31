@@ -1,7 +1,6 @@
 package uninstall
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -410,6 +409,12 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
 			backupTargets[path] = struct{}{}
 			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
+		}
+		if runtime.GOOS != "windows" {
+			for _, path := range opencodeactivation.ManagedProfilePaths(s.homeDir) {
+				backupTargets[path] = struct{}{}
+				operationsByKey[operationKey(removeOwnedOpenCodeProfile(path, s.homeDir))] = removeOwnedOpenCodeProfile(path, s.homeDir)
+			}
 		}
 	}
 
@@ -1523,20 +1528,26 @@ func removeOwnedOpenCodeLauncher(path string) operation {
 		path:   path,
 		agents: []model.AgentID{model.AgentOpenCode},
 		apply: func(path string) (bool, bool, error) {
-			data, err := os.ReadFile(path)
-			if os.IsNotExist(err) {
-				return false, false, nil
-			}
+			result, err := opencodeactivation.RemoveManagedLauncher(path)
 			if err != nil {
 				return false, false, err
 			}
-			if !bytes.Contains(data, []byte(opencodeactivation.OwnershipMarker)) {
+			if !result.Removed() {
 				return false, false, nil
 			}
-			if err := os.Remove(path); err != nil {
-				return false, false, err
-			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeOwnedOpenCodeProfile(path, homeDir string) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		agents: []model.AgentID{model.AgentOpenCode},
+		apply: func(path string) (bool, bool, error) {
+			changed, err := opencodeactivation.RemoveManagedProfileBlock(path, opencodeactivation.BinDir(homeDir))
+			return changed, false, err
 		},
 	}
 }
