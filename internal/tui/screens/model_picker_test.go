@@ -1246,6 +1246,29 @@ func TestRuntimeCatalogDiscoveryUpdatesPickerWithoutPrivateFixtures(t *testing.T
 	}
 }
 
+func TestRuntimeCatalogDiscoveryFailureKeepsConfiguredProviders(t *testing.T) {
+	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing-opencode.json"), func(context.Context, string) (map[string]opencode.Provider, error) {
+		return nil, errors.New("catalog unavailable")
+	})
+	state.ConfiguredProviders = map[string]opencode.Provider{
+		"configured": {ID: "configured", Name: "Configured", Models: map[string]opencode.Model{
+			"configured/model": {ID: "configured/model", ToolCall: true},
+		}},
+	}
+
+	state = state.Update(state.StartRuntimeCatalogDiscovery(1, "active-project")().(RuntimeCatalogDiscoveryMsg))
+
+	if state.CatalogStatus != RuntimeCatalogReady {
+		t.Fatalf("CatalogStatus = %v, want RuntimeCatalogReady", state.CatalogStatus)
+	}
+	if len(state.AvailableIDs) != 1 || state.AvailableIDs[0] != "configured" {
+		t.Fatalf("AvailableIDs = %v, want [configured]", state.AvailableIDs)
+	}
+	if got := state.SDDModels["configured"]; len(got) != 1 || got[0].ID != "configured/model" {
+		t.Fatalf("configured SDD models = %+v, want configured/model", got)
+	}
+}
+
 func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
 	state := ModelPickerState{
 		CustomAgents:     []string{"custom-1", "custom-2"},

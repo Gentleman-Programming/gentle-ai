@@ -159,12 +159,15 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		if discovery.RequestID != state.CatalogRequestID || discovery.ProjectDir != state.CatalogProjectDir {
 			return state
 		}
-		if discovery.Err != nil {
-			state.CatalogStatus = RuntimeCatalogFailed
-			return state
-		}
 		state.Providers = opencode.MergeConfiguredCatalog(discovery.Providers, state.ConfiguredProviders)
 		state.refreshRuntimeModels()
+		if discovery.Err != nil {
+			state.CatalogStatus = RuntimeCatalogReady
+			if !state.hasSelectableConfiguredModels() {
+				state.CatalogStatus = RuntimeCatalogFailed
+			}
+			return state
+		}
 		state.CatalogStatus = RuntimeCatalogReady
 		if len(state.AvailableIDs) == 0 {
 			state.CatalogStatus = RuntimeCatalogEmpty
@@ -172,6 +175,15 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		return state
 	}
 	return state
+}
+
+func (state ModelPickerState) hasSelectableConfiguredModels() bool {
+	for _, provider := range state.ConfiguredProviders {
+		if len(opencode.FilterModelsForSDD(provider)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (state *ModelPickerState) refreshRuntimeModels() {

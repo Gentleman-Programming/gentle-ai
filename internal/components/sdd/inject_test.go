@@ -668,13 +668,14 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 
 	const customPrompt = "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE"
 	seed := `{
-  "agent": {
-    "gentle-orchestrator": {
-      "mode": "primary",
-      "prompt": "` + customPrompt + `"
-    }
-  }
-}`
+	  // External profile managers may keep opencode.json as JSONC.
+	  "agent": {
+	    "gentle-orchestrator": {
+	      "mode": "primary",
+	      "prompt": "` + customPrompt + `",
+	    },
+	  },
+	}`
 	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
 		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
@@ -1510,14 +1511,15 @@ func TestInjectOpenCodeMigratesMisnamedGentlemanSDDOrchestrator(t *testing.T) {
 
 	const priorPrompt = "MISNAMED_GENTLEMAN_SDD_ORCHESTRATOR_PROMPT_TO_MIGRATE"
 	seed := `{
-  "agent": {
-    "gentleman": {
-      "mode": "primary",
-      "description": "Gentleman SDD Orchestrator - coordinates sub-agents",
-      "prompt": "` + priorPrompt + `"
-    }
-  }
-}`
+	  // Legacy misnamed SDD orchestrators may live in JSONC settings.
+	  "agent": {
+	    "gentleman": {
+	      "mode": "primary",
+	      "description": "Gentleman SDD Orchestrator - coordinates sub-agents",
+	      "prompt": "` + priorPrompt + `",
+	    },
+	  },
+	}`
 	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
 		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
@@ -5633,18 +5635,19 @@ func TestKilocodeSharedLegacyMigrationsPreserveTools(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := kilocodeAdapter().SettingsPath(home)
 	before := []byte(`{
-  "agents": {
-    "sdd-orchestrator": {"prompt": "legacy", "legacyMetadata": "preserve", "tools": {"read": true}},
-    "legacy-agent": {"tools": {"bash": true}}
-  },
-  "agent": {
-    "user-owned": {"tools": {"custom": true}}
-  },
-  "command": {
-		"legacy": {"prompt": "legacy command"}
-  }
-}
-`)
+	  // Legacy OpenCode-compatible settings may be JSONC.
+	  "agents": {
+	    "sdd-orchestrator": {"prompt": "legacy", "legacyMetadata": "preserve", "tools": {"read": true}},
+	    "legacy-agent": {"tools": {"bash": true}},
+	  },
+	  "agent": {
+	    "user-owned": {"tools": {"custom": true}},
+	  },
+	  "command": {
+			"legacy": {"prompt": "legacy command"},
+	  },
+	}
+	`)
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

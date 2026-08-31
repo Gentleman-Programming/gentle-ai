@@ -1686,8 +1686,10 @@ func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
 	}
 
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(data); err != nil {
 		return "", nil
+	} else {
+		root = parsedRoot
 	}
 
 	agentsRaw, ok := root["agent"]
@@ -1724,8 +1726,10 @@ func readMisnamedOpenCodeGentlemanSDDPrompt(settingsPath string) (string, error)
 	}
 
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(data); err != nil {
 		return "", nil
+	} else {
+		root = parsedRoot
 	}
 	agentsRaw, ok := root["agent"]
 	if !ok {
@@ -2317,8 +2321,10 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(baseJSON); err != nil {
 		return baseJSON, nil
+	} else {
+		root = parsedRoot
 	}
 
 	agentsRaw, ok := root["agent"]
@@ -2410,9 +2416,11 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(baseJSON); err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
+	} else {
+		root = parsedRoot
 	}
 
 	legacyRaw, hasLegacy := root["agents"]
