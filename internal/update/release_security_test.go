@@ -161,7 +161,7 @@ func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T)
 	if runtime.GOOS != "linux" {
 		t.Skip("release verification runtime is Ubuntu-specific")
 	}
-	for _, command := range []string{"bash", "jq", "sha256sum"} {
+	for _, command := range []string{"bash", "jq", "sha256sum", "tar"} {
 		if _, err := exec.LookPath(command); err != nil {
 			t.Skipf("%s is unavailable: %v", command, err)
 		}
@@ -185,30 +185,49 @@ func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T)
 set -euo pipefail
 printf '%s\n' "$*" >>"$GH_CALL_LOG"
 tag=${RELEASE_VERIFICATION_TAG:-$GITHUB_REF_NAME}
-if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$tag" ]]; then
-  cat <<JSON
-{"tag_name":"$tag","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"gentle-ai-review-provider-contract-1.1.0.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
-JSON
-  exit 0
+source_sha=${FAKE_SOURCE_SHA:-0123456789abcdef0123456789abcdef01234567}
+scenario=${FAKE_SCENARIO:-}
+if [[ "$1" == api ]]; then
+  case "$2" in
+    "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag") ref_type=${FAKE_REF_TYPE:-tag}; [[ $scenario != ref-commit ]] || ref_type=commit; printf '{"object":{"type":"%s","sha":"%s"}}\n' "$ref_type" "$source_sha"; exit ;;
+    "repos/$GITHUB_REPOSITORY/git/tags/$source_sha") printf '{"object":{"type":"%s","sha":"%s"}}\n' "${FAKE_TAG_TYPE:-commit}" "$source_sha"; exit ;;
+    "repos/$GITHUB_REPOSITORY/releases/tags/$tag")
+      names=(gentle-ai_1.2.3_darwin_amd64.tar.gz gentle-ai_1.2.3_darwin_arm64.tar.gz gentle-ai_1.2.3_linux_amd64.tar.gz gentle-ai_1.2.3_linux_arm64.tar.gz gentle-ai-review-provider-contract-1.1.0.tar.gz gentle-ai-release-provenance-v1.tar.gz checksums.txt checksums.txt.minisig)
+      [[ $scenario != missing-archive ]] || unset 'names[5]'
+      [[ $scenario != extra-archive ]] || names+=(unexpected.tar.gz)
+      printf '{"tag_name":"%s","draft":false,"prerelease":false,"immutable":%s,"assets":[' "$tag" "${FAKE_RELEASE_IMMUTABLE:-true}"
+      sep=; for name in "${names[@]}"; do [[ -n $name ]] || continue; printf '%s{"name":"%s"}' "$sep" "$name"; sep=,; done; printf ']}\n'; exit ;;
+    "repos/$GITHUB_REPOSITORY/contents/.goreleaser.yaml?ref=$source_sha") printf '{"encoding":"base64","content":"%s"}\n' "$(printf 'release: test\n' | base64 -w0)"; exit ;;
+  esac
 fi
 if [[ "$1" == release && "$2" == download && "$3" == "$tag" ]]; then
-  shift 3
-  directory=
-  while (( $# > 0 )); do
-    case "$1" in
-      --dir) directory=$2; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  [[ -n "$directory" ]]
+  shift 3; directory=
+  while (( $# > 0 )); do case "$1" in --dir) directory=$2; shift 2 ;; *) shift ;; esac; done
   mkdir -p "$directory"
-  for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
-    printf 'archive %s\n' "$platform" >"$directory/gentle-ai_1.2.3_${platform}.tar.gz"
-  done
+  for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do printf 'archive\n' >"$directory/gentle-ai_1.2.3_${platform}.tar.gz"; done
   printf 'provider contract\n' >"$directory/gentle-ai-review-provider-contract-1.1.0.tar.gz"
-  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz gentle-ai-review-provider-contract-1.1.0.tar.gz >checksums.txt)
-  printf 'test signature\n' >"$directory/checksums.txt.minisig"
-  exit 0
+  digest=sha256:$(printf 'release: test\n' | sha256sum | awk '{print $1}')
+  [[ $scenario != config-digest ]] || digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
+  manifest_source=${FAKE_MANIFEST_SOURCE_SHA:-0123456789abcdef0123456789abcdef01234567}
+  workflow=${PROVENANCE_WORKFLOW:-$GITHUB_WORKFLOW}; run_id=${FAKE_RUN_ID:-$GITHUB_RUN_ID}; attempt=${FAKE_RUN_ATTEMPT:-$GITHUB_RUN_ATTEMPT}; job=${FAKE_JOB:-release}
+  printf '{"schema":"gentle-ai.release-provenance/v1","repository":"%s","tag":"%s","source_sha":"%s","workflow":{"name":"%s","run_id":"%s","run_attempt":%s,"job":"%s"},"toolchain":{"goreleaser":"v2.15.2","go":"go1.24.1"},"provider_contract_semver":"1.1.0","configuration_sha256":"%s","artifacts":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz","kind":"binary","goos":"darwin","goarch":"amd64","cgo_enabled":"0","trimpath":true},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz","kind":"binary","goos":"darwin","goarch":"arm64","cgo_enabled":"0","trimpath":true},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz","kind":"binary","goos":"linux","goarch":"amd64","cgo_enabled":"0","trimpath":true},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz","kind":"binary","goos":"linux","goarch":"arm64","cgo_enabled":"0","trimpath":true},{"name":"gentle-ai-review-provider-contract-1.1.0.tar.gz","kind":"provider-contract"}]}\n' "$GITHUB_REPOSITORY" "$tag" "$manifest_source" "$workflow" "$run_id" "$attempt" "$job" "$digest" >"$directory/manifest.json"
+  case "$scenario" in
+    noncanonical) sed -i 's/,/ ,/' "$directory/manifest.json" ;;
+    bom) printf '\357\273\277' >"$directory/bom"; cat "$directory/manifest.json" >>"$directory/bom"; mv "$directory/bom" "$directory/manifest.json" ;;
+    extra-key) sed -i 's/"artifacts"/"extra":true,"artifacts"/' "$directory/manifest.json" ;;
+    wrong-type) sed -i 's/"run_attempt":1/"run_attempt":"1"/' "$directory/manifest.json" ;;
+    artifact-matrix) sed -i 's/"darwin"/"solaris"/' "$directory/manifest.json" ;;
+  esac
+  case "$scenario" in
+    tar-extra) printf x >"$directory/extra"; (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json extra); rm "$directory/extra" ;;
+    tar-link) (cd "$directory" && mv manifest.json target && ln -s target manifest.json && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json); rm "$directory/target" ;;
+    tar-path) mkdir "$directory/nested"; mv "$directory/manifest.json" "$directory/nested/manifest.json"; (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz nested) ;;
+    tar-duplicate) (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json manifest.json) ;;
+    *) (cd "$directory" && tar -czf gentle-ai-release-provenance-v1.tar.gz manifest.json) ;;
+  esac
+  rm -f "$directory/manifest.json"
+  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz gentle-ai-review-provider-contract-1.1.0.tar.gz gentle-ai-release-provenance-v1.tar.gz >checksums.txt)
+  printf 'test signature\n' >"$directory/checksums.txt.minisig"; exit
 fi
 exit 64
 `)
@@ -227,30 +246,130 @@ printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "${RELEASE_VERIFICATION_TAG:-$GIT
 
 	root := filepath.Clean(filepath.Join("..", ".."))
 	for _, tc := range []struct {
-		name            string
-		githubRef       string
-		verificationTag string
-		setExplicitTag  bool
-		wantSuccess     bool
-		wantOutput      string
+		name             string
+		githubRef        string
+		verificationTag  string
+		setExplicitTag   bool
+		immutable        string
+		workflow         string
+		manifestWorkflow string
+		scenario         string
+		sourceSHA        string
+		runID            string
+		runAttempt       string
+		job              string
+		wantSuccess      bool
+		wantOutput       string
 	}{
 		{
 			name:            "promotion tag overrides workflow dispatch main ref",
 			githubRef:       "main",
 			verificationTag: "v1.2.3",
 			setExplicitTag:  true,
+			workflow:        "Promote stable RC",
 			wantSuccess:     true,
 		},
 		{
 			name:        "native tag ref remains supported",
 			githubRef:   "v1.2.3",
+			immutable:   "true",
+			workflow:    "Release",
 			wantSuccess: true,
+		},
+		{
+			name:       "mutable release fails closed",
+			githubRef:  "v1.2.3",
+			immutable:  "false",
+			workflow:   "Release",
+			wantOutput: "remote release is not immutable",
+		},
+		{
+			name:             "provenance workflow mismatch fails closed",
+			githubRef:        "v1.2.3",
+			workflow:         "Release",
+			manifestWorkflow: "Promote stable RC",
+			wantOutput:       "release provenance manifest does not match the release identity",
+		},
+		{
+			name:       "missing archive fails closed",
+			githubRef:  "v1.2.3",
+			workflow:   "Release",
+			scenario:   "missing-archive",
+			wantOutput: "remote asset set is incomplete or unexpected",
+		},
+		{
+			name:       "extra archive fails closed",
+			githubRef:  "v1.2.3",
+			workflow:   "Release",
+			scenario:   "extra-archive",
+			wantOutput: "remote asset set is incomplete or unexpected",
+		},
+		{
+			name:       "non-annotated tag fails closed",
+			githubRef:  "v1.2.3",
+			workflow:   "Release",
+			sourceSHA:  "0123456789abcdef0123456789abcdef01234567",
+			scenario:   "ref-commit",
+			wantOutput: "release tag is not annotated",
+		},
+		{
+			name:       "wrong annotated tag SHA fails closed",
+			githubRef:  "v1.2.3",
+			workflow:   "Release",
+			sourceSHA:  "1123456789abcdef0123456789abcdef01234567",
+			wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name:       "unexpected current workflow fails closed",
+			githubRef:  "v1.2.3",
+			workflow:   "Release candidate",
+			wantOutput: "unexpected workflow",
+		},
+		{
+			name: "unsafe archive and manifest variants fail closed", githubRef: "v1.2.3", workflow: "Release", scenario: "tar-extra", wantOutput: "provenance archive layout is invalid",
+		},
+		{
+			name: "tar link fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "tar-link", wantOutput: "provenance manifest is not regular",
+		},
+		{
+			name: "tar path fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "tar-path", wantOutput: "provenance archive layout is invalid",
+		},
+		{
+			name: "tar duplicate fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "tar-duplicate", wantOutput: "provenance archive layout is invalid",
+		},
+		{
+			name: "noncanonical manifest fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "noncanonical", wantOutput: "provenance manifest is not canonical",
+		},
+		{
+			name: "BOM manifest fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "bom", wantOutput: "provenance manifest",
+		},
+		{
+			name: "extra key manifest fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "extra-key", wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name: "wrong type manifest fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "wrong-type", wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name: "run binding mismatches fail closed", githubRef: "v1.2.3", workflow: "Release", runID: "2", wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name: "attempt binding mismatches fail closed", githubRef: "v1.2.3", workflow: "Release", runAttempt: "2", wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name: "job binding mismatches fail closed", githubRef: "v1.2.3", workflow: "Release", job: "publish", wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name: "configuration digest mismatch fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "config-digest", wantOutput: "release provenance manifest does not match the release identity",
+		},
+		{
+			name: "artifact matrix mismatch fails closed", githubRef: "v1.2.3", workflow: "Release", scenario: "artifact-matrix", wantOutput: "release provenance manifest does not match the release identity",
 		},
 		{
 			name:            "empty explicit promotion tag fails closed",
 			githubRef:       "v1.2.3",
 			verificationTag: "",
 			setExplicitTag:  true,
+			workflow:        "Promote stable RC",
 			wantOutput:      "RELEASE_VERIFICATION_TAG is empty",
 		},
 	} {
@@ -264,7 +383,7 @@ printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "${RELEASE_VERIFICATION_TAG:-$GIT
 			for _, value := range os.Environ() {
 				name, _, _ := strings.Cut(value, "=")
 				switch name {
-				case "PATH", "GH_CALL_LOG", "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF_NAME", "MINISIGN_PUBLIC_KEYS", "EXPECTED_SIGNING_KEY", "RELEASE_VERIFICATION_TAG":
+				case "PATH", "GH_CALL_LOG", "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF_NAME", "GITHUB_WORKFLOW", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "MINISIGN_PUBLIC_KEYS", "EXPECTED_SIGNING_KEY", "RELEASE_VERIFICATION_TAG", "PROVENANCE_WORKFLOW", "FAKE_SCENARIO", "FAKE_SOURCE_SHA", "FAKE_RUN_ID", "FAKE_RUN_ATTEMPT", "FAKE_JOB":
 					continue
 				}
 				environment = append(environment, value)
@@ -275,11 +394,35 @@ printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "${RELEASE_VERIFICATION_TAG:-$GIT
 				"GH_TOKEN=read-only-test-token",
 				"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
 				"GITHUB_REF_NAME="+tc.githubRef,
+				"GITHUB_WORKFLOW="+tc.workflow,
+				"GITHUB_RUN_ID=1",
+				"GITHUB_RUN_ATTEMPT=1",
 				"MINISIGN_PUBLIC_KEYS="+firstKey+","+signingKey,
 				"EXPECTED_SIGNING_KEY="+signingKey,
 			)
+			if tc.immutable != "" {
+				command.Env = append(command.Env, "FAKE_RELEASE_IMMUTABLE="+tc.immutable)
+			}
 			if tc.setExplicitTag {
 				command.Env = append(command.Env, "RELEASE_VERIFICATION_TAG="+tc.verificationTag)
+			}
+			if tc.manifestWorkflow != "" {
+				command.Env = append(command.Env, "PROVENANCE_WORKFLOW="+tc.manifestWorkflow)
+			}
+			if tc.scenario != "" {
+				command.Env = append(command.Env, "FAKE_SCENARIO="+tc.scenario)
+			}
+			if tc.sourceSHA != "" {
+				command.Env = append(command.Env, "FAKE_SOURCE_SHA="+tc.sourceSHA)
+			}
+			if tc.runID != "" {
+				command.Env = append(command.Env, "FAKE_RUN_ID="+tc.runID)
+			}
+			if tc.runAttempt != "" {
+				command.Env = append(command.Env, "FAKE_RUN_ATTEMPT="+tc.runAttempt)
+			}
+			if tc.job != "" {
+				command.Env = append(command.Env, "FAKE_JOB="+tc.job)
 			}
 			output, err := command.CombinedOutput()
 			if tc.wantSuccess && err != nil {
@@ -299,8 +442,20 @@ printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "${RELEASE_VERIFICATION_TAG:-$GIT
 				t.Fatal(err)
 			}
 			lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
-			if len(lines) != 2 || !strings.HasPrefix(lines[0], "api repos/") || !strings.HasPrefix(lines[1], "release download v1.2.3 ") {
-				t.Fatalf("release verifier used commands outside the approved read-only surface: %q", lines)
+			wantCalls := []string{
+				"api repos/Gentleman-Programming/gentle-ai/git/ref/tags/v1.2.3",
+				"api repos/Gentleman-Programming/gentle-ai/git/tags/0123456789abcdef0123456789abcdef01234567",
+				"api repos/Gentleman-Programming/gentle-ai/releases/tags/v1.2.3",
+				"release download v1.2.3 ",
+				"api repos/Gentleman-Programming/gentle-ai/contents/.goreleaser.yaml?ref=0123456789abcdef0123456789abcdef01234567",
+			}
+			if len(lines) != len(wantCalls) {
+				t.Fatalf("release verifier used an unexpected API surface: %q", lines)
+			}
+			for index, want := range wantCalls {
+				if !strings.HasPrefix(lines[index], want) {
+					t.Fatalf("release verifier call %d = %q, want %q", index, lines[index], want)
+				}
 			}
 		})
 	}
@@ -391,6 +546,32 @@ func TestGoReleaserRecreatesCleanProvenanceStaging(t *testing.T) {
 	}
 	if !strings.Contains(readRepositoryFile(t, ".gitignore"), ".goreleaser-provenance/") {
 		t.Error(".gitignore does not ignore provenance staging")
+	}
+}
+
+func TestReleaseAssetVerifierBindsProvenanceToApprovedWorkflow(t *testing.T) {
+	verifier := readRepositoryFile(t, "scripts", "verify-release-assets.sh")
+	for _, required := range []string{
+		`: "${GITHUB_WORKFLOW:?GITHUB_WORKFLOW is required}"`,
+		`Release|"Promote stable RC")`,
+		`gentle-ai-release-provenance-v1.tar.gz`,
+		`git/ref/tags/$tag`,
+		`git/tags/$tag_object`,
+		`contents/.goreleaser.yaml?ref=$source_sha`,
+		`tar -tzf "$provenance_bundle"`,
+		`tar -xOf "$provenance_bundle" manifest.json`,
+		`keys_unsorted`,
+		`configuration_sha256`,
+		`GITHUB_RUN_ATTEMPT`,
+		`sha256sum --check --strict`,
+		`"${signed_archives[@]}"`,
+		`Release|"Promote stable RC"`,
+		`base64 --decode`,
+		`source_sha == $source_sha`,
+	} {
+		if !strings.Contains(verifier, required) {
+			t.Errorf("release asset verifier is missing %q", required)
+		}
 	}
 }
 
