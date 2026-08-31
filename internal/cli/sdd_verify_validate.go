@@ -150,6 +150,8 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) error {
 	_, _ = fmt.Fprintf(stdout, "  required envelope fields: %s\n", strings.Join(contract.RequiredFields, ", "))
 	_, _ = fmt.Fprintf(stdout, "  accepted verdicts: %s\n", strings.Join(contract.Verdicts, ", "))
 	_, _ = fmt.Fprintf(stdout, "  maximum report size: %d bytes (%s)\n", contract.MaxBytes, formatSDDVerifyValidateByteLimit(contract.MaxBytes))
+	_, _ = fmt.Fprintln(stdout, "  the first non-empty line must be ```yaml (```yml and any letter case are admitted) and the envelope closes with ```.")
+	_, _ = fmt.Fprintln(stdout, "  a leading UTF-8 BOM is stripped; front matter, ~~~ fences, untagged fences, and content before the fence are refused.")
 	_, _ = fmt.Fprintln(stdout, "  requirements and scenarios are completed/total; each completed count must not exceed its total.")
 	_, _ = fmt.Fprintln(stdout, "  --requirements and --scenarios must exactly equal their report totals.")
 	_, _ = fmt.Fprintln(stdout, "  Independent test and build execution evidence is required for a passing verification result.")

@@ -503,6 +503,43 @@ func TestResolveArtifactStatesAndTaskProgress(t *testing.T) {
 	}
 }
 
+// #3311: status built Relationships.DependsOn as an unconditional empty list
+// and never read openspec/changes/<change>/state.yaml, the file the OpenSpec
+// convention names as the change's DAG state.
+func TestResolveProjectsOpenSpecStateDependsOn(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  []string
+	}{
+		{"flow list", "dependsOn: [parent-change]\n", []string{"parent-change"}},
+		{"block list", "phase: apply\ndependsOn:\n  - parent-change\n  - other-change\n", []string{"parent-change", "other-change"}},
+		{"no file", "", []string{}},
+		{"missing key", "phase: apply\n", []string{}},
+		{"malformed", "dependsOn: [unclosed\n", []string{}},
+		{"scalar instead of list", "dependsOn: parent-change\n", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "add-auth", "- [ ] 1.1 Work\n")
+			if tt.state != "" {
+				write(t, filepath.Join(changeRoot, "state.yaml"), tt.state)
+			}
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "add-auth"})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.Relationships.DependsOn == nil || !reflect.DeepEqual(status.Relationships.DependsOn, tt.want) {
+				t.Fatalf("Relationships.DependsOn = %#v, want %#v", status.Relationships.DependsOn, tt.want)
+			}
+			if status.NextRecommended != "apply" {
+				t.Fatalf("NextRecommended = %q, want apply: state.yaml must never block status", status.NextRecommended)
+			}
+		})
+	}
+}
+
 func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 	tests := []struct {
 		name              string
