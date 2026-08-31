@@ -29,6 +29,9 @@ Run only when the orchestrator selects `sdd-research` and supplies the change, q
 - Never infer evidence capability from Bash, generic MCP, persistence access, filenames, or inherited unnamed tools.
 - Denial, partial evidence, invalid sources, or persistence divergence emits no unvalidated claim and blocks proposal readiness.
 - Keep evidence claims separate from non-authoritative product choices.
+- Evidence grants: documentation=[]; open-web=[].
+- Persistence tools are not evidence grants.
+- Unsupported or undeclared classes deny admission and emit no claims.
 
 ## Decision Gates
 

@@ -471,7 +471,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// runtime orchestrator: the native surface resolves the declared store, so
 	// the actor no longer determines or branches on it. Kilo renders through the
 	// OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "45b63ab97aad4a5f31b20bf834a43d1df25a5521db2e8008473cb99ebaaa593f"
+	const want = "7d0ceaf9194c45b922114ca59cebb8b8e4a496fbd4e33bd150db57d1a381171b"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
