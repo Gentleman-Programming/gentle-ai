@@ -445,6 +445,11 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	}
 	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, record.State.CapturePhaseRevision, session.lensRequest.Frozen, session.lensRequest.Subject, hostOutput)
 	if err != nil {
+		// The host relay owns its reviewer and gets no corrective
+		// re-invocation, but the refused bytes are preserved for the report.
+		_ = reviewRejectedResultClause(ctx, session.root, reviewRejectedResultMeta{
+			LineageID: record.State.LineageID, Lens: session.lensRequest.Binding.Lens, Attempt: 1, Reason: err.Error(),
+		}, hostOutput)
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_reviewer_result_refused")
 	}
 	captured, err := store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{

@@ -293,7 +293,6 @@ internal/reviewtransaction/artifact_admission.go	"artifact admission candidate-c
 internal/reviewtransaction/artifact_admission.go	"artifact admission candidate-causal finding IDs are not canonical"
 internal/reviewtransaction/artifact_admission.go	"artifact admission is not a completed binding"
 internal/reviewtransaction/artifact_admission.go	"reviewer payload contains multiple JSON objects"
-internal/reviewtransaction/artifact_admission.go	"reviewer payload contains no complete JSON object"
 internal/reviewtransaction/artifact_admission.go	"reviewer payload is empty or exceeds the native bound"
 internal/reviewtransaction/artifact_subject.go	"artifact subject authority binding is incomplete"
 internal/reviewtransaction/artifact_subject.go	"artifact subject correction identity is invalid"
