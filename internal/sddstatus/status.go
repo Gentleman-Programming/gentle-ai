@@ -536,8 +536,10 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
-		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
+	if artifacts["verifyReport"] == ArtifactDone {
+		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
+			blockedReasons.genuine = append(blockedReasons.genuine, reason)
+		}
 	}
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
@@ -575,6 +577,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
+		blockedReasons.genuine = appendMissingReason(blockedReasons.genuine, runtimeRemediationVerifyRefreshInstruction)
 	}
 	if len(unauthorizedRoots) == 0 && runtimeStatus != nil && runtimeStatusErr == nil {
 		applyRuntimeTopologyBlock(context.Background(), &applyState, &dependencies, &nextRecommended, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, changeName)
@@ -658,6 +661,30 @@ func workspaceHasGitMetadata(workspaceRoot string) bool {
 		}
 		current = parent
 	}
+}
+
+// verifyReportRefreshReason names why a persisted verification report cannot
+// stand as final evidence. A report that exists yet leaves verify at ready
+// must never project a silent tuple (#3538): the stale reason carries the
+// exact native totals the report has to match, so the agent re-verifies
+// against the current specs instead of re-validating the same envelope.
+func verifyReportRefreshReason(verify verifyResultEvaluation) string {
+	switch {
+	case verify.Incomplete:
+		return verify.Reason
+	case verify.Stale:
+		return "persisted verification report is stale: " + verify.Reason + "; rerun SDD verification and persist a report whose totals match the current specs before archive"
+	}
+	return ""
+}
+
+// appendMissingReason appends reason unless the list already carries it, so a
+// route that is explained from two sites never repeats itself.
+func appendMissingReason(reasons []string, reason string) []string {
+	if contains(reasons, reason) {
+		return reasons
+	}
+	return append(reasons, reason)
 }
 
 func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation) bool {
@@ -809,8 +836,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
-		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
+	if artifacts["verifyReport"] == ArtifactDone {
+		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
+			blockedReasons.genuine = append(blockedReasons.genuine, reason)
+		}
 	}
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
@@ -832,6 +861,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
+		blockedReasons.genuine = appendMissingReason(blockedReasons.genuine, runtimeRemediationVerifyRefreshInstruction)
 	}
 	if len(unauthorizedRoots) == 0 && runtimeStatus != nil && runtimeStatusErr == nil {
 		applyRuntimeTopologyBlock(context.Background(), &applyState, &dependencies, &nextRecommended, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, changeName)

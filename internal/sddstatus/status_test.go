@@ -828,19 +828,25 @@ func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T)
 	const staleSpec = completeSpec + "#### Scenario: Added after verification\n"
 	invalidOutputHash := "sha256:" + strings.Repeat("b", 64)
 	tests := []struct {
-		name   string
-		spec   string
-		report string
+		name        string
+		spec        string
+		report      string
+		wantReasons []string
 	}{
 		{
 			name:   "stale complete pass after a spec scenario is added",
 			spec:   staleSpec,
 			report: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0),
+			wantReasons: []string{
+				"verify result total 1 does not match actual scenario count 2",
+				"rerun SDD verification",
+			},
 		},
 		{
-			name:   "current-format incomplete failed evidence",
-			spec:   completeSpec,
-			report: testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+			name:        "current-format incomplete failed evidence",
+			spec:        completeSpec,
+			report:      testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+			wantReasons: []string{"failed verification evidence is incomplete"},
 		},
 		{
 			name: "malformed failed evidence with an invalid output hash",
@@ -851,6 +857,7 @@ func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T)
 				"test_output_hash: sha256:invalid",
 				1,
 			),
+			wantReasons: []string{"verification evidence is incomplete"},
 		},
 	}
 
@@ -891,6 +898,14 @@ func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T)
 				}
 				if strings.Contains(strings.Join(status.BlockedReasons, "\n"), "missing_review_authority") {
 					t.Fatalf("BlockedReasons = %v, want no legacy missing_review_authority routing", status.BlockedReasons)
+				}
+				// A verify route that exists only to refresh evidence must name
+				// why the persisted report cannot stand (#3538).
+				joined := strings.Join(status.BlockedReasons, "\n")
+				for _, want := range tt.wantReasons {
+					if !strings.Contains(joined, want) {
+						t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
+					}
 				}
 			})
 		}

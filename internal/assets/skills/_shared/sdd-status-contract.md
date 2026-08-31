@@ -150,4 +150,4 @@ Every command that acts on a change MUST show status before launching an executo
 - Artifact statuses and paths/topics used as context.
 - Task progress and unchecked task list when tasks exist.
 - Next recommended action.
-- `blockedReasons` when `nextRecommended` is not `verify`, plus any edit-root blockers.
+- `blockedReasons` whenever it is non-empty, including a `verify` route that must refresh stale or post-remediation evidence, plus any edit-root blockers.

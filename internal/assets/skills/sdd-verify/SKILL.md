@@ -46,6 +46,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
 - Return the Section D envelope from `../_shared/sdd-phase-common.md`.
 - Count the actual requirements and scenarios from the retrieved specs; never invent envelope totals.
+- Native status counts only `### Requirement:` / `### REQ-<n>:` and `#### Scenario:` headings. If the envelope totals differ from that count, status keeps `verify: ready` and names the mismatch in `blockedReasons`; fix the totals and re-verify instead of re-validating the same envelope.
 - Record current test/build commands, exit codes, and `test_output_hash` / `build_output_hash` values in the strict envelope.
 - Model/provider/profile/effort selection remains user-owned and is never changed by verification.
 - This is the one independent requirements/runtime final verification. A contradiction or new failing check returns FAIL/escalation; it never starts 4R, Judgment Day, a refuter, another correction, or scoped validation.
