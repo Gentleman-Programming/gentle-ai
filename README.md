@@ -117,10 +117,10 @@ Once your agents are configured, open your AI agent in a project and run these t
 
 | Command                            | What it does                                                                | When to re-run                                                                 |
 | ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `/sdd-init`                        | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
+| `/sdd-init` (`/gentle-sdd-init` in Claude Code) | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
 | `gentle-ai skill-registry refresh` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
 
-These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. In Claude Code every SDD command carries the `gentle-sdd-` prefix (`/gentle-sdd-init`, `/gentle-sdd-new`, `/gentle-sdd-continue`, ...), because Claude Code resolves a same-named delegate-only skill before a command. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Codex, Claude Code, OpenCode, and Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
+These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. In Claude Code every SDD command carries the `gentle-sdd-` prefix (`/gentle-sdd-init`, `/gentle-sdd-new`, `/gentle-sdd-continue`, and so on) because Claude Code resolves a same-named delegate-only skill before a command; the other runtimes keep the bare `/sdd-*` names. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Codex, Claude Code, OpenCode, and Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
 
 Run `gentle-ai doctor` at any time for a read-only health check of your ecosystem (tool binaries, `state.json`, Engram reachability, disk space).
 
@@ -226,7 +226,7 @@ The managed installer tracks the channel's latest version and does not accept an
 
 1. **Install and configure.** Run the installer, select the agents and components you want, then open your agent in a project.
 2. **Use the smallest implementation route.** Keep bounded work direct, delegate actions that need fresh context, and use SDD only after an explicit request or an accepted proposal. SDD artifacts can live in **Engram** for cross-session memory, **OpenSpec** for versioned files, or **hybrid** for both.
-3. **Build with discipline.** `/sdd-init` detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
+3. **Build with discipline.** `/sdd-init` (`/gentle-sdd-init` in Claude Code) detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
 4. **Review one candidate.** After implementation, bounded native review freezes the candidate and reports an informational outcome. Commit, push, PR, and release remain separate decisions under ordinary repository policy; review does not authorize, block, or govern them.
 
 > **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native review records bounded evidence while ordinary repository policy owns delivery.
