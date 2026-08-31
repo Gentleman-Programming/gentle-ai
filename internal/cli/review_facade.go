@@ -844,14 +844,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			// #3900: a zero-lens START closes approved with a pending
 			// acknowledgement in the same call, and the canonical selectorless
-			// STATUS is the only continuation the orchestrator holds. The exact
-			// live identity admits that one lineage so STATUS replays its
-			// acknowledgement instead of reoffering a START the store refuses.
+			// STATUS is the only continuation the orchestrator holds. The one
+			// lineage that START derives for this exact live identity admits, so
+			// STATUS replays its acknowledgement instead of reoffering a START
+			// the store refuses. No sibling authority is read.
 			pendingLineage := ""
 			if requestedLineage == "" {
-				pendingLineage, err = reviewtransaction.PendingApprovedCompactLineageForTarget(ctx, root, liveSnapshot.Identity)
+				pendingLineage, err = reviewPendingAcknowledgementLineage(ctx, root, liveSnapshot.Identity)
 				if err != nil {
-					return fmt.Errorf("discover pending acknowledgement for negotiated review target: %w", err)
+					return fmt.Errorf("load pending acknowledgement for negotiated review target: %w", err)
 				}
 			}
 			if pendingLineage != "" {

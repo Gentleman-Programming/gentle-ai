@@ -951,17 +951,16 @@ func runSelectorlessNegotiatedStatus(t *testing.T, repo string) ReviewTargetStat
 	return status
 }
 
-// TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector is
-// the RED-first proof for #3900: a zero-lens START closes approved with a
-// pending acknowledgement, and the canonical selectorless STATUS the
-// orchestrator contract prescribes must replay that exact acknowledgement
-// instead of calling the candidate unrelated and reoffering a START the store
-// then refuses with atomic_start_conflict.
-func TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector(t *testing.T) {
+// startZeroLensPendingAcknowledgement runs the START the canonical selectorless
+// STATUS offers for a zero-lens candidate, which closes approved with one
+// pending acknowledgement under the derived lineage.
+func startZeroLensPendingAcknowledgement(t *testing.T) (string, ReviewIntegrationStartResult, reviewtransaction.CompactStore, reviewtransaction.ApprovedCompactAcknowledgement) {
+	t.Helper()
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeZeroLensDocumentationCandidate(t, repo)
-	started := runNegotiatedReviewStart(t, repo, "zero-lens-selectorless-acknowledgement")
+	offered := runSelectorlessNegotiatedStatus(t, repo)
+	started := runNegotiatedReviewStart(t, repo, startTransitionArgumentValue(t, offered, "lineage"))
 	if started.State != reviewtransaction.StateApproved || len(started.SelectedLenses) != 0 {
 		t.Fatalf("zero-lens START = %#v, want approved with no lenses", started)
 	}
@@ -977,6 +976,17 @@ func TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector(t *
 	if !present {
 		t.Fatalf("zero-lens START issued no pending acknowledgement: %#v", record.State)
 	}
+	return repo, started, store, pending
+}
+
+// TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector is
+// the RED-first proof for #3900: a zero-lens START closes approved with a
+// pending acknowledgement, and the canonical selectorless STATUS the
+// orchestrator contract prescribes must replay that exact acknowledgement
+// instead of calling the candidate unrelated and reoffering a START the store
+// then refuses with atomic_start_conflict.
+func TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector(t *testing.T) {
+	repo, started, store, pending := startZeroLensPendingAcknowledgement(t)
 
 	selectorless := runSelectorlessNegotiatedStatus(t, repo)
 	if selectorless.Applicability != reviewtransaction.TargetApplicabilityCurrent || selectorless.NextTransition == nil ||
@@ -1025,13 +1035,7 @@ func TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector(t *
 // is not the live target's stays historical, and STATUS keeps offering a
 // fresh START for the changed candidate.
 func TestNegotiatedStatusKeepsFreshStartForApprovedRecordOfDifferentTarget(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	writeZeroLensDocumentationCandidate(t, repo)
-	started := runNegotiatedReviewStart(t, repo, "zero-lens-different-target")
-	if started.State != reviewtransaction.StateApproved || len(started.SelectedLenses) != 0 {
-		t.Fatalf("zero-lens START = %#v, want approved with no lenses", started)
-	}
+	repo, _, store, _ := startZeroLensPendingAcknowledgement(t)
 	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", "a different documentation candidate\n", 0o644)
 
 	status := runSelectorlessNegotiatedStatus(t, repo)
@@ -1039,10 +1043,6 @@ func TestNegotiatedStatusKeepsFreshStartForApprovedRecordOfDifferentTarget(t *te
 		status.NextTransition.ReasonCode != "fresh_target_ready" || status.NextTransition.Execute == nil ||
 		status.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("selectorless STATUS for a different target = applicability=%q transition=%#v, want fresh START", status.Applicability, status.NextTransition)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
 	}
 	if record, err := store.Load(); err != nil || record.State.State != reviewtransaction.StateApproved {
 		t.Fatalf("approved authority for the earlier target was mutated: %#v, %v", record, err)
@@ -1108,4 +1108,23 @@ func TestNegotiatedStatusAfterInBudgetCorrectionWithoutRecordedRuntimeStaysManua
 		status.NextTransition.ReasonCode != "manual_intervention_required" {
 		t.Fatalf("status without a recorded runtime = %#v", status.NextTransition)
 	}
+}
+
+// The admission reads exactly one store: the lineage START derives for the
+// live target. An unrelated sibling store the process cannot read is not this
+// candidate's authority and must not fail the canonical selectorless STATUS.
+func TestNegotiatedStatusReplaysPendingAcknowledgementDespiteUnreadableSiblingStore(t *testing.T) {
+	repo, started, store, pending := startZeroLensPendingAcknowledgement(t)
+	// A directory where the sibling's record file belongs makes every read of
+	// that store an operational failure rather than a damaged record.
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(store.Dir), "review-unreadable-sibling", filepath.Base(store.StatePath())), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	selectorless := runSelectorlessNegotiatedStatus(t, repo)
+	if selectorless.Applicability != reviewtransaction.TargetApplicabilityCurrent || selectorless.NextTransition == nil ||
+		selectorless.NextTransition.Kind != reviewNextTransitionExecute || selectorless.NextTransition.ReasonCode != "approved_acknowledgement_required" {
+		t.Fatalf("selectorless STATUS = applicability=%q transition=%#v, want the pending acknowledgement", selectorless.Applicability, selectorless.NextTransition)
+	}
+	assertApprovedAcknowledgementTransition(t, selectorless.NextTransition.Execute, repo, started.LineageID, pending.TargetIdentity, pending.ExpectedRevision)
 }
