@@ -48,6 +48,6 @@ Return a structured result with these fields:
 - `status`: `done` | `blocked` | `partial`
 - `executive_summary`: one-sentence confirmation that the change is archived and closed
 - `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/archive-report`, archived folder path)
-- `next_recommended`: `none` (change is complete) or a new `/sdd-new` if follow-up is needed
+- `next_recommended`: `none` (change is complete) or a new `/gentle-sdd-new` if follow-up is needed
 - `risks`: any artifacts that could not be merged or archived cleanly
 - `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

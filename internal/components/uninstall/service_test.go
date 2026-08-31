@@ -331,7 +331,7 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 		filepath.Join(homeDir, ".claude", "settings.json"):                     `{"theme":"active","outputStyle":"gentleman"}`,
 		filepath.Join(homeDir, ".claude", "CLAUDE.md"):                         "# persona\n",
 		filepath.Join(homeDir, ".claude", "output-styles", "gentleman.md"):     "# output style\n",
-		filepath.Join(homeDir, ".claude", "commands", "sdd-apply.md"):          "# SDD asset\n",
+		filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-apply.md"):   "# SDD asset\n",
 		filepath.Join(homeDir, ".config", "opencode", "tui.json"):              `{"plugins":["./tui-plugins/gentle-logo.tsx"]}`,
 		filepath.Join(homeDir, ".config", "opencode", "themes", "custom.json"): `{"theme":"custom"}`,
 	}
@@ -842,7 +842,9 @@ func TestComponentOperationsSDD_ClaudeRemovesManagedCommandFiles(t *testing.T) {
 		t.Fatalf("MkdirAll(commands dir) error = %v", err)
 	}
 
-	managed := []string{"sdd-init.md", "sdd-explore.md", "sdd-onboard.md"}
+	// sdd-init.md is the unprefixed name a pre-#2644 install managed; uninstall
+	// retires it alongside the namespaced commands.
+	managed := []string{"gentle-sdd-init.md", "gentle-sdd-explore.md", "gentle-sdd-onboard.md", "sdd-init.md"}
 	for _, name := range managed {
 		if err := os.WriteFile(filepath.Join(commandsDir, name), []byte(name), 0o644); err != nil {
 			t.Fatalf("WriteFile(%s) error = %v", name, err)

@@ -227,9 +227,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		for _, command := range sdd.OpenCodeCommands() {
-			add(filepath.Join(adapter.CommandsDir(homeDir), command.Name+".md"))
-		}
+		add(sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
 	}
 
 	if adapter.SupportsSubAgents() {
