@@ -860,7 +860,29 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if err != nil {
 				return fmt.Errorf("freeze negotiated fresh review target: %w", err)
 			}
-			native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+			// #3900: a zero-lens START closes approved with a pending
+			// acknowledgement in the same call, and the canonical selectorless
+			// STATUS is the only continuation the orchestrator holds. The one
+			// lineage that START derives for this exact live identity admits, so
+			// STATUS replays its acknowledgement instead of reoffering a START
+			// the store refuses. No sibling authority is read.
+			pendingLineage := ""
+			if requestedLineage == "" {
+				pendingLineage, err = reviewPendingAcknowledgementLineage(ctx, root, liveSnapshot.Identity)
+				if err != nil {
+					return fmt.Errorf("load pending acknowledgement for negotiated review target: %w", err)
+				}
+			}
+			if pendingLineage != "" {
+				native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
+					Target: target, LineageID: pendingLineage, PrePR: prePR,
+				})
+				if err != nil {
+					return fmt.Errorf("assess negotiated review target: %w", err)
+				}
+			} else {
+				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+			}
 		} else {
 			native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
 				Target: target, LineageID: *lineage, PrePR: prePR,
@@ -1046,6 +1068,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							// transport; the pi host relay collects the same roles
 							// through the printed materialize + submission route.
 							// Both discover pending roles identically here.
+							if runtime == "" && validationRequest != nil && record.State.RuntimeAgent != "" {
+								// The lineage froze its runtime at START, so a STATUS
+								// that omits --agent still binds the validator role to
+								// it instead of stopping (#3805). A record without the
+								// field keeps the manual route.
+								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(record.State.RuntimeAgent); recordedErr == nil {
+									runtime = recorded
+								}
+							}
 							providerRoleHost := runtime == model.AgentOpenCode || reviewProviderHostRelayMaterializeRuntime(runtime) || reviewProviderCaptureRuntime(runtime)
 							if providerRoleHost && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
 								_, readErr := readCapturedProviderRefuterResult(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
@@ -1700,12 +1731,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// identity is the manual/non-agent compatibility path and is not gated,
 	// so the provider-returned START of an undeclared route stays runnable.
 	// Every declared identity is still proven before authority is created.
+	var startRuntime model.AgentID
 	if negotiated && runtimeRequested {
 		if reviewRuntimeAgentCount(args) != 1 {
 			// refusal:by-design world-action: an ambiguous runtime identity cannot safely create review authority
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated START requires exactly one generated runtime identity"))
 		}
-		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
+		startRuntime, err = reviewRuntimeWithImmutableTransport(*runtimeAgent)
+		if err != nil {
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, err)
 		}
 	}
@@ -1861,7 +1894,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// routing; explicit compatibility owners remain responsible for any manual
 	// inspection or disposition.
 	{
-		request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses)
+		request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, startRuntime)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
 		}

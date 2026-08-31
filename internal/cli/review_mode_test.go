@@ -172,7 +172,7 @@ func TestReviewModeRepositoryRequiredRefusalDoesNotDependOnGitStderrLanguage(t *
 
 func TestWriteGlobalRDDModeSerializesWithInstallStateAndPreservesFreshFields(t *testing.T) {
 	home := reviewModeHome(t)
-	lock, err := reviewtransaction.AcquireAuthorityFileLock(installStateLockPath(home))
+	lock, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
 	if err != nil {
 		t.Fatalf("acquire install state lock: %v", err)
 	}

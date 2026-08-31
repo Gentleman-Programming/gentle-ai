@@ -171,6 +171,10 @@ type CompactState struct {
 	// exact worktree-bound atomic START API. Its absence keeps historical compact
 	// records readable, but makes them ineligible for atomic START replay.
 	InitialAtomicStart *CompactAtomicStartBinding `json:"initial_atomic_start,omitempty"`
+	// RuntimeAgent is the runtime identity START froze this lineage to. STATUS
+	// without --agent resolves the validator role from it (#3805); a record
+	// that predates the field keeps the manual route. Internal state only.
+	RuntimeAgent string `json:"runtime_agent,omitempty"`
 }
 
 // compactHistoricalEmptyArray preserves an empty retired projection only long
@@ -676,6 +680,7 @@ func NewCompactState(start Start) (CompactState, error) {
 		FrozenPolicyContent: frozenPolicy, RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
 		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
 		AdmittedRoleResults: []CompactAdmittedRoleResult{}, FixFindingIDs: []string{}, FixDeltaHash: EmptyFixDeltaHash,
+		RuntimeAgent: start.RuntimeAgent,
 	}
 	phase, err := deriveCompactCapturePhaseRevision(state)
 	if err != nil {
