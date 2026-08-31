@@ -875,10 +875,15 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, errors.New("interrupted attempts must omit evidence_revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
 		}
 		// Check the effective binding before candidate capture or line charging.
-		if active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
+		// A vanished bound worktree (#2661) admits only an interrupted settle.
+		bound, boundMissing := runtimeBoundWorktree(*active)
+		if boundMissing && request.Outcome != AttemptInterrupted {
+			return runtimeRecord{}, store.runtimeMissingWorktreeRefusal(ErrRuntimeWorktreeMismatch, *active, bound)
+		}
+		if !boundMissing && active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeEffectiveWorktreeMismatchRefusal(*active)
 		}
-		if active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
+		if !boundMissing && active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
 		// Failed-evidence remediation is an SDD-only invariant. The immutable
@@ -909,6 +914,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// records the attempt's own product as no change at all (#3806). This
 		// resolves which selection this settlement overlays, and refuses while
 		// the caller can still act when the answer is nobody's decision yet.
+		if boundMissing {
+			return runtimeMissingWorktreeInterruptedRecord(status, *active, request)
+		}
 		intendedUntracked, declaredInventory, err := store.settlementUntrackedSelection(ctx, *active, request)
 		if err != nil {
 			return runtimeRecord{}, err
@@ -1276,6 +1284,67 @@ func (store RuntimeStore) runtimeEffectiveWorktreeMismatchRefusal(active Runtime
 		ErrRuntimeWorktreeMismatch, active.Ordinal, pathquote.Quote(active.BeginWorktree), pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), pathquote.Quote(active.EffectiveWorktree))
 }
 
+// runtimeBoundWorktree names the worktree an active attempt is bound to and
+// whether that path has vanished from disk (#2661): a removed and pruned
+// linked worktree made every exit that named it unrunnable. Only a not-exist
+// stat counts; any other failure keeps the ordinary binding checks.
+func runtimeBoundWorktree(active RuntimeAttempt) (string, bool) {
+	bound := active.EffectiveWorktree
+	if bound == "" {
+		bound = active.BeginWorktree
+	}
+	if bound == "" {
+		return "", false
+	}
+	_, err := os.Stat(bound)
+	return bound, errors.Is(err, os.ErrNotExist)
+}
+
+// runtimeMissingWorktreeExit is the one exit for a vanished bound worktree:
+// passed and failed need evidence measured there, so only interrupted is
+// admitted, from any worktree of the repository. cwd and change arrive
+// rendered so the compact readiness surface can pass placeholders.
+func runtimeMissingWorktreeExit(active RuntimeAttempt, bound, cwd, change, token string) string {
+	return fmt.Sprintf("attempt %d is bound to worktree %s, which no longer exists on disk, so its passed or failed evidence cannot be measured; "+
+		"settle it as interrupted from any worktree of this repository with `gentle-ai sdd-attempt settle --cwd %s --change %s --token %s "+
+		"--request-id \"<unique-request-id>\" --outcome interrupted --diagnosis \"<why-the-worktree-is-gone>\" --harness-disposition invalidated "+
+		"--cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`, then follow the ledger's next_action, or have a maintainer discard "+
+		"the objective with `gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision <the revision that status prints> "+
+		"--request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`",
+		active.Ordinal, pathquote.Quote(bound), cwd, change, token, cwd, change)
+}
+
+func (store RuntimeStore) runtimeMissingWorktreeRefusal(sentinel error, active RuntimeAttempt, bound string) error {
+	return fmt.Errorf("%w: %s", sentinel, runtimeMissingWorktreeExit(active, bound, pathquote.Quote(store.Workspace), fmt.Sprintf("%q", store.Change), "\"<acquire-token>\""))
+}
+
+// runtimeAttemptActiveRefusal is ErrRuntimeAttemptActive with the vanished
+// worktree exit composed in when that is the state the caller is actually in.
+func (store RuntimeStore) runtimeAttemptActiveRefusal(active RuntimeAttempt) error {
+	if bound, missing := runtimeBoundWorktree(active); missing {
+		return store.runtimeMissingWorktreeRefusal(ErrRuntimeAttemptActive, active, bound)
+	}
+	return ErrRuntimeAttemptActive
+}
+
+// runtimeMissingWorktreeInterruptedRecord closes an attempt whose bound
+// worktree is gone on its own begin candidate with no line charge; a later
+// begin or reset measures drift against the worktree it runs from, as before.
+func runtimeMissingWorktreeInterruptedRecord(status RuntimeStatus, active RuntimeAttempt, request FinishAttemptRequest) (runtimeRecord, error) {
+	if request.IntendedUntracked != nil {
+		return runtimeRecord{}, fmt.Errorf("%w: the bound worktree no longer exists, so no untracked inventory can be declared against it; rerun `gentle-ai sdd-attempt settle` with --outcome interrupted and without --untracked-scope", ErrRuntimeUndeclaredUntracked)
+	}
+	intended := slices.Clone(active.IntendedUntracked)
+	return runtimeRecord{Operation: runtimeOperationFinish, Finish: &runtimeFinishEvent{
+		Ordinal: active.Ordinal, FinishCandidateIdentity: active.BeginCandidateIdentity, FinishCandidateTree: active.BeginCandidateTree,
+		Outcome: AttemptInterrupted, Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
+		CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+		ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, 0),
+		IntendedUntracked:          &intended,
+	}}, nil
+}
+
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
 // a refusal that names the continuation that actually clears it.
 //
@@ -1452,7 +1521,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
+			return runtimeRecord{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 		}
 		if status.Objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
@@ -1540,7 +1609,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
+			return runtimeRecord{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 		}
 		objective := status.Objective
 		if objective == nil {
@@ -3071,6 +3140,9 @@ func (store RuntimeStore) runtimeHandoffStatusExit() string {
 }
 
 func (store RuntimeStore) runtimeHandoffSourceRefusal(active RuntimeAttempt) error {
+	if bound, missing := runtimeBoundWorktree(active); missing {
+		return store.runtimeMissingWorktreeRefusal(ErrRuntimeHandoffSource, active, bound)
+	}
 	return fmt.Errorf("%w: attempt %d has effective worktree %s, but handoff ran from %s; %s",
 		ErrRuntimeHandoffSource, active.Ordinal, pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), store.runtimeHandoffStatusExit())
 }

@@ -193,7 +193,13 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 	case in.Status.DecisionRequired:
 		return compactBlocked(CompactBlockMaintainerDecision, ""), true
 	case in.Status.ActiveAttempt != nil:
-		return compactBlocked(CompactBlockActiveAttempt, activeToken), true
+		result := compactBlocked(CompactBlockActiveAttempt, activeToken)
+		// #2661: name the one settlement a vanished bound worktree admits.
+		if bound, missing := runtimeBoundWorktree(*in.Status.ActiveAttempt); missing {
+			result.Exit = runtimeMissingWorktreeExit(*in.Status.ActiveAttempt, bound, "<repo>", "<change>", activeToken)
+			result.Detail = result.Exit
+		}
+		return result, true
 	default:
 		return CompactAttemptResult{}, false
 	}
