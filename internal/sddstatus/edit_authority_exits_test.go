@@ -18,8 +18,8 @@ func TestReadOnlyMarkedSiblingPathDoesNotBlockApply(t *testing.T) {
 	initEditAuthorityGitRepo(t, serviceB, false)
 
 	seedReadyChange(t, planning, "release-consumer", strings.Join([]string{
-		"- [ ] 1. Read `../service-b/dist/release-1.0.tgz` as an unchanged input (read-only)",
-		"- [ ] 2. Read-Only: compare `../service-b/CHANGELOG.md` against the pinned version",
+		"- [ ] 1. Read `../service-b/dist/release-1.0.tgz` (read-only) as an unchanged input",
+		"- [ ] 2. Compare `../service-b/CHANGELOG.md` (READ-ONLY) against the pinned version",
 		"- [ ] 3. Record the pinned version in `openspec/changes/release-consumer/design.md`",
 		"",
 	}, "\n"))
@@ -56,8 +56,41 @@ func TestUnmarkedSiblingPathStillBlocksAndReasonNamesReadOnlyMarker(t *testing.T
 	if !strings.Contains(reasons, realPath(t, serviceB)) {
 		t.Fatalf("blocked reason does not name the sibling root: %s", reasons)
 	}
-	if !strings.Contains(reasons, "mark a read-only input with (read-only) on its line") {
+	if !strings.Contains(reasons, "mark a read-only input with (read-only) right after its backticked path") {
 		t.Fatalf("blocked reason does not name the read-only marker as an exit: %s", reasons)
+	}
+}
+
+// The marker is token-scoped: a line that mixes a marked read-only input with
+// an unmarked out-of-root write target keeps blocking on the unmarked path,
+// and a marker placed elsewhere on the line annotates nothing.
+func TestReadOnlyMarkerIsTokenScoped(t *testing.T) {
+	workspace := t.TempDir()
+	planning := filepath.Join(workspace, "planning")
+	serviceB := filepath.Join(workspace, "service-b")
+	serviceC := filepath.Join(workspace, "service-c")
+	initEditAuthorityGitRepo(t, planning, true)
+	initEditAuthorityGitRepo(t, serviceB, false)
+	initEditAuthorityGitRepo(t, serviceC, false)
+
+	seedReadyChange(t, planning, "release-consumer", strings.Join([]string{
+		"- [ ] 1. Read `../service-b/dist/release-1.0.tgz` (read-only) and update `../service-c/config/pin.yaml`",
+		"- [ ] 2. Update `../service-b/CHANGELOG.md` with the pinned version (read-only)",
+		"",
+	}, "\n"))
+
+	status, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "release-consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if status.ApplyState != ApplyBlocked || !strings.Contains(reasons, "blocked(edit_authority_missing)") {
+		t.Fatalf("mixed line with an unmarked write target did not block: applyState = %q, blockedReasons = %v", status.ApplyState, status.BlockedReasons)
+	}
+	for _, root := range []string{realPath(t, serviceB), realPath(t, serviceC)} {
+		if !strings.Contains(reasons, root) {
+			t.Fatalf("blocked reason does not name the unmarked target root %s: %s", root, reasons)
+		}
 	}
 }
 

@@ -26,7 +26,8 @@ import (
 // block — acceptable because the consequence is an honest blocked status
 // naming its exits, never silent authority. The one deterministic exit for a
 // genuine read-only reference (#2934) is the `(read-only)` marker on the
-// line, which readOnlyTaskLine honors without any prose inference.
+// backticked path, which editTargetTokens honors per token without any prose
+// inference.
 //
 // This derivation deliberately lives outside the #2515 runtime-readiness
 // triple (RuntimeStatus.Complete/DecisionRequired/ActiveAttempt): edit
@@ -35,32 +36,33 @@ import (
 
 var backtickedSpan = regexp.MustCompile("`([^`]+)`")
 
-// readOnlyMarker is the one documented spelling of the read-only exit; it
-// matches anywhere on the checkbox line, case-insensitively. readOnlyPrefix
-// additionally accepts `read-only:` as the line's own prefix, after the
-// checkbox and an optional task number.
-var (
-	readOnlyMarker = regexp.MustCompile(`(?i)\(read-only\)`)
-	readOnlyPrefix = regexp.MustCompile(`(?i)^\s*(?:\d+(?:\.\d+)*[.)]?\s+)?read-only:`)
-)
-
-// readOnlyTaskLine reports whether a checkbox line declares every path it
-// names a read-only input. checkboxEnd is the length of the checkbox match.
-func readOnlyTaskLine(line string, checkboxEnd int) bool {
-	return readOnlyMarker.MatchString(line) || readOnlyPrefix.MatchString(line[checkboxEnd:])
-}
+// readOnlyMarkerAfterToken is the one documented spelling of the read-only
+// exit (#2934): `(read-only)` immediately after a backticked path, matched
+// case-insensitively. It is token-scoped on purpose: a line that mixes a
+// marked input with an unmarked path keeps the unmarked path as an edit
+// target, so a marker anywhere on the line can never silence the consent
+// gate for a target it does not annotate.
+var readOnlyMarkerAfterToken = regexp.MustCompile(`(?i)^\s*\(read-only\)`)
 
 // editTargetTokens is the one derivation of "which tokens on this line are
-// edit targets": none when the line is not a checkbox or is marked read-only,
-// otherwise its path-like tokens. Both the edit-authority detector and the
-// runtime-topology guard route through it so a read-only input never blocks
-// either.
+// edit targets": none when the line is not a checkbox, otherwise every
+// path-like backticked token that is not itself annotated `(read-only)`.
+// Both the edit-authority detector and the runtime-topology guard route
+// through it so a read-only input never blocks either, and an unmarked
+// sibling on the same line still does.
 func editTargetTokens(line string) []string {
-	match := taskCheckbox.FindStringIndex(line)
-	if match == nil || readOnlyTaskLine(line, match[1]) {
+	if taskCheckbox.FindStringIndex(line) == nil {
 		return nil
 	}
-	return pathLikeTokens(line)
+	var tokens []string
+	for _, span := range backtickedSpan.FindAllStringSubmatchIndex(line, -1) {
+		token := line[span[2]:span[3]]
+		if !pathLikeToken(token) || readOnlyMarkerAfterToken.MatchString(line[span[1]:]) {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens
 }
 
 // detectUnauthorizedEditRoots scans tasks text (both status paths have text;
@@ -130,16 +132,20 @@ func sameRepositoryEditRoot(path string) string {
 func pathLikeTokens(line string) []string {
 	var tokens []string
 	for _, match := range backtickedSpan.FindAllStringSubmatch(line, -1) {
-		token := match[1]
-		if strings.ContainsAny(token, " \t") || strings.Contains(token, "://") {
-			continue
+		if pathLikeToken(match[1]) {
+			tokens = append(tokens, match[1])
 		}
-		if !strings.ContainsRune(token, '/') && !strings.ContainsRune(token, filepath.Separator) {
-			continue
-		}
-		tokens = append(tokens, token)
 	}
 	return tokens
+}
+
+// pathLikeToken reports whether one backticked token reads as a path: no
+// whitespace, no URL scheme, and at least one separator.
+func pathLikeToken(token string) bool {
+	if strings.ContainsAny(token, " \t") || strings.Contains(token, "://") {
+		return false
+	}
+	return strings.ContainsRune(token, '/') || strings.ContainsRune(token, filepath.Separator)
 }
 
 // resolveExistingPath walks up to the nearest existing ancestor (task prose
@@ -204,7 +210,7 @@ func editAuthorityBlockedReason(roots []string) string {
 		quoted = append(quoted, pathquote.Quote(root))
 	}
 	return fmt.Sprintf(
-		"blocked(edit_authority_missing): tasks.md targets edit paths outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named paths, or mark a read-only input with (read-only) on its line",
+		"blocked(edit_authority_missing): tasks.md targets edit paths outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named paths, or mark a read-only input with (read-only) right after its backticked path",
 		strings.Join(quoted, ", "),
 	)
 }
