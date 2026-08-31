@@ -673,6 +673,18 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return nil
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
+		if result.rddModeResolved && !result.rddMode.Enabled() {
+			// The kill switch answers before any selector-dependent invariant:
+			// a disabled fresh target stops with rdd_disabled whatever its
+			// projection, exactly as the transition builder decides it
+			// (issue #2981: the staged workspace-overlay STOP invariant below
+			// used to refuse that answer as a producer defect).
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
+				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
+				return errors.New("disabled fresh target lacks an RDD STOP transition")
+			}
+			return nil
+		}
 		if result.Action == reviewtransaction.TargetStatusActionStop {
 			if result.NextTransition.Kind != reviewNextTransitionStop {
 				// refusal:by-design world-action: a provider-built status envelope paired STOP with a non-STOP transition; only a producer code fix can make that invariant true
@@ -691,13 +703,6 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			default:
 				// refusal:by-design world-action: this negotiated status invariant supports only the explicitly classified fresh STOP projections; a producer must choose one of those projections
 				return errors.New("fresh target STOP action has an unsupported projection")
-			}
-			return nil
-		}
-		if result.Action == reviewtransaction.TargetStatusActionStart && result.rddModeResolved && !result.rddMode.Enabled() {
-			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
-				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
-				return errors.New("disabled fresh target lacks an RDD STOP transition")
 			}
 			return nil
 		}

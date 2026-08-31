@@ -926,14 +926,15 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Code = "operation_failed"
 		failure.Message = "The negotiated read-only review operation failed safely."
 		failure.MutationOutcome = ReviewMutationNotStarted
-		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
-		failure.NextAction = "retry"
-		// The read-only catch-all is deliberately content-free: it is the one
-		// envelope whose whole contract is "retry safely", so it clears the
-		// universal cause default rather than leaking an arbitrary internal
-		// error to a caller who has nothing to repair.
-		failure.Cause = ""
+		// Issues #2981 and #3379: every transient read-only class (remote
+		// fetch, inventory contention) is typed above, so an error that reaches
+		// this catch-all is deterministic for the same input: a selector or
+		// validation refusal that the same retry reproduces forever. The
+		// honest continuation is stop, and the scrubbed cause (the universal
+		// default set above) is what tells the caller what to change.
+		failure.RetrySafe = false
+		failure.NextAction = "stop"
 		return failure
 	}
 	// The true operation_outcome_unknown default: no typed branch above

@@ -264,21 +264,41 @@ func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 // an already-selected skills directory. It is separate from adapter injection
 // so compatibility paths can be refreshed once per operation.
 func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) {
-	return InjectSkillDirectoryWithWriter(skillDir, capability, filemerge.WriteFileAtomic)
+	return InjectSkillDirectoryForAgent(skillDir, capability, "")
+}
+
+// InjectSkillDirectoryForAgent refreshes SDD skills for one runtime, binding
+// the runtime identity the shared assets state (issue #2846: the deployed
+// skills/_shared review ledger contract kept the raw placeholder while the
+// inline orchestrator copy was rendered). An empty agent is the shared
+// compatibility root, which every runtime reads, so it renders the generic
+// `<runtime>` slot instead of one runtime's identity.
+func InjectSkillDirectoryForAgent(skillDir, capability string, agent model.AgentID) (InjectionResult, error) {
+	return injectSkillDirectoryWithWriter(skillDir, capability, agent, filemerge.WriteFileAtomic, removeLegacySharedSkillMarker)
 }
 
 // InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
 func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
-	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacySharedSkillMarker)
+	return injectSkillDirectoryWithWriter(skillDir, capability, "", writeFile, removeLegacySharedSkillMarker)
 }
 
 // InjectSkillDirectoryWithCompatibilityWriter refreshes SDD skills through a
 // compatibility-root writer that owns both writes and legacy-marker removal.
 func InjectSkillDirectoryWithCompatibilityWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
-	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacyMarker)
+	return injectSkillDirectoryWithWriter(skillDir, capability, "", writeFile, removeLegacyMarker)
 }
 
-func injectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
+// bindSharedSkillRuntimeIdentity renders the runtime placeholder a shared
+// asset carries with the identity of the runtime receiving it, or with the
+// generic `<runtime>` slot for the shared compatibility root.
+func bindSharedSkillRuntimeIdentity(content string, agent model.AgentID) string {
+	if agent == "" {
+		return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, "<runtime>")
+	}
+	return bindRuntimeAgentIdentity(content, agent)
+}
+
+func injectSkillDirectoryWithWriter(skillDir, capability string, agent model.AgentID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
@@ -298,7 +318,7 @@ func injectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(
 		}
 
 		path := filepath.Join(skillDir, "_shared", fileName)
-		writeResult, err := writeFile(path, []byte(content), 0o644)
+		writeResult, err := writeFile(path, []byte(bindSharedSkillRuntimeIdentity(content, agent)), 0o644)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -669,7 +689,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			skillResult, skillErr := InjectSkillDirectory(skillDir, opts.Capability)
+			skillResult, skillErr := InjectSkillDirectoryForAgent(skillDir, opts.Capability, adapter.Agent())
 			if skillErr != nil {
 				return InjectionResult{}, skillErr
 			}

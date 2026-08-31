@@ -694,6 +694,11 @@ func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) (
 	return paths, intendedUntrackedInventoryDigest(paths), nil
 }
 
+// intendedUntrackedInventoryCommand is the runnable STATUS that publishes the
+// canonical untracked inventory; the bare `--next-transition` form is refused
+// without a negotiated contract and runtime identity (issue #2895).
+const intendedUntrackedInventoryCommand = "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <runtime> --next-transition"
+
 // ValidateIntendedUntrackedSelection proves paths remain eligible in STATUS's inventory.
 func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
 	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
@@ -701,7 +706,7 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 		return nil, err
 	}
 	if expectedDigest != digest {
-		return nil, errors.New("untracked inventory changed; rerun `gentle-ai review status --next-transition` before selecting paths")
+		return nil, errors.New("untracked inventory changed; rerun `" + intendedUntrackedInventoryCommand + "` before selecting paths")
 	}
 	selected, err = canonicalPaths(selected)
 	if err != nil {
@@ -713,7 +718,7 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 	}
 	for _, path := range selected {
 		if _, ok := eligible[path]; !ok {
-			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition`", path)
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `"+intendedUntrackedInventoryCommand+"`", path)
 		}
 	}
 	return selected, nil
