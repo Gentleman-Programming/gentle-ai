@@ -1000,7 +1000,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								correctionRequest = &request
 							}
 						}
-						if artifactErr == nil && correctionForecasted {
+						// Native already routed a recovery-bound target away from
+						// validation, so no validation request is built for it: the
+						// envelope binds its repository context to the one transition
+						// it emits, never to a validation it does not offer (#3961).
+						if artifactErr == nil && correctionForecasted && native.Action != reviewtransaction.TargetStatusActionRecover {
 							request, requestErr := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, root, record.State, record.State.CapturePhaseRevision, liveSnapshot)
 							if requestErr != nil {
 								artifactErr = requestErr
