@@ -591,11 +591,6 @@ type runtimeBeginEvent struct {
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
 	BeginWorktree     string `json:"begin_worktree,omitempty"`
 	EffectiveWorktree string `json:"effective_worktree,omitempty"`
-	// BeginHead is the commit HEAD resolved to at Begin (#2536): Finish needs
-	// it to tell which default-branch commits entered HEAD afterwards, which
-	// the recorded trees (content, not history) cannot answer. Empty for older
-	// records and an unborn HEAD, both of which charge the plain diff as before.
-	BeginHead string `json:"begin_head,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -671,8 +666,6 @@ type runtimeReplay struct {
 	Status        RuntimeStatus
 	Requests      map[string]runtimeRequestReceipt
 	AttemptTokens map[int]string
-	// ActiveBeginHead is the active attempt's BeginHead; only Finish reads it.
-	ActiveBeginHead string
 	// Instance carries the store's ForInstance identity into replay (#2540
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
 	// when the record's identity equals this one. Empty projects nothing.
@@ -845,16 +838,12 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("%w while reading the eligible untracked inventory this attempt begins against: %w", ErrRuntimeCandidateUnavailable, err)
 		}
-		beginHead, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).HeadCommit(ctx)
-		if err != nil {
-			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("before launch", err)
-		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			IntendedUntracked: &intendedUntracked, EligibleUntrackedInventory: &eligibleInventory,
-			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace, BeginHead: beginHead,
+			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -955,10 +944,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
 		}
-		// #2536: a default-branch advance taken during the attempt sits inside
-		// the begin-to-finish range but is not authored work, so it is
-		// re-applied onto the begin tree before the charge is counted.
-		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).AuthoredChangedLines(ctx, snapshot, replay.ActiveBeginHead)
+		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).ChangedLines(ctx, snapshot)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
@@ -2209,7 +2195,6 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
-	replay.ActiveBeginHead = event.BeginHead
 	active := attempt
 	replay.Status.ActiveAttempt = &active
 	replay.Status.CumulativeAttempts++
