@@ -561,8 +561,8 @@ func TestNegotiatedReadOnlyCatchAllScrubsItsCauseAndNeverAbsorbsProcessControl(t
 		errors.New("open /home/user/.git/review-authority/receipt.json: permission denied"))
 	failure := newReviewIntegrationFailure("review.status", nil, leaky)
 	if failure.Code != "operation_failed" || failure.Phase != "pre_native" ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "stop" {
+		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "retry" {
 		t.Fatalf("read-only catch-all failure = %#v", failure)
 	}
 	if failure.Message != "The negotiated read-only review operation failed safely." {
@@ -816,16 +816,16 @@ func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
 	}
 }
 
-// Issues #2981 and #3379: the read-only catch-all cleared its cause and
-// answered `retry`, so a deterministic selector refusal was retried forever.
-// Untyped errors are by construction not a typed transient class: stop, and
-// keep the scrubbed cause that says what to change.
+// Issues #2981 and #3379: the read-only catch-all cleared its cause, so an
+// unclassified read-only failure was content-free. It keeps the scrubbed
+// cause that says what to change; retry stays, because this branch is the
+// residue of everything the typed classifier did not recognise.
 func TestNegotiatedStatusPreNativeFailurePreservesScrubbedCause(t *testing.T) {
 	failure := newReviewIntegrationFailure("review.status", nil, fmt.Errorf("freeze negotiated fresh review target: %w",
 		errors.New("staged --workspace-overlay requires exactly --base-ref")))
 	if failure.Code != "operation_failed" || failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted ||
-		failure.RetrySafe || failure.NextAction != "stop" || !strings.Contains(failure.Cause, "requires exactly --base-ref") {
-		t.Fatalf("deterministic read-only failure = %#v, want stop with the cause", failure)
+		!failure.RetrySafe || failure.NextAction != "retry" || !strings.Contains(failure.Cause, "requires exactly --base-ref") {
+		t.Fatalf("read-only failure = %#v, want retry with the cause", failure)
 	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("read-only catch-all with cause validation = %v", err)
