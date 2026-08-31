@@ -166,6 +166,27 @@ func TestPrepareOpenCodeBackgroundActivationHonorsEffectiveIntent(t *testing.T) 
 	}
 }
 
+func TestRenderOpenCodeBackgroundActivationOffReportsDisabled(t *testing.T) {
+	resolution := OpenCodeBackgroundResolution{
+		Effective: model.OpenCodeBackgroundOff,
+		Activation: opencodeactivation.ActivationReport{
+			Capability: opencodeactivation.CapabilityResolution{Status: opencodeactivation.CapabilityReady},
+			Action:     "off",
+			LauncherPaths: []string{
+				filepath.Join(t.TempDir(), "opencode"),
+			},
+		},
+	}
+
+	got := renderOpenCodeBackgroundActivation(resolution)
+	if !strings.Contains(got, "OpenCode background activation status: off") {
+		t.Fatalf("off activation report = %q, want intentional off status", got)
+	}
+	if strings.Contains(got, "activation status: pending") {
+		t.Fatalf("off activation report = %q, must not report pending", got)
+	}
+}
+
 func TestOpenCodeBackgroundStateIsOptionalAndLossless(t *testing.T) {
 	home := t.TempDir()
 	want := state.InstallState{
@@ -250,16 +271,17 @@ func TestDryRunReportsBackgroundIntentWithoutWritingState(t *testing.T) {
 
 func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		version    string
-		wantStatus string
-		wantReady  bool
-		wantPolicy bool
-		wantNote   string
+		name                 string
+		version              string
+		wantCapabilityStatus string
+		wantActivationStatus string
+		wantReady            bool
+		wantPolicy           bool
+		wantNote             string
 	}{
-		{name: "ready", version: "1.15.11", wantStatus: "ready", wantReady: true, wantPolicy: true},
-		{name: "unsupported", version: "1.15.10", wantStatus: "unsupported", wantNote: "execution stays foreground"},
-		{name: "unknown", version: "development", wantStatus: "unknown", wantNote: "execution stays foreground"},
+		{name: "ready but pending shell", version: "1.15.11", wantCapabilityStatus: "ready", wantActivationStatus: "pending", wantReady: true, wantPolicy: false, wantNote: "execution stays foreground"},
+		{name: "unsupported", version: "1.15.10", wantCapabilityStatus: "unsupported", wantActivationStatus: "unsupported", wantNote: "execution stays foreground"},
+		{name: "unknown", version: "development", wantCapabilityStatus: "unknown", wantActivationStatus: "unknown", wantNote: "execution stays foreground"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := installTestHome(t)
@@ -277,8 +299,8 @@ func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(result.Background.Activation.Capability.Status) != tt.wantStatus || result.BackgroundPolicyEnabled != tt.wantPolicy {
-				t.Fatalf("activation = %#v policy=%t, want status=%q policy=%t", result.Background.Activation, result.BackgroundPolicyEnabled, tt.wantStatus, tt.wantPolicy)
+			if string(result.Background.Activation.Capability.Status) != tt.wantCapabilityStatus || string(result.Background.Activation.Status) != tt.wantActivationStatus || result.BackgroundPolicyEnabled != tt.wantPolicy {
+				t.Fatalf("activation = %#v policy=%t, want capability=%q activation=%q policy=%t", result.Background.Activation, result.BackgroundPolicyEnabled, tt.wantCapabilityStatus, tt.wantActivationStatus, tt.wantPolicy)
 			}
 			if result.Background.Activation.Capability.Ready() != tt.wantReady {
 				t.Fatalf("capability ready = %t, want %t", result.Background.Activation.Capability.Ready(), tt.wantReady)
@@ -696,6 +718,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 }
 
 func TestSyncReportsManagedLauncherChanges(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
 	home := syncBackgroundTestHome(t)
 	target := filepath.Join(home, "opencode-real")
 	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {

@@ -187,7 +187,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	result.Background.activationPlan = backgroundActivation
 	if backgroundActivation != nil {
 		result.Background.Activation = backgroundActivation.Report()
-		result.BackgroundPolicyEnabled = backgroundActivation.Capability().Ready() && background.Effective == model.OpenCodeBackgroundOn
+		result.BackgroundPolicyEnabled = backgroundActivation.Effective() && background.Effective == model.OpenCodeBackgroundOn
 	}
 
 	if input.DryRun {
@@ -215,7 +215,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	runtime.background = background
 	runtime.backgroundActivation = backgroundActivation
-	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Effective()
 	runtime.piBackgroundProjection = piBackgroundProjection
 
 	stagePlan = runtime.stagePlan()
@@ -237,6 +237,9 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		State:        runtime.state,
 	})
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
+	if backgroundActivation != nil {
+		background.Activation = backgroundActivation.Report()
+	}
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, runtime.runtimeReady, resolved.Agents)
 	result.Verify = withOpenCodeBackgroundActivationNote(result.Verify, background, resolved.Agents)
 	if plan := piBackground.projectionPlan; plan != nil && plan.skipReason != "" {
@@ -797,7 +800,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			channel:      r.channel,
 			state:        r.state,
 		}
-		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundPolicy = r.backgroundActivation != nil && r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundReady = &r.runtimeReady
 		apply = append(apply, step)
 	}
 	// Routing guidance is scheduled per agent and outside the component loop:
@@ -1175,7 +1179,7 @@ func (s openCodeBackgroundActivationStep) Run() error {
 		return fmt.Errorf("apply managed OpenCode background activation: %w", err)
 	}
 	if s.ready != nil {
-		*s.ready = s.plan.Capability().Ready()
+		*s.ready = s.plan.Effective()
 	}
 	return nil
 }
@@ -1306,6 +1310,7 @@ type componentApplyStep struct {
 	state        *runtimeState
 
 	backgroundPolicy bool
+	backgroundReady  *bool
 }
 
 type communityToolInstallStep struct {
@@ -1331,6 +1336,10 @@ func (s communityToolInstallStep) Run() error {
 
 func (s componentApplyStep) ID() string {
 	return s.id
+}
+
+func (s componentApplyStep) backgroundPolicyEnabled() bool {
+	return s.backgroundPolicy && (s.backgroundReady == nil || *s.backgroundReady)
 }
 
 // computeSlugSlimVerdicts implements the Per-slug forwarding semantics
@@ -1662,7 +1671,7 @@ func (s componentApplyStep) Run() error {
 				Profiles:                    s.selection.Profiles,
 				CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
 			}
-			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
+			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicyEnabled() && adapter.Agent() == model.AgentOpenCode
 			if _, err := injectSDD(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
 			}
@@ -1820,7 +1829,7 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	runtime.background = backgroundResolution
 	runtime.progress = onProgress
 	runtime.backgroundActivation = backgroundActivation
-	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Effective()
 	piBackgroundResolution := PiBackgroundResolution{
 		Intent:    piBackground,
 		Effective: piBackground,

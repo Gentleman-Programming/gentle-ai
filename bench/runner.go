@@ -25,12 +25,14 @@ type Sandbox struct {
 	Binary string
 	// PathOverride is prepended to PATH for journeys that need a deterministic
 	// local runtime probe without depending on the host installation.
-	PathOverride string
-	Root         string
-	Home         string
-	Repo         string
-	Remote       string
-	TracePath    string
+	PathOverride             string
+	Shell                    string
+	Root                     string
+	Home                     string
+	Repo                     string
+	Remote                   string
+	TracePath                string
+	BenchReceiptMutationPath string
 	// BenchCrashAtPhase, when non-empty, is read by product binaries built
 	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
 	// (format "<phase>:<lineage_id>"): the deterministic phase-hook
@@ -100,6 +102,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
+	}
+	if s.Shell != "" {
+		env = append(env, "SHELL="+s.Shell)
 	}
 	// Set last so a journey that poisons the process temp directory overrides
 	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
