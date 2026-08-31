@@ -46,10 +46,15 @@ func TestSkillFrontmatterIsLintClean(t *testing.T) {
 				t.Fatalf("extract frontmatter: %v", err)
 			}
 
-			// Rule 2: name == parent directory basename.
+			// Rule 2: name == parent directory basename, except stable public identities.
 			expectedName := skillDirBasename(path)
+			identityRule := "must match directory basename"
+			if path == "skills/chained-pr/SKILL.md" {
+				expectedName = "gentle-ai-chained-pr"
+				identityRule = "must use the required stable public skill identity"
+			}
 			if fm.name != expectedName {
-				t.Errorf("name = %q, want %q (must match directory basename)", fm.name, expectedName)
+				t.Errorf("name = %q, want %q (%s)", fm.name, expectedName, identityRule)
 			}
 
 			// Rule 3: description raw line is a quoted YAML-safe scalar (no `>` or `|`).

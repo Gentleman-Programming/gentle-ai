@@ -1,50 +1,53 @@
 ---
-name: chained-pr
-description: "Trigger: PRs over 400 lines, stacked PRs, review slices. Split oversized changes into chained PRs that protect review focus."
+name: gentle-ai-chained-pr
+description: "Trigger: PRs over 400 lines, stacked PRs, review slices. Plan provider-aware chains that protect review focus and remote authority."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.0"
+  version: "2.0"
 ---
 
 ## Activation Contract
 
-Load this skill when a planned PR may exceed **400 changed lines**, SDD forecasts `400-line budget risk: High` or `Chained PRs recommended: Yes`, or the user asks for chained/stacked PRs, review slices, or reviewer-load control.
+Load when a planned PR may exceed **400 changed lines**, SDD forecasts chain risk, or the user asks for chained/stacked PRs, review slices, or reviewer-load control.
 
 ## Hard Rules
 
-- Split PRs over **400 changed lines** unless a maintainer explicitly accepts `size:exception`.
-- Keep each PR reviewable in about **≤60 minutes**.
-- Use one deliverable work unit per PR; keep tests/docs with the unit they verify.
-- State start, end, prior dependencies, follow-up work, and out-of-scope items in every chained PR.
-- Every child PR must include a dependency diagram marking the current PR with `📍`.
-- In Feature Branch Chain, create a draft/no-merge tracker PR; child PR #1 targets the tracker branch, later children target the immediate parent branch.
-- Treat polluted diffs as base bugs: retarget or rebase until only the current work unit appears.
-- Do not mix chain strategies after the user chooses one.
+- Detect the Git host read-only; stop when it is unknown or ambiguous.
+- Use the GitHub native route only when #3356 proves the exact host/build capability; do not silently install it or fall back to manual GitHub choreography, and never permit `size:exception` there.
+- A positively identified non-GitHub host uses its host-specific adapter and portable chaining; a maintainer-approved `size:exception` is available only there, and parent closure requires the reference's fail-closed invariant: no dependent child may remain.
+- Issue approval, planning, SDD phase approval, `auto-chain`, RDD reviews/receipts, and delivery approval do not authorize remote create/submit/sync/update/merge operations; each consumes separate bounded authority.
+- Compose Chain Context into generated `pr-body.md`; never modify the target repository's PR template.
 
 ## Decision Gates
 
 | Condition | Action |
-|---|---|
-| PR ≤400 changed lines and focused | Keep single PR. |
-| PR >400, each slice can land independently | Use Stacked PRs to main. |
-| PR >400, feature must integrate before main | Use Feature Branch Chain with tracker. |
-| Generated/vendor/migration diff cannot split cleanly | Ask maintainer for `size:exception`. |
-| SDD provides `delivery_strategy` | Follow it before apply/PR creation. |
+| --- | --- |
+| GitHub plus #3356 exact host/build proof | Use only the proven native command help surface. |
+| GitHub without that proof | Fail-closed; provide the official setup and evidence guidance in the reference. |
+| Positively identified non-GitHub host | Select the portable strategy explicitly. |
+| Unknown or ambiguous host | Fail-closed; run `git remote get-url --all origin` to resolve or prove ambiguity, then select the route. |
+| Over-budget `single-pr` on GitHub | Stop; run the exact-base check below, then select `auto-chain` or reduce scope; never use `size:exception`. |
+| Over-budget `ask-on-risk` or `auto-chain` | Select or form a compliant chain; this is not remote authority. |
+
+```bash
+pr_number="${1:?PR number required}"; case "$pr_number" in ''|0*|*[!0-9]*) printf '%s\n' 'PR number must be a positive integer' >&2; exit 2;; esac
+pr_id="$(gh pr view "$pr_number" --json id --jq .id)"
+IFS=$'\t' read -r base_oid base_repo < <(gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on PullRequest { baseRefOid baseRepository { nameWithOwner } } } }' -F id="$pr_id" --jq '[.data.node.baseRefOid, .data.node.baseRepository.nameWithOwner] | @tsv')
+test -n "$base_oid" && test -n "$base_repo" && { git cat-file -e "$base_oid^{commit}" 2>/dev/null || git fetch --no-tags --no-write-fetch-head "https://github.com/$base_repo.git" "$base_oid"; } && git cat-file -e "$base_oid^{commit}" && (set -o pipefail; git diff --numstat "$base_oid" HEAD | awk -F '\t' '$1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad=1; next } { total += $1 + $2 } END { exit bad || total > 400 }')
+```
 
 ## Execution Steps
 
-1. Estimate changed lines and identify independent work units.
-2. Ask for a chain strategy when none is cached and the budget is exceeded.
-3. Create branches/PRs using the chosen strategy only.
-4. Add Chain Context to each PR without replacing the repo PR template.
-5. Verify each PR independently: CI/tests/docs/manual checks, rollback scope, and clean diff.
-6. Keep tracker PR draft/no-merge until all child PRs are reviewed and integrated.
+1. Detect the host and select GitHub native or portable routing.
+2. Apply `ask-on-risk`, `auto-chain`, or `single-pr`; retain `feature-branch-chain` for portable routing.
+3. Partition autonomous work units under budget, compose `pr-body.md` with Chain Context, and require separate bounded authority before every remote operation.
+4. After a sync, rebase, or base change, re-enter through review status; with RDD disabled, follow ordinary repository policy and report `disabled/unmanaged`.
 
 ## Output Contract
 
-Return the chosen strategy, PR order, current PR boundary, dependency diagram, review budget (`additions + deletions`), verification plan, and any `size:exception` rationale.
+Return provider, route, capability evidence, strategy, PR order, current boundary, dependency diagram, budget, verification plan, remote-authority status, and any portable `size:exception` rationale.
 
 ## References
 
-- [references/chaining-details.md](references/chaining-details.md) — strategy diagrams, PR body section, branch commands, and reviewer guidance.
+- [references/chaining-details.md](references/chaining-details.md) — portable closure, approved GitHub capability, Chain Context, and authority boundaries.
