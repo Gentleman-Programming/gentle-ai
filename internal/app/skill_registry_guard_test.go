@@ -186,6 +186,7 @@ func TestSkillRegistryRefreshProceedsWithProjectSkillDir(t *testing.T) {
 	}
 }
 
+// TestSkillRegistryRefreshLiteralDotCWDProceedsInGitProject proves --cwd . reaches the project refresh path.
 func TestSkillRegistryRefreshLiteralDotCWDProceedsInGitProject(t *testing.T) {
 	home := t.TempDir()
 	setFakeHome(t, home)
@@ -205,6 +206,7 @@ func TestSkillRegistryRefreshLiteralDotCWDProceedsInGitProject(t *testing.T) {
 	}
 }
 
+// TestSkillRegistryListLiteralDotCWDReportsProjectSkill proves --cwd . preserves project skill identity.
 func TestSkillRegistryListLiteralDotCWDReportsProjectSkill(t *testing.T) {
 	home := t.TempDir()
 	setFakeHome(t, home)
@@ -247,6 +249,7 @@ Use the project skill.
 	}
 }
 
+// chdir moves the process working directory for app-boundary cwd tests and restores it during cleanup.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	old, err := os.Getwd()
@@ -263,6 +266,7 @@ func chdir(t *testing.T, dir string) {
 	})
 }
 
+// writeSkillFile writes a skill file fixture, creating parent directories as needed.
 func writeSkillFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

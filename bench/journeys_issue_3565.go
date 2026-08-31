@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// issue3565Axis identifies the black-box coverage for relative skill-registry cwd handling.
 const issue3565Axis = "issue-3565-skill-registry-cwd"
 
 func init() {
@@ -23,6 +24,7 @@ func init() {
 	})
 }
 
+// issue3565ProjectSkillFixture creates a git project with one project-local skill.
 func issue3565ProjectSkillFixture(sandbox *Sandbox) error {
 	if err := baseRepo(sandbox); err != nil {
 		return err
@@ -36,14 +38,17 @@ Use the project skill.
 `)
 }
 
+// issue3565ListDotArgs runs the public list command with a literal dot cwd.
 func issue3565ListDotArgs(*Sandbox) ([]string, error) {
 	return []string{"skill-registry", "list", "--json", "--cwd", "."}, nil
 }
 
+// issue3565RefreshDotArgs runs the public refresh command with a literal dot cwd.
 func issue3565RefreshDotArgs(*Sandbox) ([]string, error) {
 	return []string{"skill-registry", "refresh", "--cwd", "."}, nil
 }
 
+// issue3565VerifyListDot confirms list output keeps the project skill project-scoped.
 func issue3565VerifyListDot(sandbox *Sandbox, observation Observation) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("list --json --cwd . exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
@@ -66,6 +71,7 @@ func issue3565VerifyListDot(sandbox *Sandbox, observation Observation) error {
 	return nil
 }
 
+// issue3565VerifyRefreshDot confirms refresh proceeds instead of reporting a root skip.
 func issue3565VerifyRefreshDot(sandbox *Sandbox, observation Observation) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("refresh --cwd . exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
@@ -79,6 +85,7 @@ func issue3565VerifyRefreshDot(sandbox *Sandbox, observation Observation) error 
 	return nil
 }
 
+// issue3565Journeys returns the public CLI journey required by issue 3565.
 func issue3565Journeys() []Journey {
 	return []Journey{{
 		ID:     "j3565-skill-registry-dot-cwd",
