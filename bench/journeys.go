@@ -788,6 +788,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue2696Journeys()...)
 	journeys = append(journeys, sddChainJourneys()...)
 	journeys = append(journeys, issue3094Journeys()...)
+	journeys = append(journeys, issue3708Journeys()...)
 	journeys = append(journeys, issue3065Journeys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)

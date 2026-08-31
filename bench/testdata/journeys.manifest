@@ -16,7 +16,9 @@ j116-codex-committed-correction-runs-returned-status-continuation
 j117-doctor-dangling-managed-config
 j118-doctor-dangling-config-ancestor
 j119-global-review-mode-status-reports-persisted-source
+j119-passive-candidate-does-not-owe-final-verification
 j12-rejected-capture-then-recapture
+j120-active-candidate-still-owes-final-verification
 j120-welcome-tui-runs-under-a-real-tty
 j121-rdd-tui-controls-global-mode
 j122-global-review-mode-from-non-git-cwd
