@@ -42,6 +42,8 @@ type Sandbox struct {
 	// product binary without the bench_fixture tag never reads this
 	// variable at all.
 	BenchCrashAtPhase string
+	// PiReviewRelayContract is injected only by journeys that act as the Pi host.
+	PiReviewRelayContract string
 
 	// Journey state carried between steps.
 	Lineage  string
@@ -100,6 +102,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
+	}
+	if s.PiReviewRelayContract != "" {
+		env = append(env, "GENTLE_PI_REVIEW_RELAY_CONTRACT="+s.PiReviewRelayContract)
 	}
 	// Set last so a journey that poisons the process temp directory overrides
 	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.

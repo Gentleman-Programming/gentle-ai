@@ -132,6 +132,23 @@ func TestReviewCapabilitiesV23MatchesConformanceFixture(t *testing.T) {
 	}
 }
 
+func TestReviewCapabilitiesV24AdvertisementIsCurrent(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV2}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var got ReviewCapabilitiesResult
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Schema != "gentle-ai.review-integration.capabilities/v2.4" || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 4}) ||
+		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV6) || !slices.Contains(got.Schemas, "gentle-ai.review-intended-untracked-selection/v1") ||
+		!slices.Contains(got.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(got.Schemas, ReviewIntegrationConsentSchemaV3) ||
+		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) || slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV5) {
+		t.Fatalf("current v2 capabilities advertisement = %#v", got)
+	}
+}
+
 func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
 	if err != nil {
