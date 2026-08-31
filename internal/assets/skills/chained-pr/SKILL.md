@@ -14,6 +14,8 @@ Load this skill when a planned PR may exceed **400 changed lines**, SDD forecast
 ## Hard Rules
 
 - Split PRs over **400 changed lines** unless a maintainer explicitly accepts `size:exception`.
+- The budget constrains how work is **sliced**, never the code itself. Never delete comments, blank lines, docs, or tests, and never compress or restyle code, to fit under the budget.
+- Slicing is bounded: make **one** honest slicing pass. If no cohesive split brings every slice within budget, stop iterating, keep the best cohesive split, and report the final line count with a `size:exception` recommendation.
 - Keep each PR reviewable in about **≤60 minutes**.
 - Use one deliverable work unit per PR; keep tests/docs with the unit they verify.
 - State start, end, prior dependencies, follow-up work, and out-of-scope items in every chained PR.
@@ -30,6 +32,7 @@ Load this skill when a planned PR may exceed **400 changed lines**, SDD forecast
 | PR >400, each slice can land independently | Use Stacked PRs to main. |
 | PR >400, feature must integrate before main | Use Feature Branch Chain with tracker. |
 | Generated/vendor/migration diff cannot split cleanly | Ask maintainer for `size:exception`. |
+| No cohesive split fits the budget after one slicing pass | Stop; deliver the best split, report the overage and why it cannot shrink further, and recommend `size:exception`. |
 | SDD provides `delivery_strategy` | Follow it before apply/PR creation. |
 
 ## Execution Steps
