@@ -78,7 +78,9 @@ func AllowedRoot(path string) (string, error) {
 		if absErr != nil {
 			return "", fmt.Errorf("resolve home directory %q: %w", home, absErr)
 		}
-		if WithinRoot(pathAbs, homeAbs) {
+		// Same identity-vs-spelling rule as EnsureWithinRoot: a home whose
+		// path traverses a symlink must still be recognised as the root.
+		if WithinRoot(pathAbs, homeAbs) || WithinRoot(canonicalizeExisting(pathAbs), canonicalizeExisting(homeAbs)) {
 			return filepath.Clean(homeAbs), nil
 		}
 	}
@@ -105,10 +107,37 @@ func EnsureWithinRoot(path, root, original string) error {
 	if err != nil {
 		return fmt.Errorf("resolve absolute path %q: %w", path, err)
 	}
-	if !WithinRoot(pathAbs, root) {
+	// Containment must compare filesystem identity, not path spelling. A
+	// symlinked ancestor (macOS /var -> /private/var and /tmp, or a Linux
+	// /home -> /export/home layout) makes an in-root target read as an
+	// escape when only the literal strings are compared.
+	if !WithinRoot(pathAbs, root) && !WithinRoot(canonicalizeExisting(pathAbs), canonicalizeExisting(root)) {
 		return fmt.Errorf("symlink %q resolves outside allowed root %q: %q", original, root, pathAbs)
 	}
 	return nil
+}
+
+// canonicalizeExisting resolves the deepest existing ancestor of path through
+// symlinks and re-appends the components that do not exist yet. Dangling
+// targets stay comparable because only the existing prefix is resolved.
+func canonicalizeExisting(path string) string {
+	current := filepath.Clean(path)
+	remainder := ""
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			if remainder == "" {
+				return filepath.Clean(resolved)
+			}
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(path)
+		}
+		remainder = filepath.Join(filepath.Base(current), remainder)
+		current = parent
+	}
 }
 
 func WithinRoot(path, root string) bool {
