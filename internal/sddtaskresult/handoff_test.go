@@ -11,7 +11,7 @@ import (
 // its continuation exactly once.
 
 func TestHandoffCarriesThePrefixAndSchema(t *testing.T) {
-	handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "")
+	handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "", "")
 	if !strings.HasPrefix(handoff, "GENTLE_AI_SDD_FAILURE ") {
 		t.Fatalf("handoff lost its literal prefix: %q", handoff)
 	}
@@ -40,7 +40,7 @@ func TestHandoffQuotesACwdContainingASingleQuote(t *testing.T) {
 	// would compare against JSON escaping rather than the command a consumer
 	// actually runs.
 	var decoded map[string]any
-	handoff := Handoff(ClassMalformed, "sdd-verify", "/re'po", "")
+	handoff := Handoff(ClassMalformed, "sdd-verify", "/re'po", "", "")
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(handoff, "GENTLE_AI_SDD_FAILURE ")), &decoded); err != nil {
 		t.Fatalf("handoff payload is not JSON: %v", err)
 	}
@@ -51,17 +51,17 @@ func TestHandoffQuotesACwdContainingASingleQuote(t *testing.T) {
 }
 
 func TestHandoffCarriesAValidatedTaskModel(t *testing.T) {
-	if handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "openai/gpt-5.6"); !strings.Contains(handoff, `"taskModel":"openai/gpt-5.6"`) {
+	if handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "", "openai/gpt-5.6"); !strings.Contains(handoff, `"taskModel":"openai/gpt-5.6"`) {
 		t.Errorf("handoff dropped a valid task model: %q", handoff)
 	}
 	// A route token that cannot be trusted is omitted, never echoed.
-	if handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "not a model/../etc"); strings.Contains(handoff, "taskModel") {
+	if handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "", "not a model/../etc"); strings.Contains(handoff, "taskModel") {
 		t.Errorf("handoff echoed an untrusted task model: %q", handoff)
 	}
 }
 
 func TestDispatchLatchedNamesBothPhases(t *testing.T) {
-	handoff := DispatchLatched("sdd-verify", "sdd-apply", "sdd_task_result_empty", "/repo")
+	handoff := DispatchLatched("sdd-verify", "sdd-apply", "sdd_task_result_empty", "/repo", "")
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(handoff, "GENTLE_AI_SDD_FAILURE ")), &decoded); err != nil {
 		t.Fatalf("latched payload is not JSON: %v", err)
@@ -82,7 +82,28 @@ func TestDispatchLatchedNamesBothPhases(t *testing.T) {
 }
 
 func TestHandoffIsEmptyForAnAdmittedResult(t *testing.T) {
-	if handoff := Handoff(ClassOK, "sdd-apply", "/repo", ""); handoff != "" {
+	if handoff := Handoff(ClassOK, "sdd-apply", "/repo", "", ""); handoff != "" {
 		t.Errorf("an admitted result produced a failure handoff: %q", handoff)
+	}
+}
+
+// #2790: with two active changes, a selector-less sdd-status answers
+// select-change, so a handoff that knows the change must name it.
+func TestHandoffContinuationNamesTheChangeWhenKnown(t *testing.T) {
+	for _, tt := range []struct{ change, want string }{
+		{change: "", want: "gentle-ai sdd-status --cwd '/repo' --json"},
+		{change: "feat-x", want: "gentle-ai sdd-status 'feat-x' --cwd '/repo' --json"},
+	} {
+		var decoded map[string]any
+		handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", tt.change, "")
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(handoff, HandoffPrefix)), &decoded); err != nil {
+			t.Fatalf("handoff payload is not JSON: %v", err)
+		}
+		if decoded["continuation"] != tt.want {
+			t.Errorf("change %q: continuation = %#v, want %q", tt.change, decoded["continuation"], tt.want)
+		}
+		if latched := DispatchLatched("sdd-verify", "sdd-apply", "sdd_task_result_empty", "/repo", tt.change); !strings.Contains(latched, tt.want) {
+			t.Errorf("change %q: latched handoff does not carry %q: %s", tt.change, tt.want, latched)
+		}
 	}
 }

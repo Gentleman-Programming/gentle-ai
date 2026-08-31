@@ -172,6 +172,12 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 }
 
 func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.CompactReviewInput) ([]reviewtransaction.RefuterClaim, error) {
+	claimText := map[string]string{}
+	for _, result := range input.LensResults {
+		for _, finding := range result.Findings {
+			claimText[finding.ID] = finding.Claim
+		}
+	}
 	claims := make([]reviewtransaction.RefuterClaim, 0)
 	for _, classification := range input.Classifications {
 		if classification.Class != reviewtransaction.EvidenceInferential {
@@ -179,7 +185,7 @@ func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.Compac
 		}
 		switch classification.Causality {
 		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
-			claims = append(claims, reviewtransaction.RefuterClaim{FindingID: classification.FindingID, SnapshotIdentity: snapshot, Proof: classification.Proof})
+			claims = append(claims, reviewtransaction.RefuterClaim{FindingID: classification.FindingID, SnapshotIdentity: snapshot, Proof: classification.Proof, Claim: claimText[classification.FindingID]})
 		}
 	}
 	if len(claims) == 0 {
