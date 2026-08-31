@@ -234,7 +234,7 @@ var compatibilitySDDSkillIDs = []model.SkillID{
 	"sdd-onboard", "judgment-day",
 }
 
-// SkillDirectoryPaths returns every file that InjectSkillDirectory may write or
+// SkillDirectoryPaths returns every file that InjectSkillDirectoryForAgent may write or
 // remove. The legacy marker remains a transaction target so a failed refresh can
 // restore it from the compatibility backup.
 func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
@@ -260,13 +260,6 @@ func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 	return append(paths, skillPaths...), nil
 }
 
-// InjectSkillDirectory refreshes the SDD skills and their shared references in
-// an already-selected skills directory. It is separate from adapter injection
-// so compatibility paths can be refreshed once per operation.
-func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) {
-	return InjectSkillDirectoryForAgent(skillDir, capability, "")
-}
-
 // InjectSkillDirectoryForAgent refreshes SDD skills for one runtime, binding
 // the runtime identity the shared assets state (issue #2846: the deployed
 // skills/_shared review ledger contract kept the raw placeholder while the
@@ -275,11 +268,6 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 // `<runtime>` slot instead of one runtime's identity.
 func InjectSkillDirectoryForAgent(skillDir, capability string, agent model.AgentID) (InjectionResult, error) {
 	return injectSkillDirectoryWithWriter(skillDir, capability, agent, filemerge.WriteFileAtomic, removeLegacySharedSkillMarker)
-}
-
-// InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
-func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
-	return injectSkillDirectoryWithWriter(skillDir, capability, "", writeFile, removeLegacySharedSkillMarker)
 }
 
 // InjectSkillDirectoryWithCompatibilityWriter refreshes SDD skills through a
