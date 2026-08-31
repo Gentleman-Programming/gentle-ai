@@ -68,6 +68,10 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 	"answer. Never record an inconclusive inspection as a failed check: a failed check spends the correction budget " +
 	"on something you did not observe.\n\n" +
 	"Return exactly one JSON object with no prose. " +
+	"Validate your result against the supplied output schema. " +
+	"Echo targeted_validation_request_hash and correction_target_identity from the input. " +
+	"Include original_criteria and correction_regression, each with a boolean passed and non-empty evidence. " +
+	"Always emit follow_ups; use [] when none exist. " +
 	"Native Go alone decides correction accounting, receipts, and delivery gates."
 
 // Contract is the sole role authority for schema serving, capability reporting,

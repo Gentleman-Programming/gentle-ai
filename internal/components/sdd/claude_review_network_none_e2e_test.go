@@ -146,7 +146,7 @@ func TestClaudeReviewerTransportInNetworkNone(t *testing.T) {
 	const evidenceA = "- path_index: 0\n  path: parser.go\n  patch: |\n    -    return ErrMalformedPort\n    +    return nil"
 	const evidenceB = "- path_index: 1\n  path: parser_test.go\n  patch: |\n    -    require.Error(t, err)\n    +    require.NoError(t, err)"
 	prompt := `GENTLE_AI_REVIEW_BINDING {"lineage":"claude-runtime-e2e","target":"fixture","lens":"review-reliability","order":0,"revision":"1","repository_context":"opaque-fixture","subject_hash":"` + subject + `"}
-GENTLE_AI_CLAUDE_REVIEW_CONTEXT
+GENTLE_AI_REVIEW_CONTEXT
 artifact_subject: {"subject_hash":"` + subject + `"}
 base_tree: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 candidate_tree: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -154,7 +154,7 @@ changed_path_manifest: [{"path":"parser.go","status":"M"},{"path":"parser_test.g
 name_status: "M\tparser.go\nM\tparser_test.go"
 numstat: "1\t1\tparser.go\n1\t1\tparser_test.go"
 path_evidence:
-` + evidenceA + "\n" + evidenceB + "\nGENTLE_AI_CLAUDE_REVIEW_CONTEXT_END"
+` + evidenceA + "\n" + evidenceB + "\nGENTLE_AI_REVIEW_CONTEXT_END"
 	for _, test := range []struct {
 		name, prompt string
 		unknown      bool

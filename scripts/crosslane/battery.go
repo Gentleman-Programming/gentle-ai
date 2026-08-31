@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 )
 
 // commandTimeout bounds every non-host command: the --with-model lane drives
@@ -41,9 +43,14 @@ type capturedEnvelope struct {
 // lineageScope is the Go-issued authority binding a lane received at START.
 // The lineage is immutable; revision and target advance only from native STATUS.
 type lineageScope struct {
-	Lineage  string
+	Lineage string
+	// Revision is the live authority Rn used only by mutation/recovery checks.
 	Revision string
-	Target   string
+	// CaptureRevision is stable Pn used by every capture/materialization binding.
+	CaptureRevision string
+	Target          string
+	BaseRef         string
+	CommittedOnly   bool
 }
 
 type battery struct {
@@ -146,15 +153,77 @@ func (b *battery) statusArgs(repo, agent string, extra ...string) []string {
 	args = append(args, extra...)
 	if scope, found := b.lineages[repo]; found {
 		args = append(args, "--lineage", scope.Lineage)
+		if scope.BaseRef != "" {
+			args = append(args, "--base-ref", scope.BaseRef)
+		}
+		if scope.CommittedOnly {
+			args = append(args, "--committed-only")
+		}
 	}
 	return args
 }
 
+// statusFromClosure follows the final capture's provider-owned continuation.
+// It intentionally consumes operation plus ordered tokens, never a command line
+// or the lane's retained lineage state.
+func (b *battery) statusFromClosure(repo string, closure map[string]any) (map[string]any, string, int) {
+	return b.statusFromClosureEnv(repo, nil, closure)
+}
+
+func (b *battery) statusFromClosureEnv(repo string, env []string, closure map[string]any) (map[string]any, string, int) {
+	continuation := getMap(closure, "status_continuation")
+	if getString(continuation, "operation") != "review.status" {
+		return nil, "last-event closure omitted review.status continuation", 1
+	}
+	if scope, found := b.lineages[repo]; found && operationLineage(closure) != scope.Lineage {
+		return nil, "last-event closure lineage does not match the started authority", 1
+	}
+	doc, stderr, code := b.runTransitionExecution("status", repo, env, continuation)
+	if err := b.admitStatusScope(repo, doc); err != nil {
+		return nil, err.Error(), 1
+	}
+	return doc, stderr, code
+}
+
+// runTransitionExecution dispatches a public operation and its ordered argument
+// tokens. It never reparses the rendered command or rebuilds any selector.
+func (b *battery) runTransitionExecution(source, repo string, env []string, execution map[string]any) (map[string]any, string, int) {
+	var args []string
+	switch getString(execution, "operation") {
+	case "review.start":
+		args = []string{"review", "start"}
+	case "review.status":
+		args = []string{"review", "status"}
+	case "review.recover":
+		args = []string{"review", "recover"}
+	case "review.repair":
+		args = []string{"review", "repair"}
+	case "review.validate":
+		args = []string{"review", "validate"}
+	case "review.acknowledge-approved":
+		args = []string{"review", "acknowledge-approved"}
+	default:
+		return nil, "unsupported provider transition operation", 1
+	}
+	for _, argument := range getSlice(execution, "arguments") {
+		entry, ok := argument.(map[string]any)
+		if !ok {
+			return nil, "provider transition argument is not an object", 1
+		}
+		token, _ := entry["token"].(string)
+		if token == "" {
+			return nil, "provider transition argument omitted its token", 1
+		}
+		args = append(args, token)
+	}
+	return b.runJSONEnv(source, repo, env, args...)
+}
+
 func (b *battery) rememberStarted(repo, target string, start map[string]any) error {
 	context := getMap(start, "repository_context")
-	scope := lineageScope{Lineage: operationLineage(start), Revision: getString(context, "revision"), Target: getString(context, "target_identity")}
-	if scope.Lineage == "" || scope.Revision == "" || scope.Target == "" || scope.Target != target {
-		return fmt.Errorf("START omitted the exact authority lineage/revision/target")
+	scope := lineageScope{Lineage: operationLineage(start), CaptureRevision: getString(context, "revision"), Target: getString(context, "target_identity")}
+	if scope.Lineage == "" || scope.CaptureRevision == "" || scope.Target == "" || scope.Target != target {
+		return fmt.Errorf("START omitted the exact authority lineage/capture-phase/target")
 	}
 	b.lineages[repo] = scope
 	return nil
@@ -174,6 +243,9 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 		return fmt.Errorf("STATUS no longer matches the started authority lineage/revision/target")
 	}
 	scope.Revision, scope.Target = getString(authority, "revision"), target
+	if phase := getString(doc, "repository_context", "revision"); phase != "" {
+		scope.CaptureRevision = phase
+	}
 	b.lineages[repo] = scope
 	if input := collectInput(doc); input != nil {
 		args := argumentValues(input)
@@ -181,21 +253,26 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 		if correctionTarget := getString(doc, "validation_request", "correction_target_identity"); correctionTarget != "" {
 			expectedTarget = correctionTarget
 		}
-		if args["lineage"] != scope.Lineage || args["expected-revision"] != scope.Revision || args["target"] != expectedTarget {
-			return fmt.Errorf("collect slot does not match the started authority lineage/revision/target")
+		expectedRevision := scope.Revision
+		if operation := getString(input, "capture_operation"); strings.HasPrefix(operation, "review.capture") || operation == "external.run_provider_role" {
+			expectedRevision = scope.CaptureRevision
+		}
+		if args["lineage"] != scope.Lineage || args["expected-revision"] != expectedRevision || args["target"] != expectedTarget {
+			return fmt.Errorf("collect slot does not match the started authority lineage/Pn-or-Rn/target")
 		}
 	}
 	return nil
 }
 
-// runCommandLine splits a provider-rendered command string and executes it
-// verbatim through the binary under test, from the given directory.
+// runCommandLine executes a provider-rendered command with the product's
+// quoting-aware splitter. Transition closures use runTransitionExecution instead,
+// because their operation and ordered argument tokens are already structured.
 func (b *battery) runCommandLine(source, dir, command string) (map[string]any, string, int) {
-	fields := strings.Fields(command)
-	if len(fields) < 2 || fields[0] != "gentle-ai" {
+	words, err := cli.SplitPrintedCommandWords(command)
+	if err != nil || len(words) < 2 || words[0] != "gentle-ai" {
 		return nil, fmt.Sprintf("unexpected provider command %q", command), 1
 	}
-	return b.runJSON(source, dir, fields[1:]...)
+	return b.runJSON(source, dir, words[1:]...)
 }
 
 // scratchRepo creates one initialized scratch git repository.
@@ -217,15 +294,104 @@ func (b *battery) scratchRepo(name string) (string, error) {
 	return dir, nil
 }
 
+// committedMediumCandidate creates the exact committed-only review shape: an
+// immutable base tree followed by a clean committed candidate. The later
+// lifecycle never depends on a mutable workspace diff for its initial target.
+func (b *battery) committedMediumCandidate(lane, name, path, base, candidate string) (string, string, bool) {
+	repo, err := b.scratchRepo(name)
+	if err != nil {
+		b.fail(lane, "committed process scratch repository", err.Error())
+		return "", "", false
+	}
+	if err := writeFile(repo, path, base); err != nil {
+		b.fail(lane, "committed process base", err.Error())
+		return "", "", false
+	}
+	if err := commitAll(repo, "feat: committed base"); err != nil {
+		b.fail(lane, "committed process base", err.Error())
+		return "", "", false
+	}
+	baseTree, err := runGitOutput(repo, "rev-parse", "HEAD^{tree}")
+	if err != nil || baseTree == "" {
+		b.fail(lane, "committed process base", fmt.Sprintf("resolve immutable base tree: %v", err))
+		return "", "", false
+	}
+	if err := writeFile(repo, path, candidate); err != nil {
+		b.fail(lane, "committed process candidate", err.Error())
+		return "", "", false
+	}
+	if err := commitAll(repo, "feat: review candidate"); err != nil {
+		b.fail(lane, "committed process candidate", err.Error())
+		return "", "", false
+	}
+	return repo, baseTree, true
+}
+
+// startCommittedMedium follows STATUS's structured START operation for an exact
+// base tree and committed-only candidate, then runs the consent envelope's
+// provider-owned granted invocation through the product's quoting-aware splitter.
+func (b *battery) startCommittedMedium(lane, repo, agent, baseTree string) bool {
+	statusDoc, stderr, code := b.status(repo, agent, "--base-ref", baseTree, "--committed-only")
+	execution := getMap(statusDoc, "next_transition", "execute")
+	if code != 0 || getString(execution, "operation") != "review.start" ||
+		!transitionCarriesToken(execution, "--base-ref="+baseTree) || !transitionCarriesToken(execution, "--committed-only=true") {
+		b.fail(lane, "committed START advertised", fmt.Sprintf("exit=%d operation=%q base-ref=%t committed-only=%t %s",
+			code, getString(execution, "operation"), transitionCarriesToken(execution, "--base-ref="+baseTree),
+			transitionCarriesToken(execution, "--committed-only=true"), firstLine(stderr)))
+		return false
+	}
+	consent, stderr, code := b.runTransitionExecution("start", repo, nil, execution)
+	if code != 0 || getString(consent, "schema") != "gentle-ai.review-integration.consent/v3" || getString(consent, "action") != "consent_required" {
+		b.fail(lane, "committed START consent", fmt.Sprintf("exit=%d schema=%q action=%q %s",
+			code, getString(consent, "schema"), getString(consent, "action"), firstLine(stderr)))
+		return false
+	}
+	granted := grantedInvocation(consent)
+	if granted == "" {
+		b.fail(lane, "committed START consent", "no granted choice invocation in envelope")
+		return false
+	}
+	started, stderr, code := b.runCommandLine("start", repo, granted)
+	if code != 0 || getString(started, "state") != "reviewing" || getString(started, "risk_level") != "medium" || len(getSlice(started, "selected_lenses")) != 1 {
+		b.fail(lane, "committed START consent", fmt.Sprintf("exit=%d state=%q risk=%q lenses=%d %s",
+			code, getString(started, "state"), getString(started, "risk_level"), len(getSlice(started, "selected_lenses")), firstLine(stderr)))
+		return false
+	}
+	if err := b.rememberStarted(repo, getString(statusDoc, "target_identity"), started); err != nil {
+		b.fail(lane, "committed START consent", err.Error())
+		return false
+	}
+	scope := b.lineages[repo]
+	scope.BaseRef, scope.CommittedOnly = baseTree, true
+	b.lineages[repo] = scope
+	b.pass(lane, "committed START consent", "immutable base tree and committed-only candidate created a reviewing medium lineage")
+	return true
+}
+
+func transitionCarriesToken(execution map[string]any, want string) bool {
+	for _, argument := range getSlice(execution, "arguments") {
+		entry, ok := argument.(map[string]any)
+		if ok && entry["token"] == want {
+			return true
+		}
+	}
+	return false
+}
+
 func runGit(dir string, args ...string) error {
+	_, err := runGitOutput(dir, args...)
+	return err
+}
+
+func runGitOutput(dir string, args ...string) (string, error) {
 	command := exec.Command("git", args...)
 	command.Dir = dir
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, stderr.String())
+		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, stderr.String())
 	}
-	return nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func commitAll(dir, message string) error {
@@ -338,14 +504,29 @@ func firstLine(text string) string {
 
 func timestamp() string { return time.Now().UTC().Format("2006-01-02T15:04:05Z") }
 
-// operationState reads the finalize state from either the negotiated
-// operation envelope (result.state) or the legacy bare result (state):
-// provider-rendered finalize commands without --contract emit the latter.
+// operationState reads the state from either a negotiated operation envelope
+// (result.state) or a direct last-event capture result (state).
 func operationState(doc map[string]any) string {
 	if state := getString(doc, "result", "state"); state != "" {
 		return state
 	}
 	return getString(doc, "state")
+}
+
+// admittedCapture accepts both an intermediate result-artifact acknowledgement
+// and the terminal last-event response. The final selected lens or validator
+// no longer hands control to FINALIZE: it closes the review itself.
+func admittedCapture(doc map[string]any) bool {
+	switch getString(doc, "schema") {
+	case "gentle-ai.review-result-artifact/v2":
+		return getString(doc, "admission_decision") == "completed"
+	case "gentle-ai.review-last-event-closure/v1":
+		switch operationState(doc) {
+		case "approved", "correction_required", "escalated":
+			return true
+		}
+	}
+	return false
 }
 
 // operationLineage mirrors operationState for the lineage identifier.
@@ -356,72 +537,84 @@ func operationLineage(doc map[string]any) string {
 	return getString(doc, "lineage_id")
 }
 
-// finishApproved follows only native transitions through final evidence and burn.
-func (b *battery) finishApproved(lane, name, repo, agent string, env []string) bool {
-	evidencePath := filepath.Join(b.workRoot, lane+"-final-evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("crosslane final verification passed\n"), 0o644); err != nil {
-		b.fail(lane, name, err.Error())
-		return false
-	}
-	for step := 0; step < 5; step++ {
-		status, statusStderr, _ := b.statusEnv(repo, agent, env)
-		switch getString(status, "next_transition", "kind") {
-		case "execute":
-			result, stderr, code := b.runCommandLineEnv("operation", repo, env, getString(status, "next_transition", "execute", "command"))
-			if code != 0 {
-				b.fail(lane, name, fmt.Sprintf("%s exit=%d %s", getString(status, "next_transition", "execute", "operation"), code, firstLine(stderr)))
-				return false
-			}
-			if operationState(result) == "approved" {
-				return b.burnApproved(lane, name, repo, agent, env, result)
-			}
-		case "collect":
-			input := collectInput(status)
-			if input == nil || input["capture_operation"] != "review.capture-evidence" {
-				b.fail(lane, name, "unexpected collect input")
-				return false
-			}
-			tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
-			doc, stderr, code := b.runJSONEnv("verification-evidence", repo, env,
-				append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)...)
-			if code != 0 || getString(doc, "outcome") != "passed" {
-				b.fail(lane, name, fmt.Sprintf("evidence capture exit=%d %s", code, firstLine(stderr)))
-				return false
-			}
-		default:
-			b.fail(lane, name, fmt.Sprintf("unexpected transition %s/%s %s", getString(status, "next_transition", "kind"), getString(status, "next_transition", "reason_code"), firstLine(statusStderr)))
-			return false
-		}
-	}
-	b.fail(lane, name, "did not reach the terminal burn within the step budget")
-	return false
-}
-
-func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finalized map[string]any) bool {
+func (b *battery) acknowledgeApproved(lane, name, repo, agent string, env []string, finalized map[string]any) bool {
 	scope, found := b.lineages[repo]
 	result := getMap(finalized, "result")
 	if result == nil {
 		result = finalized
 	}
-	if !found || operationState(finalized) != "approved" || getString(result, "lineage_id") != scope.Lineage || !strings.Contains(getString(result, "action"), "burned") {
-		b.fail(lane, name, "terminal finalize did not report approved+burn for the exact lineage")
+	acknowledgement := getMap(result, "acknowledgement")
+	if !found || operationState(finalized) != "approved" || getString(result, "lineage_id") != scope.Lineage ||
+		getString(acknowledgement, "operation") != "review.acknowledge-approved" {
+		b.fail(lane, name, "terminal capture did not report an exact pending acknowledgement for the started lineage")
 		return false
 	}
 	for _, field := range []string{"receipt", "receipt_path", "authority", "next_transition"} {
 		if _, present := result[field]; present {
-			b.fail(lane, name, "burned terminal retained "+field)
+			b.fail(lane, name, "pending terminal retained "+field)
 			return false
 		}
 	}
+	if _, token, ok := crosslaneAcknowledgementTokens(acknowledgement); !ok {
+		b.fail(lane, name, "terminal acknowledgement did not carry its exact five bound arguments")
+		return false
+	} else if len(token) != 64 {
+		b.fail(lane, name, "terminal acknowledgement token is not a canonical 256-bit value")
+		return false
+	}
+
+	status, stderr, code := b.statusEnv(repo, agent, env)
+	statusAcknowledgement := getMap(status, "next_transition", "execute")
+	if code != 0 || getString(status, "next_transition", "kind") != "execute" ||
+		getString(status, "next_transition", "reason_code") != "approved_acknowledgement_required" ||
+		!sameCrosslaneExecution(acknowledgement, statusAcknowledgement) {
+		b.fail(lane, name, fmt.Sprintf("restart acknowledgement exit=%d reason=%q exact=%t %s", code,
+			getString(status, "next_transition", "reason_code"), sameCrosslaneExecution(acknowledgement, statusAcknowledgement), firstLine(stderr)))
+		return false
+	}
+
+	wrong := cloneCrosslaneExecution(statusAcknowledgement)
+	_, token, ok := crosslaneAcknowledgementTokens(wrong)
+	if !ok {
+		b.fail(lane, name, "restart acknowledgement could not be cloned for wrong-binding refusal")
+		return false
+	}
+	wrongToken := strings.Repeat("0", 64)
+	if wrongToken == token {
+		wrongToken = strings.Repeat("1", 64)
+	}
+	wrongArguments := getSlice(wrong, "arguments")
+	wrongArgument, _ := wrongArguments[4].(map[string]any)
+	wrongArgument["value"] = wrongToken
+	wrongArgument["token"] = "--token=" + wrongToken
+	if _, wrongStderr, wrongCode := b.runTransitionExecution("acknowledgement-wrong-binding", repo, env, wrong); wrongCode == 0 {
+		b.fail(lane, name, "wrong acknowledgement binding unexpectedly burned authority: "+firstLine(wrongStderr))
+		return false
+	}
+	afterWrong, afterWrongStderr, afterWrongCode := b.statusEnv(repo, agent, env)
+	if afterWrongCode != 0 || !sameCrosslaneExecution(acknowledgement, getMap(afterWrong, "next_transition", "execute")) {
+		b.fail(lane, name, fmt.Sprintf("wrong acknowledgement changed the pending continuation: exit=%d %s", afterWrongCode, firstLine(afterWrongStderr)))
+		return false
+	}
+
+	if _, acknowledgeStderr, acknowledgeCode := b.runTransitionExecution("acknowledgement", repo, env, statusAcknowledgement); acknowledgeCode != 0 {
+		b.fail(lane, name, fmt.Sprintf("exact acknowledgement exit=%d %s", acknowledgeCode, firstLine(acknowledgeStderr)))
+		return false
+	}
+	if _, replayStderr, replayCode := b.runTransitionExecution("acknowledgement-replay", repo, env, statusAcknowledgement); replayCode == 0 {
+		b.fail(lane, name, "replayed acknowledgement unexpectedly succeeded: "+firstLine(replayStderr))
+		return false
+	}
+
 	delete(b.lineages, repo)
 	for _, gate := range []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"} {
-		doc, stderr, code := b.runJSONEnv("gate", repo, env,
+		doc, gateStderr, gateCode := b.runJSONEnv("gate", repo, env,
 			"review", "validate", "--cwd", repo, "--contract", reviewContract, "--gate", gate)
 		gateResult := getMap(doc, "result")
-		if code != 0 || getString(gateResult, "result") != "invalidated" || getString(gateResult, "delivery") != "unmanaged" ||
+		if gateCode != 0 || getString(gateResult, "result") != "invalidated" || getString(gateResult, "delivery") != "unmanaged" ||
 			getString(gateResult, "action") != "repository-policy" {
-			b.fail(lane, name, fmt.Sprintf("%s exit=%d result=%q delivery=%q action=%q %s", gate, code,
-				getString(gateResult, "result"), getString(gateResult, "delivery"), getString(gateResult, "action"), firstLine(stderr)))
+			b.fail(lane, name, fmt.Sprintf("%s exit=%d result=%q delivery=%q action=%q %s", gate, gateCode,
+				getString(gateResult, "result"), getString(gateResult, "delivery"), getString(gateResult, "action"), firstLine(gateStderr)))
 			return false
 		}
 		allowed, _ := gateResult["allowed"].(bool)
@@ -430,6 +623,41 @@ func (b *battery) burnApproved(lane, name, repo, _ string, env []string, finaliz
 			return false
 		}
 	}
-	b.pass(lane, name, "approved authority burned; five delivery gates are invalidated/unmanaged repository policy")
+	b.pass(lane, name, "approved authority replayed one exact acknowledgement before burn; five delivery gates are invalidated/unmanaged repository policy")
 	return true
+}
+
+func crosslaneAcknowledgementTokens(execution map[string]any) ([]string, string, bool) {
+	arguments := getSlice(execution, "arguments")
+	if len(arguments) != 5 {
+		return nil, "", false
+	}
+	wantNames := []string{"cwd", "lineage", "target", "expected-revision", "token"}
+	tokens := make([]string, len(wantNames))
+	for index, name := range wantNames {
+		argument, ok := arguments[index].(map[string]any)
+		if !ok || getString(argument, "name") != name || getString(argument, "value") == "" || getString(argument, "token") == "" {
+			return nil, "", false
+		}
+		tokens[index] = getString(argument, "token")
+	}
+	return tokens, getString(arguments[4].(map[string]any), "value"), true
+}
+
+func cloneCrosslaneExecution(execution map[string]any) map[string]any {
+	payload, err := json.Marshal(execution)
+	if err != nil {
+		return nil
+	}
+	clone := map[string]any{}
+	if err := json.Unmarshal(payload, &clone); err != nil {
+		return nil
+	}
+	return clone
+}
+
+func sameCrosslaneExecution(want, got map[string]any) bool {
+	wantPayload, wantErr := json.Marshal(want)
+	gotPayload, gotErr := json.Marshal(got)
+	return wantErr == nil && gotErr == nil && bytes.Equal(wantPayload, gotPayload)
 }

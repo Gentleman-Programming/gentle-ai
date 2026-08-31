@@ -195,20 +195,6 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 }
 
 func TestInstallNavigationRoundTrips(t *testing.T) {
-	withModelCache := func(t *testing.T) {
-		t.Helper()
-		cacheFile := filepath.Join(t.TempDir(), "models.json")
-		if err := os.WriteFile(cacheFile, []byte(`{}`), 0o644); err != nil {
-			t.Fatalf("WriteFile(models cache) error = %v", err)
-		}
-
-		origStat := osStatModelCache
-		osStatModelCache = func(name string) (os.FileInfo, error) {
-			return os.Stat(cacheFile)
-		}
-		t.Cleanup(func() { osStatModelCache = origStat })
-	}
-
 	continuePluginsCursor := len(opencodepluginDefinitions()) * 2
 	tests := []struct {
 		name           string
@@ -279,9 +265,8 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenSDDMode, ScreenPreset},
 		},
 		{
-			name: "OpenCode SDD multi with model cache returns through plugins strict TDD model picker and SDD mode",
+			name: "OpenCode SDD multi returns through plugins strict TDD model picker and SDD mode",
 			setup: func(t *testing.T) Model {
-				withModelCache(t)
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenPreset
 				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
@@ -297,8 +282,8 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 					setCursor: true,
 					prepare: func(state Model) Model {
 						// The round-trip under test is the ModelPicker navigation edge, not
-						// provider cache parsing. CI may not have a real OpenCode cache, so
-						// force the picker into its normal row+Continue mode deterministically.
+						// asynchronous runtime catalog discovery or completion. Force the
+						// picker state and results into normal row+Continue mode deterministically.
 						state.ModelPicker.AvailableIDs = []string{"opencode"}
 						state.ModelPicker.CustomAgents = nil
 						return state
@@ -433,7 +418,6 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			// both directions.
 			name: "all picker agents SDD multi round-trips through every picker and model picker",
 			setup: func(t *testing.T) Model {
-				withModelCache(t)
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenPreset
 				m.Selection.Agents = []model.AgentID{
@@ -456,8 +440,8 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 					cursor:    len(screens.ModelPickerRows()),
 					setCursor: true,
 					prepare: func(state Model) Model {
-						// Force the picker into row+Continue mode deterministically;
-						// CI may lack a real OpenCode provider cache.
+						// Force the picker state and results into row+Continue mode to avoid
+						// asynchronous runtime catalog discovery or completion in this focused preset-flow test.
 						state.ModelPicker.AvailableIDs = []string{"opencode"}
 						state.ModelPicker.CustomAgents = nil
 						return state

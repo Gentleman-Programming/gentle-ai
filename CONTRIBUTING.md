@@ -28,7 +28,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 This project follows a strict issue-first workflow:
 
 1. **Open an issue** using the appropriate template ([Bug Report](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml) or [Feature Request](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml))
-2. **Wait for approval** — a maintainer will add the `status:approved` label when the issue is ready to be worked on
+2. **Wait for approval** — work may begin only when the issue has `status:approved` under the canonical issue-creation workflow contract. Without a current direct instruction and target-host capability granting the exact action, comment and wait.
 3. **Comment on the issue** to let others know you're working on it
 4. **Open a PR** referencing the approved issue
 
@@ -372,7 +372,7 @@ All PRs go through automated checks:
 |-------|-----------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
-| **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
+| **Check Issue Has status:approved** | The linked issue has `status:approved` under the canonical issue-creation workflow contract |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |
 | **Unit Tests** | `go test ./...` passes |
 | **E2E Tests** | `cd e2e && ./docker-test.sh` passes |

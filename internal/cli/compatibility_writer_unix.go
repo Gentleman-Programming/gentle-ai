@@ -126,6 +126,37 @@ func (w *unixCompatibilityDirectoryWriter) Write(path string, content []byte, pe
 	return result, nil
 }
 
+func (w *unixCompatibilityDirectoryWriter) Remove(path string) (bool, error) {
+	parts, err := compatibilityPathParts(w.root, path)
+	if err != nil {
+		return false, err
+	}
+
+	dirFD, err := w.openParent(parts[:len(parts)-1])
+	if err != nil {
+		return false, err
+	}
+	if dirFD != w.rootFD {
+		defer unix.Close(dirFD)
+	}
+
+	name := parts[len(parts)-1]
+	exists, err := physicalCompatibilityFileExists(dirFD, name)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	if err := unix.Unlinkat(dirFD, name, 0); err != nil {
+		return false, fmt.Errorf("remove compatibility destination %q: %w", path, err)
+	}
+	if err := unix.Fsync(dirFD); err != nil {
+		return true, fmt.Errorf("sync compatibility parent directory for %q: %w", path, err)
+	}
+	return true, nil
+}
+
 func compatibilityPathParts(root, path string) ([]string, error) {
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
@@ -166,6 +197,21 @@ func (w *unixCompatibilityDirectoryWriter) openParent(parts []string) (int, erro
 		currentFD = nextFD
 	}
 	return currentFD, nil
+}
+
+func physicalCompatibilityFileExists(dirFD int, name string) (bool, error) {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(dirFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if err == unix.ENOENT {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat physical compatibility destination %q: %w", name, err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		// refusal:by-design world-action: a non-regular destination must be replaced before a safe atomic refresh can continue.
+		return false, fmt.Errorf("compatibility destination %q must be a regular file", name)
+	}
+	return true, nil
 }
 
 func readPhysicalCompatibilityFile(dirFD int, name string) ([]byte, bool, error) {

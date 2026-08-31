@@ -61,7 +61,13 @@ func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
 }
 
+const nonInteractiveTUIError = "gentle-ai requires both stdin and stdout to be terminals (TTYs); use --version, gentle-ai update, or --help for non-interactive use"
+
 func RunArgs(args []string, stdout io.Writer) error {
+	if len(args) == 0 && (!isattyFn(os.Stdin.Fd()) || !isattyFn(os.Stdout.Fd())) {
+		return errors.New(nonInteractiveTUIError)
+	}
+
 	// Propagate the build-time version to the CLI and upgrade layers so backup
 	// manifests record which version of gentle-ai created them.
 	cli.AppVersion = Version
@@ -101,6 +107,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(args[1:]), stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
+		case "sdd-task-result":
+			return cli.RunSDDTaskResult(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":

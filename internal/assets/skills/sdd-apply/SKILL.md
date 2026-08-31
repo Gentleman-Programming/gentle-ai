@@ -35,7 +35,7 @@ You are a sub-agent responsible for IMPLEMENTATION. You receive specific tasks f
 From the orchestrator:
 - Change name
 - The specific task(s) to implement (e.g., "Phase 1, tasks 1.1-1.3")
-- Artifact store mode (`engram | openspec | hybrid | none`)
+- Artifact store mode as REPORTED by native status (`engram | openspec | hybrid | none`) — consume it, never re-derive it
 - Structured status from `skills/_shared/sdd-status-contract.md`: `schemaName`, `planningHome`, `changeRoot`, `artifactPaths`, `contextFiles`, `applyState`, task progress, dependency states, and `actionContext`
 - Delivery strategy and resolved workload decision (`ask-on-risk | auto-chain | single-pr | exception-ok`, plus PR slice or `size:exception` when applicable)
 
@@ -43,10 +43,14 @@ From the orchestrator:
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks` (all required — keep tasks ID for updates). Mark tasks complete via `mem_update(id: {tasks-observation-id}, content: "...")`. Save progress as `sdd/{change-name}/apply-progress`.
-- **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Update `tasks.md` with `[x]` marks.
-- **hybrid**: Follow BOTH conventions — persist progress to Engram (`mem_update` for tasks) AND update `tasks.md` with `[x]` marks on filesystem.
-- **none**: Return progress only. Do not update project artifacts.
+**Reads are store-blind.** Read `proposal`, `spec`, `design`, and `tasks` (all required) from the locators in `artifactPaths`, and `apply-progress` from its locator whenever that one resolves. Do not detect the store and do not assemble locators yourself.
+
+Writes name a mechanism because writing a file and saving an observation are different operations, but the reported store selects it — you do not:
+
+- **engram**: `mem_update` the `tasks` observation so completed tasks are marked `[x]`; `mem_save` or `mem_update` the `apply-progress` locator.
+- **openspec**: follow `skills/_shared/openspec-convention.md`; mark `[x]` in the file at the `tasks` locator.
+- **hybrid**: both mechanisms, against that artifact's locators.
+- **none**: return progress only. Do not update project artifacts.
 
 ## Status and Workspace Guard
 
@@ -155,7 +159,7 @@ If design/tasks contain applicable threat-matrix cases, write and run each mappe
 
 After all implementation work units finish, return control to the parent orchestrator for independent SDD verification. Do not launch or recommend review directly after apply. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator. Only after independent SDD verification passes may the parent offer the optional review lifecycle.
 
-Focused remediation is the sole `applyState: all_done` exception. It requires the persisted transaction's exact `lineage_id`, `generation`, mode-specific `fix_batch`, and `failed_evidence_revision`. Record those values in both the `gentle-ai.remediation-result/v1` envelope and its immediately following `gentle-ai.remediation-evidence/v1` JSON. A bare envelope, stale revision, mismatched lineage/generation, or exhausted budget never completes remediation.
+Focused remediation is the sole `applyState: all_done` exception. It follows ordinary SDD failed-evidence accounting for the exact `failed_evidence_revision`; a bare envelope, stale revision, or exhausted attempt budget never completes remediation.
 
 ### Step 4: Implement Tasks (Standard Workflow)
 
@@ -192,7 +196,7 @@ Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
 - artifact: `apply-progress`
 - topic_key: `sdd/{change-name}/apply-progress`
 - type: `architecture`
-- Also update the tasks artifact with `[x]` marks via `mem_update` (engram) or file edit (openspec/hybrid).
+- Also mark completed tasks `[x]` at the `tasks` locator, using the write mechanism the reported store requires.
 
 #### Merge Protocol
 
@@ -304,7 +308,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - Consume structured status when provided; stop on `blocked`, `all_done`, or unsafe `actionContext`
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
-- Focused remediation is the sole `all_done` exception and must bind both evidence blocks to the exact lineage_id, generation, fix_batch, and failed_evidence_revision from native status
+- Focused remediation is the sole `all_done` exception and must bind evidence to the exact failed_evidence_revision from native status
 
 ## Steps
 
@@ -315,8 +319,8 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 5. Read only files explicitly referenced by the task (max 3 files)
 6. Implement code changes — minimal, localized edits
 7. Persist progress immediately after each completed task:
-    - `engram`: `mem_update` the `sdd/{change-name}/tasks` observation so completed tasks are marked `[x]`, then `mem_save` or `mem_update` for `sdd/{change-name}/apply-progress`
-    - `openspec`: mark tasks.md checkboxes
+    - `engram`: `mem_update` the `tasks` observation so completed tasks are marked `[x]`, then `mem_save` or `mem_update` the `apply-progress` locator
+    - `openspec`: mark the checkboxes in the file at the `tasks` locator
     - `hybrid`: both
 8. Re-read persisted tasks and verify completed tasks are checked before returning.
 9. Return short summary: files changed list, completed tasks, blocked items.

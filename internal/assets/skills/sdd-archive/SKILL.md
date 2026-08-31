@@ -47,10 +47,9 @@ The archive report is the terminal record of the cycle. It describes the state o
 
 When sources disagree about a fact, rank them — most authoritative first:
 
-1. **Native review context** — structured status `reviewGate`, a terminal receipt, and post-apply gate context. These are informational observations; they never authorize, block, or govern archive or delivery.
-2. **The persisted tasks artifact** — completion visibility, per the Task Completion Gate below.
-3. **Explicit final-state facts in the orchestrator's launch prompt** — e.g. "these verify warnings were fixed in later commits", "this blocker was resolved and the gate passed". The launch prompt is the most recent account of the change and outranks intermediate snapshots.
-4. **`verify-report` and `apply-progress`** — intermediate snapshots. Lowest rank: valid history of what was true at their time, never evidence of final state.
+1. **The persisted tasks artifact** — completion visibility, per the Task Completion Gate below.
+2. **Explicit final-state facts in the orchestrator's launch prompt** — e.g. "these verify warnings were fixed in later commits", "this blocker was resolved and verification passed". The launch prompt is the most recent account of the change and outranks intermediate snapshots.
+3. **`verify-report` and `apply-progress`** — intermediate snapshots. Lowest rank: valid history of what was true at their time, never evidence of final state.
 
 Reporting rules that follow:
 
@@ -60,26 +59,22 @@ Reporting rules that follow:
 - Carry final numbers (test counts, warnings, open issues) from the highest-ranked source that covers them; do not copy numbers from `verify-report` or `apply-progress` when later work changed them.
 - Never merge distinct defects or failures into a single causal story. A cause is recorded as confirmed only with evidence; otherwise record the failure as undiagnosed.
 
-This hierarchy governs how the archive REPORTS facts. CRITICAL issues in `verify-report` still block archive with no prompt override (a claim that a CRITICAL was fixed requires re-running `sdd-verify`, not a prompt assertion), while review context remains informational and the Task Completion Gate below remains authoritative.
+This hierarchy governs how the archive REPORTS facts. CRITICAL issues in `verify-report` still block archive with no prompt override (a claim that a CRITICAL was fixed requires re-running `sdd-verify`, not a prompt assertion), and the Task Completion Gate below remains authoritative.
 
 ## Execution and Persistence Contract
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` (all required). When `reviewGate` is present, read the exact `sdd/{change-name}/review/{transaction,ledger,receipt,gate-context}` topics as informational context; when it is absent, no review context exists to read. Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
+- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` (all required). Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
 - **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Perform merge and archive folder moves.
 - **hybrid**: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
 - **none**: Return closure summary only. Do not perform archive file operations.
 
-### Review Context Is Informational
+### Archive Readiness
 
-Before any task reconciliation, spec sync, or archive move, require structured status. `reviewGate` is structurally absent when no review context was discovered and may be present when an earlier review left historical context.
+Before any task reconciliation, spec sync, or archive move, require structured status. Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`. A post-verify `reviewOffer` is an invitation only and is never read as archive state.
 
-- **`reviewGate` absent**: archive proceeds under ordinary repository policy. A post-verify `reviewOffer` is an invitation, never a gate.
-- **`reviewGate` present**: read its transaction, ledger, receipt, and gate context only to report the observed review state. `allow`, pending, malformed, `scope-changed`, `invalidated`, and `escalated` are informational; none authorizes, blocks, or governs archive or delivery.
-- **Post-review final verification report delta**: native final-verify settlement may attest exact report bytes for traceability. It does not create an archive or delivery gate.
-
-Do not treat `reviewGate`'s absence or result as a defect or as grounds to demand a receipt. The Task Completion Gate and strict verification decide whether archive can proceed; ordinary repository policy decides delivery.
+The Task Completion Gate and strict independent verification decide whether archive can proceed; ordinary repository policy decides delivery.
 
 ### Task Completion Gate
 
@@ -210,16 +205,43 @@ fi
 ```bash
 # Run this block as one shell transaction so the EXIT trap remains active.
 # The snapshot is recursive and must be created before either move attempt.
+source="openspec/changes/{change-name}"
+destination="openspec/changes/archive/YYYY-MM-DD-{change-name}"
 snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/sdd-archive.XXXXXX")"
 trap 'rm -rf -- "$snapshot_root"' EXIT
-cp -R "openspec/changes/{change-name}" "$snapshot_root/source"
+cp -R "$source" "$snapshot_root/source"
 
 # Mechanical move (MANDATORY): git mv when tracked, mv otherwise
 mkdir -p openspec/changes/archive
-if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+  printf 'archive destination collision: source %s and destination %s remain unchanged. Resolve the destination collision, then rerun this archive step.\n' "$source" "$destination" >&2
+  exit 1
+fi
+
+if git mv "$source" "$destination"; then
   :
 else
-  if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+  git_mv_status=$?
+  if [ -e "$source" ] || [ -L "$source" ]; then
+    :
+  else
+    printf 'git mv failed with status %s and source %s is absent; refusing plain mv fallback.\n' "$git_mv_status" "$source" >&2
+    exit "$git_mv_status"
+  fi
+  if diff -r "$snapshot_root/source" "$source"; then
+    fallback_source_diff_status=0
+  else
+    fallback_source_diff_status=$?
+  fi
+  if [ "$fallback_source_diff_status" -ne 0 ]; then
+    printf 'git mv failed with status %s and source %s changed; refusing plain mv fallback.\n' "$git_mv_status" "$source" >&2
+    exit "$git_mv_status"
+  fi
+  if [ -e "$destination" ] || [ -L "$destination" ]; then
+    printf 'archive destination collision: source %s and destination %s remain unchanged. Resolve the destination collision, then rerun this archive step.\n' "$source" "$destination" >&2
+    exit 1
+  fi
+  if mv "$source" "$destination"; then
     :
   else
     move_status=$?
@@ -228,13 +250,13 @@ else
 fi
 
 # The source must be gone before comparing the archived tree with its snapshot.
-if [ -e "openspec/changes/{change-name}" ] || [ -L "openspec/changes/{change-name}" ]; then
+if [ -e "$source" ] || [ -L "$source" ]; then
   printf 'archive move left the source directory in place\n' >&2
   exit 1
 fi
 
 # MANDATORY readback: only empty diff output passes.
-if diff -r "$snapshot_root/source" "openspec/changes/archive/YYYY-MM-DD-{change-name}"; then
+if diff -r "$snapshot_root/source" "$destination"; then
   diff_status=0
 else
   diff_status=$?
@@ -247,6 +269,29 @@ fi
 Use today's date in ISO format (e.g., `2026-02-16`).
 
 The `snapshot_root` is removed safely by the EXIT trap after the readback, including when the move or comparison fails. Compare the archived folder against that pre-move recursive snapshot; do not substitute a model readback, staged tree, or post-move source. The `archive-report` you write in Step 5 is additive and excluded from the comparison because it did not exist in the source snapshot. Any non-empty `diff -r` output or non-zero status is truncation, alteration, or an operational failure and FAILS the phase; a missing `diff -r` also FAILS the phase.
+
+The portable destination guard rejects a destination that already exists before either move attempt; it does not provide an atomic cross-process no-clobber guarantee. Do not add a suffix, overwrite, merge, delete, or otherwise choose a destination automatically.
+
+### Historical Malformed Nesting Recovery (Manual Only)
+
+This guidance is only for the historical malformed shape `archive/YYYY-MM-DD-{change-name}/{change-name}/`. Run this block manually only after inspecting the paths:
+
+```bash
+active_source="openspec/changes/{change-name}"
+outer_destination="openspec/changes/archive/YYYY-MM-DD-{change-name}"
+nested_source="$outer_destination/{change-name}"
+
+if [ -e "$active_source" ] || [ -L "$active_source" ] ||
+   [ ! -d "$outer_destination" ] || [ -L "$outer_destination" ] ||
+   [ ! -d "$nested_source" ] || [ -L "$nested_source" ]; then
+  printf 'historical archive recovery refused: active source must be absent, and outer destination and nested source must be real directories; all paths remain unchanged. Resolve the ambiguous shape manually.\n' >&2
+  exit 1
+fi
+
+mv "$nested_source" "$active_source"
+```
+
+Never automatically delete, overwrite, or merge the outer archive directory. If the active source exists or is a symlink, the outer destination or nested source is not a real directory, or the shape is otherwise ambiguous, stop and resolve the paths manually. After the active source is restored and the collision is resolved, rerun this archive step.
 
 ### Step 4: Verify Archive
 

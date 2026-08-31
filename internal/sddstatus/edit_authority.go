@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,4 +198,103 @@ func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tas
 	}
 	reasons.genuine = append(reasons.genuine, editAuthorityBlockedReason(roots))
 	return ApplyBlocked, roots
+}
+
+// applyRuntimeTopologyBlock stops only a currently routed runtime actor when a
+// task target belongs to a different Git common directory. Edit authority is
+// deliberately checked first: a grant can authorize a path, but it cannot make
+// an independent repository share the planning change's candidate accounting.
+func applyRuntimeTopologyBlock(ctx context.Context, applyState *ApplyState, dependencies *Dependencies, nextRecommended *string, reasons *blockerReasons, tasksText, workspaceRoot, change string) {
+	if applyState == nil || dependencies == nil || nextRecommended == nil {
+		return
+	}
+	switch *nextRecommended {
+	case string(PhaseApply), string(PhaseVerify), string(PhaseRemediate):
+	default:
+		return
+	}
+	roots, err := foreignRuntimeTopologyRoots(ctx, tasksText, workspaceRoot, change)
+	if err != nil {
+		reasons.genuine = append(reasons.genuine, runtimeTopologyBlockedReason(nil, err))
+	} else if len(roots) == 0 {
+		return
+	} else {
+		reasons.genuine = append(reasons.genuine, runtimeTopologyBlockedReason(roots, nil))
+	}
+	if *applyState == ApplyReady {
+		*applyState = ApplyBlocked
+		dependencies.Apply = DependencyBlocked
+	}
+	dependencies.Verify = DependencyBlocked
+	dependencies.Archive = DependencyBlocked
+	*nextRecommended = "resolve-blockers"
+}
+
+func foreignRuntimeTopologyRoots(ctx context.Context, tasksText, workspaceRoot, change string) ([]string, error) {
+	planningStore, err := OpenRuntimeStore(ctx, workspaceRoot, change)
+	if err != nil {
+		return nil, fmt.Errorf("resolve the planning repository Git common directory: %w", err)
+	}
+	foreign := map[string]bool{}
+	for _, line := range strings.Split(tasksText, "\n") {
+		if len(taskCheckbox.FindStringSubmatch(line)) == 0 {
+			continue
+		}
+		for _, token := range pathLikeTokens(line) {
+			resolved := token
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(workspaceRoot, resolved)
+			}
+			target := gitRootOf(resolveExistingPath(filepath.Clean(resolved)))
+			if target == "" {
+				continue
+			}
+			targetStore, err := OpenRuntimeStore(ctx, target, change)
+			if err != nil {
+				return nil, fmt.Errorf("resolve the target repository Git common directory for %s: %w", pathquote.Quote(target), err)
+			}
+			same, err := sameRuntimeCommonDirectory(planningStore.commonDir, targetStore.commonDir)
+			if err != nil {
+				return nil, err
+			}
+			if !same {
+				foreign[target] = true
+			}
+		}
+	}
+	roots := make([]string, 0, len(foreign))
+	for root := range foreign {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+	return roots, nil
+}
+
+func sameRuntimeCommonDirectory(left, right string) (bool, error) {
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		return false, fmt.Errorf("read planning repository Git common directory: %w", err)
+	}
+	rightInfo, err := os.Stat(right)
+	if err != nil {
+		return false, fmt.Errorf("read task target Git common directory: %w", err)
+	}
+	return os.SameFile(leftInfo, rightInfo), nil
+}
+
+func runtimeTopologyBlockedReason(roots []string, err error) string {
+	detail := ""
+	if err != nil {
+		detail = fmt.Sprintf("cannot verify Git common-dir identity: %v", err)
+	} else {
+		quoted := make([]string, 0, len(roots))
+		for _, root := range roots {
+			quoted = append(quoted, pathquote.Quote(root))
+		}
+		detail = fmt.Sprintf("tasks.md targets repositories with a different Git common directory: %s", strings.Join(quoted, ", "))
+	}
+	return fmt.Sprintf(
+		"blocked(cross_common_dir_runtime_target): %s; keep runtime work in the planning repository or a shared linked worktree with the same Git common directory, or split independent repositories into separately planned and runtime-accounted SDD changes; an edit-authority grant does not supply candidate accounting",
+		detail,
+	)
 }

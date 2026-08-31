@@ -36,6 +36,8 @@ const ReviewIntegrationCapabilitiesSchemaV21 = "gentle-ai.review-integration.cap
 const ReviewIntegrationCapabilitiesSchemaIDV21 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.1.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV22 = "gentle-ai.review-integration.capabilities/v2.2"
 const ReviewIntegrationCapabilitiesSchemaIDV22 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.2.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV23 = "gentle-ai.review-integration.capabilities/v2.3"
+const ReviewIntegrationCapabilitiesSchemaIDV23 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.3.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -224,17 +226,14 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			reviewtransaction.GateRequestSchema,
 			ReviewIntegrationCapabilitiesSchema,
 			ReviewIntegrationFailureSchema,
-			reviewtransaction.FinalVerificationIncidentSchema,
 			ReviewIntegrationOperationSchema,
 			ReviewIntegrationProjectionSchema,
 			ReviewIntegrationRepairSchema,
 			ReviewIntegrationStartSchemaV2,
 			ReviewIntegrationStatusSchemaV2,
 			reviewtransaction.ReceiptSchema,
-			reviewtransaction.CompactReceiptSchema,
 			reviewResultArtifactSchema,
 			reviewtransaction.TargetedValidationRequestSchema,
-			reviewtransaction.VerificationEvidenceRecordSchema,
 			reviewRefuterSchemaID,
 			reviewReviewerSchemaID,
 			reviewValidatorSchemaID,
@@ -242,13 +241,10 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		Features: ReviewCapabilitiesFeatures{
 			Mandatory: []ReviewCapabilityFeature{
 				{Name: "compact_v2_authority", Supported: true, Requires: []string{}},
-				{Name: "exact_receipt_replay", Supported: true, Requires: []string{"compact_v2_authority"}},
-				{Name: "five_delivery_gates", Supported: true, Requires: []string{"compact_v2_authority"}},
 				{Name: "immutable_snapshot", Supported: true, Requires: []string{}},
 				{Name: "legacy_v1_target_scoped_read_only", Supported: true, Requires: []string{"target_scoped_status"}},
 				{Name: "repository_independent_capabilities", Supported: true, Requires: []string{}},
 				{Name: "restart_safe_projection", Supported: true, Requires: []string{"target_scoped_status"}},
-				{Name: "sdd_receipt_binding", Supported: true, Requires: []string{"compact_v2_authority"}},
 				{Name: "target_scoped_status", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 				{Name: "uniform_failure_envelope", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 			},
@@ -256,13 +252,10 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 				{Name: "base_ref_workspace_overlay", Supported: true, Requires: []string{"immutable_snapshot", "restart_safe_projection"}},
 				{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 				{Name: "classified_authority_repair", Supported: true, Requires: []string{"native_next_transition", "uniform_failure_envelope"}},
-				{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
 				{Name: "native_frozen_candidate_context", Supported: true, Requires: []string{"immutable_snapshot"}},
 				{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
 				{Name: "native_next_transition", Supported: true, Requires: []string{"target_scoped_status"}},
-				{Name: "one_shot_final_verification_retry", Supported: true, Requires: []string{"compact_v2_authority", "exact_receipt_replay", "native_next_transition"}},
 				{Name: "opaque_repository_context", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
-				{Name: "outcome_bound_verification_evidence", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 				{Name: "provider_artifact_admission", Supported: true, Requires: []string{"compact_v2_authority", "native_frozen_candidate_context", "opaque_repository_context"}},
 				{Name: "provider_targeted_validation_request", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 				{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
@@ -292,8 +285,8 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV22, ReviewIntegrationContractV2
-		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 2}
+		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV23, ReviewIntegrationContractV2
+		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 3}
 		for index, schema := range result.Schemas {
 			switch schema {
 			case reviewtransaction.AdmittedReviewerResultSchemaV1:
@@ -301,7 +294,7 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			case reviewtransaction.ArtifactSubjectSchemaV1:
 				result.Schemas[index] = reviewtransaction.ArtifactSubjectSchema
 			case ReviewIntegrationCapabilitiesSchema:
-				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV22
+				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV23
 			case ReviewIntegrationFailureSchema:
 				result.Schemas[index] = ReviewIntegrationFailureSchemaV2
 			case ReviewIntegrationConsentSchema:

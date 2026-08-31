@@ -74,23 +74,31 @@ func TestReviewStartInABareRepositoryNamesAWorkingTreeThatActuallyWorks(t *testi
 	}
 }
 
-// Destroying diagnostic information is its own defect. Only the bare case gets
-// the product-voice message; any other rev-parse failure must still surface the
-// cause it came with, and must never claim the repository is bare.
-func TestReviewStartOutsideAnyRepositoryStillSurfacesItsCause(t *testing.T) {
+// A genuinely unversioned workspace gets local Git metadata before START
+// evaluates the same candidate lifecycle it would inside an existing repository.
+// With no candidate changes, that normal lifecycle refuses the empty candidate;
+// bootstrap itself neither remains a repository-root failure nor creates a remote.
+func TestReviewStartOutsideAnyRepositoryBootstrapsLocalGitAndContinuesToEmptyCandidateRefusal(t *testing.T) {
 	reviewModeHome(t)
-	outside := t.TempDir()
+	workspace := t.TempDir()
 
 	var output bytes.Buffer
-	err := RunReview([]string{"start", "--cwd", outside}, &output)
+	err := RunReview([]string{"start", "--cwd", workspace}, &output)
 	if err == nil {
-		t.Fatalf("review start outside a repository was allowed: %s", output.String())
+		t.Fatalf("review start without candidate changes was allowed: %s", output.String())
 	}
-	if message := err.Error(); strings.Contains(message, "bare") {
-		t.Fatalf("a non-bare failure was misclassified as bare: %s", message)
+	message := err.Error()
+	if strings.Contains(message, "bare") {
+		t.Fatalf("unversioned workspace was misclassified as bare: %s", message)
 	}
-	if message := err.Error(); !strings.Contains(message, "not a git repository") {
-		t.Fatalf("an unexpected git failure lost its cause: %s", err)
+	if !strings.Contains(message, "candidate has no pending changes") {
+		t.Fatalf("review start did not continue to the normal empty-candidate refusal: %s", message)
+	}
+	if info, statErr := os.Stat(filepath.Join(workspace, ".git")); statErr != nil || !info.IsDir() {
+		t.Fatalf("local Git metadata = %v (%v), want directory", info, statErr)
+	}
+	if remote := strings.TrimSpace(runReviewCLIGit(t, workspace, "remote")); remote != "" {
+		t.Fatalf("git remote = %q, want no remotes", remote)
 	}
 }
 

@@ -247,13 +247,17 @@ func intendedUntrackedJourneys() []Journey {
 		{
 			ID:     "j110-untracked-terminal-burn-and-unmanaged-staged-validation",
 			Review: reviewOptedIn,
-			Title:  "#3417: an untracked intended candidate terminal-burns and staged validation stays unmanaged",
-			Source: "#3417 preserves explicit intended-untracked START selection while removing staged receipt authorization",
+			Title:  "#3797: an untracked intended candidate awaits acknowledgement before burn and staged validation stays unmanaged",
+			Source: "#3797 preserves explicit intended-untracked START selection while requiring exact acknowledgement before terminal burn",
 			Steps: []Step{
 				{Name: "fixture: unborn repository with one all-untracked candidate", Fixture: unbornIntendedDeliveryCandidate},
-				{Name: "select every untracked path and execute printed START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
-				{Name: "terminal finalization burns the unborn transaction", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: func(sandbox *Sandbox, observation Observation) error {
-					return requireBurnedApproval(sandbox.Lineage)(sandbox, observation)
+				{Name: "select every untracked path and execute printed zero-lens START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
+				{Name: "the zero-lens terminal event emits acknowledgement before burning the unborn transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage,
+						"--agent", "opencode", "--untracked-scope=select",
+						"--expected-untracked-inventory="+r.sandbox.Scratch["unborn-intended-inventory"],
+						"--intended-untracked="+unbornIntendedDeliveryPath,
+					)
 				}},
 				{Name: "unstaged unborn pre-commit validation is informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
 					return requireUnmanagedShippedGate(observation, "pre-commit")

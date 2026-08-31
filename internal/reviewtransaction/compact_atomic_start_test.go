@@ -410,6 +410,7 @@ func TestCompactStoreCreateOrReplayAtomicStartConvergesConcurrentExactRequests(t
 func TestCompactStoreCreateOrReplayAtomicStartRecreatesAfterApprovedAuthorityBurn(t *testing.T) {
 	const lineage = "compact-atomic-start-recreate-after-burn"
 	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	store := compactAtomicStartStore(t, repo, lineage)
 	request := compactAtomicStartFixture(t, repo, lineage)
 	created, err := store.CreateOrReplayAtomicStart(context.Background(), request)
@@ -417,27 +418,29 @@ func TestCompactStoreCreateOrReplayAtomicStartRecreatesAfterApprovedAuthorityBur
 		t.Fatal(err)
 	}
 	approved := created.Record.State
-	if err := approved.CompleteReview(CompactReviewInput{}); err != nil {
-		t.Fatal(err)
+	for order := range approved.SelectedLenses {
+		captureCompactLens(t, store, approved, order)
 	}
-	validatingRevision, err := store.Replace(created.Record.Revision, "review/complete-review", approved)
+	captured, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := approved.CompleteVerification([]byte("approved atomic authority"), true); err != nil {
-		t.Fatal(err)
-	}
-	approvedRevision, err := store.Replace(validatingRevision, "review/complete-verification", approved)
+	approved = captured.State
+	view, err := approved.CompactReviewView()
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := approved.Receipt()
+	if err := approved.CompleteReview(CompactReviewInput{LensResults: view.LensResults, RefuterOutcomes: view.RefuterOutcomes}); err != nil {
+		t.Fatal(err)
+	}
+	if err := approved.CloseCleanReviewOnLastEvent(); err != nil {
+		t.Fatal(err)
+	}
+	acknowledgement, err := CommitApprovedCompactAcknowledgement(context.Background(), store, captured.Revision, "review/complete-review", approved)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteReceipt(context.Background(), receipt); err != nil {
-		t.Fatal(err)
-	}
+	approvedRevision := acknowledgement.ExpectedRevision
 	beforeBurn, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +454,7 @@ func TestCompactStoreCreateOrReplayAtomicStartRecreatesAfterApprovedAuthorityBur
 	if err != nil || !bytes.Equal(beforeBurn, afterTerminalReplay) {
 		t.Fatalf("terminal atomic START replay changed authority: %v", err)
 	}
-	if err := BurnApprovedCompactAuthority(context.Background(), repo, lineage, approvedRevision); err != nil {
+	if err := AcknowledgeApprovedCompactAuthority(context.Background(), repo, lineage, acknowledgement.TargetIdentity, approvedRevision, acknowledgement.Token); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(store.StatePath()); !errors.Is(err, os.ErrNotExist) {
@@ -461,8 +464,5 @@ func TestCompactStoreCreateOrReplayAtomicStartRecreatesAfterApprovedAuthorityBur
 	recreated, err := store.CreateOrReplayAtomicStart(context.Background(), request)
 	if err != nil || recreated.Replayed {
 		t.Fatalf("CreateOrReplayAtomicStart(after burn) = %#v, %v", recreated, err)
-	}
-	if _, err := os.Stat(store.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("recreated START retained a terminal receipt/tombstone: %v", err)
 	}
 }

@@ -363,13 +363,14 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup is unavailable")
 	}
 	defer cleanup()
+	resolveBasename := candidateBasenameResolver(request.FrozenContext.ChangedPathManifest)
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
 	wantCandidateCausalIDs := make([]string, 0)
 	for _, evidence := range canonical.Evidence {
 		if evidenceReportsUnavailableInspection(evidence) {
 			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
 		}
-		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains)
+		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains, resolveBasename)
 		if lookupErr != nil {
 			return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
 		}
@@ -395,10 +396,23 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 				findingAdmissionDiagnostic("invalid_finding_location", finding.ID, finding.Location, reason), locationErr)
 		}
 		if stringIndex(wantPaths, location.Path) < 0 {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			// The same citation shape reaches a finding's own location, and
+			// resolving it in evidence and proofs but not here would refuse the
+			// exact artifact the rest of this admission just accepted.
+			resolved, unique, resolveErr := resolveBasename(location.Path)
+			if resolveErr != nil {
+				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
+			}
+			if !unique || stringIndex(wantPaths, resolved) < 0 {
+				return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			}
+			// The citation is left as the reviewer wrote it. Normalizing it here
+			// would rewrite the reviewer's own text for no consumer: nothing
+			// downstream reads this location, and an unobserved rewrite is a
+			// claim no test can hold.
 		}
 		for _, proof := range finding.ProofRefs {
-			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains)
+			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains, resolveBasename)
 			if lookupErr != nil {
 				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
 			}
@@ -516,12 +530,53 @@ type artifactReferenceToken struct {
 	quoted bool
 }
 
+// frozenRepositoryPathListingLimit bounds the one full path listing the
+// basename index needs. The frozen trees are a reviewed candidate, not an
+// arbitrary repository, and an unbounded listing here would be a way to make
+// admission allocate on a caller's schedule.
 type frozenRepositoryPathLookup struct {
 	ctx       context.Context
 	repo      string
 	isolation []string
 	trees     []string
 	cache     map[string]bool
+}
+
+// candidateBasenameResolver answers the one citation shape a Go-owned reviewer
+// produces that a literal lookup cannot satisfy (#3042): a file of the
+// candidate named by its basename rather than its repository-relative path. The
+// path IS in the frozen candidate, so refusing it as outside is both wrong and
+// unrecoverable -- the reviewer is locked down, so no caller can correct the
+// citation and every retry reproduces it.
+//
+// It resolves against the frozen changed-path manifest rather than the tree:
+// that is the exact set the reviewer was shown, it is bounded by construction,
+// and it costs no Git call on a path that is deliberately bounded.
+//
+// Exactly one match resolves. Two or more do not, because choosing between them
+// would attach a finding to a file the reviewer never read, which is worse than
+// the refusal. A citation that already carries a directory prefix said where it
+// meant, so it is not eligible: being wrong about that is not ambiguity.
+func candidateBasenameResolver(manifest []ChangedPathManifestEntry) func(string) (string, bool, error) {
+	index := make(map[string]string, len(manifest))
+	for _, entry := range manifest {
+		base := entry.Path[strings.LastIndex(entry.Path, "/")+1:]
+		if base == "" || base == entry.Path {
+			continue
+		}
+		if existing, seen := index[base]; seen && existing != entry.Path {
+			index[base] = ""
+			continue
+		}
+		index[base] = entry.Path
+	}
+	return func(name string) (string, bool, error) {
+		if name == "" || strings.ContainsRune(name, '/') {
+			return "", false, nil
+		}
+		resolved := index[name]
+		return resolved, resolved != "", nil
+	}
 }
 
 func newFrozenRepositoryPathLookup(ctx context.Context, frozen FrozenCandidateContext) (*frozenRepositoryPathLookup, func(), error) {
@@ -585,7 +640,7 @@ func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, er
 // The offender return names the first malformed or unknown token verbatim so
 // a rejection is diagnosable after the fact; detection semantics are
 // unchanged.
-func referenceOutsideRepository(value string, lookup func(string) (bool, error)) (outside bool, offender string, err error) {
+func referenceOutsideRepository(value string, lookup func(string) (bool, error), resolveBasename func(string) (string, bool, error)) (outside bool, offender string, err error) {
 	for _, token := range artifactReferenceTokens(value) {
 		path, malformed := artifactRepositoryPathReference(token)
 		if malformed {
@@ -595,6 +650,22 @@ func referenceOutsideRepository(value string, lookup func(string) (bool, error))
 			continue
 		}
 		known, err := lookup(path)
+		if err != nil {
+			return false, "", err
+		}
+		if known {
+			continue
+		}
+		// A literal miss is not yet proof the citation left the candidate: it
+		// may be a bare basename that exactly one candidate path answers.
+		resolved, unique, err := resolveBasename(path)
+		if err != nil {
+			return false, "", err
+		}
+		if !unique {
+			return true, token.value, nil
+		}
+		known, err = lookup(resolved)
 		if err != nil {
 			return false, "", err
 		}

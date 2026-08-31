@@ -57,6 +57,7 @@ func ValidateProfileName(name string) error {
 var profilePhaseOrder = []string{
 	"sdd-init",
 	"sdd-explore",
+	"sdd-research",
 	"sdd-propose",
 	"sdd-spec",
 	"sdd-design",
@@ -143,6 +144,31 @@ func ProfileAgentKeys(name string) []string {
 	return keys
 }
 
+// managedProfileAgentPrefixes returns the canonical key prefixes that identify
+// profile-derived managed agents: the profile orchestrator plus every SDD phase
+// and Judgment Day agent that profiles can generate.
+func managedProfileAgentPrefixes() []string {
+	prefixes := []string{"sdd-orchestrator-"}
+	for _, phase := range ProfileAssignmentPhaseOrder() {
+		prefixes = append(prefixes, phase+"-")
+	}
+	return prefixes
+}
+
+// managedProfileAgentName returns the profile name and true when key names a
+// profile-derived managed agent: a canonical managed prefix followed by a valid
+// profile-name slug. Any other key — including one that resembles a profile key
+// but carries an invalid suffix — is user-owned and returns false.
+func managedProfileAgentName(key string) (string, bool) {
+	for _, prefix := range managedProfileAgentPrefixes() {
+		if strings.HasPrefix(key, prefix) {
+			name := strings.TrimPrefix(key, prefix)
+			return name, ValidateProfileName(name) == nil
+		}
+	}
+	return "", false
+}
+
 // DetectProfiles reads opencode.json at settingsPath and returns all named
 // SDD profiles found in the agent map. The default profile (bare sdd-orchestrator
 // without suffix) is NOT included in the result. Returns an empty slice if the
@@ -170,16 +196,14 @@ func DetectProfiles(settingsPath string) ([]model.Profile, error) {
 		return []model.Profile{}, nil
 	}
 
-	// Scan for sdd-orchestrator-{name} keys (exclude bare sdd-orchestrator).
-	const orchPrefix = "sdd-orchestrator-"
+	// Scan every canonical profile key, not just the orchestrator. A prior sync
+	// can leave an orphaned phase entry behind; it remains managed and must be
+	// refreshed (including removal of deprecated tools) on the next sync.
 	profileNames := make([]string, 0)
 	seen := make(map[string]bool)
 	for key := range agentMap {
-		if !strings.HasPrefix(key, orchPrefix) {
-			continue
-		}
-		profileName := key[len(orchPrefix):]
-		if profileName == "" || seen[profileName] {
+		profileName, managed := managedProfileAgentName(key)
+		if !managed || seen[profileName] {
 			continue
 		}
 		seen[profileName] = true
@@ -261,7 +285,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 	}
 
 	// Build the agent map.
-	agentMap := make(map[string]any, 11)
+	agentMap := make(map[string]any, 12)
 
 	// Orchestrator entry
 	taskPerms := map[string]any{
@@ -299,16 +323,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 				"__replace__": taskPerms,
 			},
 		},
-		"tools": map[string]any{
-			"__replace__": map[string]any{
-				"read":     true,
-				"write":    true,
-				"edit":     true,
-				"bash":     true,
-				"question": true,
-				"task":     true,
-			},
-		},
 	}
 	orchAssignment := profile.OrchestratorModel
 	if orchAssignment.ProviderID == "" || orchAssignment.ModelID == "" {
@@ -334,16 +348,17 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 
 	// Sub-agent entries
 	phaseDescriptions := map[string]string{
-		"sdd-init":    "Bootstrap SDD context and project configuration",
-		"sdd-explore": "Investigate codebase and think through ideas",
-		"sdd-propose": "Create change proposals from explorations",
-		"sdd-spec":    "Write detailed specifications from proposals",
-		"sdd-design":  "Create technical design from proposals",
-		"sdd-tasks":   "Break down specs and designs into implementation tasks",
-		"sdd-apply":   "Implement code changes from task definitions",
-		"sdd-verify":  "Validate implementation against specs",
-		"sdd-archive": "Archive completed change artifacts",
-		"sdd-onboard": "Guide user through a complete SDD cycle using their real codebase",
+		"sdd-init":     "Bootstrap SDD context and project configuration",
+		"sdd-explore":  "Investigate codebase and think through ideas",
+		"sdd-research": "Collect auditable external evidence",
+		"sdd-propose":  "Create change proposals from explorations",
+		"sdd-spec":     "Write detailed specifications from proposals",
+		"sdd-design":   "Create technical design from proposals",
+		"sdd-tasks":    "Break down specs and designs into implementation tasks",
+		"sdd-apply":    "Implement code changes from task definitions",
+		"sdd-verify":   "Validate implementation against specs",
+		"sdd-archive":  "Archive completed change artifacts",
+		"sdd-onboard":  "Guide user through a complete SDD cycle using their real codebase",
 	}
 
 	for _, phase := range profilePhaseOrder {
@@ -357,12 +372,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 			"hidden":      true,
 			"description": phaseDescriptions[phase],
 			"prompt":      prompt,
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
 		}
 		// Issue #557: consult fallback when the profile did not set the phase,
 		// so generated *-{name} agents stay consistent with what the user sees
@@ -458,7 +467,7 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 
 	root, err := filemerge.UnmarshalJSONObject(data)
 	if err != nil {
-		// Keep this cleanup no stricter than mergeJSONFile/filemerge.MergeJSONObjects:
+		// Keep this cleanup no stricter than filemerge.MergeJSONObjects:
 		// malformed existing OpenCode configs are treated as an empty base during
 		// merge after the backup step, so stale-key cleanup must not block sync first.
 		return filemerge.WriteResult{}, nil
@@ -499,6 +508,57 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 	return filemerge.WriteFileAtomic(settingsPath, out, 0o644)
 }
 
+// cleanupKilocodeProfileJDPermissions removes OpenCode-only permissions from
+// the managed, assigned named Judgment Day judges before the Kilocode overlay
+// is merged. The corresponding tools use __replace__, so the final agent shape
+// cannot retain stale grants from an earlier OpenCode configuration.
+func cleanupKilocodeProfileJDPermissions(settingsPath string, profile model.Profile) (filemerge.WriteResult, error) {
+	if profile.Name == "" || profile.Name == "default" {
+		return filemerge.WriteResult{}, nil
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return filemerge.WriteResult{}, nil
+		}
+		return filemerge.WriteResult{}, fmt.Errorf("read settings %q: %w", settingsPath, err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		return filemerge.WriteResult{}, nil
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		return filemerge.WriteResult{}, nil
+	}
+
+	changed := false
+	for _, jd := range []string{"jd-judge-a", "jd-judge-b"} {
+		if !hasProfileAssignment(profile, jd) {
+			continue
+		}
+		agent, ok := agentMap[jd+"-"+profile.Name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, exists := agent["permission"]; exists {
+			delete(agent, "permission")
+			changed = true
+		}
+	}
+	if !changed {
+		return filemerge.WriteResult{}, nil
+	}
+
+	root["agent"] = agentMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
+	}
+	return filemerge.WriteFileAtomic(settingsPath, append(out, '\n'), 0o644)
+}
+
 func jdProfileAgentEntry(jd string) map[string]any {
 	switch jd {
 	case "jd-judge-a":
@@ -507,10 +567,7 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
+			"permission":  judgmentDayJudgePermission(),
 		}
 	case "jd-judge-b":
 		return map[string]any{
@@ -518,10 +575,7 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
+			"permission":  judgmentDayJudgePermission(),
 		}
 	case "jd-fix-agent":
 		return map[string]any{
@@ -529,12 +583,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Surgical fix agent for judgment-day protocol",
 			"prompt":      "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the task prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.",
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
 		}
 	default:
 		return map[string]any{
@@ -542,12 +590,12 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": jd,
 			"prompt":      "Execute the task prompt exactly. Do NOT delegate further.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	}
+}
+
+func judgmentDayJudgePermission() map[string]any {
+	return map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"}
 }
 
 // buildProfileOrchestratorPrompt constructs the orchestrator prompt for a named
@@ -693,16 +741,17 @@ func renderProfileModelAssignmentsSection(profile model.Profile) string {
 
 	// Phase rows
 	phaseReasons := map[string]string{
-		"sdd-init":    "Bootstrap SDD context",
-		"sdd-explore": "Reads code, structural - not architectural",
-		"sdd-propose": "Architectural decisions",
-		"sdd-spec":    "Structured writing",
-		"sdd-design":  "Architecture decisions",
-		"sdd-tasks":   "Mechanical breakdown",
-		"sdd-apply":   "Implementation",
-		"sdd-verify":  "Validation against spec",
-		"sdd-archive": "Copy and close",
-		"sdd-onboard": "Guided walkthrough",
+		"sdd-init":     "Bootstrap SDD context",
+		"sdd-explore":  "Reads code, structural - not architectural",
+		"sdd-research": "Collects source-backed evidence",
+		"sdd-propose":  "Architectural decisions",
+		"sdd-spec":     "Structured writing",
+		"sdd-design":   "Architecture decisions",
+		"sdd-tasks":    "Mechanical breakdown",
+		"sdd-apply":    "Implementation",
+		"sdd-verify":   "Validation against spec",
+		"sdd-archive":  "Copy and close",
+		"sdd-onboard":  "Guided walkthrough",
 	}
 
 	for _, phase := range profilePhaseOrder {

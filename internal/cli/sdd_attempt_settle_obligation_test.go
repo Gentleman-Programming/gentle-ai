@@ -124,7 +124,7 @@ func TestSDDStatusContractRequiresRelayingTheSettleObligation(t *testing.T) {
 	}
 }
 
-// TestReviewLedgerContractAdmitsVerificationRefreshAfterRemediation is #2617.
+// TestSDDStatusContractAdmitsVerificationRefreshAfterRemediation is #2617.
 //
 // Its reporter had four doors and every one was shut: keeping the admitted
 // failed report blocks archive; re-running SDD verification appeared to
@@ -137,23 +137,14 @@ func TestSDDStatusContractRequiresRelayingTheSettleObligation(t *testing.T) {
 // nouns (reviewer, refuter, correction, validator) are all REVIEW actors, and
 // it read as forbidding SDD's own verification from ever running twice. The
 // contract must now say which lifecycle it bounds.
-func TestReviewLedgerContractAdmitsVerificationRefreshAfterRemediation(t *testing.T) {
-	// The clarification lives in the SDD status contract, not the review
-	// ledger contract: the review contract's rendered prompt sits inside a
-	// deliberate token ceiling with under 15% headroom, and archive
-	// eligibility is an SDD question anyway.
-	if !strings.Contains(string(assets.MustRead("skills/_shared/review-ledger-contract.md")),
-		"never starts another reviewer, refuter, correction, or validator") {
-		t.Fatal("the one-verification sentence is gone; this guard is stale")
-	}
+func TestSDDStatusContractAdmitsVerificationRefreshAfterRemediation(t *testing.T) {
 	contract := readSharedSDDStatusContract(t)
 	for _, want := range []string{
-		"REVIEW actors",
-		"ADMITS one verification refresh",
-		"not a second independent verification",
+		"A passing remediation settlement requires a fresh verification report before archive.",
+		"ordinary SDD failed-evidence accounting",
 	} {
 		if !strings.Contains(contract, want) {
-			t.Fatalf("the contract does not disambiguate the one-verification rule; it must contain %q", want)
+			t.Fatalf("the contract does not preserve SDD-only refresh evidence; it must contain %q", want)
 		}
 	}
 	// And it must not be read as a licence to fabricate a pass.

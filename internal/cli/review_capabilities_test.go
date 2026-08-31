@@ -84,8 +84,8 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	}
 }
 
-func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
+func TestReviewCapabilitiesV23MatchesConformanceFixture(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.3.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,16 +107,19 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
-		t.Fatalf("v2.2 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
+		t.Fatalf("v2.3 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("v2.2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
+		t.Fatalf("v2.3 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
 	}
-	if got.Schema != ReviewIntegrationCapabilitiesSchemaV22 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 2}) ||
+	if got.Schema != ReviewIntegrationCapabilitiesSchemaV23 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 3}) ||
 		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
-		t.Fatalf("v2.2 capabilities runtime surface = %#v", got)
+		t.Fatalf("v2.3 capabilities runtime surface = %#v", got)
 	}
-	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
+	if !slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV4) || slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV3) {
+		t.Fatalf("v2.3 capabilities must advertise start/v4 instead of start/v3: %v", got.Schemas)
+	}
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.3.schema.json", ReviewIntegrationCapabilitiesSchemaIDV23, fixture)
 	var malformed map[string]any
 	if err := json.Unmarshal(fixture, &malformed); err != nil {
 		t.Fatal(err)
@@ -125,8 +128,26 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 	optional := features["optional"].([]any)
 	optional[0].(map[string]any)["requires"] = []any{"unknown_required_feature"}
 	if err := schema.Validate(malformed); err == nil {
-		t.Fatal("v2.2 schema accepted an unknown required feature")
+		t.Fatal("v2.3 schema accepted an unknown required feature")
 	}
+}
+
+func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Schema   string                     `json:"schema"`
+		Protocol ReviewCapabilitiesProtocol `json:"protocol"`
+	}
+	if err := json.Unmarshal(fixture, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.Schema != ReviewIntegrationCapabilitiesSchemaV22 || identity.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 2}) {
+		t.Fatalf("v2.2 capabilities identity = %#v", identity)
+	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
 }
 
 func TestReviewCapabilitiesV21ArtifactRemainsReadable(t *testing.T) {
@@ -211,7 +232,7 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeGit ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV22 {
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV23 {
 		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)
@@ -236,14 +257,14 @@ func TestReviewCapabilitiesAdvertisesOnlyNativeSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantOperations := []string{
-		"review.bind_sdd", "review.capabilities", "review.finalize", "review.repair", "review.retry_final_verification", "review.start", "review.status", "review.validate",
+		"review.capabilities", "review.repair", "review.start", "review.status", "review.validate",
 	}
 	wantGates := []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"}
 	wantProjections := []string{"staged", "workspace"}
 	if !slices.Equal(result.Operations, wantOperations) || !slices.Equal(result.Gates, wantGates) || !slices.Equal(result.Projections, wantProjections) {
 		t.Fatalf("capability surface = operations %v gates %v projections %v", result.Operations, result.Gates, result.Projections)
 	}
-	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) || !slices.Contains(result.Schemas, reviewtransaction.FinalVerificationIncidentSchema) {
+	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) {
 		t.Fatalf("capability schemas do not advertise the negotiated provider surface: %v", result.Schemas)
 	}
 	if result.Bootstrap == nil || result.Bootstrap.Command != "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition" ||
@@ -284,7 +305,7 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateFinalVerificationContractSchema(t, "capabilities-v1.5.schema.json", fixture)
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "capabilities-v1.5.schema.json"), fixture)
 	decoder := json.NewDecoder(bytes.NewReader(fixture))
 	decoder.DisallowUnknownFields()
 	var result ReviewCapabilitiesResult
@@ -600,13 +621,10 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 	}
 	wantMandatory := []ReviewCapabilityFeature{
 		{Name: "compact_v2_authority", Supported: true, Requires: []string{}},
-		{Name: "exact_receipt_replay", Supported: true, Requires: []string{"compact_v2_authority"}},
-		{Name: "five_delivery_gates", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "immutable_snapshot", Supported: true, Requires: []string{}},
 		{Name: "legacy_v1_target_scoped_read_only", Supported: true, Requires: []string{"target_scoped_status"}},
 		{Name: "repository_independent_capabilities", Supported: true, Requires: []string{}},
 		{Name: "restart_safe_projection", Supported: true, Requires: []string{"target_scoped_status"}},
-		{Name: "sdd_receipt_binding", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "target_scoped_status", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 		{Name: "uniform_failure_envelope", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 	}
@@ -614,13 +632,10 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "base_ref_workspace_overlay", Supported: true, Requires: []string{"immutable_snapshot", "restart_safe_projection"}},
 		{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 		{Name: "classified_authority_repair", Supported: true, Requires: []string{"native_next_transition", "uniform_failure_envelope"}},
-		{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
 		{Name: "native_frozen_candidate_context", Supported: true, Requires: []string{"immutable_snapshot"}},
 		{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "native_next_transition", Supported: true, Requires: []string{"target_scoped_status"}},
-		{Name: "one_shot_final_verification_retry", Supported: true, Requires: []string{"compact_v2_authority", "exact_receipt_replay", "native_next_transition"}},
 		{Name: "opaque_repository_context", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
-		{Name: "outcome_bound_verification_evidence", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "provider_artifact_admission", Supported: true, Requires: []string{"compact_v2_authority", "native_frozen_candidate_context", "opaque_repository_context"}},
 		{Name: "provider_targeted_validation_request", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
@@ -665,12 +680,11 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 	document := string(payload)
 	for _, required := range []string{
 		"`stop`", "`legacy_v1_read_only`", "`mutation_outcome`", "`not_started`", "`unknown`", "`committed`",
-		"Legacy-v1 never reports `publication_pending`", "retry and replay disabled",
-		"Historical `ordinary_4r` legacy status omits `frozen`", "START, finalize, BIND-SDD, invalidation, and direct append",
+		"retry and replay disabled", "Historical `ordinary_4r` legacy status omits `frozen`",
+		"START, BIND-SDD, invalidation, and direct append",
 		"`native_frozen_candidate_context`", "`base_tree`", "`candidate_tree`", "`changed_path_manifest`",
 		"`opaque_repository_context`", "`provider_targeted_validation_request`",
 		"`provider_artifact_admission`", "`validating_result_reopen`", "`recovered_correction_evidence`",
-		"`one_shot_final_verification_retry`", "`outcome_bound_verification_evidence`", "`review.retry_final_verification`", "`procedural_tooling_failure`",
 		"`artifact_subjects`", "`subject_hash`", "`admission_decision: completed`",
 		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
 		"25-second aggregate budget", "120-second budget", "180-second budget", "one-second wait delay",

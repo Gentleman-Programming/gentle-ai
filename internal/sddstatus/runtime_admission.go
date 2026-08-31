@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -14,6 +15,35 @@ type runtimeBeginAdmissionResult struct {
 	Advancing  bool
 	Generation int
 	Snapshot   reviewtransaction.Snapshot
+}
+
+// runtimeRescopeSuccessorIntendedUntracked recovers only the exact selection
+// whose zero-drift candidate opened a fresh rescope successor. The successor
+// has no attempt of its own yet, so its predecessor's recorded selection is
+// the sole inventory-validated scope that can reproduce InitialCandidate*.
+func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, bool) {
+	if status.Objective == nil || status.ActiveAttempt != nil || status.LastRescope == nil ||
+		status.LastRescope.ObjectiveID != status.Objective.ID || runtimeObjectiveHasRecordedAttempt(status) ||
+		len(status.Attempts) == 0 {
+		return nil, false
+	}
+	predecessor := status.Attempts[len(status.Attempts)-1]
+	if predecessor.ObjectiveID != status.LastRescope.PreviousObjectiveID ||
+		predecessor.ObjectiveGeneration != status.LastRescope.PreviousGeneration ||
+		predecessor.Outcome == AttemptRunning {
+		return nil, false
+	}
+	return slices.Clone(predecessor.IntendedUntracked), true
+}
+
+func runtimeRescopeSuccessorRequest(status RuntimeStatus, request BeginAttemptRequest, inherit bool) BeginAttemptRequest {
+	if !inherit {
+		return request
+	}
+	if intended, ok := runtimeRescopeSuccessorIntendedUntracked(status); ok {
+		request.IntendedUntracked = intended
+	}
+	return request
 }
 
 // runtimeBeginAdmission is the ONE evaluator of every precondition Begin must
@@ -71,8 +101,22 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 			return runtimeBeginAdmissionResult{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 		}
-		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+		// #3842: the terminal capture replays the RECORDED selection, which
+		// the user may have legitimately committed since the last settle, so
+		// reconcile it against the current index first — a committed path then
+		// replays as zero drift or as ordinary candidate drift, never as a
+		// capture failure. The request-vs-recorded comparison below
+		// deliberately stays against the recorded list: what the caller must
+		// re-request is the scope the ledger holds, exactly as acquired.
+		var intended []string
+		intended, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err == nil {
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
+		}
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+		}
+		if err == nil && !slices.Equal(request.IntendedUntracked, last.IntendedUntracked) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
 	case status.Objective != nil && !advancing:
@@ -90,12 +134,12 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if runtimeObjectiveScopeChanged(status, request) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
-		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 		if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
 	default:
-		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 	}
 	if err != nil {
 		return runtimeBeginAdmissionResult{}, wrapRuntimeCandidateUnavailable("before launch", err)
@@ -140,14 +184,16 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	// attempt or an exhausted budget does not make the chain owe less, and a
 	// surface that goes quiet under those states would disagree with acquire
 	// exactly when the operator is looking hardest.
-	status.SettleObligation = runtimeSettleObligation(status, store.ReviewDisabled)
+	status.SettleObligation = runtimeSettleObligation(status)
 
+	inheritIntendedUntracked := request.IntendedUntracked == nil
 	normalized, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
 		status.BlockedReason = CompactBlockInvalidContinuation
 		status.BlockedExit = err.Error()
 		return status, nil
 	}
+	normalized = runtimeRescopeSuccessorRequest(status, normalized, inheritIntendedUntracked)
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
 	}); terminal && result.State == CompactStateBlocked {

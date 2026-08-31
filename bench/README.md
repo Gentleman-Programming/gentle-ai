@@ -360,8 +360,8 @@ invents a metric is worse than one that admits a gap.
 10. **The report is not byte-identical between two runs, though every count
     except one is.** Each journey runs under `os.MkdirTemp`, whose random
     suffix varies in length, and several journeys quote that path back in a
-    block message — `j14`, `j17`, `j31`, `j33`, `j34`, `j37`, `j38`, `j39` and
-    `j40` observed so far, and any journey that drives a refusal naming a
+    block message — `j14`, `j17`, `j31`, `j33`, `j34`, and `j40` observed so
+    far, and any journey that drives a refusal naming a
     repository path can join them. Which of them actually moves between a given
     pair of runs is chance: the suffix is 9 or 10 digits. No `damaged-store`
     axis journey has been observed to move: its refusals name lineages,
@@ -550,23 +550,18 @@ number look covered.
 | `j35-correction-budget-exactly-zero` | forecasting a correction against a budget of 0 | 3 + 4 |
 | `j36-contract-right-name-wrong-version` | `--contract` with the right name and a version this build lacks | 2 + 4 |
 
-### The SDD remediation successor cycle (`journeys_sdd.go`)
+### SDD lifecycle journeys (`journeys_sdd.go`)
 
-Journeys 37 to 43 close the corpus's largest blind spot. A community tester
-found a hard deadlock on this path that no internal audit had caught, and two
-of its blocks were fixed by hand with nothing in a loop pinning either one. Up
-to journey 36 the benchmark reported zero `out_of_band` blocks and zero dead
-ends for a surface it had simply never driven.
+The active SDD-focused corpus is non-exhaustive; it includes these lifecycle
+and compatibility journeys:
 
-| ID | Flow | Shape |
+| ID | Flow | Source |
 |---|---|---|
-| `j37-sdd-remediation-self-successor` | a bound passing attempt over a corrected candidate is refused, and the refusal names the finish that IS accepted | 4 |
-| `j38-sdd-remediation-distinct-successor` | with a real recovery successor in the way, the same refusal must route to review and must NOT name a finish | 3 + 4 |
-| `j39-sdd-remediation-stranded-successor` | a successor that can never be finalized: the named route runs and changes nothing | 4 + 2 |
-| `j40-sdd-attempt-reset-after-drift` | terminal attempt plus candidate drift: begin refuses, reset is the only way on | 2 + 4 |
-| `j41-kill-switch-versus-sdd-pre-verify` | reviews off at the pre-verify decision: the router steps aside instead of naming a review the operator may not start | 5 |
-| `j42-kill-switch-versus-sdd-archive` | reviews off at the archive decision: the product defers and never fabricates an approval | 5 |
-| `j43-recovery-guard-rails-as-an-operator-meets-them` | three correct refusals around healthy approved authority, and the exit that is not a command | 4 |
+| `j40-sdd-attempt-reset-after-drift` | terminal attempt, drifted candidate: begin refuses and reset is the only way on | shape 2 (a recoverable objective read as terminal) + shape 4 |
+| `j41-kill-switch-versus-sdd-pre-verify` | pre-verify: RDD supervises nothing, on or off, before verify runs | shape 5 (the kill switch and the pre-verify router) + Wave 4's removal of pre-verify review supervision |
+| `j42-kill-switch-versus-sdd-archive` | the offer is an invitation, never a gate: archive proceeds with reviews on or off | shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1 |
+| `j63-disabled-failed-verification-unmanaged-remediation` | failed verification gets one evidence-bound correction; re-enabled review context remains informational | #3417: failed, unknown, and pending review evidence remains visible but never gates completed SDD archive routing |
+| `j44-sdd-historical-requirement-stale-pass` | historical change-local requirement heading: stale PASS restarts verification instead of failed remediation | issue #2137 (historical OpenSpec requirement compatibility and stale verification routing) |
 
 Two of them measure something no test could: `j41` and `j42` each take one item
 off the documented known-open list and let the number say whether it is still
@@ -577,20 +572,10 @@ count, so a regression fails the journey loudly instead of passing quietly.
 `j41` is the clearest example of the corpus working as intended: it was written
 to measure a believed-open dead end where the SDD pre-verify router demanded a
 review the kill switch forbade, and it FAILED its own assertions on the run that
-found the behavior fixed. The failure was the finding. It now pins both
-positions of the switch — off routes to `verify` with no blocked reasons, on
-routes to `review` with a reason that says why — because either half alone would
-pass while the other regressed.
-
-The state these journeys need cannot be built with git alone: an attempt
-ordinal, a populated review binding and the leaf/non-leaf topology of a lineage
-all live inside the product. Every fixture and composite here therefore reads
-them back out of the product (`Sandbox.readBack`, uncounted, `GIT_TRACE`
-blanked so its git calls are never charged to the next counted invocation) and
-fails the journey when the state is not what it claims — including the two
-premises that matter most: that the plain passing finish really does block, and
-that the topology really is the leaf or the non-leaf shape the journey says it
-is.
+found the behavior fixed. The failure was the finding. It now pins the absence
+of pre-verify review supervision: with the switch on, off, and re-enabled,
+routing remains `verify` with a ready verification dependency and no blocked
+reasons, because either half alone would pass while the other regressed.
 
 **Every fixture proves its own edge case before the journey trusts the result.**
 A fixture that sets its edge case up wrongly and then passes is the failure mode
@@ -861,8 +846,8 @@ metrics.go     Dimension, BlockCounts, accumulator, aggregate
 runner.go      Sandbox, capability probe, journey engine
 journeys.go    the corpus, as data — guide flows and their failure paths
 journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
-journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
-                  SDD, and the recovery guard rails
+journeys_sdd.go   active SDD attempt flows, the kill switch against SDD, and
+                  the recovery guard rails
 journeys_wave1.go  integrated community fixes exercised at their CLI boundary
 axis.go        the opt-in axis seam: registry, --axis selection, provenance
 axis_damaged_store.go  ONE axis, deletable: journeys starting from a store

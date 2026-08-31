@@ -914,23 +914,6 @@ func (transaction *Transaction) CompleteFinalVerification(evidenceHash string, a
 	return nil
 }
 
-func ParseTransaction(payload []byte) (Transaction, error) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var transaction Transaction
-	if err := decoder.Decode(&transaction); err != nil {
-		return Transaction{}, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return Transaction{}, errors.New("multiple JSON values in review transaction")
-	}
-	if err := transaction.validate(); err != nil {
-		return Transaction{}, err
-	}
-	return transaction, nil
-}
-
 func (transaction *Transaction) UnmarshalJSON(payload []byte) error {
 	type persistedTransaction Transaction
 	decoder := json.NewDecoder(bytes.NewReader(payload))

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,14 +65,19 @@ func TestOrdinaryCompactLifecycleIgnoresHistoricalSiblings(t *testing.T) {
 		t.Fatalf("ordinary STATUS did not select the active compact authority: %#v", status)
 	}
 
-	for order := range started.SelectedLenses {
+	for order := 0; order < len(started.SelectedLenses)-1; order++ {
 		captureCLIReviewerResult(t, repo, started, order)
 	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--captured-results=true",
-	}, io.Discard); err != nil {
-		t.Fatalf("ordinary FINALIZE beside historical siblings: %v", err)
+	var terminalOutput bytes.Buffer
+	captureCleanCLIReviewerResult(t, repo, started, len(started.SelectedLenses)-1, &terminalOutput)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, terminalOutput.Bytes(), &terminal)
+	if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != "review/capture-result" ||
+		terminal.LineageID != started.LineageID || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("ordinary final capture beside historical siblings = %#v", terminal)
 	}
+	store := atomicCompactStartStore(t, repo, started.LineageID)
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
 func TestAtomicStartPlainRouteAlwaysCreatesCompact(t *testing.T) {
@@ -105,7 +109,7 @@ func TestAtomicStartPlainRouteAlwaysCreatesCompact(t *testing.T) {
 func TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	linked := filepath.Join(t.TempDir(), "linked")
+	linked := filepath.Join(canonicalReviewCLITempDir(t), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")
 	for _, root := range []string{repo, linked} {
 		if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("same overlapping candidate\n"), 0o644); err != nil {
@@ -163,7 +167,7 @@ func TestAtomicStartLinkedWorktreesAreIndependentAndReplayExactly(t *testing.T) 
 func TestAtomicStartBurnRecreateAndCrossWorktreeConflictStayScoped(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	linked := filepath.Join(t.TempDir(), "linked")
+	linked := filepath.Join(canonicalReviewCLITempDir(t), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")
 	for _, root := range []string{repo, linked} {
 		writeAtomicStartDocumentationCandidate(t, root)
@@ -173,12 +177,27 @@ func TestAtomicStartBurnRecreateAndCrossWorktreeConflictStayScoped(t *testing.T)
 	second := atomicStartV2(t, linked, "")
 	firstStore := atomicCompactStartStore(t, repo, first.LineageID)
 	secondStore := atomicCompactStartStore(t, linked, second.LineageID)
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", first.LineageID}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("approve and burn first linked-worktree authority: %v", err)
+	if first.RepositoryContext == nil {
+		t.Fatalf("first linked-worktree START omitted repository context: %#v", first)
 	}
-	if _, err := firstStore.Load(); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("approved first authority remains readable: %v", err)
+	firstCapture := ReviewFacadeStartResult{
+		LineageID: first.LineageID, TargetIdentity: first.RepositoryContext.TargetIdentity,
+		SelectedLenses: first.SelectedLenses,
 	}
+	if len(firstCapture.SelectedLenses) > 0 {
+		for order := 0; order < len(firstCapture.SelectedLenses)-1; order++ {
+			captureCLIReviewerResult(t, repo, firstCapture, order)
+		}
+		var terminalOutput bytes.Buffer
+		captureCleanCLIReviewerResult(t, repo, firstCapture, len(firstCapture.SelectedLenses)-1, &terminalOutput)
+		var terminal reviewLastEventClosureResult
+		decodeStrictReviewJSON(t, terminalOutput.Bytes(), &terminal)
+		if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != "review/capture-result" ||
+			terminal.LineageID != first.LineageID || terminal.State != reviewtransaction.StateApproved {
+			t.Fatalf("first linked-worktree final capture = %#v", terminal)
+		}
+	}
+	assertApprovedCompactAuthorityBurned(t, firstStore, first.LineageID)
 	if record, err := secondStore.Load(); err != nil || record.State.State != reviewtransaction.StateReviewing {
 		t.Fatalf("burning first authority changed sibling authority: %#v, %v", record.State, err)
 	}
@@ -338,7 +357,7 @@ func assertAtomicStartRepositoryContext(t *testing.T, wantRoot string, started R
 		t.Fatalf("atomic negotiated START schema/context = %#v", started)
 	}
 	writeAtomicStartCorruptSibling(t, wantRoot, "v3", started.LineageID)
-	resolved, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
+	resolved, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), wantRoot, started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, Revision: started.RepositoryContext.Revision,
 	})
 	if err != nil {
@@ -391,7 +410,7 @@ func writeAtomicStartDocumentationCandidate(t *testing.T, repo string) {
 	for index := 0; index < 129; index++ {
 		lines = append(lines, "ordinary documentation line\n"...)
 	}
-	writeReviewStartCandidate(t, repo, "docs/atomic-start.md", string(lines), 0o644)
+	writeReviewStartCandidate(t, repo, "docs/atomic-start.md", string(lines), 0o755)
 }
 
 func writeAtomicStartCorruptSibling(t *testing.T, repo, version, lineage string) {

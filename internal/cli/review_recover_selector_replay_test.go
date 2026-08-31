@@ -33,23 +33,15 @@ func escalatedSelectionReplayFixture(t *testing.T, lineage string) (string, revi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage,
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage,
 		"--untracked-scope=select", "--expected-untracked-inventory=" + digest,
-		"--intended-untracked", "notes-a.txt"}, io.Discard); err != nil {
+		"--intended-untracked", "notes-a.txt"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	resultPath := filepath.Join(t.TempDir(), "review.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
-			ProofRefs:     []string{"differential test fails only on candidate"},
-			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
-		}}, Evidence: []string{"focused differential test failed"},
-	})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage,
-		"--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	escalateReviewForRecovery(t, repo, started)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)

@@ -25,8 +25,8 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 	writeReviewStartCandidate(t, repo, "feature.md", "# feature\n\nstaged reviewed prose.\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "feature.md")
 	// This approved predecessor is historical compact authority. Seed it through
-	// the test-only legacy seam because current START is v3 and current FINALIZE
-	// burns terminal authority before STATUS can select recovery.
+	// the test-only legacy seam because current START closes on its terminal
+	// capture before STATUS can select recovery.
 	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
 		"--cwd", repo, "--projection", "staged", "--lineage", "staged-rebase-predecessor",
 	})
@@ -35,7 +35,7 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 	}
 	var startResult ReviewFacadeStartResult
 	decodeStrictReviewJSON(t, startedBytes, &startResult)
-	finalizeHistoricalFacadeReviewForLineage(t, repo, startResult.LineageID)
+	seedHistoricalApprovalForLineage(t, repo, startResult.LineageID)
 
 	// The exact candidate is committed, then rebased across a disjoint
 	// parent advance: patch, reviewed path set, and blobs stay identical
@@ -135,13 +135,9 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 func TestNegotiatedStatusOffersFreshStartForByteIdenticalHistoricalApprovedCandidate(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "feature.md", "# feature\n\nworkspace reviewed prose.\n", 0o644)
-	historical := finalizeHistoricalFacadeReviewForRepo(t, repo, "historical-byte-identical")
+	writeReviewStartCandidate(t, repo, "feature.md", "# feature\n\nworkspace reviewed prose.\n", 0o755)
+	historical := seedHistoricalApprovalForRepo(t, repo, "historical-byte-identical")
 	stateBefore, err := os.ReadFile(historical.Store.StatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiptBefore, err := os.ReadFile(historical.Store.ReceiptPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +183,7 @@ func TestNegotiatedStatusOffersFreshStartForByteIdenticalHistoricalApprovedCandi
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiptAfter, err := os.ReadFile(historical.Store.ReceiptPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) {
+	if !bytes.Equal(stateBefore, stateAfter) {
 		t.Fatal("fresh atomic START changed historical approved authority")
 	}
 }

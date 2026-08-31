@@ -5,45 +5,87 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 )
 
 const capturedProviderValidatorLineage = "captured-provider-validator"
+const capturedProviderValidatorRejectionLineage = "captured-provider-validator-rejection"
 
 var capturedProviderValidatorStatusCapability = &Capability{Verb: []string{"review", "status"}, Flags: []string{
 	"--cwd", "--contract", "--agent", "--lineage", "--next-transition",
 }}
 
-// capturedProviderValidatorJourneys proves the generic STATUS-to-FINALIZE
+// capturedProviderValidatorJourneys proves the STATUS-to-terminal-validator
 // continuation with the native relay protocol. It deliberately drives relay
 // frames directly; this is not evidence about OpenCode Task-hook affinity.
 func capturedProviderValidatorJourneys() []Journey {
-	return []Journey{{
-		ID:     "j106-captured-provider-validator-slot-finalizes-generically",
-		Review: reviewOptedIn,
-		Title:  "#3417: captured provider validator slot finalizes only through its exact active lineage",
-		Source: "#3417 provider-slot continuation: an occupied Go-admitted validator slot is an exact active-lineage provider fact, not OpenCode finalizer behavior",
-		Steps: []Step{
-			{Name: "fixture: repo", Fixture: baseRepo},
-			{Name: "fixture: stage correction candidate", Fixture: stageCaptureEvidenceDescriptorCorrection},
-			{Name: "start correction review with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", capturedProviderValidatorLineage)},
-			{Name: "capture correction finding and the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
-				return captureExactSelectedReviewerSlots(r, capturedProviderValidatorLineage, true)
-			}},
-			{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", capturedProviderValidatorLineage, "--captured-results=true")},
-			{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", capturedProviderValidatorLineage, "--correction-lines", "2")},
-			{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
-			{Name: "capture passed correction evidence", Requires: captureEvidenceDescriptorCapability, Composite: func(r *journeyRun) error {
-				return captureV5CorrectionEvidenceDescriptorFor(r, capturedProviderValidatorLineage)
-			}},
-			{Name: "capture the Go-issued validator Task through the native relay protocol", Requires: capturedProviderValidatorStatusCapability, Composite: captureProviderValidatorSlot},
-			{Name: "finalize the generic captured-provider transition", Requires: finalizeEvidenceCapability, Composite: finalizeCapturedProviderValidatorSlot},
+	return []Journey{
+		{
+			ID:     "j106-captured-provider-validator-terminal-capture",
+			Review: reviewOptedIn,
+			Title:  "#3587: captured provider validator closes only through its exact active lineage",
+			Source: "#3587 provider-slot continuation: an occupied Go-admitted validator slot is an exact active-lineage provider fact, and its capture is the terminal event",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage correction candidate", Fixture: stageCaptureEvidenceDescriptorCorrection},
+				{Name: "start correction review with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", capturedProviderValidatorLineage)},
+				{Name: "capture correction finding and the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, capturedProviderValidatorLineage, true)
+				}},
+				{Name: "capture the Go-issued bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, capturedProviderValidatorLineage, 2)
+				}},
+				{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
+				{Name: "capture the Go-issued validator Task through the native relay protocol", Requires: capturedProviderValidatorStatusCapability, Composite: captureProviderValidatorSlot},
+				{Name: "the terminal validator capture exposes acknowledgement before the exact lineage burns", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, capturedProviderValidatorLineage)
+				}},
+			},
 		},
-	}}
+		{
+			ID:     "j123-rejected-provider-validator-starts-fresh-high-risk-review",
+			Review: reviewOptedIn,
+			Title:  "#3799: a rejected validator leaves a changed normal candidate for a fresh high-risk review",
+			Source: "#3799 Boundary B: inline actionable rejection evidence is terminal for its exact authority; a normal candidate edit receives only selectorless STATUS/START and all four new lenses",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
+				{Name: "start correction review with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", capturedProviderValidatorRejectionLineage)},
+				{Name: "capture correction finding and all four selected lens slots", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureAtomicReviewerSlots(r, capturedProviderValidatorRejectionLineage, true)
+				}},
+				{Name: "capture the Go-issued bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, capturedProviderValidatorRejectionLineage, 2)
+				}},
+				{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
+				{Name: "capture inline actionable rejection evidence from Boundary A", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+					return captureRejectedProviderValidatorSlotFor(r, capturedProviderValidatorRejectionLineage)
+				}},
+				{Name: "fixture: make a normal candidate edit", Fixture: writeNormalCandidateAfterRejectedValidator},
+				{Name: "selectorless STATUS/START creates a different fresh lineage with all four required lenses", Requires: atomicReviewStatusCapability, Composite: startFreshRejectedValidatorReview},
+			},
+		},
+	}
 }
 
 func captureProviderValidatorSlot(r *journeyRun) error {
-	status, err := readCapturedProviderValidatorStatus(r, true)
+	return captureProviderValidatorSlotFor(r, capturedProviderValidatorLineage)
+}
+
+// captureProviderValidatorSlotFor relays the provider-owned validator request
+// that STATUS binds to one correction. The relay's successful completion is
+// the final event: it captures validation, approves, and exposes acknowledgement before the lineage burns.
+func captureProviderValidatorSlotFor(r *journeyRun, lineage string) error {
+	return captureProviderValidatorSlotWithResult(r, lineage, true)
+}
+
+func captureRejectedProviderValidatorSlotFor(r *journeyRun, lineage string) error {
+	return captureProviderValidatorSlotWithResult(r, lineage, false)
+}
+
+func captureProviderValidatorSlotWithResult(r *journeyRun, lineage string, passed bool) error {
+	status, err := readProviderValidatorStatus(r, lineage, true)
 	if err != nil {
 		return err
 	}
@@ -57,11 +99,15 @@ func captureProviderValidatorSlot(r *journeyRun) error {
 		input.ProviderTask == nil || input.ProviderTask.Role != "targeted-validator" || input.ProviderTask.Prompt == "" {
 		return fmt.Errorf("provider slot task = %+v", input)
 	}
+	originalEvidence := "original acceptance check passed"
+	if !passed {
+		originalEvidence = "the corrected candidate still fails the original criterion"
+	}
 	payload, err := json.Marshal(map[string]any{
 		"targeted_validation_request_hash": status.ValidationRequest.RequestHash,
 		"correction_target_identity":       status.ValidationRequest.CorrectionTargetIdentity,
-		"original_criteria":                map[string]any{"passed": true, "evidence": []string{"original acceptance check passed"}},
-		"correction_regression":            map[string]any{"passed": true, "evidence": []string{"targeted regression check passed"}},
+		"original_criteria":                map[string]any{"passed": passed, "evidence": []string{originalEvidence}},
+		"correction_regression":            map[string]any{"passed": true, "evidence": []string{"the correction introduced no unrelated regression"}},
 		"follow_ups":                       []any{},
 	})
 	if err != nil {
@@ -105,7 +151,7 @@ func captureProviderValidatorSlot(r *journeyRun) error {
 	if err != nil || observation.ExitCode != 0 {
 		return fmt.Errorf("native provider-slot relay = exit %d err=%v stderr=%s", observation.ExitCode, err, firstLine(observation.Stderr))
 	}
-	if !capturedProviderSlotReported(observation.Stdout) {
+	if !capturedProviderSlotReported(observation.Stdout, passed) {
 		return fmt.Errorf("native provider-slot relay did not report capture: %s", observation.Stdout)
 	}
 	return nil
@@ -143,17 +189,22 @@ func finalizeCapturedProviderValidatorSlot(r *journeyRun) error {
 	if err != nil || result.State != "approved" || result.LineageID != capturedProviderValidatorLineage {
 		return fmt.Errorf("generic captured-provider finalize result = %+v, %v", result, err)
 	}
-	return requireAtomicLineageBurned(r, capturedProviderValidatorLineage)
+	return requireAtomicLineageAcknowledged(r, capturedProviderValidatorLineage)
 }
 
 func readCapturedProviderValidatorStatus(r *journeyRun, withOpenCodeTask bool) (waveCorrectionStatus, error) {
-	arguments := []string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--lineage", capturedProviderValidatorLineage}
+	return readProviderValidatorStatus(r, capturedProviderValidatorLineage, withOpenCodeTask)
+}
+
+func readProviderValidatorStatus(r *journeyRun, lineage string, withOpenCodeTask bool, selectors ...string) (waveCorrectionStatus, error) {
+	arguments := []string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--lineage", lineage}
+	arguments = append(arguments, selectors...)
 	if withOpenCodeTask {
 		arguments = append(arguments, "--agent", "opencode")
 	}
 	observation := r.run(productArgsFor(r, arguments...), false)
 	var status waveCorrectionStatus
-	return status, decodeWaveObservation(observation, &status, "captured provider validator status")
+	return status, decodeWaveObservation(observation, &status, "provider validator status")
 }
 
 func executeArgument(arguments []waveTransitionArgument, name string) string {
@@ -165,14 +216,40 @@ func executeArgument(arguments []waveTransitionArgument, name string) string {
 	return ""
 }
 
-func capturedProviderSlotReported(stdout string) bool {
+func writeNormalCandidateAfterRejectedValidator(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int { return 4 }\n")
+}
+
+func startFreshRejectedValidatorReview(r *journeyRun) error {
+	lineage, err := startAtomicTransactionFromSelectorlessStatus(r, capturedProviderValidatorRejectionLineage)
+	if err != nil {
+		return fmt.Errorf("selectorless START after rejected validator: %w", err)
+	}
+	r.sandbox.Lineage = lineage
+	return requireExplicitAtomicFourLensStatusFor(r, lineage)
+}
+
+func capturedProviderSlotReported(stdout string, passed bool) bool {
 	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
 		var frame struct {
 			Operation string `json:"operation"`
 			Output    string `json:"output"`
 		}
-		if json.Unmarshal([]byte(line), &frame) == nil && frame.Operation == "result" &&
-			strings.Contains(frame.Output, `"role":"targeted-validator"`) && strings.Contains(frame.Output, `"captured":true`) {
+		if json.Unmarshal([]byte(line), &frame) != nil || frame.Operation != "result" {
+			continue
+		}
+		var closure struct {
+			Schema          string `json:"schema"`
+			Operation       string `json:"operation"`
+			State           string `json:"state"`
+			Acknowledgement struct {
+				Operation string `json:"operation"`
+			} `json:"acknowledgement"`
+		}
+		if json.Unmarshal([]byte(frame.Output), &closure) == nil &&
+			closure.Schema == "gentle-ai.review-last-event-closure/v1" && closure.Operation == "review/capture-validation" &&
+			(closure.State == "escalated" && !passed || closure.State == "approved" && passed &&
+				closure.Acknowledgement.Operation == "review.acknowledge-approved") {
 			return true
 		}
 	}

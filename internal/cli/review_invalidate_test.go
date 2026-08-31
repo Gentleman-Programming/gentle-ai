@@ -25,13 +25,6 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 		run                func(t *testing.T, repo, lineage, revision string, chain reviewtransaction.ValidatedChain) error
 	}{
 		{
-			name:               "finalize",
-			wantCompactAbsence: true,
-			run: func(t *testing.T, repo, lineage, _ string, _ reviewtransaction.ValidatedChain) error {
-				return RunReview([]string{"finalize", "--cwd", repo, "--lineage", lineage}, &bytes.Buffer{})
-			},
-		},
-		{
 			name:          "invalidate",
 			wantOperation: "review/invalidate",
 			run: func(t *testing.T, repo, lineage, revision string, _ reviewtransaction.ValidatedChain) error {
@@ -74,18 +67,10 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 			before := readLegacyAuthorityTree(t, store.Dir)
 			for attempt := 0; attempt < 2; attempt++ {
 				err := tt.run(t, repo, lineage, chain.HeadRevision, chain)
-				if tt.wantCompactAbsence {
-					var absent *reviewCompactFacadeLineageAbsentError
-					if !errors.As(err, &absent) || absent.LineageID != lineage ||
-						!strings.Contains(err.Error(), "gentle-ai review start") || !strings.Contains(err.Error(), "gentle-ai review-resume") {
-						t.Fatalf("attempt %d compact-only finalize error = %#v", attempt+1, err)
-					}
-				} else {
-					var typed *reviewtransaction.LegacyReadOnlyError
-					if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !errors.As(err, &typed) ||
-						typed.Code() != reviewtransaction.LegacyReadOnlyErrorCode || typed.Operation != tt.wantOperation || typed.LineageID != lineage {
-						t.Fatalf("attempt %d legacy error = %#v", attempt+1, err)
-					}
+				var typed *reviewtransaction.LegacyReadOnlyError
+				if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !errors.As(err, &typed) ||
+					typed.Code() != reviewtransaction.LegacyReadOnlyErrorCode || typed.Operation != tt.wantOperation || typed.LineageID != lineage {
+					t.Fatalf("attempt %d legacy error = %#v", attempt+1, err)
 				}
 				if after := readLegacyAuthorityTree(t, store.Dir); !reflect.DeepEqual(after, before) {
 					t.Fatalf("attempt %d changed legacy authority bytes", attempt+1)

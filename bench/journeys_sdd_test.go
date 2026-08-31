@@ -9,9 +9,6 @@ var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j59-current-status-and-start-ignore-sibling-worktree-transaction",
 	"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
-	"j108-sdd-post-review-verify-report-is-natively-bound",
-	"j109-sdd-legacy-post-review-report-requires-current-attestation",
 	"j80-rescope-authorized-evidence-only-retry",
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }

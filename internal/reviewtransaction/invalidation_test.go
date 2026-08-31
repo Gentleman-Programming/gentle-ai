@@ -63,9 +63,6 @@ func TestInvalidatePristineFencesLegacyReadOnlyAndKeepsCompactTerminal(t *testin
 	if retry, err := compactStore.Replace(revision, "review/invalidate", compact); err != nil || retry != invalidated {
 		t.Fatalf("compact exact retry = %q, %v", retry, err)
 	}
-	if _, err := compact.Receipt(); err == nil {
-		t.Fatal("invalidated compact review produced a receipt")
-	}
 }
 
 func readLegacyAuthorityBytes(t *testing.T, store Store, revision string) ([]byte, []byte) {

@@ -277,28 +277,6 @@ func TestNamedReviewModeDisableIsAlwaysCloneScoped(t *testing.T) {
 	}
 }
 
-// TestShippedUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition is the
-// execution-based RED-first proof for adversarial finding F4: `gentle-ai
-// review start` on a candidate whose target is unchanged from the current
-// authority does not start a fresh lineage -- it resumes the SAME one
-// (confirmed by execution: the response reports `"action": "resumed"` with
-// the identical lineage_id). Naming only `gentle-ai review start` loops the
-// consumer back to the same stop. The row/entry must disclose that the
-// candidate needs to change first.
-func TestShippedUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition(t *testing.T) {
-	for label, content := range reviewStopReasonDocsCompleteDocuments(t) {
-		section := reviewStopReasonDocsSection(t, content)
-		row := reviewStopReasonTableRow(t, section, "unchanged_or_unverified_authority")
-		lowered := strings.ToLower(row)
-		if !strings.Contains(lowered, "resum") {
-			t.Errorf("%s: unchanged_or_unverified_authority row never discloses that `review start` on an unchanged candidate only resumes the same lineage: %q", label, row)
-		}
-		if !strings.Contains(lowered, "change") {
-			t.Errorf("%s: unchanged_or_unverified_authority row never states that the candidate must change first: %q", label, row)
-		}
-	}
-}
-
 // reviewStopReasonDocsContinuations expands every grouped table entry into
 // one continuation per reason code. It rejects duplicate codes, so grouping
 // cannot conceal conflicting instructions for the same emitted stop.

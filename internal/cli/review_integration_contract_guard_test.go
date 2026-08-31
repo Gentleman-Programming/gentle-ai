@@ -154,7 +154,7 @@ func TestEveryTestingGuideTransitionFieldIsEmitted(t *testing.T) {
 	}
 	for _, match := range matches {
 		segments := strings.Split(match[1], ".")
-		// next_transition is the STATUS/FINALIZE property name whose value is a
+		// next_transition is the STATUS property whose value is a
 		// ReviewNextTransition; the walk starts inside that struct.
 		structName := "ReviewNextTransition"
 		for _, segment := range segments[1:] {
@@ -455,10 +455,7 @@ func reviewIntegrationNegotiationCallSites(t *testing.T) []string {
 //     negotiated rerun.
 var reviewIntegrationModeCompletenessClassification = map[string]string{
 	"runReviewFacadeStart":               "hinted",
-	"runReviewFacadeFinalize":            "explicit-refusal",
 	"runReviewFacadeValidateNonDeciding": "vacuous",
-	"runReviewBindSDD":                   "vacuous",
-	"runReviewRetryFinalVerification":    "vacuous",
 }
 
 // TestReviewIntegrationDualModeCommandsAreClassified is Guard C's enumeration
@@ -492,22 +489,19 @@ var reviewIntegrationEncodeOperationCallRegexp = regexp.MustCompile(`encodeRevie
 
 // TestReviewIntegrationVacuousModeClassificationIsProvenBySource is Guard C's
 // evidence half for the "vacuous" classification: it re-derives, from every
-// encodeReviewIntegrationOperation(...) call site in review_facade.go and
-// review_final_verification_retry.go, whether the legacy and public result
-// arguments are the literal same identifier. Any command classified
+// encodeReviewIntegrationOperation(...) call site in review_facade.go,
+// whether the legacy and public result arguments are the literal same
+// identifier. Any command classified
 // "vacuous" above whose call site(s) pass two DIFFERENT identifiers fails
 // closed -- the structural proof no longer holds and the classification must
 // be revisited (most likely to "hinted" or "explicit-refusal").
 func TestReviewIntegrationVacuousModeClassificationIsProvenBySource(t *testing.T) {
 	operationToFunc := map[string]string{
-		"ReviewIntegrationOperationValidate":               "runReviewFacadeValidateNonDeciding",
-		"ReviewIntegrationOperationBindSDD":                "runReviewBindSDD",
-		"ReviewIntegrationOperationRetryFinalVerification": "runReviewRetryFinalVerification",
-		"ReviewIntegrationOperationFinalize":               "runReviewFacadeFinalize",
+		"ReviewIntegrationOperationValidate": "runReviewFacadeValidateNonDeciding",
 	}
 	vacuousByOperation := map[string]bool{}
 	sawOperation := map[string]bool{}
-	for _, file := range []string{"review_facade.go", "review_final_verification_retry.go"} {
+	for _, file := range []string{"review_facade.go"} {
 		payload, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -558,7 +552,6 @@ func TestReviewIntegrationNonVacuousModeClassificationsAreEvidenced(t *testing.T
 		// implementation, checked below, can only create or replay compact
 		// authority and cannot reach either legacy or v3 creation.
 		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "runReviewFacadeCompactAtomicStart(ctx, root, request)"},
-		{fn: "runReviewFacadeFinalize", file: "review_facade.go", evidence: "reviewContractRequiredForActionEligibilityReason"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.fn, func(t *testing.T) {
