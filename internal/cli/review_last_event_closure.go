@@ -43,7 +43,24 @@ func reviewApprovedAcknowledgementTransition(repo string, acknowledgement review
 // RunReviewAcknowledgeApproved executes the one v2-local acknowledgement
 // continuation. It intentionally returns no independent result: ambiguous
 // delivery is resolved by rerunning the STATUS transition against authority.
-func RunReviewAcknowledgeApproved(args []string, _ io.Writer) error {
+// reviewAcknowledgedSchema names the one typed answer the burn prints. The
+// acknowledgement is the most consequential step of the lifecycle, and until
+// #3946 it succeeded in silence: a caller could only infer the burn from a
+// later STATUS offering a fresh START. Every sibling terminal command already
+// returns its own envelope, so this one does too.
+const reviewAcknowledgedSchema = "gentle-ai.review-acknowledged/v1"
+
+type reviewAcknowledgedResult struct {
+	Schema           string `json:"schema"`
+	Operation        string `json:"operation"`
+	Action           string `json:"action"`
+	LineageID        string `json:"lineage_id"`
+	TargetIdentity   string `json:"target_identity"`
+	ConsumedRevision string `json:"consumed_revision"`
+	Authority        string `json:"authority"`
+}
+
+func RunReviewAcknowledgeApproved(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review acknowledge-approved", io.Discard, "Acknowledge one approved review authority using its exact v2 continuation.")
 	cwd := flags.String("cwd", ".", "repository path")
 	lineage := flags.String("lineage", "", "exact approved review lineage")
@@ -62,7 +79,13 @@ func RunReviewAcknowledgeApproved(args []string, _ io.Writer) error {
 	if *lineage == "" || *target == "" || *expectedRevision == "" || *token == "" {
 		return errors.New("review acknowledge-approved requires --lineage, --target, --expected-revision, and --token") // refusal:by-design operator-knowledge: run the exact v2 acknowledgement continuation emitted by STATUS or terminal closure
 	}
-	return reviewtransaction.AcknowledgeApprovedCompactAuthority(context.Background(), *cwd, *lineage, *target, *expectedRevision, *token)
+	if err := reviewtransaction.AcknowledgeApprovedCompactAuthority(context.Background(), *cwd, *lineage, *target, *expectedRevision, *token); err != nil {
+		return err
+	}
+	return encodeReviewJSON(stdout, reviewAcknowledgedResult{
+		Schema: reviewAcknowledgedSchema, Operation: "review/acknowledge-approved", Action: "acknowledged",
+		LineageID: *lineage, TargetIdentity: *target, ConsumedRevision: *expectedRevision, Authority: "burned",
+	})
 }
 
 func closeCorrectionOnCapturedValidator(

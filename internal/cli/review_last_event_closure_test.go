@@ -156,13 +156,15 @@ func TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns(t *testing.
 		t.Fatalf("wrong acknowledgement token mutated authority: %v", err)
 	}
 
+	var acknowledged bytes.Buffer
 	if err := RunReview([]string{
 		"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID,
 		"--target", started.TargetIdentity, "--expected-revision", terminal.StoreRevision, "--token", acknowledgement.Arguments[4].Value,
-	}, io.Discard); err != nil {
+	}, &acknowledged); err != nil {
 		t.Fatalf("acknowledge approved authority: %v", err)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertAcknowledgedEnvelope(t, acknowledged.Bytes(), started.LineageID, started.TargetIdentity, terminal.StoreRevision)
 	if err := RunReview([]string{
 		"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID,
 		"--target", started.TargetIdentity, "--expected-revision", terminal.StoreRevision, "--token", acknowledgement.Arguments[4].Value,
@@ -920,5 +922,23 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 	afterReplay, err := store.Load()
 	if err != nil || afterReplay.Revision != beforeReplay {
 		t.Fatalf("replayed rejected validator capture mutated authority = %#v, %v", afterReplay, err)
+	}
+}
+
+// assertAcknowledgedEnvelope pins the one typed answer the burn prints (#3946):
+// an orchestrator reports the most consequential step of the lifecycle from
+// the command's own output, not from a later STATUS offering a fresh START.
+func assertAcknowledgedEnvelope(t *testing.T, output []byte, lineage, target, revision string) {
+	t.Helper()
+	var envelope reviewAcknowledgedResult
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		t.Fatalf("acknowledgement output is not one JSON envelope: %v\n%s", err, output)
+	}
+	want := reviewAcknowledgedResult{
+		Schema: reviewAcknowledgedSchema, Operation: "review/acknowledge-approved", Action: "acknowledged",
+		LineageID: lineage, TargetIdentity: target, ConsumedRevision: revision, Authority: "burned",
+	}
+	if envelope != want {
+		t.Fatalf("acknowledgement envelope = %#v, want %#v", envelope, want)
 	}
 }
