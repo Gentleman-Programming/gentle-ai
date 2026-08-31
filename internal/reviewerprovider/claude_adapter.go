@@ -64,7 +64,7 @@ func (adapter *ClaudeAdapter) Review(ctx context.Context, invocation Invocation)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("claude reviewer transport failed: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("claude reviewer transport failed: %w: %s", err, reviewerTransportFailureDetail(stderr.String(), stdout.String()))
 	}
 	return stdout.Bytes(), nil
 }

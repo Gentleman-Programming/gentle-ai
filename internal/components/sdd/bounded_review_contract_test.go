@@ -52,7 +52,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Forecast is informational; route only from `next_transition`",
 		"query the same exact-lineage STATUS",
 		"reoffers the same bound slot",
-		"repeated `--result-artifact-file <path>`",
+		"through `--input <path|->`",
 		"Only candidate-caused severe findings block",
 		"four-lens review is long work",
 		"at-most-one bounded correction",

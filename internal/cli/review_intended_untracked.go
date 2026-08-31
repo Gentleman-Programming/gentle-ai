@@ -12,6 +12,13 @@ import (
 
 const reviewIntendedUntrackedSelectionSchema = "gentle-ai.review-intended-untracked-selection/v1"
 
+// reviewIntendedUntrackedInventoryCommand is the runnable form of the STATUS
+// that publishes the canonical untracked inventory. `--next-transition` is
+// refused without a negotiated contract and runtime identity, so a refusal
+// that names the bare form sends the operator to a command that fails
+// (issue #2895).
+const reviewIntendedUntrackedInventoryCommand = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --agent <runtime> --next-transition"
+
 type reviewRepeatedPathFlag []string
 
 func (paths *reviewRepeatedPathFlag) String() string { return strings.Join(*paths, "\n") }
@@ -45,7 +52,7 @@ func reviewIntendedUntrackedDeclared(mode reviewSingleValueFlag, selected review
 }
 
 func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag) (reviewIntendedUntrackedScope, error) {
-	return intendedUntrackedScopeForTarget(ctx, builder, mode, selected, expectedDigest, "gentle-ai review status --next-transition", "gentle-ai review start")
+	return intendedUntrackedScopeForTarget(ctx, builder, mode, selected, expectedDigest, reviewIntendedUntrackedInventoryCommand, "gentle-ai review start")
 }
 
 func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag, inventoryCommand, selectionCommand string) (reviewIntendedUntrackedScope, error) {
@@ -89,7 +96,7 @@ func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransact
 }
 
 func reviewIntendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope) error {
-	return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai review start")
+	return intendedUntrackedSelectionRequired(scope, reviewIntendedUntrackedInventoryCommand, "gentle-ai review start")
 }
 
 func intendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope, inventoryCommand, selectionCommand string) error {
