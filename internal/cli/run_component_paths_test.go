@@ -16,11 +16,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
-func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T) {
+func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{
 		model.AgentClaudeCode,
-		model.AgentOpenCode,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
@@ -32,6 +31,25 @@ func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T
 		p := adapter.SystemPromptFile(home)
 		if !containsPath(paths, p) {
 			t.Fatalf("componentPaths(sdd) missing system prompt path %q\npaths=%v", p, paths)
+		}
+	}
+}
+
+// TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents pins issue
+// #3975: the SDD injector scopes the orchestrator to the gentle-orchestrator
+// agent in the settings file for OpenCode and Kilocode in every mode, so SDD
+// must not require, back up, or verify the AGENTS.md it never writes.
+func TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode, model.AgentKilocode})
+
+	for _, mode := range []model.SDDModeID{"", model.SDDModeSingle, model.SDDModeMulti} {
+		paths := componentPaths(home, model.Selection{SDDMode: mode}, adapters, model.ComponentSDD)
+		for _, adapter := range adapters {
+			p := adapter.SystemPromptFile(home)
+			if containsPath(paths, p) {
+				t.Fatalf("componentPaths(sdd, mode=%q) lists %q, which the SDD injector never writes for %s\npaths=%v", mode, p, adapter.Agent(), paths)
+			}
 		}
 	}
 }
