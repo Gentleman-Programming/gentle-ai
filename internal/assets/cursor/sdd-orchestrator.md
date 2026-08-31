@@ -210,7 +210,7 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 
 - **Contract conformance:** the phase returned `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, and `skill_resolution`, and `status` indicates success (not partial, failed, or blocked).
 - **Artifact existence:** the declared artifact actually exists and is readable in the active backend — read it back (engram: `mem_search` + `mem_get_observation` on the topic key; openspec: read the file path). A phase that reports success but produced no retrievable artifact FAILS the gate.
-- **No hallucination:** every file path, symbol, command, or artifact the phase claims it created or referenced must actually exist; spot-check the concrete claims. A referenced path that does not resolve FAILS the gate.
+- **No hallucination:** every file path, symbol, command, or artifact the phase claims it created or referenced must actually exist; spot-check the concrete claims. A referenced path that does not resolve FAILS the gate. A path the artifact explicitly marks as planned (to be created by a later apply) is not required to exist yet; only paths claimed as already created or read must resolve.
 - **No drift from inputs:** the output is consistent with the phase's required inputs per the Dependency Graph — spec stays within the proposal's scope, design answers the proposal, tasks cover spec and design, apply implements the tasks. Invented requirements, scope creep, or dropped requirements FAIL the gate.
 - **Routing coherence:** `next_recommended` follows the Dependency Graph and `risks` are within tolerance (no unaddressed CRITICAL).
 
