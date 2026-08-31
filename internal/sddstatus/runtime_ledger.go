@@ -1941,18 +1941,27 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 //
 // Condition names the failed predicate; Revision names the offending record so
 // an operator does not have to re-derive which one violated it by reading the
-// chain. Expected/actual pairs are deliberately absent: that detail is where
-// the bespoke messages came from (#3816).
+// chain; Path names its file under the Git common directory (#3938) so a
+// record an older binary admitted is a maintainer decision, not a dead end.
+// Expected/actual pairs are deliberately absent: that detail is where the
+// bespoke messages came from (#3816).
 type RuntimeRecordRejectedError struct {
 	Condition string
 	Revision  string
+	Path      string
 }
 
 func (err *RuntimeRecordRejectedError) Error() string {
 	if err.Revision == "" {
 		return fmt.Sprintf("SDD runtime record rejected (condition %s); %s", err.Condition, runtimeLedgerStatusPointer)
 	}
-	return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); %s", err.Condition, err.Revision, runtimeLedgerStatusPointer)
+	if err.Path == "" {
+		return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); %s", err.Condition, err.Revision, runtimeLedgerStatusPointer)
+	}
+	// No repair command exists here by design (human authority): nothing may
+	// rewrite or drop a published chain record; a maintainer inspects or
+	// removes the named file, then the status pointer is the read-only re-entry.
+	return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); the record file is %s; a maintainer must inspect or remove that record, then %s", err.Condition, err.Revision, err.Path, runtimeLedgerStatusPointer)
 }
 
 // rejectRuntimeRecord refuses a record that disagrees with what the authority
@@ -1963,19 +1972,21 @@ func rejectRuntimeRecord(condition string) error {
 	return &RuntimeRecordRejectedError{Condition: condition}
 }
 
-// withRuntimeRecordRevision stamps the offending revision onto a rejection once
-// the caller knows it. Unrelated errors pass through untouched.
-func withRuntimeRecordRevision(err error, revision string) error {
+// withRuntimeRecordRevision stamps the offending revision and its record file
+// onto a rejection once the caller knows them. Unrelated errors pass through
+// untouched.
+func withRuntimeRecordRevision(err error, revision string, path string) error {
 	var rejected *RuntimeRecordRejectedError
 	if err == nil || !errors.As(err, &rejected) || rejected.Revision != "" {
 		return err
 	}
-	return &RuntimeRecordRejectedError{Condition: rejected.Condition, Revision: revision}
+	return &RuntimeRecordRejectedError{Condition: rejected.Condition, Revision: revision, Path: path}
 }
 
-// applyRuntimeRecord stamps every rejection with the offending revision.
+// applyRuntimeRecord stamps every rejection with the offending revision and
+// the record file it was read from.
 func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
-	return withRuntimeRecordRevision(applyRuntimeRecordLocked(store, replay, revision, record), revision)
+	return withRuntimeRecordRevision(applyRuntimeRecordLocked(store, replay, revision, record), revision, store.recordPath(revision))
 }
 
 func applyRuntimeRecordLocked(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
@@ -3349,7 +3360,7 @@ func (store RuntimeStore) ensureDirectories() error {
 
 func (store RuntimeStore) publishRecord(revision string, payload []byte) error {
 	recordsDir := filepath.Join(store.Dir, "records")
-	path := filepath.Join(recordsDir, strings.TrimPrefix(revision, "sha256:")+".json")
+	path := store.recordPath(revision)
 	temp, err := os.CreateTemp(recordsDir, ".record-*")
 	if err != nil {
 		return err
@@ -3439,11 +3450,17 @@ func readRuntimeHead(path string) (string, bool, error) {
 	return revision, true, nil
 }
 
+// recordPath is the one derivation of a record's file under the Git common
+// directory: <common>/gentle-ai/sdd-runtime/v1/<change>/records/<sha256>.json.
+func (store RuntimeStore) recordPath(revision string) string {
+	return filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+}
+
 func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if !runtimeRevisionPattern.MatchString(revision) {
 		return runtimeRecord{}, errors.New("invalid SDD runtime record revision")
 	}
-	path := filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+	path := store.recordPath(revision)
 	payload, err := readBoundedRuntimeFile(path)
 	if err != nil {
 		return runtimeRecord{}, fmt.Errorf("load SDD runtime revision %s: %w", revision, err)

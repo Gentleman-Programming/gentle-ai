@@ -2922,6 +2922,32 @@ func isolatedGitEnvironment() []string {
 	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull, "GIT_CONFIG_COUNT=0")
 }
 
+// #3516: OpenCode can hand the plugin an empty or filesystem-root cwd, and the
+// Go side refuses `--cwd /`. The plugin has no JS/TS test harness, so this
+// pins the guard in its source: a root or empty cwd never renders as a
+// `--cwd` value; the continuation falls back to the `<repo>` placeholder and
+// the summary says so.
+func TestSDDTaskResultArtifactsPluginGuardsFilesystemRootCwd(t *testing.T) {
+	source, err := Read("opencode/plugins/sdd-task-result-artifacts.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`function isFilesystemRoot`,
+		`function continuationCwd`,
+		`const cwd = continuationCwd(worktree, directory)`,
+		`--cwd <repo> --json`,
+		`replace <repo> with the repository root`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("SDD task plugin missing root-cwd guard %q", want)
+		}
+	}
+	if strings.Contains(source, "const cwd = worktree || directory") {
+		t.Fatal("SDD task plugin still renders whatever cwd OpenCode hands over")
+	}
+}
+
 // #2212: the spec phase writes every capability under the change folder.
 // The shipped skills used to send new capabilities to openspec/specs/, a
 // root the dispatcher never reads, so the actor could follow the skill and

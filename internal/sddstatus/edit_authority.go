@@ -16,14 +16,18 @@ import (
 // the only honest signal that a task plan names an edit path outside its
 // authorized roots is the prose itself. Detection is deliberately
 // conservative: it inspects only backticked tokens inside markdown checkbox
-// lines, and it flags a token only when it resolves to a path in a Git
-// repository outside every authorized edit root. Different repositories are
-// represented by their Git roots; targets inside the planning repository are
-// narrowed to their containing edit roots. It catches the reported scenario
+// lines, and it flags a token only when it resolves to a path outside every
+// authorized edit root. Different repositories are represented by their Git
+// roots; targets inside the planning repository are narrowed to their
+// containing edit roots; a target in no Git repository at all (#3504) is
+// represented by its resolved directory. It catches the reported scenario
 // (explicit `../sibling/...` and absolute paths); it cannot catch pure prose
 // ("update the billing service"), and a context reference can raise a false
 // block — acceptable because the consequence is an honest blocked status
-// naming its exits, never silent authority.
+// naming its exits, never silent authority. The one deterministic exit for a
+// genuine read-only reference (#2934) is the `(read-only)` marker on the
+// backticked path, which editTargetTokens honors per token without any prose
+// inference.
 //
 // This derivation deliberately lives outside the #2515 runtime-readiness
 // triple (RuntimeStatus.Complete/DecisionRequired/ActiveAttempt): edit
@@ -31,6 +35,35 @@ import (
 // TestOneReadinessPredicateHasNoRivalDerivations stays green by design.
 
 var backtickedSpan = regexp.MustCompile("`([^`]+)`")
+
+// readOnlyMarkerAfterToken is the one documented spelling of the read-only
+// exit (#2934): `(read-only)` immediately after a backticked path, matched
+// case-insensitively. It is token-scoped on purpose: a line that mixes a
+// marked input with an unmarked path keeps the unmarked path as an edit
+// target, so a marker anywhere on the line can never silence the consent
+// gate for a target it does not annotate.
+var readOnlyMarkerAfterToken = regexp.MustCompile(`(?i)^\s*\(read-only\)`)
+
+// editTargetTokens is the one derivation of "which tokens on this line are
+// edit targets": none when the line is not a checkbox, otherwise every
+// path-like backticked token that is not itself annotated `(read-only)`.
+// Both the edit-authority detector and the runtime-topology guard route
+// through it so a read-only input never blocks either, and an unmarked
+// sibling on the same line still does.
+func editTargetTokens(line string) []string {
+	if taskCheckbox.FindStringIndex(line) == nil {
+		return nil
+	}
+	var tokens []string
+	for _, span := range backtickedSpan.FindAllStringSubmatchIndex(line, -1) {
+		token := line[span[2]:span[3]]
+		if !pathLikeToken(token) || readOnlyMarkerAfterToken.MatchString(line[span[1]:]) {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens
+}
 
 // detectUnauthorizedEditRoots scans tasks text (both status paths have text;
 // the Engram store has no tasks.md path) for path-like tokens in checkbox
@@ -54,21 +87,17 @@ func detectUnauthorizedEditRoots(tasksText string, workspaceRoot string, allowed
 
 	unauthorized := map[string]bool{}
 	for _, line := range strings.Split(tasksText, "\n") {
-		if len(taskCheckbox.FindStringSubmatch(line)) == 0 {
-			continue
-		}
-		for _, token := range pathLikeTokens(line) {
+		for _, token := range editTargetTokens(line) {
 			resolved := token
 			if !filepath.IsAbs(resolved) {
 				resolved = filepath.Join(workspaceRoot, resolved)
 			}
 			resolved = resolveExistingPath(filepath.Clean(resolved))
 			target := gitRootOf(resolved)
-			if target == "" {
-				continue
-			}
 			missing := target
-			if target == planningGitRoot {
+			// #3504: a path in no Git repository is still outside every
+			// allowed root when it is; name its resolved directory.
+			if target == "" || target == planningGitRoot {
 				missing = sameRepositoryEditRoot(resolved)
 			}
 			if withinAnyRoot(missing, allowed) {
@@ -100,19 +129,13 @@ func sameRepositoryEditRoot(path string) string {
 // line: backticked tokens that contain a path separator (which subsumes
 // `../` prefixes and absolute paths). Tokens with whitespace are commands or
 // prose, and URL-like tokens are references, not filesystem targets.
-func pathLikeTokens(line string) []string {
-	var tokens []string
-	for _, match := range backtickedSpan.FindAllStringSubmatch(line, -1) {
-		token := match[1]
-		if strings.ContainsAny(token, " \t") || strings.Contains(token, "://") {
-			continue
-		}
-		if !strings.ContainsRune(token, '/') && !strings.ContainsRune(token, filepath.Separator) {
-			continue
-		}
-		tokens = append(tokens, token)
+// pathLikeToken reports whether one backticked token reads as a path: no
+// whitespace, no URL scheme, and at least one separator.
+func pathLikeToken(token string) bool {
+	if strings.ContainsAny(token, " \t") || strings.Contains(token, "://") {
+		return false
 	}
-	return tokens
+	return strings.ContainsRune(token, '/') || strings.ContainsRune(token, filepath.Separator)
 }
 
 // resolveExistingPath walks up to the nearest existing ancestor (task prose
@@ -139,8 +162,9 @@ func resolveExistingPath(path string) string {
 
 // gitRootOf walks up from path to the nearest directory containing a `.git`
 // entry (a directory for ordinary repositories, a file for worktrees). An
-// empty result means the path belongs to no repository and can never be an
-// unauthorized edit target.
+// empty result means the path belongs to no repository; the edit-authority
+// detector then names the resolved directory itself (#3504), while the
+// runtime-topology guard has no common directory to compare and skips it.
 func gitRootOf(path string) string {
 	current := path
 	if info, err := os.Stat(current); err != nil || !info.IsDir() {
@@ -167,16 +191,16 @@ func withinAnyRoot(target string, roots []string) bool {
 	return false
 }
 
-// editAuthorityBlockedReason names each unauthorized edit root and both exits:
-// keep the plan inside the authorized edit roots, or grant authority for the
-// named paths (the grant command is a later slice of #2540).
+// editAuthorityBlockedReason names each unauthorized edit root and the three
+// exits: keep the plan inside the authorized edit roots, grant authority for
+// the named paths, or mark a genuine read-only input with `(read-only)`.
 func editAuthorityBlockedReason(roots []string) string {
 	quoted := make([]string, 0, len(roots))
 	for _, root := range roots {
 		quoted = append(quoted, pathquote.Quote(root))
 	}
 	return fmt.Sprintf(
-		"blocked(edit_authority_missing): tasks.md targets edit paths outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named paths",
+		"blocked(edit_authority_missing): tasks.md targets edit paths outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named paths, or mark a read-only input with (read-only) right after its backticked path",
 		strings.Join(quoted, ", "),
 	)
 }
@@ -237,10 +261,7 @@ func foreignRuntimeTopologyRoots(ctx context.Context, tasksText, workspaceRoot, 
 	}
 	foreign := map[string]bool{}
 	for _, line := range strings.Split(tasksText, "\n") {
-		if len(taskCheckbox.FindStringSubmatch(line)) == 0 {
-			continue
-		}
-		for _, token := range pathLikeTokens(line) {
+		for _, token := range editTargetTokens(line) {
 			resolved := token
 			if !filepath.IsAbs(resolved) {
 				resolved = filepath.Join(workspaceRoot, resolved)
