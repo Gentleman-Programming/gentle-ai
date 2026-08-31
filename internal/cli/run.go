@@ -19,7 +19,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
@@ -2600,17 +2599,16 @@ func isLegacyOpenCodeBackgroundAgentsPlugin(path string) bool {
 	path = filepath.Clean(path)
 	pluginsDir := filepath.Dir(path)
 	opencodeDir := filepath.Dir(pluginsDir)
-	if filepath.Base(path) != "background-agents.ts" || filepath.Base(pluginsDir) != "plugins" {
+	if filepath.Base(path) != "background-agents.ts" || filepath.Base(pluginsDir) != "plugins" || filepath.Base(opencodeDir) != "opencode" {
 		return false
 	}
-	// The plugin lives in the directory the adapter resolves: <root>/.config/opencode
-	// for a workspace or a home without XDG_CONFIG_HOME, and
-	// $XDG_CONFIG_HOME/opencode for the user's home when it is set (#3219).
-	if opencodeDir == opencodeagent.ConfigPath(filepath.Dir(filepath.Dir(opencodeDir))) {
+	if filepath.Base(filepath.Dir(opencodeDir)) == ".config" {
 		return true
 	}
-	home, err := os.UserHomeDir()
-	return err == nil && opencodeDir == opencodeagent.ConfigPath(home)
+	// A home installed with XDG_CONFIG_HOME keeps its OpenCode config under
+	// $XDG_CONFIG_HOME/opencode instead of ~/.config/opencode (#3219).
+	xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	return filepath.IsAbs(xdgConfigHome) && opencodeDir == filepath.Join(filepath.Clean(xdgConfigHome), "opencode")
 }
 
 func hasComponent(components []model.ComponentID, target model.ComponentID) bool {
