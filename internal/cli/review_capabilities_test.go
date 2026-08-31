@@ -126,9 +126,9 @@ func TestReviewCapabilitiesV24AdvertisementIsCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Schema != "gentle-ai.review-integration.capabilities/v2.4" || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 4}) ||
-		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV6) || !slices.Contains(got.Schemas, "gentle-ai.review-intended-untracked-selection/v1") ||
-		!slices.Contains(got.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(got.Schemas, ReviewIntegrationConsentSchemaV3) ||
-		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) || slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV5) {
+		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV5) || !slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV6) ||
+		!slices.Contains(got.Schemas, "gentle-ai.review-intended-untracked-selection/v1") || !slices.Contains(got.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(got.Schemas, ReviewIntegrationConsentSchemaV3) ||
+		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) {
 		t.Fatalf("current v2 capabilities advertisement = %#v", got)
 	}
 }

@@ -165,7 +165,7 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/capabilities-v2.4.schema.json":            "eaa603607191190a974dd8389e54c65cdfc718d0578636eacfa4dff77801d075",
+		"schemas/capabilities-v2.4.schema.json":            "283a1b06b7030c6b87f782c2064a81e60b04ea0e4bc9eeedca4c779f72d1350d",
 		"schemas/intended-untracked-selection.schema.json": "6f300c4cc10ab669fa3ef8cc608829df623a453cd5e6629958786e0724430259",
 		"schemas/status-v6.schema.json":                    "0aa731e4d3961d678b4e51a6be0af93f2de82a4a326c3366e2fbe6a3e687236c",
 	}

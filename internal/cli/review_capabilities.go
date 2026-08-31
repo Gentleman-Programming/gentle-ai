@@ -308,10 +308,10 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			case ReviewIntegrationStartSchemaV2:
 				result.Schemas[index] = ReviewIntegrationStartSchema
 			case ReviewIntegrationStatusSchemaV2:
-				result.Schemas[index] = ReviewIntegrationStatusSchemaV6
+				result.Schemas[index] = ReviewIntegrationStatusSchemaV5
 			}
 		}
-		result.Schemas = append(result.Schemas, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema)
+		result.Schemas = append(result.Schemas, ReviewIntegrationStatusSchemaV6, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema)
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_bound_native_git_context", Supported: true,
 			Requires: []string{"native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"},

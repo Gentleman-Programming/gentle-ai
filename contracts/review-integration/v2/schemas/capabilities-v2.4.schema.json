@@ -20,14 +20,15 @@
     "operations": {"$ref": "capabilities-v2.3.schema.json#/properties/operations"},
     "gates": {"$ref": "capabilities-v2.3.schema.json#/properties/gates"},
     "projections": {"$ref": "capabilities-v2.3.schema.json#/properties/projections"},
-    "schemas": {"type": "array", "minItems": 20, "maxItems": 20, "uniqueItems": true, "items": {"enum": [
+    "schemas": {"type": "array", "minItems": 21, "maxItems": 21, "uniqueItems": true, "items": {"enum": [
       "gentle-ai.review-admitted-result/v2", "gentle-ai.review-artifact-subject/v2",
       "gentle-ai.review-authority-repair-assessment/v1", "gentle-ai.review-authority-status/v1",
       "gentle-ai.review-gate-request/v1", "gentle-ai.review-integration.capabilities/v2.4",
       "gentle-ai.review-integration.consent/v3", "gentle-ai.review-integration.failure/v2",
       "gentle-ai.review-integration.operation/v2", "gentle-ai.review-integration.projection/v1",
       "gentle-ai.review-integration.repair/v2", "gentle-ai.review-integration.start/v4",
-      "gentle-ai.review-integration.status/v6", "gentle-ai.review-intended-untracked-selection/v1",
+      "gentle-ai.review-integration.status/v5", "gentle-ai.review-integration.status/v6",
+          "gentle-ai.review-intended-untracked-selection/v1",
       "gentle-ai.review-receipt/v1", "gentle-ai.review-result-artifact/v2",
       "gentle-ai.review-targeted-validation-request/v1", "https://gentle-ai.dev/schema/review/refuter/v1",
       "https://gentle-ai.dev/schema/review/reviewer/v1", "https://gentle-ai.dev/schema/review/validator/v1"
