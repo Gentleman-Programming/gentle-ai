@@ -2914,3 +2914,38 @@ func isolatedGitEnvironment() []string {
 	}
 	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull, "GIT_CONFIG_COUNT=0")
 }
+
+// #2212: the spec phase writes every capability under the change folder.
+// The shipped skills used to send new capabilities to openspec/specs/, a
+// root the dispatcher never reads, so the actor could follow the skill and
+// still get nextRecommended: spec forever.
+func TestSDDSpecAndProposeNameTheChangeLocalSpecLocation(t *testing.T) {
+	spec := MustRead("skills/sdd-spec/SKILL.md")
+	for _, required := range []string{
+		"This becomes a NEW FULL spec: openspec/changes/{change-name}/specs/<capability-name>/spec.md",
+		"never write to `openspec/specs/` during the spec phase",
+		"sdd-archive promotes it to `openspec/specs/<capability-name>/spec.md`",
+		"create a FULL spec (not a delta) at `openspec/changes/{change-name}/specs/{domain}/spec.md`",
+	} {
+		if !strings.Contains(spec, required) {
+			t.Fatalf("skills/sdd-spec/SKILL.md missing change-local spec location wording %q", required)
+		}
+	}
+	if strings.Contains(spec, "This becomes a NEW full spec: openspec/specs/<capability-name>/spec.md") {
+		t.Fatalf("skills/sdd-spec/SKILL.md still sends new capabilities to the canonical openspec/specs/ root")
+	}
+
+	propose := MustRead("skills/sdd-propose/SKILL.md")
+	required := "gets a full spec at `openspec/changes/{change-name}/specs/<name>/spec.md` during the spec phase and becomes `openspec/specs/<name>/spec.md` at archive"
+	if got := strings.Count(propose, required); got != 2 {
+		t.Fatalf("skills/sdd-propose/SKILL.md contains %d copies of %q, want 2 (template comment and checklist)", got, required)
+	}
+	for _, forbidden := range []string{
+		"Each becomes a new `openspec/specs/<name>/spec.md`",
+		"each will become `openspec/specs/<name>/spec.md`",
+	} {
+		if strings.Contains(propose, forbidden) {
+			t.Fatalf("skills/sdd-propose/SKILL.md still states the spec-phase location as the archive outcome: %q", forbidden)
+		}
+	}
+}

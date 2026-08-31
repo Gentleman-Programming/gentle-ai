@@ -535,7 +535,10 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	}
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
-	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
+	if artifacts["specs"] == ArtifactPartial {
+		blockedReasons.genuine = append(blockedReasons.genuine, openSpecSpecsLayoutReason(changeName))
+	}
 	if artifacts["verifyReport"] == ArtifactDone {
 		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
 			blockedReasons.genuine = append(blockedReasons.genuine, reason)
@@ -835,7 +838,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	runtimeStatus, runtimeAttemptTokens, _, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
-	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
 	if artifacts["verifyReport"] == ArtifactDone {
 		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
 			blockedReasons.genuine = append(blockedReasons.genuine, reason)
@@ -1660,13 +1663,17 @@ func countTaskProgressText(content string) TaskProgress {
 	return progress
 }
 
-func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress) blockerReasons {
+func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress, changeName string) blockerReasons {
 	var reasons blockerReasons
+	if changeName == "" {
+		changeName = "<change>"
+	}
+	specsDir := "openspec/changes/" + changeName + "/specs/"
 	if artifacts["proposal"] != ArtifactDone {
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "proposal.md is missing or partial.")
 	}
 	if artifacts["specs"] != ArtifactDone {
-		reasons.expectedPlanning = append(reasons.expectedPlanning, "spec.md or specs/**/spec.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, specsDir+"<domain>/spec.md is missing or partial.")
 	}
 	if artifacts["design"] != ArtifactDone {
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "design.md is missing or partial.")
@@ -1678,6 +1685,19 @@ func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress Tas
 		reasons.genuine = append(reasons.genuine, "tasks.md has no markdown task checkboxes.")
 	}
 	return reasons
+}
+
+// openSpecSpecsLayoutReason names the change-local layout when the OpenSpec
+// specs/ directory has entries but no <domain>/spec.md (#2212). That flat
+// layout is what an actor produces after the shipped skill sent a new
+// capability elsewhere, and the dispatcher can never read it. The spec route
+// drops expected planning blockers, so this guidance is a genuine reason;
+// otherwise the reporter sees nextRecommended: spec with no reason forever.
+// The Engram store reports partial for an empty artifact, not a layout, so
+// only the OpenSpec resolver appends it.
+func openSpecSpecsLayoutReason(changeName string) string {
+	specsDir := "openspec/changes/" + changeName + "/specs/"
+	return specsDir + " has files but no non-empty <domain>/spec.md; the spec phase writes every capability (new ones as full specs) at " + specsDir + "<domain>/spec.md, and sdd-archive promotes new ones to openspec/specs/<domain>/spec.md"
 }
 
 func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
