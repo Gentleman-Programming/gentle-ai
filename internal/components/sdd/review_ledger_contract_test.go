@@ -475,7 +475,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Native Runtime Attempt Authority section and drops `--successor-lineage`,
 	// a flag settle never defined. Kilo renders that shared section through the
 	// OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "a11b382c8a804da09937205c418c65a64eddbc1f4ced28549c613d566db9ba33"
+	// #3105 adds the planned-path carve-out to the automatic gate's
+	// no-hallucination clause in every runtime orchestrator, so a design that
+	// names files apply will create is no longer failed by the gate. Kilo
+	// renders the OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "b3c375b834db28f97daaf05c19b55f088c470e7ed58b0ba3dd965569ef04c74c"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

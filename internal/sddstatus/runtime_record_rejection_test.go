@@ -36,7 +36,7 @@ func TestRuntimeRecordRejectionCarriesConditionAndRevision(t *testing.T) {
 		t.Errorf("Revision = %q, want empty until the record is stamped", rejected.Revision)
 	}
 
-	stamped := withRuntimeRecordRevision(err, "sha256:abc")
+	stamped := withRuntimeRecordRevision(err, "sha256:abc", "")
 	if !errors.As(stamped, &rejected) || rejected.Revision != "sha256:abc" {
 		t.Fatalf("withRuntimeRecordRevision did not stamp the revision: %v", stamped)
 	}
@@ -51,10 +51,10 @@ func TestRuntimeRecordRejectionCarriesConditionAndRevision(t *testing.T) {
 // helper never rewrites an unrelated error.
 func TestWithRuntimeRecordRevisionLeavesOtherErrorsAlone(t *testing.T) {
 	original := errors.New("some other failure")
-	if got := withRuntimeRecordRevision(original, "sha256:abc"); got != original {
+	if got := withRuntimeRecordRevision(original, "sha256:abc", ""); got != original {
 		t.Errorf("unrelated error was rewritten: %v", got)
 	}
-	if withRuntimeRecordRevision(nil, "sha256:abc") != nil {
+	if withRuntimeRecordRevision(nil, "sha256:abc", "") != nil {
 		t.Error("nil was turned into an error")
 	}
 }
