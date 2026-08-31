@@ -141,7 +141,7 @@ prompt="You are the only implementation runtime. Work in the current tiny Go fix
 if [[ $scenario == direct-* ]]; then
   prompt+=" Implement Add(a, b) correctly and run go test ./... -count=1. Do not use SDD or create OpenSpec artifacts."; phase='implementation and uncached tests'
 else
-  prompt+=" Plan first: proposal, specs, design, tasks. Implement Add only during apply, run go test ./... -count=1, then verify, sync, and archive according to the installed runtime workflow; prove archive completion."; phase='SDD archive completion'
+  prompt+=" Plan first: proposal, specs, design, tasks. Use artifact store mode openspec for this change; Engram-only, hybrid, and none are not acceptable for this manual fixture. Implement Add only during apply, run go test ./... -count=1, then verify, sync, and archive according to the installed runtime workflow; prove archive completion."; phase='SDD archive completion'
 fi
 if [[ $scenario == *-rdd-fix ]]; then
   export MANUAL_AGENT_BENCH_INJECTOR="$injector"

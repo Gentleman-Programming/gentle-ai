@@ -70,10 +70,10 @@ archive_ok() {
   [[ -s $d/state.yaml && -s $d/proposal.md && -s $d/design.md && -s $d/tasks.md && -s $d/verify-report.md && -s $d/archive-report.md && ! -e $1/openspec/changes/test-change ]] && compgen -G "$d/specs/*/spec.md" >/dev/null
 }
 assert_sdd_prompt() {
-  local -a argv=(); local prompt
-  mapfile -d '' -t argv <"$1/evidence/runtime.argv"; prompt=${argv[${#argv[@]}-1]}
-  [[ ${prompt%%'Plan first:'*} != "$prompt" && ${prompt#*'Plan first:'} == *'Implement Add only during apply'* ]] || red 'SDD prompt implements before planning'
-  [[ $2 != *-rdd-fix || ${prompt#*'archive completion'} == *'MANUAL_AGENT_BENCH_INJECTOR'* ]] || red 'SDD injection precedes archive'
+  local -a argv=(); local prompt requirement before_requirement after_requirement
+  mapfile -d '' -t argv <"$1/evidence/runtime.argv"; prompt=${argv[${#argv[@]}-1]}; requirement='Use artifact store mode openspec for this change; Engram-only, hybrid, and none are not acceptable for this manual fixture.'
+  [[ ${prompt%%'Plan first:'*} != "$prompt" && ${prompt#*'Plan first:'} == *'Implement Add only during apply'* ]] || red 'SDD prompt implements before planning'; [[ $prompt == *"$requirement"* ]] || red 'SDD prompt omits the required openspec artifact-store mode'
+  before_requirement=${prompt%%"$requirement"*}; after_requirement=${prompt#*"$requirement"}; [[ $before_requirement != *'Implement Add only during apply'* && $before_requirement != *'archive according to the installed runtime workflow'* && $after_requirement == *'Implement Add only during apply'* && $after_requirement == *'archive according to the installed runtime workflow'* ]] || red 'SDD openspec requirement does not precede apply and archive instructions'; [[ $2 != *-rdd-fix || ${prompt#*'archive completion'} == *'MANUAL_AGENT_BENCH_INJECTOR'* ]] || red 'SDD injection precedes archive'
 }
 assert_fixture() {
   local work=$1 scenario=$2
