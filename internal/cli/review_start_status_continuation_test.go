@@ -40,13 +40,13 @@ func startStatusContinuationExecution(t *testing.T, started ReviewIntegrationSta
 	if execution.Command != "gentle-ai review status "+strings.Join(tokens, " ") {
 		t.Fatalf("START continuation command %q does not execute exactly its arguments %v", execution.Command, tokens)
 	}
-	for index, name := range []string{"contract", "next-transition", "lineage"} {
+	for index, name := range []string{"contract", "next-transition", "lineage", "repository-context"} {
 		if execution.Arguments[index].Name != name {
 			t.Fatalf("START continuation argument order = %#v", execution.Arguments)
 		}
 	}
 	if execution.Arguments[0].Value != ReviewIntegrationContractV2 || execution.Arguments[1].Value != "true" ||
-		execution.Arguments[2].Value != started.LineageID {
+		execution.Arguments[2].Value != started.LineageID || started.RepositoryContext == nil || execution.Arguments[3].Value != started.RepositoryContext.Handle {
 		t.Fatalf("START continuation binding rows = %#v", execution.Arguments)
 	}
 	tokenizedSelectors := reviewTokenizedTransitionArguments(wantSelectors)
@@ -159,7 +159,7 @@ func TestOpenCodeRunsTheStartStatusContinuationVerbatim(t *testing.T) {
 	execution := startStatusContinuationExecution(t, started, []ReviewTransitionArgument{
 		{Name: "projection", Value: string(reviewtransaction.ProjectionWorkspace)},
 	})
-	if agent := execution.Arguments[3]; agent.Name != "agent" || agent.Value != "opencode" {
+	if agent := execution.Arguments[4]; agent.Name != "agent" || agent.Value != "opencode" {
 		t.Fatalf("declared runtime row = %#v", execution.Arguments)
 	}
 

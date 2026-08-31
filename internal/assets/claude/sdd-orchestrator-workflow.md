@@ -13,19 +13,19 @@ SDD is the structured planning layer for substantial changes. This file is the l
 
 Skills and slash commands:
 
-- `/sdd-init` → initialize SDD context; detects stack and testing capabilities.
-- `/sdd-explore <topic>` → investigate an idea; no implementation.
-- `/sdd-status [change]` → read-only structured status.
-- `/sdd-apply [change]` → implement pending tasks in batches.
-- `/sdd-verify [change]` → validate implementation against specs/tasks.
-- `/sdd-archive [change]` → close a completed change.
-- `/sdd-onboard` → guided end-to-end walkthrough.
+- `/gentle-sdd-init` → initialize SDD context; detects stack and testing capabilities.
+- `/gentle-sdd-explore <topic>` → investigate an idea; no implementation.
+- `/gentle-sdd-status [change]` → read-only structured status.
+- `/gentle-sdd-apply [change]` → implement pending tasks in batches.
+- `/gentle-sdd-verify [change]` → validate implementation against specs/tasks.
+- `/gentle-sdd-archive [change]` → close a completed change.
+- `/gentle-sdd-onboard` → guided end-to-end walkthrough.
 
 Meta-commands are handled by the orchestrator directly and do not appear in autocomplete:
 
-- `/sdd-new <change>` → run exploration then proposal.
-- `/sdd-continue [change]` → run the next dependency-ready phase.
-- `/sdd-ff <name>` → fast-forward proposal → specs → design → tasks.
+- `/gentle-sdd-new <change>` → run exploration then proposal.
+- `/gentle-sdd-continue [change]` → run the next dependency-ready phase.
+- `/gentle-sdd-ff <name>` → fast-forward proposal → specs → design → tasks.
 
 ### Native SDD Dispatcher Guard
 
@@ -40,7 +40,7 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, inv
 
 Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit `SDD Session Preflight` decision block.
 
-This applies to `/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
+This applies to `/gentle-sdd-new`, `/gentle-sdd-ff`, `/gentle-sdd-continue`, `/gentle-sdd-explore`, `/gentle-sdd-status`, `/gentle-sdd-apply`, `/gentle-sdd-verify`, `/gentle-sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
 
 Required preflight choices:
 
@@ -90,7 +90,7 @@ Hard gate rules:
 
 ### SDD Entry Routing (MANDATORY)
 
-For a new product/code change request that says to use SDD, start at preflight -> init guard -> explore/proposal (`/sdd-new` equivalent). Never launch `sdd-apply` just because the user asked to implement a feature.
+For a new product/code change request that says to use SDD, start at preflight -> init guard -> explore/proposal (`/gentle-sdd-new` equivalent). Never launch `sdd-apply` just because the user asked to implement a feature.
 
 Only launch `sdd-apply` when all are true:
 
@@ -98,7 +98,7 @@ Only launch `sdd-apply` when all are true:
 2. The active change has existing spec, design, and tasks artifacts.
 3. The user explicitly asked to apply/continue implementation, or the prior SDD planning phase completed and the orchestrator has passed the review workload guard.
 
-If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement.
+If any dependency is missing, STOP and propose `/gentle-sdd-new` or `/gentle-sdd-ff`; do not implement.
 
 ### SDD Init Guard (MANDATORY)
 

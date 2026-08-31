@@ -914,6 +914,15 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		applyNativeRuntimeRouting(&status)
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
+	if _, archived := artifactsByType["archive-report"]; archived {
+		// The archive phase wrote the archive report, so the change is closed.
+		// Discovery already skips it (#3008); naming it must not send an
+		// orchestrator back to archive (#3480). The same closure OpenSpec reports
+		// as "Active OpenSpec change not found".
+		status.Dependencies.Archive = DependencyAllDone
+		status.NextRecommended = "sdd-new"
+		status.BlockedReasons = append(status.BlockedReasons, fmt.Sprintf("Engram change %s is archived: sdd/%s/archive-report exists, so no phase remains. List the active changes with `gentle-ai sdd-status --cwd %s`.", changeName, changeName, pathquote.Quote(workspaceRoot)))
+	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction

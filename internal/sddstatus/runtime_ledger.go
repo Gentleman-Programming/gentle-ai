@@ -2793,12 +2793,6 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
-	if request.MaxAttempts == 0 {
-		request.MaxAttempts = DefaultRuntimeAttemptLimit
-	}
-	if request.MaxChangedLines == 0 {
-		request.MaxChangedLines = DefaultRuntimeChangedLines
-	}
 	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
 		return BeginAttemptRequest{}, fmt.Errorf("max_attempts must be within 1..%d", maximumRuntimeAttemptLimit)
 	}

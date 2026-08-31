@@ -107,14 +107,15 @@
         "command": {"type": "string", "pattern": "^gentle-ai review status(?: |$)"},
         "arguments": {
           "type": "array",
-          "minItems": 4,
-          "maxItems": 7,
+          "minItems": 5,
+          "maxItems": 8,
           "items": {
             "allOf": [{"$ref": "#/$defs/executable_transition_argument"}],
             "type": "object",
-            "properties": {"name": {"enum": ["contract", "next-transition", "lineage", "agent", "base-ref", "committed-only", "projection", "workspace-overlay"]}}
+            "properties": {"name": {"enum": ["contract", "next-transition", "lineage", "repository-context", "agent", "base-ref", "committed-only", "projection", "workspace-overlay"]}}
           },
           "allOf": [
+            {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "repository-context"}, "value": {"type": "string", "pattern": "^rctx[12]_[0-9a-f]{64}$"}}}, "minContains": 1, "maxContains": 1},
             {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "contract"}, "value": {"const": "gentle-ai.review-integration/v2"}}}, "minContains": 1, "maxContains": 1},
             {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "next-transition"}, "value": {"const": "true"}}}, "minContains": 1, "maxContains": 1},
             {"contains": {"type": "object", "required": ["name", "value", "token"], "properties": {"name": {"const": "lineage"}, "value": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}}}, "minContains": 1, "maxContains": 1}

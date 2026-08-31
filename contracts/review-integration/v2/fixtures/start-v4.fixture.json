@@ -99,7 +99,7 @@
     "reason_code": "review_status_required",
     "execute": {
       "operation": "review.status",
-      "command": "gentle-ai review status --contract=gentle-ai.review-integration/v2 --next-transition=true --lineage=review-start-fixture --projection=workspace",
+      "command": "gentle-ai review status --contract=gentle-ai.review-integration/v2 --next-transition=true --lineage=review-start-fixture --repository-context=rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --projection=workspace",
       "arguments": [
         {
           "name": "contract",
@@ -115,6 +115,11 @@
           "name": "lineage",
           "value": "review-start-fixture",
           "token": "--lineage=review-start-fixture"
+        },
+        {
+          "name": "repository-context",
+          "value": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "token": "--repository-context=rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
         {
           "name": "projection",

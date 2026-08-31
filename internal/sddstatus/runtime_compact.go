@@ -588,7 +588,8 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 			"--expected-revision <the revision that status prints> --request-id \"<unique-request-id>\" " +
 			"--reason \"<why-the-objective-is-being-reset>\" --actor \"<actor>\"`; turning receipt-driven " +
 			"review off does not clear this, because review governs delivery of a finished change, not " +
-			"whether a work unit may open"
+			"whether a work unit may open; a base merged into the branch during the attempt is charged " +
+			"to the attempt: merge before begin or after finish, or have a maintainer reset"
 	case CompactBlockActiveAttempt:
 		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
 		// / `settle --token <t>` forms are not complete commands -- each

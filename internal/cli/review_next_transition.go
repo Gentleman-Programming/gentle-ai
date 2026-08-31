@@ -212,7 +212,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 	bindingTarget := status.TargetIdentity
 	if status.Authority.State == reviewtransaction.StateValidating || status.Authority.State == reviewtransaction.StateCorrectionRequired ||
-		status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+		status.Authority.State == reviewtransaction.StateApproved && input.Acknowledgement != nil {
 		// Correction-plan capture is bound to the severe reviewer event's frozen
 		// candidate, never to a live correction candidate STATUS may be
 		// projecting. Targeted validation replaces this value with its own
@@ -224,7 +224,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	if status.Authority.CapturePhaseRevision != "" {
 		captureBinding.Revision = status.Authority.CapturePhaseRevision
 	}
-	if status.Authority.State == reviewtransaction.StateApproved && input.Contract == ReviewIntegrationContractV2 && input.Acknowledgement != nil {
+	// The pending acknowledgement is the lineage's own next step, not a v2
+	// feature (issue #3940): gating it on the contract sent every v1 caller to
+	// native_stop_required one step before the burn it was asked to perform.
+	if status.Authority.State == reviewtransaction.StateApproved && input.Acknowledgement != nil {
 		acknowledgement := *input.Acknowledgement
 		if acknowledgement.LineageID != binding.LineageID || acknowledgement.TargetIdentity != binding.TargetIdentity || acknowledgement.ExpectedRevision != binding.Revision {
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
@@ -636,11 +639,15 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 // consumer replays them without re-deriving any spelling. It deliberately
 // carries no --cwd token: a negotiated START payload publishes no filesystem
 // path, and the caller runs the command in the repository it already holds.
-func reviewStartStatusContinuation(state reviewtransaction.CompactState, revision string, runtime model.AgentID) *ReviewNextTransition {
+// It does carry the opaque repository context START published (issue #3932),
+// so a process cwd that does not hold this lineage fails closed instead of
+// silently preflighting a fresh target in whatever repository it found.
+func reviewStartStatusContinuation(state reviewtransaction.CompactState, revision string, runtime model.AgentID, repositoryContext string) *ReviewNextTransition {
 	arguments := []ReviewTransitionArgument{
 		{Name: "contract", Value: ReviewIntegrationContractV2},
 		{Name: "next-transition", Value: "true"},
 		{Name: "lineage", Value: state.LineageID},
+		{Name: "repository-context", Value: repositoryContext},
 	}
 	if runtime != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})

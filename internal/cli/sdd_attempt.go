@@ -114,12 +114,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			}
 		}
 		if !inheritsRescopeSelection {
-			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+			scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 			if scopeErr != nil {
 				return scopeErr
 			}
 			if scope.NeedsSelection {
-				return intendedUntrackedSelectionRequired(scope, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+				return intendedUntrackedSelectionRequired(scope, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 			}
 			intended = scope.Intended
 		}
@@ -131,7 +131,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	var settlementUntracked *[]string
 	settlementInventory := ""
 	if (operation == "finish" || operation == "settle") && declaredUntracked {
-		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, "gentle-ai review status --next-transition", "gentle-ai sdd-attempt "+operation)
+		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
 		if scopeErr != nil {
 			return scopeErr
 		}
@@ -561,7 +561,15 @@ func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int
 	if !ok {
 		return new(int)
 	}
-	return flags.Int(name, 0, definition.usage)
+	// Budgets default at the flag so an explicit zero reaches the range check (#1947).
+	value := 0
+	switch name {
+	case "max-attempts":
+		value = sddstatus.DefaultRuntimeAttemptLimit
+	case "max-changed-lines":
+		value = sddstatus.DefaultRuntimeChangedLines
+	}
+	return flags.Int(name, value, definition.usage)
 }
 
 func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sddAttemptRootList) {

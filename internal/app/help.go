@@ -26,7 +26,7 @@ COMMANDS
                Run bounded normal orchestration without exposing runtime history
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
-  review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
+  review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; the final capture closes and burns its review
   review capture-correction-plan --lineage <id> --target <id> --expected-revision <rev> --request-hash <hash> --correction-lines <n>
@@ -46,11 +46,11 @@ COMMANDS
   review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>]
                User-owned kill switch; off wins, no clone inherits an override,
                status never mutates, and re-enabling applies to future candidates only
-               'review start' asks once per clone before a review that would do work;
-               accepting the review records that answer, 'not now' applies to that candidate only
-               and persists nothing, turning reviews off for good needs a deliberate
-               'gentle-ai review mode disable', and a session without a terminal reviews
-               the change and says so instead of asking
+               'review start' asks per candidate before a review that would do work;
+               accepting covers that candidate only and nothing is granted for later candidates,
+               'not now' applies to that candidate only and persists nothing, turning reviews
+               off for good needs a deliberate 'gentle-ai review mode disable', and a session
+               without a terminal reviews the change and says so instead of asking
 
 COMPATIBILITY COMMANDS
   review-start --cwd <repo> --lineage <id> --policy-file <path>

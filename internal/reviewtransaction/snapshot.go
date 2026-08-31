@@ -694,6 +694,38 @@ func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) (
 	return paths, intendedUntrackedInventoryDigest(paths), nil
 }
 
+// intendedUntrackedInventoryCommand is the runnable STATUS that publishes the
+// canonical untracked inventory; the bare `--next-transition` form is refused
+// without a negotiated contract and runtime identity (issue #2895).
+const intendedUntrackedInventoryCommand = "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <runtime> --next-transition"
+
+// StillUntracked keeps the entries of a frozen intended-untracked declaration
+// that the index does not carry yet (issue #3759). A declared path committed
+// after the declaration froze is no longer untracked: the current-changes
+// target already covers it, so replaying it would only trip the
+// "already tracked" refusal in buildCurrentChanges.
+func (builder SnapshotBuilder) StillUntracked(ctx context.Context, declared []string) ([]string, error) {
+	remaining := []string{}
+	if len(declared) == 0 {
+		return remaining, nil
+	}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	trackedOutput, err := runGitInventory(ctx, root, "ls-files", "--cached", "-z", "--")
+	if err != nil {
+		return nil, err
+	}
+	tracked := nulSeparatedPathSet(trackedOutput)
+	for _, path := range declared {
+		if _, isTracked := tracked[path]; !isTracked {
+			remaining = append(remaining, path)
+		}
+	}
+	return remaining, nil
+}
+
 // ValidateIntendedUntrackedSelection proves paths remain eligible in STATUS's inventory.
 func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
 	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
@@ -701,7 +733,7 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 		return nil, err
 	}
 	if expectedDigest != digest {
-		return nil, errors.New("untracked inventory changed; rerun `gentle-ai review status --next-transition` before selecting paths")
+		return nil, errors.New("untracked inventory changed; rerun `" + intendedUntrackedInventoryCommand + "` before selecting paths")
 	}
 	selected, err = canonicalPaths(selected)
 	if err != nil {
@@ -713,7 +745,7 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 	}
 	for _, path := range selected {
 		if _, ok := eligible[path]; !ok {
-			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition`", path)
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `"+intendedUntrackedInventoryCommand+"`", path)
 		}
 	}
 	return selected, nil
@@ -938,7 +970,7 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) || live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
 		return Snapshot{}, errors.New("committed correction reconstruction does not match frozen authority") // refusal:by-design world-action: repository history must match the immutable authority before correction routing can continue
 	}
-	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
+	if _, err := admitCorrectionScope(live.Paths, state.GenesisPaths); err != nil {
 		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
 	}
 	intended := append([]string(nil), initial.IntendedUntracked...)

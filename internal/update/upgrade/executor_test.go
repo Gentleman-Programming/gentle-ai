@@ -12,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -1578,4 +1580,40 @@ func mockCmd(name string, args ...string) *exec.Cmd {
 		}
 	}
 	return exec.Command(name, args...)
+}
+
+// TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome pins #3219 for
+// the pre-upgrade snapshot: the managed OpenCode plugins live wherever the
+// adapter resolves the config directory, so the backup must snapshot them
+// there, and it must cover the current managed plugin set.
+func TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome(t *testing.T) {
+	homeDir := t.TempDir()
+	xdg := filepath.Join(homeDir, ".xdg")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("opencode adapter not found in registry")
+	}
+
+	paths := managedAgentBackupPaths(homeDir, adapter, log.Writer())
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+		if strings.HasPrefix(p, filepath.Join(homeDir, ".config", "opencode", "plugins")) {
+			t.Fatalf("backup path %q ignores XDG_CONFIG_HOME", p)
+		}
+	}
+	for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(model.AgentOpenCode)...) {
+		want := filepath.Join(xdg, "opencode", "plugins", name)
+		if _, ok := pathSet[want]; !ok {
+			t.Fatalf("backup paths miss managed plugin %q; got %v", want, paths)
+		}
+	}
 }

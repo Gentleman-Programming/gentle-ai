@@ -114,7 +114,7 @@ func runLegacyFacadeStartForTest(t *testing.T, args []string, stdout io.Writer) 
 	if *allowDuplicateAuthority && trimmedLineage == "" {
 		return errors.New("--allow-duplicate-authority requires --lineage")
 	}
-	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, trimmedLineage, *policySource, target, snapshot, assessment, assessment.ChangedLines, lenses)
+	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, trimmedLineage, *policySource, target, snapshot, assessment, assessment.ChangedLines, lenses, "")
 	if err != nil {
 		return fmt.Errorf("prepare compact atomic test fixture: %w", err)
 	}

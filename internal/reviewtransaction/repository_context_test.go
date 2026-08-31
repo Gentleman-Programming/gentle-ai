@@ -137,6 +137,95 @@ func TestRctx2HandleResolvesAgainstTheCallerRepositoryWithoutMutation(t *testing
 	}
 }
 
+func TestRctx2HandleResolvesFromARegisteredHostWorktreeWithoutMutation(t *testing.T) {
+	host, target, store, binding, handle := registeredRctx2HostFixture(t, "rctx2-registered-host")
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, repo := range []string{target, host} {
+		root, resolved, err := ResolveReviewRepositoryContextBindingFromHost(t.Context(), repo, handle, binding)
+		if err != nil || root != target || resolved != binding {
+			t.Fatalf("rctx2 host resolution from %q = root %q, binding %#v, error %v", repo, root, resolved, err)
+		}
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("registered-host rctx2 resolution mutated compact authority")
+	}
+}
+
+func TestRctx2HostResolverRefusesUnregisteredAndUnrelatedWorktreesWithoutMutation(t *testing.T) {
+	t.Run("unrelated clone", func(t *testing.T) {
+		host, _, store, binding, handle := registeredRctx2HostFixture(t, "rctx2-unrelated-host")
+		unrelated := filepath.Join(t.TempDir(), "unrelated-clone")
+		if err := runSnapshotGit(host, "clone", "--quiet", host, unrelated); err != nil {
+			t.Fatal(err)
+		}
+		assertRctx2HostResolutionRefusedWithoutMutation(t, unrelated, store, handle, binding)
+	})
+
+	t.Run("moved registered target", func(t *testing.T) {
+		host, target, store, binding, handle := registeredRctx2HostFixture(t, "rctx2-moved-host")
+		moved := target + "-moved"
+		if err := os.Rename(target, moved); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.Rename(moved, target); err != nil {
+				t.Errorf("restore moved worktree: %v", err)
+			}
+		})
+		assertRctx2HostResolutionRefusedWithoutMutation(t, host, store, handle, binding)
+	})
+}
+
+func registeredRctx2HostFixture(t *testing.T, lineage string) (string, string, CompactStore, ReviewRepositoryContextBinding, string) {
+	t.Helper()
+	host := initSnapshotRepo(t)
+	target := filepath.Join(t.TempDir(), "review-target")
+	if err := runSnapshotGit(host, "worktree", "add", "-q", "-b", lineage+"-target", target, "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runSnapshotGit(host, "worktree", "remove", "--force", target) })
+	record, _ := pristineReviewingFixture(t, target, lineage)
+	store, err := CompactAuthoritativeStore(t.Context(), target, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	}
+	handle, err := deriveReviewRepositoryContextV2Token(t.Context(), target, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, target, store, binding, handle
+}
+
+func assertRctx2HostResolutionRefusedWithoutMutation(t *testing.T, host string, store CompactStore, handle string, binding ReviewRepositoryContextBinding) {
+	t.Helper()
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, resolved, err := ResolveReviewRepositoryContextBindingFromHost(t.Context(), host, handle, binding)
+	if err == nil || root != "" || resolved != (ReviewRepositoryContextBinding{}) {
+		t.Fatalf("invalid host resolution = root %q, binding %#v, error %v", root, resolved, err)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("refused host resolution mutated compact authority")
+	}
+}
+
 func TestRctx2HandleRefusesTamperAndConfinementWithoutMutation(t *testing.T) {
 	fixture := newCompactReviewerCaptureFixture(t, "rctx2-refusals")
 	record, err := fixture.store.Load()

@@ -467,8 +467,27 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 		reviewModeLabel(result.Status.Global),
 		reviewModeLabel(result.Status.CloneLocal),
 	)
-	if err != nil || result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+	if err != nil {
 		return err
+	}
+	if result.Operation == "enable" && result.Scope == reviewModeScopeClone &&
+		result.Status.Effective == reviewtransaction.RDDModeOff && result.Status.Source == reviewtransaction.RDDModeSourceDefault {
+		// The clone-local override can only disable, so this enable cleared an
+		// opinion and turned nothing on: the global switch was never set and
+		// still decides (issue #3972). The outcome is by design and exits 0,
+		// but a status block that stops at "off" reads as if reviews were
+		// enabled, and the next START refuses with rdd_disabled again. The
+		// JSON envelope already carries the fact as source "default", so the
+		// sentence lives on the human surface only.
+		if _, err = fmt.Fprint(
+			stdout,
+			"  note:        a clone-local override can only disable, so this cleared the clone's off opinion and the global switch still decides; run `gentle-ai review mode enable --scope global` to turn receipt-driven development on\n",
+		); err != nil {
+			return err
+		}
+	}
+	if result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+		return nil
 	}
 	// The switch is machine state. A write that reached only this build has to
 	// say so on the surface the operator actually reads, or it reports a
