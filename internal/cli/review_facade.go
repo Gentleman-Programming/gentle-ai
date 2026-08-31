@@ -1307,7 +1307,14 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		}
 		intended = append(intended, scope.Intended...)
 	case currentChangesSuccessor && predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges:
-		intended = append(intended, predecessorRecord.State.InitialSnapshot.IntendedUntracked...)
+		// Issue #3759: a declared path committed since the predecessor froze
+		// is tracked now and already inside the current-changes target, so
+		// replaying it would only refuse as "already tracked".
+		remaining, inheritErr := builder.StillUntracked(context.Background(), predecessorRecord.State.InitialSnapshot.IntendedUntracked)
+		if inheritErr != nil {
+			return inheritErr
+		}
+		intended = append(intended, remaining...)
 	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
