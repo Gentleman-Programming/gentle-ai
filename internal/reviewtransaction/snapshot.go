@@ -1694,10 +1694,17 @@ type GitOutputLimitError struct {
 	Args   []string
 	Limit  int
 	Actual int
+	// Entries counts the NUL-terminated records the child produced, including
+	// those past the limit, so an inventory overflow names its path count.
+	Entries int
 }
 
 func (err *GitOutputLimitError) Error() string {
-	return fmt.Sprintf("git %s output exceeds deterministic %d-byte limit", strings.Join(err.Args, " "), err.Limit)
+	message := fmt.Sprintf("git %s output exceeds deterministic %d-byte limit", strings.Join(err.Args, " "), err.Limit)
+	if err.Entries > 0 {
+		message += fmt.Sprintf(" (%d NUL-terminated entries)", err.Entries)
+	}
+	return message
 }
 
 func (err *GitOutputLimitError) Unwrap() error { return ErrGitOutputLimit }
@@ -1736,7 +1743,12 @@ var gitProcessTreeStarter = startGitProcessTree
 
 const (
 	defaultGitOutputLimit = 8 << 20
-	defaultGitStderrLimit = 64 << 10
+	// defaultGitInventoryLimit bounds `git ls-files` inventories, whose size
+	// follows the tracked path count rather than a candidate's content: at
+	// roughly 190 bytes per path, 8 MiB refused ordinary repositories near
+	// 50k tracked paths (#3498). Consumers materialize the path set anyway.
+	defaultGitInventoryLimit = 64 << 20
+	defaultGitStderrLimit    = 64 << 10
 )
 
 func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
@@ -1748,7 +1760,7 @@ func runGitInventory(ctx context.Context, repo string, args ...string) ([]byte, 
 }
 
 func runGitInventoryWithEnv(ctx context.Context, repo string, extraEnv []string, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, nil, defaultGitOutputLimit, false, true, args...)
+	return runGitCaptured(ctx, repo, extraEnv, nil, defaultGitInventoryLimit, false, true, args...)
 }
 
 func runGitIsolated(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
@@ -1854,7 +1866,7 @@ func gitOutputOverflow(args []string, outputLimit int, stdout, stderr *boundedGi
 	var overflows []error
 	// Preserve stream order so errors.As deterministically finds stdout first.
 	if stdout.exceeded {
-		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total})
+		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total, Entries: stdout.entries})
 	}
 	if stderr.exceeded {
 		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: stderr.limit, Actual: stderr.total})
@@ -1882,12 +1894,16 @@ type boundedGitOutput struct {
 	// child is drained regardless -- and it is the only place the true size
 	// is ever visible, because nothing downstream retains the discarded tail.
 	total int
+	// entries counts NUL terminators the same way, so an overflowing
+	// inventory can still name how many paths it held.
+	entries int
 }
 
 func (output *boundedGitOutput) Write(payload []byte) (int, error) {
 	written := len(payload)
 	start := output.total
 	output.total += written
+	output.entries += bytes.Count(payload, []byte{0})
 	if output.total <= output.offset {
 		return written, nil
 	}
