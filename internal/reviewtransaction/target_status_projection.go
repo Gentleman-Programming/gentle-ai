@@ -303,7 +303,7 @@ func compactLiveTargetMatchesValidatedSnapshot(state CompactState, live Snapshot
 	return compactTargetProjectionsCompatible(initial.Kind, initial.Projection, live.Kind, live.Projection) &&
 		compactStartTargetKindsCompatible(initial.Kind, live.Kind) &&
 		initial.BaseTree == live.BaseTree && (!requireCurrentCandidate || state.CurrentSnapshot.CandidateTree == live.CandidateTree) &&
-		pathsAreSubset(live.Paths, state.CorrectionScopePaths()) == nil && sideBandMatches && len(live.LedgerIDs) == 0
+		!correctionScopeRefused(live.Paths, state.CorrectionScopePaths()) && sideBandMatches && len(live.LedgerIDs) == 0
 }
 
 func legacyLiveTargetMatchesValidatedSnapshot(transaction Transaction, live Snapshot) bool {

@@ -514,6 +514,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 				changed = changed || writeResult.Changed
 				files = append(files, path)
+
+				// Retire the unprefixed name a pre-#2644 install managed so an
+				// upgraded Claude Code never keeps both command names.
+				legacy := LegacyClaudeCommandPath(adapter.Agent(), commandsDir, entry.Name())
+				if legacy == "" {
+					continue
+				}
+				if err := os.Remove(legacy); err != nil {
+					if !os.IsNotExist(err) {
+						return InjectionResult{}, fmt.Errorf("remove retired Claude command %s: %w", legacy, err)
+					}
+				} else {
+					changed = true
+					files = append(files, legacy)
+				}
 			}
 		}
 	}

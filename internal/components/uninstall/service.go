@@ -752,6 +752,10 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				path := filepath.Join(commandsDir, entry.Name())
 				targets = append(targets, path)
 				ops = append(ops, removeFile(path))
+				if legacy := sdd.LegacyClaudeCommandPath(adapter.Agent(), commandsDir, entry.Name()); legacy != "" {
+					targets = append(targets, legacy)
+					ops = append(ops, removeFile(legacy))
+				}
 			}
 			ops = append(ops, removeDirIfEmpty(commandsDir))
 		}

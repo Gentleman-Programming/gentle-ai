@@ -226,17 +226,17 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/output-style-neutral.md",
 		"claude/persona-gentleman.md",
 		"claude/sdd-orchestrator.md",
-		"claude/commands/sdd-apply.md",
-		"claude/commands/sdd-archive.md",
-		"claude/commands/sdd-continue.md",
-		"claude/commands/sdd-explore.md",
-		"claude/commands/sdd-ff.md",
-		"claude/commands/sdd-init.md",
-		"claude/commands/sdd-new.md",
-		"claude/commands/sdd-onboard.md",
-		"claude/commands/sdd-research.md",
-		"claude/commands/sdd-status.md",
-		"claude/commands/sdd-verify.md",
+		"claude/commands/gentle-sdd-apply.md",
+		"claude/commands/gentle-sdd-archive.md",
+		"claude/commands/gentle-sdd-continue.md",
+		"claude/commands/gentle-sdd-explore.md",
+		"claude/commands/gentle-sdd-ff.md",
+		"claude/commands/gentle-sdd-init.md",
+		"claude/commands/gentle-sdd-new.md",
+		"claude/commands/gentle-sdd-onboard.md",
+		"claude/commands/gentle-sdd-research.md",
+		"claude/commands/gentle-sdd-status.md",
+		"claude/commands/gentle-sdd-verify.md",
 		"claude/agents/sdd-init.md",
 		"claude/agents/sdd-onboard.md",
 		"claude/agents/sdd-research.md",
@@ -516,7 +516,7 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 	const verifyRoute = "After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`."
 	for _, path := range []string{
-		"claude/commands/sdd-verify.md",
+		"claude/commands/gentle-sdd-verify.md",
 		"opencode/commands/sdd-verify.md",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -528,7 +528,7 @@ func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 
 	const archiveRoute = "Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`."
 	for _, path := range []string{
-		"claude/commands/sdd-archive.md",
+		"claude/commands/gentle-sdd-archive.md",
 		"opencode/commands/sdd-archive.md",
 		"skills/sdd-archive/SKILL.md",
 	} {
@@ -558,7 +558,7 @@ func TestSDDVerifyAdmissionPrecedesPersistence(t *testing.T) {
 	if count := strings.Count(MustRead("skills/sdd-verify/SKILL.md"), "sdd-verify-validate"); count < 2 {
 		t.Fatalf("both sdd-verify model sections require admission, got %d occurrences", count)
 	}
-	for _, path := range []string{"claude/agents/sdd-verify.md", "claude/commands/sdd-verify.md", "cursor/agents/sdd-verify.md", "kimi/agents/sdd-verify.md", "kiro/agents/sdd-verify.md"} {
+	for _, path := range []string{"claude/agents/sdd-verify.md", "claude/commands/gentle-sdd-verify.md", "cursor/agents/sdd-verify.md", "kimi/agents/sdd-verify.md", "kiro/agents/sdd-verify.md"} {
 		content := MustRead(path)
 		if skill, save := strings.Index(content, "sdd-verify/SKILL.md"), strings.LastIndex(content, "mem_save"); skill < 0 || save < 0 || skill > save {
 			t.Fatalf("%s must load the shared verify contract before persistence", path)
@@ -1144,7 +1144,7 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 		"### SDD Entry Routing (MANDATORY)",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"Only launch `sdd-apply` when all are true",
-		"If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement",
+		"If any dependency is missing, STOP and propose `/gentle-sdd-new` or `/gentle-sdd-ff`; do not implement",
 		"or `hybrid` when Engram is callable",
 		"Both -> `hybrid`",
 	} {
@@ -1240,7 +1240,7 @@ func TestSDDOrchestratorAssetsDefaultToAutomatic(t *testing.T) {
 func TestSDDFFCommandsHonorInteractiveMode(t *testing.T) {
 	for _, path := range []string{
 		"opencode/commands/sdd-ff.md",
-		"claude/commands/sdd-ff.md",
+		"claude/commands/gentle-sdd-ff.md",
 	} {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
@@ -2487,7 +2487,7 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"cursor/agents/sdd-archive.md",
 		"kiro/agents/sdd-archive.md",
 		"kimi/agents/sdd-archive.md",
-		"claude/commands/sdd-archive.md",
+		"claude/commands/gentle-sdd-archive.md",
 		"opencode/commands/sdd-archive.md",
 	} {
 		content := MustRead(path)

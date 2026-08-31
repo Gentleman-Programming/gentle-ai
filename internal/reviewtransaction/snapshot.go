@@ -970,7 +970,7 @@ func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo strin
 		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) || live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
 		return Snapshot{}, errors.New("committed correction reconstruction does not match frozen authority") // refusal:by-design world-action: repository history must match the immutable authority before correction routing can continue
 	}
-	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
+	if _, err := admitCorrectionScope(live.Paths, state.GenesisPaths); err != nil {
 		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
 	}
 	intended := append([]string(nil), initial.IntendedUntracked...)

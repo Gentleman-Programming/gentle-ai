@@ -8,7 +8,7 @@ import (
 // #2130: a workspace-scope install writes the lazy SDD workflow under the
 // workspace's .claude, so every pointer names that location first, then home.
 func TestClaudeWorkflowPointersNameWorkspaceAndHomeLocations(t *testing.T) {
-	for _, asset := range []string{"claude/commands/sdd-new.md", "claude/commands/sdd-continue.md", "claude/commands/sdd-ff.md", "claude/sdd-orchestrator.md"} {
+	for _, asset := range []string{"claude/commands/gentle-sdd-new.md", "claude/commands/gentle-sdd-continue.md", "claude/commands/gentle-sdd-ff.md", "claude/sdd-orchestrator.md"} {
 		content := MustRead(asset)
 		workspace := strings.Index(content, "`.claude/skills/_shared/sdd-orchestrator-workflow.md`")
 		home := strings.Index(content, "`~/.claude/skills/_shared/sdd-orchestrator-workflow.md`")
