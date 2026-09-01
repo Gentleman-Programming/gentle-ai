@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -1824,10 +1825,7 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
+	command := claudeSkillRegistryHookCommand(runtime.GOOS)
 
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
@@ -1836,6 +1834,26 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	}
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
+	}
+	if found, changed := reconcileClaudeSkillRegistryHook(hooksMap, command); found {
+		if !changed {
+			return false, nil
+		}
+		root["hooks"] = hooksMap
+		out, err := json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			return false, err
+		}
+		out = append(out, '\n')
+		previous, readErr := os.ReadFile(settingsPath)
+		wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+		if err != nil {
+			if readErr == nil {
+				_ = os.WriteFile(settingsPath, previous, 0o644)
+			}
+			return false, err
+		}
+		return wr.Changed, nil
 	}
 	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
 	userPromptSubmit, _ := promptRaw.([]any)
@@ -1864,6 +1882,72 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 	return wr.Changed, nil
+}
+
+const (
+	claudeSkillRegistryHookCommandPOSIX   = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	claudeSkillRegistryHookCommandWindows = `if ($env:CLAUDE_PROJECT_DIR) { $d = $env:CLAUDE_PROJECT_DIR } else { $d = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$d"; exit 0`
+)
+
+func claudeSkillRegistryHookCommand(goos string) string {
+	if goos == "windows" {
+		return claudeSkillRegistryHookCommandWindows
+	}
+	return claudeSkillRegistryHookCommandPOSIX
+}
+
+func reconcileClaudeSkillRegistryHook(hooksMap map[string]any, command string) (bool, bool) {
+	managed := map[string]bool{
+		claudeSkillRegistryHookCommandPOSIX:   true,
+		claudeSkillRegistryHookCommandWindows: true,
+	}
+	found := false
+	changed := false
+	kept := false
+	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+		hookEntries, ok := hooksMap[key].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range hookEntries {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			hooks, ok := itemMap["hooks"].([]any)
+			if !ok {
+				continue
+			}
+			reconciledHooks := hooks[:0]
+			for _, hook := range hooks {
+				hookMap, ok := hook.(map[string]any)
+				if !ok {
+					reconciledHooks = append(reconciledHooks, hook)
+					continue
+				}
+				existing, _ := hookMap["command"].(string)
+				if !managed[existing] {
+					reconciledHooks = append(reconciledHooks, hook)
+					continue
+				}
+				found = true
+				if !kept {
+					if existing != command {
+						hookMap["command"] = command
+						changed = true
+					}
+					reconciledHooks = append(reconciledHooks, hookMap)
+					kept = true
+					continue
+				}
+				changed = true
+			}
+			if len(reconciledHooks) != len(hooks) {
+				itemMap["hooks"] = reconciledHooks
+			}
+		}
+	}
+	return found, changed
 }
 
 func claudeHookExists(root map[string]any, command string) bool {

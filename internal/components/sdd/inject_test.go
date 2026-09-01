@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -6992,6 +6994,104 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 	}
 }
 
+func TestClaudeSkillRegistryHookCommandUsesPowerShellSafeWindowsSyntax(t *testing.T) {
+	windows := claudeSkillRegistryHookCommand("windows")
+	for _, forbidden := range []string{`${CLAUDE_PROJECT_DIR:-$PWD}`, `|| true`} {
+		if strings.Contains(windows, forbidden) {
+			t.Fatalf("Windows hook command contains PowerShell 5.1-incompatible syntax %q: %s", forbidden, windows)
+		}
+	}
+	for _, want := range []string{`$env:CLAUDE_PROJECT_DIR`, `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd`, `exit 0`} {
+		if !strings.Contains(windows, want) {
+			t.Fatalf("Windows hook command missing %q: %s", want, windows)
+		}
+	}
+
+	posix := claudeSkillRegistryHookCommand("linux")
+	if !strings.Contains(posix, `${CLAUDE_PROJECT_DIR:-$PWD}`) || !strings.Contains(posix, `|| true`) {
+		t.Fatalf("POSIX hook command lost existing fallback/error suppression syntax: %s", posix)
+	}
+}
+
+func TestReconcileClaudeSkillRegistryHookRemovesDuplicateManagedCommands(t *testing.T) {
+	hooksMap := map[string]any{
+		"UserPromptSubmit": []any{
+			map[string]any{"matcher": "", "hooks": []any{
+				map[string]any{"type": "command", "command": claudeSkillRegistryHookCommandWindows},
+				map[string]any{"type": "command", "command": claudeSkillRegistryHookCommandPOSIX},
+				map[string]any{"type": "command", "command": "echo keep"},
+			}},
+		},
+	}
+
+	found, changed := reconcileClaudeSkillRegistryHook(hooksMap, claudeSkillRegistryHookCommandWindows)
+	if !found || !changed {
+		t.Fatalf("reconcile found=%v changed=%v, want true true", found, changed)
+	}
+	entries := hooksMap["UserPromptSubmit"].([]any)
+	hooks := entries[0].(map[string]any)["hooks"].([]any)
+	commands := []string{}
+	for _, hook := range hooks {
+		commands = append(commands, hook.(map[string]any)["command"].(string))
+	}
+	if strings.Count(strings.Join(commands, "\n"), "gentle-ai skill-registry refresh") != 1 {
+		t.Fatalf("managed hook was not deduped: %#v", commands)
+	}
+	if !slices.Contains(commands, claudeSkillRegistryHookCommandWindows) || !slices.Contains(commands, "echo keep") {
+		t.Fatalf("reconcile commands = %#v", commands)
+	}
+}
+
+func TestEnsureClaudeSkillRegistryHookReplacesLegacyManagedCommand(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := fmt.Sprintf(`{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": %q}
+        ]
+      }
+    ]
+  }
+}`, claudeSkillRegistryHookCommandPOSIX)
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	if runtime.GOOS == "windows" && !changed {
+		t.Fatal("Windows migration changed = false, want true")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+		t.Fatalf("managed hook count mismatch after migration:\n%s", text)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("decode migrated settings: %v", err)
+	}
+	if !claudeHookExists(root, claudeSkillRegistryHookCommand(runtime.GOOS)) {
+		t.Fatalf("managed hook was not migrated to current command:\n%s", text)
+	}
+	if runtime.GOOS == "windows" && claudeHookExists(root, claudeSkillRegistryHookCommandPOSIX) {
+		t.Fatalf("legacy POSIX hook survived Windows migration:\n%s", text)
+	}
+}
+
 func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -7044,6 +7144,14 @@ func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
 	text := string(data)
 	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
 		t.Fatalf("hook command count mismatch:\n%s", text)
+	}
+	if runtime.GOOS == "windows" {
+		if strings.Contains(text, `|| true`) || strings.Contains(text, `${CLAUDE_PROJECT_DIR:-$PWD}`) {
+			t.Fatalf("Windows hook contains PowerShell 5.1-incompatible syntax:\n%s", text)
+		}
+		if !strings.Contains(text, `$env:CLAUDE_PROJECT_DIR`) {
+			t.Fatalf("Windows hook missing PowerShell environment fallback:\n%s", text)
+		}
 	}
 	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo existing") {
 		t.Fatalf("existing hooks not preserved:\n%s", text)
