@@ -10,10 +10,10 @@
   "properties": {
     "schema": {"const": "gentle-ai.review-integration.capabilities/v2.4"},
     "contract": {"$ref": "capabilities-v2.3.schema.json#/properties/contract"},
-    "protocol": {"allOf": [
-      {"$ref": "capabilities-v2.3.schema.json#/properties/protocol"},
-      {"properties": {"minor": {"const": 4}}}
-    ]},
+    "protocol": {
+      "type": "object", "additionalProperties": false, "required": ["major", "minor"],
+      "properties": {"major": {"const": 2}, "minor": {"const": 4}}
+    },
     "package": {"$ref": "capabilities-v2.3.schema.json#/properties/package"},
     "build": {"$ref": "capabilities-v2.3.schema.json#/properties/build"},
     "executable": {"$ref": "capabilities-v2.3.schema.json#/properties/executable"},

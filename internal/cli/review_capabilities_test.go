@@ -131,6 +131,7 @@ func TestReviewCapabilitiesV24AdvertisementIsCurrent(t *testing.T) {
 		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) {
 		t.Fatalf("current v2 capabilities advertisement = %#v", got)
 	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.4.schema.json", ReviewIntegrationCapabilitiesSchemaIDV24, output.Bytes())
 }
 
 func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
@@ -176,6 +177,10 @@ func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []b
 	if err != nil {
 		t.Fatal(err)
 	}
+	v23, err := os.ReadFile(filepath.Join(root, "v2", "schemas", "capabilities-v2.3.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	capabilities, err := os.ReadFile(filepath.Join(root, "v2", "schemas", name))
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +188,7 @@ func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []b
 	compiler := jsonschema.NewCompiler()
 	for uri, payload := range map[string][]byte{
 		"https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json": v14,
+		"https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.3.schema.json": v23,
 		id: capabilities,
 	} {
 		var document any
