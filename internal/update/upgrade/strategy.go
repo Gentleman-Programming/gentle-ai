@@ -52,6 +52,11 @@ var (
 // server or CDN could still serve a malicious script within this size limit.
 const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 
+type strategyOutcome struct {
+	exitRequested   bool
+	observedVersion string
+}
+
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
 // for the given platform profile.
 //
@@ -65,7 +70,7 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
 		var err error
@@ -87,7 +92,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	case update.InstallBrew:
 		return false, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
-		return false, goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
+		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
@@ -101,7 +106,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		}
 		return false, scriptUpgrade(ctx, r, profile)
 	case update.InstallOpenCodePlugin:
-		return false, opencodePluginUpgrade(ctx, r)
+		_, err := opencodePluginUpgrade(ctx, r)
+		return false, err
 	default:
 		return false, &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
@@ -110,43 +116,56 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	}
 }
 
-func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
+func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
+	if effectiveMethod(r.Tool, profile) == update.InstallOpenCodePlugin {
+		observedVersion, err := opencodePluginUpgrade(ctx, r)
+		return strategyOutcome{observedVersion: observedVersion}, err
+	}
+	exitRequested, err := runStrategy(ctx, r, profile, preflightDestination...)
+	return strategyOutcome{exitRequested: exitRequested}, err
+}
+
+func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, error) {
 	pkg := strings.TrimSpace(r.Tool.NpmPackage)
 	if pkg == "" {
-		return &ManualFallbackError{Hint: openCodePluginManualHint(r)}
+		return "", &ManualFallbackError{Hint: openCodePluginManualHint(r)}
 	}
 
 	homeDir, err := openCodeHomeDir()
 	if err != nil || strings.TrimSpace(homeDir) == "" {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s Could not resolve the user home directory; update %s manually.", openCodePluginManualHint(r), pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s Could not resolve the user home directory; update %s manually.", openCodePluginManualHint(r), pkg)}
 	}
 
 	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
 	info, err := os.Stat(opencodeDir)
 	if err != nil || !info.IsDir() {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
 	}
 
 	materialized, registered, err := openCodePluginRegisteredOrMaterialized(opencodeDir, pkg)
 	if err != nil {
-		return fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
+		return "", fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
 	}
 	if !materialized && !registered && r.Status != update.RegisteredNotMaterialized {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
 	}
 
 	pm, err := selectOpenCodePackageManager(opencodeDir)
 	if err != nil {
-		return &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s can be upgraded from %s, but no supported package manager is available in PATH. Install bun or npm, then run update tools again.", pkg, opencodeDir)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s can be upgraded from %s, but no supported package manager is available in PATH. Install bun or npm, then run update tools again.", pkg, opencodeDir)}
 	}
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return "", ctx.Err()
 	default:
 	}
 
-	targets := []string{pkg + "@latest", "@opencode-ai/plugin@latest"}
+	expectedVersion := strings.TrimSpace(r.LatestVersion)
+	if expectedVersion == "" {
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s upgrade cannot be pinned because the expected version is empty; rerun the update check and try again.", pkg)}
+	}
+	targets := []string{pkg + "@" + expectedVersion, "@opencode-ai/plugin@latest"}
 	var cmd *exec.Cmd
 	switch pm {
 	case "bun":
@@ -154,7 +173,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 	case "npm":
 		cmd = execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund"}, targets...)...)
 	default:
-		return &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
 	}
 	cmd.Dir = opencodeDir
 	cmd.Stdin = nil
@@ -164,7 +183,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 		if pm == "npm" && npmErrorCode(outStr) == "ERESOLVE" {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return "", ctx.Err()
 			default:
 			}
 			fmt.Fprintln(os.Stderr, "WARNING: npm reported an ERESOLVE peer dependency conflict; retrying with --legacy-peer-deps")
@@ -173,16 +192,59 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 			retryCmd.Stdin = nil
 			retryCmd.Env = openCodePluginUpgradeEnv(retryCmd.Env)
 			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
-				return fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
+				return "", fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
 			}
 		} else {
-			return fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
+			return "", fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
 		}
 	}
 	if err := clearOpenCodePluginPackageCache(homeDir, pkg); err != nil {
-		return fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
+		return "", fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
 	}
-	return nil
+
+	observedVersion, err := inspectOpenCodePluginVersion(opencodeDir, pkg)
+	if err != nil || observedVersion != expectedVersion {
+		// A successful package-manager command crosses the mutation boundary. A
+		// failed materialization check is therefore a real failed postcondition,
+		// not a no-op manual fallback.
+		return "", fmt.Errorf("OpenCode plugin %s materialization failed after %s mutation: %s", pkg, pm, openCodePluginVerificationHint(r, pkg, opencodeDir, observedVersion, err))
+	}
+	return observedVersion, nil
+}
+
+func inspectOpenCodePluginVersion(opencodeDir, pkg string) (string, error) {
+	manifestPath := filepath.Join(opencodeDir, "node_modules", pkg, "package.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("installed manifest is absent at %s", manifestPath)
+		}
+		return "", fmt.Errorf("installed manifest could not be read at %s: %w", manifestPath, err)
+	}
+
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", fmt.Errorf("installed manifest is invalid at %s: %w", manifestPath, err)
+	}
+	version := strings.TrimSpace(manifest.Version)
+	if version == "" {
+		return "", fmt.Errorf("installed manifest is invalid at %s: version is missing", manifestPath)
+	}
+	return version, nil
+}
+
+func openCodePluginVerificationHint(r update.UpdateResult, pkg, opencodeDir, observedVersion string, verificationErr error) string {
+	observed := strings.TrimSpace(observedVersion)
+	if observed == "" {
+		observed = "absent or invalid"
+	}
+	detail := ""
+	if verificationErr != nil {
+		detail = fmt.Sprintf(" (%s)", verificationErr)
+	}
+	return fmt.Sprintf("OpenCode plugin %s upgrade was not verified: expected version %q but observed %q%s. No automatic rollback is available for package-manager state; package metadata, lockfiles, or node_modules may have changed. Inspect %s/node_modules/%s/package.json and the package-manager files in %s, restore or correct them, then rerun the upgrade.", pkg, strings.TrimSpace(r.LatestVersion), observed, detail, opencodeDir, pkg, opencodeDir)
 }
 
 func npmErrorCode(output string) string {
@@ -460,13 +522,13 @@ func homebrewFailureAdvice(toolName string, output string, detected ...update.Ho
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.
 //
-// `go install` writes to GOBIN (or GOPATH/bin), which is not necessarily the
-// directory the user's shell resolves for the tool. After a successful install
-// the destination is compared against the effective binary so a silent no-op
-// upgrade cannot pass as a clean success. A mismatch, or a destination that
-// cannot be resolved, is reported as a warning — never as a failure, because
-// the new binary genuinely was written.
-func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string) error {
+// Generic Go-managed tools retain the post-install warning because the new
+// binary was genuinely written. Windows gentle-ai self-upgrades are different:
+// they must prove that Go owns the active executable before writing, or skip to
+// a manual recovery instead of creating a second PATH-visible binary.
+func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination string) error {
+	tool := r.Tool
+	latestVersion := r.LatestVersion
 	if tool.GoImportPath == "" {
 		return fmt.Errorf("upgrade %q: GoImportPath is empty — cannot run go install", tool.Name)
 	}
@@ -474,18 +536,94 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	// GOBIN/GOPATH are static Go configuration that `go install` does not
 	// change, so they are read up front; the PATH lookup happens afterwards so
 	// a first-time install resolves correctly.
-	destDir, destErr := goInstallDestinationDir()
+	destDir := preflightDestination
+	var destErr error
+	if destDir == "" {
+		destDir, destErr = goInstallDestinationDir()
+		if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+			return err
+		}
+	}
 
-	// Pin to the exact release version.
+	// Pin release installs to their exact version. Beta checks advertise
+	// main@<sha>, which Go installs by resolving the main branch, not by
+	// prepending a v to that display value.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
+	betaGentleAI := isBetaGentleAIUpgrade(r)
+	if betaGentleAI {
+		target = tool.GoImportPath + "@main"
+	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
+	if betaGentleAI {
+		cmd.Env = goProxyBypassEnv(cmd.Env, gentleAIModulePath(tool))
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
 	}
 
 	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
+}
+
+func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) (string, error) {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return "", nil
+	}
+	destDir, destErr := goInstallDestinationDir()
+	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+		return "", err
+	}
+	return destDir, nil
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func preflightWindowsGentleAIGoInstallWithDestination(r update.UpdateResult, profile system.PlatformProfile, destDir string, destErr error) error {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return nil
+	}
+	if destErr != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, "", "")}
+	}
+
+	destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(r.Tool.Name, profile.OS)))
+	active, err := lookPathFn(r.Tool.Name)
+	if err != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, "")}
+	}
+	active = absoluteBinaryPath(active)
+	if !sameBinaryPathForOS(destination, active, profile.OS) {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, active)}
+	}
+	return nil
+}
+
+func gentleAIWindowsGoInstallProvenanceHint(r update.UpdateResult, destination, active string) string {
+	details := "could not determine the Go installation destination"
+	switch {
+	case destination != "" && active == "":
+		details = fmt.Sprintf("could not resolve the active gentle-ai executable before Go would write to %s", destination)
+	case destination != "" && active != "":
+		details = fmt.Sprintf("resolves gentle-ai to %s, but Go would write to %s", active, destination)
+	}
+
+	hint := fmt.Sprintf("Windows self-upgrade %s. No files were changed. ", details)
+	if active != "" {
+		hint += fmt.Sprintf("Keep %s as the active installation, or intentionally migrate to %s with:\n  ", active, destination)
+	} else {
+		hint += "Confirm the active installation, then intentionally migrate with:\n  "
+	}
+	hint += update.GentleAISourceInstallCommand(r.LatestVersion)
+	if destination != "" {
+		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for gentle-ai on PATH.", destination)
+	}
+	return hint
 }
 
 func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
@@ -500,15 +638,7 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 // same risk of writing somewhere the shell does not resolve, so it performs the
 // same non-fatal destination verification.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
-	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if repository == "github.com//" {
-		repository = "github.com/gentleman-programming/gentle-ai"
-	}
-	// Go derives the module path from the repository plus the major-version
-	// suffix: for major 2 and above the module path must end in /vN or the
-	// toolchain refuses every resolution of that repository, including the
-	// branch pseudo-versions this beta path installs.
-	module := repository + "/v2"
+	module := gentleAIModulePath(tool)
 
 	destDir, destErr := goInstallDestinationDir()
 
@@ -522,6 +652,18 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 
 	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
+}
+
+func gentleAIModulePath(tool update.ToolInfo) string {
+	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
+	if repository == "github.com//" {
+		repository = "github.com/gentleman-programming/gentle-ai"
+	}
+	// Go derives the module path from the repository plus the major-version
+	// suffix: for major 2 and above the module path must end in /vN or the
+	// toolchain refuses every resolution of that repository, including the
+	// branch pseudo-versions this beta path installs.
+	return repository + "/v2"
 }
 
 func goProxyBypassEnv(base []string, module string) []string {
@@ -784,16 +926,28 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Clone the full repository at the target release tag so the install.sh
+	// Fetch and check out the exact release tag so the install.sh
 	// executed here matches the version the user is upgrading TO, not whatever
-	// is on main at the moment of the upgrade. This prevents a race where a
-	// commit lands on main between the release and the user's upgrade run.
-	targetTag := "v" + r.LatestVersion
+	// is on main at the moment of the upgrade or a homonymous branch ref.
+	targetTagRef := "refs/tags/v" + r.LatestVersion
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", r.Tool.Owner, r.Tool.Repo)
-	cloneCmd := execCommand("git", "clone", "--depth=1", "--branch", targetTag, repoURL, tmpDir)
-	cloneCmd.Stdin = nil
-	if out, err := cloneCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
+
+	initCmd := execCommand("git", "init", tmpDir)
+	initCmd.Stdin = nil
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git init %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
+	}
+
+	fetchCmd := execCommand("git", "-C", tmpDir, "fetch", "--depth=1", repoURL, targetTagRef+":"+targetTagRef)
+	fetchCmd.Stdin = nil
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
+	}
+
+	checkoutCmd := execCommand("git", "-C", tmpDir, "checkout", "-f", targetTagRef)
+	checkoutCmd.Stdin = nil
+	if out, err := checkoutCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git checkout %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
 	}
 
 	// Execute install.sh from within the cloned repo (non-interactive).

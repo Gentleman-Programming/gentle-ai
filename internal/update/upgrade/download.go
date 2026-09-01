@@ -20,6 +20,7 @@ import (
 
 	minisign "github.com/jedisct1/go-minisign"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
@@ -30,6 +31,11 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 // lookPathFn resolves the binary path. Package-level var for testability.
 var lookPathFn = exec.LookPath
+
+// renameFn publishes the staged binary. Package-level var so tests can simulate
+// a rename that reports success without taking effect, which is what the TUI
+// reported as an applied upgrade over an unchanged binary (#2319).
+var renameFn = os.Rename
 
 // URL builders are package variables so tests can route release traffic to an
 // isolated server without weakening the production URL contract.
@@ -217,31 +223,19 @@ func downloadToFile(ctx context.Context, url string, outPath string, maxBytes in
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return "", fmt.Errorf("create dir: %w", err)
 	}
-	f, err := os.Create(outPath)
-	if err != nil {
-		return "", fmt.Errorf("create %s: %w", outPath, err)
-	}
-	completed := false
-	defer func() {
-		if closeErr := f.Close(); err == nil && closeErr != nil {
-			err = fmt.Errorf("close %s: %w", outPath, closeErr)
-		}
-		if !completed || err != nil {
-			_ = os.Remove(outPath)
-		}
-	}()
 
-	h := sha256.New()
-	written, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxBytes+1))
+	// The digest is read back from outPath rather than accumulated from the
+	// response body: a stream digest verifies its own copy and cannot detect a
+	// destination that ended up holding something else (#1998).
+	result, err := filemerge.WriteStreamAtomic(outPath, io.LimitReader(resp.Body, maxBytes+1), 0o644)
 	if err != nil {
 		return "", fmt.Errorf("write %s: %w", outPath, err)
 	}
-	if written > maxBytes {
+	if result.Bytes > maxBytes {
+		_ = os.Remove(outPath)
 		return "", fmt.Errorf("release archive exceeds %d-byte limit", maxBytes)
 	}
-
-	completed = true
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return result.Digest, nil
 }
 
 // fetchChecksums downloads checksums.txt from url and returns its content.
@@ -387,31 +381,53 @@ func extractBinaryFromTarGz(r io.Reader, binaryName string, outPath string) erro
 	return nil
 }
 
-// writeExecutable writes the content from r to outPath with executable permissions.
+// writeExecutable writes the content from r to outPath with executable
+// permissions, staging it beside the destination and synchronizing it before
+// publication so a crash cannot leave the new name over incomplete content
+// (#2216). A failed extraction leaves whatever was at outPath untouched.
 func writeExecutable(r io.Reader, outPath string) error {
+	// Create the parent at 0755 explicitly: the writer's own parent creation is
+	// tuned for private config files, and an install directory on PATH is not one.
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
-
-	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, r); err != nil {
+	if _, err := filemerge.WriteStreamAtomic(outPath, r, 0o755); err != nil {
 		return fmt.Errorf("write %s: %w", outPath, err)
 	}
-
 	return nil
 }
 
-// atomicReplace moves src to dst atomically using os.Rename.
-// This is safe on Unix (same-filesystem rename) but NOT safe on Windows
-// when the binary is running. The caller must guard against Windows before calling.
+// atomicReplace moves src over dst and confirms the replacement by reading dst
+// back.
+//
+// The read-back is the point. A rename that returns nil has not necessarily
+// taken effect. On Windows a hold by antivirus, the indexer, or the running
+// image turns the swap into a silent no-op, and reporting the attempt as the
+// outcome is how an upgrade was announced as applied over an unchanged binary
+// (#2319). This is safe on Unix (same-filesystem rename); the caller must guard
+// against Windows before calling.
 func atomicReplace(src, dst string) error {
-	if err := os.Rename(src, dst); err != nil {
+	stagedDigest, stagedBytes, err := filemerge.FileDigest(src)
+	if err != nil {
+		return fmt.Errorf("read staged binary %s: %w", src, err)
+	}
+
+	if err := renameFn(src, dst); err != nil {
 		return fmt.Errorf("rename %s -> %s: %w", src, dst, err)
+	}
+
+	installedDigest, installedBytes, err := filemerge.FileDigest(dst)
+	if err != nil {
+		return fmt.Errorf("read back %s after replacement: %w", dst, err)
+	}
+	if installedBytes != stagedBytes || installedDigest != stagedDigest {
+		return fmt.Errorf(
+			"replace %s: the binary was not replaced. It holds %d bytes (%s); the staged binary was %d bytes (%s)",
+			dst, installedBytes, installedDigest, stagedBytes, stagedDigest)
+	}
+
+	if err := filemerge.SyncDir(filepath.Dir(dst)); err != nil {
+		return fmt.Errorf("sync install directory for %s: %w", dst, err)
 	}
 	return nil
 }

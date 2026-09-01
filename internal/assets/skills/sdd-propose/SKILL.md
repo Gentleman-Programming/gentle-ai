@@ -10,15 +10,12 @@ metadata:
   delegate_only: true
 ---
 
-> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are
-> the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Delegate to
-> the dedicated `sdd-propose` sub-agent using your platform's delegation primitive
-> (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
-> only.
+## Execution Role
 
-## Executor Override
+Confirm your role before acting. You are the dedicated `sdd-propose` sub-agent unless you loaded this skill directly through the `skill()` tool.
 
-If you ARE the `sdd-propose` sub-agent (NOT the orchestrator), the gate above does NOT apply to you. Continue with the phase work below. Do NOT delegate. Do NOT call the Skill tool. You are the executor — execute.
+- If you are the `sdd-propose` sub-agent, continue with the phase work below. Do not delegate. Do not call the Skill tool.
+- If you loaded this skill through the `skill()` tool, you are the orchestrator. Stop here and delegate to the dedicated `sdd-propose` sub-agent using your platform's delegation primitive (for example, `task(...)` or a sub-agent invocation).
 
 
 ## Language Domain Contract
@@ -37,7 +34,7 @@ You are a sub-agent responsible for creating PROPOSALS. You take the exploration
 
 From the orchestrator:
 - Change name (e.g., "add-dark-mode")
-- Exploration analysis (from sdd-explore) OR direct user description
+- Confirmed pre-proposal handoff with state revision, confirmed decisions, and optional exploration/research references
 - Artifact store mode (`engram | openspec | hybrid | none`)
 
 ## Execution and Persistence Contract
@@ -51,22 +48,6 @@ From the orchestrator:
 - Never force `openspec/` creation unless user requested file-based persistence or mode is `hybrid`.
 
 ## What to Do
-
-### Step 0: Shape the Proposal in Interactive Mode
-
-- In interactive SDD mode, do not make the executor decide silently whether the proposal is "clear enough". Offer the user a proposal question round before finalizing the proposal: explain that the questions are meant to improve the PRD/proposal by uncovering business rules, implications, impact, edge cases, and product tradeoffs. Let the user answer, skip, correct the framing, or ask for a second question round.
-- Proposal-shaping questions should uncover business/product/PRD understanding, not harness mechanics. Cover the smallest useful subset of:
-  1. business problem: what pain, opportunity, user confusion, or operational cost makes this change worth doing now;
-  2. target users and situations: who is affected, in which workflow, at what moment, and with what level of urgency;
-  3. business rules: policies, permissions, thresholds, lifecycle rules, compliance/security expectations, or domain invariants the proposal must respect;
-  4. product outcome: what should feel, work, or become possible after the change;
-  5. current-state gap: what is wrong, inconsistent, missing, ad hoc, or hard to explain today;
-  6. implications and impact: which teams, workflows, data, UX expectations, support burden, or operational processes may be affected;
-  7. edge cases: empty states, partial data, failures, permissions, slow paths, unusual customers, migration states, or conflicting user needs;
-  8. decision gaps: which product unknowns would make the proposal ambiguous, risky, or easy to overbuild;
-  9. scope boundaries and non-goals: what belongs in the first product slice, what is later refinement, and what must stay unchanged even if related;
-  10. business risk or tradeoff: what downside matters most if the proposal chooses the wrong direction.
-- Prefer 3–5 concrete product questions per round. After the first answers, summarize the resulting proposal assumptions and ask whether the user wants to correct anything or run a second question round. Do not ask about test commands, PR shape, changed-line budget, or other harness decisions unless the user explicitly asks to discuss delivery. If blocked from asking directly, write a `## Proposal question round` section in the proposal result with the proposed questions and assumptions needing user review.
 
 ### Step 1: Load Skills
 Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
@@ -118,7 +99,7 @@ Be specific about the user need or technical debt being addressed.}
 > Research `openspec/specs/` before filling this in.
 
 ### New Capabilities
-<!-- Capabilities being introduced. Each becomes a new `openspec/specs/<name>/spec.md`.
+<!-- Capabilities being introduced. Each gets a full spec at `openspec/changes/{change-name}/specs/<name>/spec.md` during the spec phase and becomes `openspec/specs/<name>/spec.md` at archive.
      Use kebab-case names (e.g., user-auth, data-export, api-rate-limiting).
      Leave empty if no new capabilities. -->
 - `<capability-name>`: <brief description of what this capability covers>
@@ -196,10 +177,11 @@ Ready for specs (sdd-spec) or design (sdd-design).
 - Keep the proposal CONCISE - it's a thinking tool, not a novel
 - Every proposal MUST have a rollback plan
 - Every proposal MUST have success criteria
+- Require the confirmed pre-proposal handoff. The proposer MUST NOT interview, infer consent, or repair pending decisions; return `blocked` instead.
 - Use concrete file paths in "Affected Areas" when possible
 - Apply any `rules.proposal` from `openspec/config.yaml`
 - **ALWAYS fill in the Capabilities section** — this is the contract with sdd-spec. Research `openspec/specs/` first to use correct existing capability names.
-- New Capabilities → each will become `openspec/specs/<name>/spec.md` (new full spec)
+- New Capabilities → each gets a full spec at `openspec/changes/{change-name}/specs/<name>/spec.md` during the spec phase and becomes `openspec/specs/<name>/spec.md` at archive
 - Modified Capabilities → each will become a delta spec in the change folder
 - If nothing changes at the spec level (pure refactor, config change), explicitly write "None" under both sub-sections — don't leave them as template placeholders
 - **Size budget**: Proposal artifact MUST be under 450 words. Use bullet points and tables over prose. Headers organize, not explain.

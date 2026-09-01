@@ -3,7 +3,9 @@ package assets
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -47,6 +49,10 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
+		// The sharded Windows full suite is deliberately NOT here: it lives in
+		// its own workflow while the pre-existing Windows failures it exposed
+		// are paid down, so it is not one of ci.yml's required checks and owes
+		// no fail-closed contract to a go-format job in another file.
 		{id: "windows-runtime", next: "darwin-runtime"},
 		// darwin-runtime is a required check like its siblings, so it owes the
 		// same fail-closed contract. Listing it here is also what keeps the
@@ -94,6 +100,14 @@ func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
 	install := "npm install --global opencode-ai@" + versions.OpenCode
 	if strings.Count(string(data), install) != 1 {
 		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
+	}
+	for _, required := range []string{
+		"TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport",
+		`GENTLE_AI_OPENCODE_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}`,
+	} {
+		if !strings.Contains(string(data), required) {
+			t.Fatalf("organic runtime E2E is missing live OpenCode provider isolation guard %q", required)
+		}
 	}
 }
 
@@ -208,5 +222,129 @@ func TestFormatterOrderingBehaviorContract(t *testing.T) {
 				t.Fatalf("mutation passed: receipt=%t commits=%d", fixture.receipt, fixture.commits)
 			}
 		})
+	}
+}
+
+// TestWindowsFullSuiteShardsCoverEveryTestName proves the sharded Windows lane
+// still runs every test. Sharding trades one long job for several short ones,
+// and its failure mode is silent: a selector edited to stop matching some tests
+// skips them while every shard, and the lane, still reports green.
+//
+// The shards used to be letter ranges tiling A-Z, checked by range algebra.
+// That was cheap to verify but impossible to balance: Go test names cluster by
+// prefix and so does their cost, so one letter (TestReview*, 423 of the 649
+// TestR* tests in internal/cli) can own more work than a whole shard's budget.
+// Selectors are therefore arbitrary -run regexes now, and coverage is proved
+// against the package's real `go test -list` inventory instead: every test that
+// exists must be claimed by exactly one shard. That is strictly stronger than
+// the range check -- it catches an uncovered name even when the ranges look
+// contiguous -- and it leaves the split free to follow measured cost.
+func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "windows-full-suite.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(data), "  windows-full-suite:")
+	if start < 0 {
+		t.Fatal("missing windows-full-suite job")
+	}
+	section := string(data)[start:]
+	// Stop at the step list: steps carry their own `run:` keys, and a shell
+	// command is not a shard selector.
+	if end := strings.Index(section, "\n    steps:"); end >= 0 {
+		section = section[:end]
+	}
+
+	// Selectors are read straight out of the matrix, so this cannot drift from
+	// what actually runs the way a copy of the list would.
+	type shard struct {
+		name     string
+		pkg      string
+		selector string
+		matcher  *regexp.Regexp
+	}
+	var shards []shard
+	var name string
+	var pkg string
+	for _, line := range strings.Split(section, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(trimmed, "- name: "); ok {
+			name = strings.Trim(value, `"`)
+		}
+		if value, ok := strings.CutPrefix(trimmed, "packages: "); ok {
+			pkg = strings.Trim(value, `"`)
+		}
+		value, ok := strings.CutPrefix(trimmed, "run: ")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(value, `"`)
+		if value == "" {
+			// The `rest` shard selects by package, not by name.
+			continue
+		}
+		matcher, err := regexp.Compile(value)
+		if err != nil {
+			t.Fatalf("shard %q selector %q does not compile as a -run regex: %v", name, value, err)
+		}
+		shards = append(shards, shard{name: name, pkg: pkg, selector: value, matcher: matcher})
+	}
+	if len(shards) == 0 {
+		t.Fatal("no name-selecting shards found; the guard would pass vacuously")
+	}
+
+	if strings.Contains(string(data), "reviewtransaction-a-k") {
+		t.Fatal("former reviewtransaction-a-k aggregate is still present")
+	}
+
+	byPackage := map[string][]shard{}
+	for _, s := range shards {
+		if s.pkg == "" {
+			t.Fatalf("shard %q selects tests by name but names no package", s.name)
+		}
+		byPackage[s.pkg] = append(byPackage[s.pkg], s)
+	}
+
+	for pkg, packageShards := range byPackage {
+		// Ask go test for the current top-level inventory instead of
+		// maintaining a second list that would rot.
+		command := exec.Command("go", "test", pkg, "-list", "^Test")
+		command.Dir = filepath.Join("..", "..")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("list %s tests: %v\n%s", pkg, err, output)
+		}
+		inventory := 0
+		claimed := map[string]int{}
+		for _, testName := range strings.Split(string(output), "\n") {
+			testName = strings.TrimSpace(testName)
+			if !strings.HasPrefix(testName, "Test") {
+				continue
+			}
+			inventory++
+			var owners []string
+			for _, s := range packageShards {
+				// -run splits on "/" for subtests; these selectors address
+				// top-level names only, so a plain match is the same rule.
+				if s.matcher.MatchString(testName) {
+					owners = append(owners, s.name)
+				}
+			}
+			if len(owners) != 1 {
+				t.Fatalf("%s test %q is claimed by %d shards (%v), want exactly one", pkg, testName, len(owners), owners)
+			}
+			claimed[owners[0]]++
+		}
+		if inventory == 0 {
+			t.Fatalf("%s test inventory is empty; coverage guard would pass vacuously", pkg)
+		}
+		// A shard that matches nothing is the same silent hole seen from the
+		// other side, and the lane's own runtime guard throws on it. Catch it
+		// here instead of one push later.
+		for _, s := range packageShards {
+			if claimed[s.name] == 0 {
+				t.Fatalf("%s shard %q selector %q matches no test", pkg, s.name, s.selector)
+			}
+		}
 	}
 }

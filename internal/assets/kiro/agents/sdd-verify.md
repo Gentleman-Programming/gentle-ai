@@ -23,9 +23,9 @@ Also read shared conventions from the same skills root:
 - Windows: `%USERPROFILE%\\.kiro\\skills\\_shared\\sdd-phase-common.md`
 
 Execute all steps from the skill directly in this context window:
-1. Read spec artifact (required): `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-2. Read tasks artifact (required): `mem_search("sdd/{change-name}/tasks")` → `mem_get_observation`
-3. Read design artifact: `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
+1. Read spec artifact (required): read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+2. Read tasks artifact (required): read the `tasks` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+3. Read design artifact: read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 4. Check completeness: all tasks done?
 5. Run tests (detect runner from config, package.json, Makefile, etc.)
 6. Run build/type check

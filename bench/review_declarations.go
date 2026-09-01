@@ -1,0 +1,147 @@
+package main
+
+// coreJourneyReviewModes is an explicit declaration for every core journey. Most
+// lifecycle journeys need the runner's isolated global opt-in; switch journeys are
+// deliberately untouched so they can prove their own mode transition.
+var coreJourneyReviewModes = map[string]ReviewPrecondition{
+	"j01-docs-happy-path":                                                       reviewOptedIn,
+	"j03-kill-switch":                                                           reviewUntouched,
+	"j04-size-does-not-escalate":                                                reviewOptedIn,
+	"j05-gate-without-any-review":                                               reviewOptedIn,
+	"j06-pre-push-after-publication":                                            reviewOptedIn,
+	"j07-disabled-with-stale-receipts":                                          reviewOptedIn,
+	"j08-finalize-without-reviewer-results":                                     reviewOptedIn,
+	"j09-finalize-without-evidence":                                             reviewOptedIn,
+	"j10-invalid-flag-combination":                                              reviewOptedIn,
+	"j100-pre-push-unqualified-selector-ignores-unreachable-remote":             reviewOptedIn,
+	"j101-zero-path-base-diff-stops-before-start":                               reviewOptedIn,
+	"j102-status-stops-oversized-lens-context":                                  reviewOptedIn,
+	"j103-sdd-interrupted-settlement-omits-evidence":                            reviewOptedIn,
+	"j104-repository-context-survives-fresh-process":                            reviewOptedIn,
+	"j105-compiled-provider-capture-retries-same-binding":                       reviewOptedIn,
+	"j106-captured-provider-validator-terminal-capture":                         reviewOptedIn,
+	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding":        reviewOptedIn,
+	"j108-sdd-post-review-verify-report-is-natively-bound":                      reviewOptedIn,
+	"j109-sdd-legacy-post-review-report-requires-current-attestation":           reviewOptedIn,
+	"j11-unborn-head":                                                           reviewOptedIn,
+	"j110-untracked-terminal-burn-and-unmanaged-staged-validation":              reviewOptedIn,
+	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged":           reviewOptedIn,
+	"j112-sdd-attempt-settle-survives-review-mode-transition":                   reviewUntouched,
+	"j113-correction-removes-candidate-only-path":                               reviewOptedIn,
+	"j114-last-reviewer-capture-closes-and-burns":                               reviewOptedIn,
+	"j12-rejected-capture-then-recapture":                                       reviewOptedIn,
+	"j13-next-transition-runs-verbatim":                                         reviewOptedIn,
+	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,
+	"j15-linked-worktree":                                                       reviewOptedIn,
+	"j16-detached-head":                                                         reviewOptedIn,
+	"j17-bare-repository":                                                       reviewOptedIn,
+	"j18-space-and-non-ascii-path":                                              reviewOptedIn,
+	"j19-submodule-gitlink":                                                     reviewOptedIn,
+	"j20-symlink-candidate":                                                     reviewOptedIn,
+	"j21-mode-only-change":                                                      reviewOptedIn,
+	"j2138-opencode-native-fallback-boundary":                                   reviewUntouched,
+	"j22-pure-rename":                                                           reviewOptedIn,
+	"j23-deletion-only":                                                         reviewOptedIn,
+	"j24-empty-file":                                                            reviewOptedIn,
+	"j25-no-trailing-newline":                                                   reviewOptedIn,
+	"j26-crlf-content":                                                          reviewOptedIn,
+	"j27-merge-in-progress":                                                     reviewOptedIn,
+	"j28-rebase-in-progress":                                                    reviewOptedIn,
+	"j29-cherry-pick-in-progress":                                               reviewOptedIn,
+	"j30-kill-switch-flipped-mid-review":                                        reviewOptedIn,
+	"j3043-opencode-managed-background-activation":                              reviewUntouched,
+	"j117-doctor-dangling-managed-config":                                       reviewUntouched,
+	"j118-doctor-dangling-config-ancestor":                                      reviewUntouched,
+	"j31-nonsense-mode-value":                                                   reviewUntouched,
+	"j32-recovery-of-a-recovery":                                                reviewOptedIn,
+	"j33-escalate-then-recover":                                                 reviewOptedIn,
+	"j34-abandon-then-start-again":                                              reviewOptedIn,
+	"j35-correction-budget-exactly-zero":                                        reviewOptedIn,
+	"j36-contract-right-name-wrong-version":                                     reviewOptedIn,
+	"j40-sdd-attempt-reset-after-drift":                                         reviewOptedIn,
+	"j41-kill-switch-versus-sdd-pre-verify":                                     reviewUntouched,
+	"j42-kill-switch-versus-sdd-archive":                                        reviewOptedIn,
+	"j43-recovery-guard-rails-as-an-operator-meets-them":                        reviewOptedIn,
+	"j44-corrected-current-changes-delivery":                                    reviewOptedIn,
+	"j44-sdd-historical-requirement-stale-pass":                                 reviewOptedIn,
+	"j45-completed-final-verification-retry":                                    reviewOptedIn,
+	"j46-correction-required-staged-recovery":                                   reviewOptedIn,
+	"j47-disabled-mode-archives-discovered-scope-changed-authority":             reviewUntouched,
+	"j48-recovered-workspace-preserves-full-candidate-scope":                    reviewOptedIn,
+	"j49-status-without-cwd-honors-kill-switch":                                 reviewUntouched,
+	"j50-candidate-decline-denies-generically-then-disabled":                    reviewUntouched,
+	"j51-negotiated-status-correction-continuation":                             reviewOptedIn,
+	"j52-sdd-stale-authority-does-not-shadow-approved-candidate":                reviewOptedIn,
+	"j53-sdd-ambiguous-authorities-fail-closed":                                 reviewOptedIn,
+	"j54-sdd-missing-authority-receipt-fails-closed":                            reviewOptedIn,
+	"j55-sdd-mismatched-authority-receipt-fails-closed":                         reviewOptedIn,
+	"j56-sdd-non-allow-post-apply-gate-fails-closed":                            reviewOptedIn,
+	"j58-sdd-foreign-openspec-path-fails-closed":                                reviewOptedIn,
+	"j59-current-status-and-start-ignore-sibling-worktree-transaction":          reviewOptedIn,
+	"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow": reviewOptedIn,
+	"j61-pre-pr-multi-segment-delivery-denies-without-composition":              reviewOptedIn,
+	"j62-sdd-settle-canonicalizes-unambiguous-evidence-revision":                reviewOptedIn,
+	"j63-disabled-failed-verification-unmanaged-remediation":                    reviewOptedIn,
+	"j64-unmanaged-remediation-survives-audited-reset":                          reviewUntouched,
+	"j65-selectorless-committed-correction-continuation":                        reviewOptedIn,
+	"j66-v5-capture-evidence-descriptors-execute":                               reviewOptedIn,
+	"j67-v5-capture-evidence-correction-descriptor-executes":                    reviewOptedIn,
+	"j72-direct-review-start-refuses-empty-candidate":                           reviewOptedIn,
+	"j74-sdd-attempt-explicit-linked-worktree-handoff":                          reviewUntouched,
+	"j75-intended-untracked-selection-executes-printed-start":                   reviewOptedIn,
+	"j76-scope-changed-four-lens-successor":                                     reviewOptedIn,
+	"j77-capture-result-input-preflight-is-read-only":                           reviewOptedIn,
+	"j78-lens-finding-id-prefix-discovery":                                      reviewOptedIn,
+	"j79-consecutive-rescope-refuses-before-publication":                        reviewOptedIn,
+	"j80-rescope-authorized-evidence-only-retry":                                reviewOptedIn,
+	"j81-rc1-consecutive-rescope-repair-executes-printed-command":               reviewOptedIn,
+	"j82-reviewed-superset-pre-push-allows-unpublished-subset":                  reviewOptedIn,
+	"j83-pre-pr-moving-advertised-base-binds-merge-base":                        reviewOptedIn,
+	"j84-sdd-attempt-selected-untracked-lifecycle":                              reviewOptedIn,
+	"j99-sdd-attempt-born-during-untracked-lifecycle":                           reviewOptedIn,
+	"j85-review-parse-refusals-are-preflight":                                   reviewOptedIn,
+	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt":      reviewOptedIn,
+	"j87-unmanaged-remediation-uses-chain-failed-evidence":                      reviewUntouched,
+	"j88-unborn-status-collects-untracked-selection":                            reviewOptedIn,
+	"j89-staged-validation-is-informational-and-unmanaged":                      reviewOptedIn,
+	"j90-explicit-frozen-reviewing-lineage-resumes-after-drift":                 reviewOptedIn,
+	"j91-audited-abandon-preplan-over-budget-correction":                        reviewOptedIn,
+	"j92-released-compact-history-quarantines-without-compatibility":            reviewOptedIn,
+	"j93-stale-managed-assets-start-is-not-unknown":                             reviewOptedIn,
+	"j94-escalated-changed-scope-negotiates-recovery":                           reviewOptedIn,
+	"j95-targeted-validator-inspects-provider-bound-corrected-tree":             reviewOptedIn,
+	"j96-sdd-same-parent-repository-edit-authority":                             reviewOptedIn,
+	"j97-pre-push-preserves-ls-remote-failure":                                  reviewOptedIn,
+	"j98-sdd-flat-root-spec-is-discovered":                                      reviewUntouched,
+	"j99-issue-2906-finalize-missing-contract":                                  reviewOptedIn,
+	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
+	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
+	"j119-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
+	"j120-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
+	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
+	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
+	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
+	"j124-sdd-attempt-reset-after-selected-untracked-lands":                     reviewOptedIn,
+}
+
+func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
+	for index := range journeys {
+		journeys[index].Review = coreJourneyReviewModes[journeys[index].ID]
+	}
+	return journeys
+}
+
+func declareAxisJourneyReviewMode(journeys []Journey, review ReviewPrecondition) []Journey {
+	for index := range journeys {
+		journeys[index].Review = review
+	}
+	return journeys
+}
+
+func allDeclaredJourneys() []Journey {
+	journeys := append([]Journey{}, Journeys()...)
+	for _, axis := range Axes() {
+		journeys = append(journeys, axis.Journeys()...)
+	}
+	return journeys
+}

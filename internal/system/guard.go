@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 )
 
 var ErrUnsupportedOS = errors.New("unsupported operating system")
@@ -27,7 +28,25 @@ func EnsureSupportedPlatform(profile PlatformProfile) error {
 	}
 
 	if profile.OS == "linux" && !profile.Supported {
-		return fmt.Errorf("%w: Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family (detected %s)", ErrUnsupportedLinuxDistro, profile.LinuxDistro)
+		distro := strings.TrimSpace(profile.LinuxDistro)
+		if distro == "" {
+			distro = LinuxDistroUnknown
+		}
+
+		// A refusal that names no exit is why users edited /etc/os-release to
+		// lie about their distribution. This one names what was searched,
+		// where, and the single thing that resolves it.
+		return fmt.Errorf(
+			"%w: no package manager found on PATH (detected distro %s).\n"+
+				"gentle-ai looks for these, in order: %s\n"+
+				"See which ones this machine already has:\n"+
+				"  for m in %s; do command -v \"$m\"; done\n"+
+				"Install one of them, or add the directory holding it to PATH, then run gentle-ai again.",
+			ErrUnsupportedLinuxDistro,
+			distro,
+			strings.Join(linuxPackageManagers, ", "),
+			strings.Join(linuxPackageManagers, " "),
+		)
 	}
 
 	return nil

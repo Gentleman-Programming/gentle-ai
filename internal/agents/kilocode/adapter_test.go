@@ -10,7 +10,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestDetect(t *testing.T) {
@@ -152,7 +151,6 @@ func TestCapabilities(t *testing.T) {
 		{"SupportsSystemPrompt", a.SupportsSystemPrompt, true},
 		{"SupportsSlashCommands", a.SupportsSlashCommands, true},
 		{"SupportsOutputStyles", a.SupportsOutputStyles, false},
-		{"SupportsAutoInstall", a.SupportsAutoInstall, true},
 	}
 
 	for _, tt := range tests {
@@ -203,27 +201,27 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "darwin resolves npm install without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@latest"}},
 		},
 		{
 			name:    "ubuntu resolves npm install with sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@latest"}},
 		},
 		{
 			name:    "arch resolves npm install with sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@latest"}},
 		},
 		{
 			name:    "fedora resolves npm install with sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@latest"}},
 		},
 		{
 			name:    "linux with writable npm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@" + versions.Kilocode}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@kilocode/cli@latest"}},
 		},
 	}
 

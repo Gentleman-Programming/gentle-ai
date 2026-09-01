@@ -17,6 +17,12 @@ type InstallFlags struct {
 	Scope      string
 	Channel    string
 	DryRun     bool
+
+	OpenCodeBackgroundSubagents    string
+	OpenCodeBackgroundSubagentsSet bool
+
+	PiBackgroundSubagents    string
+	PiBackgroundSubagentsSet bool
 }
 
 const installChannelHelp = "Gentle AI channel: stable (default), beta, or nightly (alias for beta) — env: GENTLE_AI_CHANNEL"
@@ -34,6 +40,12 @@ FLAGS
   --sdd-mode single|multi            SDD orchestrator mode
   --scope global|workspace           Install scope (env: GENTLE_AI_INSTALL_SCOPE)
   --channel stable|beta|nightly      Release channel; nightly is an alias for beta (env: GENTLE_AI_CHANNEL)
+  --opencode-background-subagents=auto|on|off
+                                     Resolve OpenCode capability and manage a launcher when eligible; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
+                                     auto inherits managed on/off, unsupported/unknown stays foreground, off removes only owned launchers
+  --pi-background-subagents=auto|on|off
+                                     Project the resolved Pi background-subagent policy for gentle-pi; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS
+                                     auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
 `)
@@ -55,6 +67,8 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.StringVar(&opts.Scope, "scope", "", "install scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
 	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
+	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
+	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 
 	if err := fs.Parse(args); err != nil {
@@ -64,6 +78,14 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	if fs.NArg() > 0 {
 		return InstallFlags{}, fmt.Errorf("unexpected install argument %q", fs.Arg(0))
 	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "opencode-background-subagents":
+			opts.OpenCodeBackgroundSubagentsSet = true
+		case "pi-background-subagents":
+			opts.PiBackgroundSubagentsSet = true
+		}
+	})
 
 	return opts, nil
 }

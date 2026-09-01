@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestReviewFacadeKeepsInvalidatedAuthorityNonPoisoningAndNonUsable(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started := startFacadeReview(t, repo)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -67,13 +67,8 @@ func TestReviewFacadeKeepsInvalidatedAuthorityNonPoisoningAndNonUsable(t *testin
 	}
 
 	output.Reset()
-	err = RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	if err == nil {
-		t.Fatal("invalidated authority was accepted as usable gate authority")
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err != nil {
+		t.Fatalf("invalidated authority ordinary delivery: %v\n%s", err, output.String())
 	}
-	var denied ReviewGateDeniedError
-	if !errors.As(err, &denied) || denied.Context.Denial == nil ||
-		denied.Context.Denial.Stage != "receipt-discovery" || denied.Context.Denial.Code != string(ReviewReceiptMissing) {
-		t.Fatalf("invalidated authority gate denial = %#v, want receipt-discovery %q", err, ReviewReceiptMissing)
-	}
+	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePreCommit)
 }

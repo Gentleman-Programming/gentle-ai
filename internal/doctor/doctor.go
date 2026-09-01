@@ -7,9 +7,10 @@ import "context"
 type CheckID string
 
 const (
-	CheckStateJSON       CheckID = "state:json"
-	CheckEngramReachable CheckID = "engram:reachable"
-	CheckDiskSpace       CheckID = "disk:space"
+	CheckStateJSON             CheckID = "state:json"
+	CheckInstalledAssetVersion CheckID = "installed:asset_version"
+	CheckEngramReachable       CheckID = "engram:reachable"
+	CheckDiskSpace             CheckID = "disk:space"
 )
 
 // ToolCheckID returns the stable check identifier for a tool binary.

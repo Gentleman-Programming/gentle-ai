@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -70,10 +71,11 @@ type AuthorityInventoryEntry struct {
 	// identity its own authority was frozen at. The negotiated target status
 	// cannot serve that role: it recomputes the identity from the worktree
 	// and withholds the authority block entirely once the target drifts.
-	SnapshotIdentity string                     `json:"snapshot_identity,omitempty"`
-	ChainIdentity    string                     `json:"chain_identity,omitempty"`
-	Recovery         *CompactRecoveryProvenance `json:"recovery,omitempty"`
-	Problems         []string                   `json:"problems"`
+	SnapshotIdentity string                       `json:"snapshot_identity,omitempty"`
+	DiscardedWork    *CompactDiscardedWorkSummary `json:"discarded_work,omitempty"`
+	ChainIdentity    string                       `json:"chain_identity,omitempty"`
+	Recovery         *CompactRecoveryProvenance   `json:"recovery,omitempty"`
+	Problems         []string                     `json:"problems"`
 	compact          *CompactRecord
 }
 
@@ -149,11 +151,21 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 	}
 	markCompactGraph(&report)
 	markMixedCollisions(&report)
-	for _, entry := range report.Entries {
-		if entry.Status == AuthorityStatusInvalid || entry.Status == AuthorityStatusIncomplete || entry.Status == AuthorityStatusReset || entry.Status == AuthorityStatusCollision {
-			report.Complete = false
-		}
-	}
+	// Completeness is a statement about the INVENTORY, not about every entry
+	// in it. A per-entry defect already has a per-entry home: the entry keeps
+	// its own Invalid/Incomplete/Reset/Collision status and its own problems,
+	// which is where an operator with a damaged lineage has to look anyway.
+	//
+	// Folding those per-entry verdicts back into one repository-wide boolean
+	// is what this removes. Every worktree of a repository shares one review
+	// store through the Git common directory, so that boolean turned one
+	// unreadable historical record into "complete review authority inventory
+	// is unavailable or corrupted" for every unrelated candidate, in every
+	// worktree, with no exit (1892, 2014, 2167, 2234, 2270, 2456). Complete
+	// now flips only for problems that really are repository-scope: an
+	// unreadable authority root, a prepared batch reconciliation, an
+	// unexpected entry directly under a version root, an ambiguous lock, or a
+	// version root that cannot be listed at all.
 	sortAuthorityReport(&report)
 	report.Authoritative = report.Complete
 	if len(report.Entries) == 0 && report.Complete {
@@ -205,18 +217,15 @@ func inventoryVersion(ctx context.Context, repo, root, directory string, version
 		}
 		entry, locks, quarantine := inventoryLineage(ctx, repo, version, path, item.Name())
 		if quarantine != nil {
-			// A TERMINAL lineage that fails semantic validation is quarantined
-			// out of the entries table alone (issue-1813): auditable via this
-			// diagnostic, never silently dropped, but never counted against
-			// report.Complete/Authoritative for every other healthy lineage.
+			// A semantically corrupt lineage is quarantined out of the entries
+			// table (issue-1813): auditable via this diagnostic, never silently
+			// dropped, but never counted against report.Complete/Authoritative
+			// for every other healthy lineage.
 			result.diagnostics = append(result.diagnostics, *quarantine)
 			continue
 		}
 		result.entries = append(result.entries, entry)
 		result.locks = append(result.locks, locks...)
-		if entry.Status == AuthorityStatusReset {
-			result.complete = false
-		}
 	}
 	return result
 }
@@ -231,6 +240,17 @@ func inventoryUnexpected(result authorityVersionInventory, path, problem string)
 	result.complete = false
 	result.diagnostics = append(result.diagnostics, AuthorityInventoryDiagnostic{Path: path, Problem: problem})
 	return result
+}
+
+// compactUnreadableEntryProblem states one entry's own failure, the fact that
+// it is one entry's failure, and the read-only diagnosis that names whatever
+// sanctioned exit this particular damage has. No clearing command is guessed
+// here: which one applies depends on what the entry holds, and inspection is
+// the surface that already knows.
+func compactUnreadableEntryProblem(lineage string, cause error) string {
+	return fmt.Sprintf(
+		"%v. Lineage %q alone cannot be read and every other lineage is unaffected; see this entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
+		cause, lineage)
 }
 
 func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion, path, lineage string) (AuthorityInventoryEntry, []AuthorityLockEvidence, *AuthorityInventoryDiagnostic) {
@@ -264,33 +284,31 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
 		record, err := store.LoadContext(ctx)
 		if err != nil {
-			// A TERMINAL lineage that fails semantic validation is quarantined
-			// (issue-1813): diagnostic-only, excluded from the entries table,
-			// never counted against report.Complete/Authoritative. Every other
-			// load failure (structural: JSON decode, schema, checksum) still
-			// fails this entry closed as AuthorityStatusInvalid.
+			// A semantic-validation failure is quarantined regardless of its
+			// lifecycle state (issue-1813): diagnostic-only and excluded from
+			// selector-free inventory. Structural failures (JSON decode, schema,
+			// checksum) still fail this entry closed as AuthorityStatusInvalid.
 			if _, quarantinable := compactLineageQuarantinable(err); quarantinable {
-				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-terminal-lineage: " + err.Error()}
+				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-semantic-lineage: " + err.Error()}
 			}
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
+			// This entry refuses for itself, and now it has to say how to
+			// leave: it is no longer accompanied by a repository-wide refusal
+			// that somebody else was going to have to diagnose. The exit is
+			// named rather than described, because a refusal whose
+			// continuation is a paraphrase is a dead end with better prose.
+			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{compactUnreadableEntryProblem(lineage, err)}
 			return entry, locks, nil
 		}
 		entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery
 		entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
+		if discarded, summaryErr := compactDiscardedWorkSummary(ctx, store, record); summaryErr == nil {
+			entry.DiscardedWork = &discarded
+		} else {
+			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"inspect discarded work: " + summaryErr.Error()}
+		}
 		entry.compact = &record
-		entry.Status = authorityStatusForState(record.State.State)
-		if payload, err := os.ReadFile(store.ReceiptPath()); err == nil {
-			receipt, parseErr := ParseCompactReceipt(payload)
-			authoritative, authorityErr := record.State.Receipt()
-			if parseErr != nil {
-				entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"invalid compact receipt: " + parseErr.Error()}
-			} else if authorityErr != nil || !compactReceiptEqual(receipt, authoritative) {
-				entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"compact receipt does not match terminal authority"}
-			}
-		} else if os.IsNotExist(err) && (record.State.State == StateApproved || record.State.State == StateEscalated) {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"terminal compact authority is missing its receipt"}
-		} else if !os.IsNotExist(err) {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read compact receipt: " + err.Error()}
+		if entry.Status != AuthorityStatusInvalid {
+			entry.Status = authorityStatusForState(record.State.State)
 		}
 		return entry, locks, nil
 	}
@@ -367,7 +385,17 @@ func inventoryLock(version AuthorityVersion, lineage, path string) (AuthorityLoc
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	var owner storeLockOwner
-	if err := decoder.Decode(&owner); err != nil {
+	if err := decoder.Decode(&owner); errors.Is(err, io.EOF) {
+		// An empty payload is a clean release (#2504): the holder cleared its
+		// owner record before unlocking, and the probe just proved no holder.
+		if err := unlockFile(file); err != nil {
+			lock.Problem = "release existing lock probe: " + err.Error()
+			return lock, true
+		}
+		probeHeld = false
+		lock.Status = AuthorityLockReleased
+		return lock, true
+	} else if err != nil {
 		lock.Problem = "parse lock owner: " + err.Error()
 		return lock, true
 	}

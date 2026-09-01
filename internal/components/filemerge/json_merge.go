@@ -55,6 +55,31 @@ func UnmarshalJSONObject(raw []byte) (map[string]any, error) {
 	return unmarshalJSONObject(raw)
 }
 
+func RemoveJSONAgentTools(raw []byte, names ...string) ([]byte, error) {
+	root, err := unmarshalJSONObject(raw)
+	if err != nil {
+		return raw, nil
+	}
+	agents, _ := root["agent"].(map[string]any)
+	changed := false
+	for _, name := range names {
+		if agent, ok := agents[name].(map[string]any); ok {
+			if _, exists := agent["tools"]; exists {
+				delete(agent, "tools")
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
 func normalizeJSON(raw []byte) []byte {
 	withoutComments := stripJSONComments(raw)
 	return stripTrailingCommas(withoutComments)

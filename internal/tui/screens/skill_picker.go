@@ -13,6 +13,7 @@ import (
 var skillLabels = map[model.SkillID]string{
 	model.SkillSDDInit:       "SDD Init",
 	model.SkillSDDExplore:    "SDD Explore",
+	model.SkillSDDResearch:   "SDD Research",
 	model.SkillSDDPropose:    "SDD Propose",
 	model.SkillSDDSpec:       "SDD Spec",
 	model.SkillSDDDesign:     "SDD Design",
@@ -29,12 +30,15 @@ var skillLabels = map[model.SkillID]string{
 }
 
 var additionalSkillLabels = map[model.SkillID]string{
-	model.SkillImprover:        "Skill Improver",
-	model.SkillSkillRegistry:   "Skill Registry",
-	model.SkillChainedPR:       "Chained PR",
-	model.SkillCognitiveDoc:    "Cognitive Doc Design",
-	model.SkillCommentWriter:   "Comment Writer",
-	model.SkillWorkUnitCommits: "Work Unit Commits",
+	model.SkillImprover:            "Skill Improver",
+	model.SkillSkillRegistry:       "Skill Registry",
+	model.SkillChainedPR:           "Chained PR",
+	model.SkillCognitiveDoc:        "Cognitive Doc Design",
+	model.SkillCommentWriter:       "Comment Writer",
+	model.SkillWorkUnitCommits:     "Work Unit Commits",
+	model.SkillRDDDefectWorkflow:   "RDD Defect Workflow",
+	model.SkillSystemicIssueTriage: "Systemic Issue Triage",
+	model.SkillGentleAIBench:       "Gentle AI Bench",
 }
 
 // SkillPickerOptions returns the action buttons shown after the skill checkboxes.

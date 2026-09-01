@@ -37,72 +37,104 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
+	return InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+}
 
-	paths := make([]string, 0, len(skillIDs))
-	skipped := make([]model.SkillID, 0)
-	changed := false
+type directoryAsset struct {
+	source      string
+	destination string
+}
 
+// DirectoryPaths returns every file that directory injection may write.
+func DirectoryPaths(skillDir string, skillIDs []model.SkillID, capability string) ([]string, error) {
+	entries, _, err := directoryAssets(skillDir, skillIDs, capability)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		paths = append(paths, entry.destination)
+	}
+	return paths, nil
+}
+
+func directoryAssets(skillDir string, skillIDs []model.SkillID, capability string) ([]directoryAsset, []model.SkillID, error) {
+	var result []directoryAsset
+	var skipped []model.SkillID
 	for _, id := range skillIDs {
-		// SDD skills are written by the SDD component — skip to avoid conflicts
-		// unless a capability was specified (model-section extraction requested).
 		if IsSDDSkill(id) && capability == "" {
 			continue
 		}
-
 		embedDir := "skills/" + string(id)
-		entries, readErr := fs.ReadDir(assets.FS, embedDir)
-		if readErr != nil {
-			log.Printf("skills: skipping %q — embedded asset not found: %v", id, readErr)
+		entries, err := fs.ReadDir(assets.FS, embedDir)
+		if err != nil {
+			log.Printf("skills: skipping %q — embedded asset not found: %v", id, err)
 			skipped = append(skipped, id)
 			continue
 		}
 		if len(entries) == 0 {
-			return InjectionResult{}, fmt.Errorf("skill %q: embedded directory exists but is empty — build may be corrupt", id)
+			return nil, nil, fmt.Errorf("skill %q: embedded directory exists but is empty — build may be corrupt", id)
 		}
-
-		destDir := filepath.Join(skillDir, string(id))
-		walkErr := fs.WalkDir(assets.FS, embedDir, func(assetPath string, d fs.DirEntry, walkErr error) error {
+		err = fs.WalkDir(assets.FS, embedDir, func(source string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if d.IsDir() {
+			if entry.IsDir() {
 				return nil
 			}
-
-			content, readErr := assets.Read(assetPath)
-			if readErr != nil {
-				return fmt.Errorf("read %q: %w", assetPath, readErr)
+			relative, err := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(source))
+			if err != nil {
+				return fmt.Errorf("resolve relative path for %q: %w", source, err)
 			}
-			if len(content) == 0 {
-				return fmt.Errorf("embedded asset %q is empty", assetPath)
-			}
-
-			relPath, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(assetPath))
-			if relErr != nil {
-				return fmt.Errorf("resolve relative path for %q: %w", assetPath, relErr)
-			}
-			path := filepath.Join(destDir, relPath)
-
-			// Extract model section if capability is set (non-empty).
-			if capability != "" {
-				content = extractModelSection(content, capability)
-			}
-
-			writeResult, writeErr := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
-			if writeErr != nil {
-				return fmt.Errorf("write %q: %w", path, writeErr)
-			}
-
-			changed = changed || writeResult.Changed
-			paths = append(paths, path)
+			result = append(result, directoryAsset{source: source, destination: filepath.Join(skillDir, string(id), relative)})
 			return nil
 		})
-		if walkErr != nil {
-			return InjectionResult{}, fmt.Errorf("skill %q: copy embedded directory: %w", id, walkErr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("skill %q: enumerate embedded directory: %w", id, err)
 		}
 	}
+	return result, skipped, nil
+}
 
-	return InjectionResult{Changed: changed, Files: paths, Skipped: skipped}, nil
+// InjectDirectoryWithCapability writes skills directly to an already-selected
+// skills directory. Operation-level compatibility refreshes use this to avoid
+// routing the shared directory through every selected agent adapter.
+func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, filemerge.WriteFileAtomic)
+}
+
+// InjectDirectoryWithWriter writes ordinary skills with a caller-selected writer.
+// Compatibility refreshes use this to keep their physical-directory contract.
+func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+}
+
+// InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.
+func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	entries, skipped, err := directoryAssets(skillDir, skillIDs, capability)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	result := InjectionResult{Files: make([]string, 0, len(entries)), Skipped: skipped}
+	for _, entry := range entries {
+		content, err := assets.Read(entry.source)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("read %q: %w", entry.source, err)
+		}
+		if len(content) == 0 {
+			return InjectionResult{}, fmt.Errorf("embedded asset %q is empty", entry.source)
+		}
+		if capability != "" {
+			content = extractModelSection(content, capability)
+		}
+		writeResult, err := writeFile(entry.destination, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("write %q: %w", entry.destination, err)
+		}
+		result.Changed = result.Changed || writeResult.Changed
+		result.Files = append(result.Files, entry.destination)
+	}
+	return result, nil
 }
 
 // Inject writes the embedded SKILL.md files for each requested skill

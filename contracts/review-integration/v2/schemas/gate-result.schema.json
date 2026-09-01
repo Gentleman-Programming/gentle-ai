@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/gate-result.schema.json",
+  "title": "Gentle AI review delivery gate result",
+  "description": "The gentle-ai.review-gate-result/v1 envelope every delivery gate (post-apply, pre-commit, pre-push, pre-pr, release) emits from review validate, including the negotiated review.validate transition. Derived from internal/cli/review.go's ReviewValidateResult and internal/reviewtransaction/receipt.go's GateContext.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "result", "allowed", "action", "reason", "context"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-gate-result/v1"},
+    "result": {"enum": ["allow", "scope-changed", "invalidated", "escalated"]},
+    "allowed": {"type": "boolean"},
+    "action": {"enum": ["continue", "explicit-maintainer-action", "review.status", "repository-policy"]},
+    "reason": {"type": "string"},
+    "context": {},
+    "delivery": {"enum": ["receipt_governed", "disabled/unmanaged", "unmanaged", "candidate_declined/unmanaged"]},
+    "relation": {"enum": ["exact", "compatible_base_advance", "provable_contraction", "changed", "unrelated", "ambiguous", "unknown"]},
+    "next": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reason_code"],
+      "properties": {
+        "transition": {"type": "string", "minLength": 1},
+        "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"result": {"const": "allow"}}}, "then": {"properties": {"allowed": {"const": true}}}, "else": {"properties": {"allowed": {"const": false}}}},
+    {
+      "if": {
+        "required": ["delivery"],
+        "properties": {"delivery": {"enum": ["unmanaged", "disabled/unmanaged"]}}
+      },
+      "then": {
+        "required": ["delivery"],
+        "properties": {
+          "result": {"const": "invalidated"},
+          "allowed": {"const": false},
+          "action": {"const": "repository-policy"},
+          "context": {"$ref": "#/$defs/gate_only_context"}
+        },
+        "not": {"anyOf": [{"required": ["relation"]}, {"required": ["next"]}]}
+      },
+      "else": {
+        "properties": {
+          "context": {"$ref": "#/$defs/gate_context"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "maybe_sha256": {"type": "string", "pattern": "^$|^sha256:[0-9a-f]{64}$"},
+    "maybe_git_object": {"type": "string", "pattern": "^$|^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "string_array_or_null": {
+      "oneOf": [
+        {"type": "array", "items": {"type": "string", "minLength": 1}},
+        {"type": "null"}
+      ]
+    },
+    "gate_context": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "gate", "lineage_id", "generation", "base_tree", "candidate_tree", "paths_digest",
+        "fix_delta_hash", "policy_hash", "ledger_hash", "evidence_hash", "base_relationship_valid"
+      ],
+      "properties": {
+        "gate": {"enum": ["", "post-apply", "pre-commit", "pre-push", "pre-pr", "release"]},
+        "lineage_id": {"type": "string", "maxLength": 128},
+        "generation": {"type": "integer", "minimum": 0},
+        "store_revision": {"$ref": "#/$defs/sha256"},
+        "genesis_revision": {"$ref": "#/$defs/sha256"},
+        "chain_identity": {"$ref": "#/$defs/sha256"},
+        "bundle_digest": {"$ref": "#/$defs/sha256"},
+        "base_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "candidate_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "paths_digest": {"$ref": "#/$defs/maybe_sha256"},
+        "fix_delta_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "policy_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "ledger_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "evidence_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "base_relationship_valid": {"type": "boolean"},
+        "external_evidence": {"enum": ["invalidating", "escalating"]},
+        "receipt_base_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "base_advanced_compatible": {"$ref": "#/$defs/base_advance_compatibility"},
+        "release": {"$ref": "#/$defs/release_evidence"},
+        "pre_pr_boundary": {"$ref": "#/$defs/pre_pr_boundary"},
+        "denial": {
+          "type": "object", "additionalProperties": false,
+          "required": ["stage", "code"],
+          "properties": {
+            "stage": {"type": "string", "minLength": 1},
+            "code": {"type": "string", "minLength": 1}
+          }
+        },
+        "scope_change": {"$ref": "#/$defs/scope_change"},
+        "base_mismatch": {
+          "type": "object", "additionalProperties": false,
+          "required": ["expected", "actual"],
+          "properties": {
+            "expected": {"type": "string"},
+            "actual": {"type": "string"}
+          }
+        }
+      }
+    },
+    "gate_only_context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate"],
+      "properties": {
+        "gate": {"enum": ["post-apply", "pre-commit", "pre-push", "pre-pr", "release"]}
+      }
+    },
+    "base_advance_compatibility": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "status", "compatible", "old_base_tree", "new_base_tree", "original_patch_identity",
+        "delivered_patch_identity", "delivered_paths_digest", "base_advance_paths_digest",
+        "paths_disjoint", "merged_result_tree", "ci_attestation_artifact_hash", "ci_attestation_issuer"
+      ],
+      "properties": {
+        "status": {"type": "string"},
+        "compatible": {"type": "boolean"},
+        "old_base_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "new_base_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "original_patch_identity": {"$ref": "#/$defs/maybe_sha256"},
+        "delivered_patch_identity": {"$ref": "#/$defs/maybe_sha256"},
+        "delivered_paths_digest": {"$ref": "#/$defs/maybe_sha256"},
+        "base_advance_paths_digest": {"$ref": "#/$defs/maybe_sha256"},
+        "paths_disjoint": {"type": "boolean"},
+        "merged_result_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "ci_attestation_artifact_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "ci_attestation_issuer": {"type": "string"}
+      }
+    },
+    "release_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "release_tree", "configuration_hash", "generated_artifact_hash", "provenance_hash",
+        "publication_boundary_hash", "publication_state", "evidence_freshness_hash", "evidence_freshness_state"
+      ],
+      "properties": {
+        "release_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "configuration_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "generated_artifact_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "provenance_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "publication_boundary_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "publication_state": {"enum": ["", "sealed"]},
+        "evidence_freshness_hash": {"$ref": "#/$defs/maybe_sha256"},
+        "evidence_freshness_state": {"enum": ["", "current"]}
+      }
+    },
+    "pre_pr_boundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "selector", "commit", "merge_base"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1},
+        "selector": {"type": "string"},
+        "commit": {"type": "string"},
+        "merge_base": {"type": "string"},
+        "remote": {"type": "string"},
+        "remote_ref": {"type": "string"},
+        "remote_identity": {"type": "string"}
+      }
+    },
+    "gate_target_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base_tree", "candidate_tree", "paths_digest", "paths"],
+      "properties": {
+        "base_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "candidate_tree": {"$ref": "#/$defs/maybe_git_object"},
+        "paths_digest": {"$ref": "#/$defs/maybe_sha256"},
+        "paths": {"$ref": "#/$defs/string_array_or_null"}
+      }
+    },
+    "scope_change": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "expected", "actual", "differing_paths", "differing_path_count", "differing_paths_digest",
+        "predecessor_lineage_id", "predecessor_revision", "recovery_operation", "recovery_required_inputs"
+      ],
+      "properties": {
+        "expected": {"$ref": "#/$defs/gate_target_evidence"},
+        "actual": {"$ref": "#/$defs/gate_target_evidence"},
+        "differing_paths": {"$ref": "#/$defs/string_array_or_null"},
+        "differing_path_count": {"type": "integer", "minimum": 0},
+        "differing_paths_digest": {"$ref": "#/$defs/maybe_sha256"},
+        "predecessor_lineage_id": {"type": "string"},
+        "predecessor_revision": {"$ref": "#/$defs/maybe_sha256"},
+        "recovery_operation": {"type": "string"},
+        "recovery_required_inputs": {"$ref": "#/$defs/string_array_or_null"},
+        "recovery_scope": {"type": "string"},
+        "recovery_base_ref": {"type": "string"},
+        "recovery_derived_inputs": {"$ref": "#/$defs/string_array_or_null"}
+      }
+    }
+  }
+}

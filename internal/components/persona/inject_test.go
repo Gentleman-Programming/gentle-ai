@@ -434,6 +434,66 @@ func TestInjectCustomOpenCodeDoesNothing(t *testing.T) {
 	}
 }
 
+func TestInjectPiPersonaWritesSelectedModeAndIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	path := PiPersonaConfigPath(root)
+
+	result, err := InjectPiPersona(root, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("InjectPiPersona() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("first Pi persona injection changed = false, want true")
+	}
+	if len(result.Files) != 1 || result.Files[0] != path {
+		t.Fatalf("first Pi persona injection files = %v, want [%q]", result.Files, path)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if got, want := string(content), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
+		t.Fatalf("Pi persona config = %q, want %q", got, want)
+	}
+
+	second, err := InjectPiPersona(root, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("second InjectPiPersona() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("second Pi persona injection changed = true, want false")
+	}
+}
+
+func TestInjectPiPersonaCustomPreservesExistingConfig(t *testing.T) {
+	root := t.TempDir()
+	path := PiPersonaConfigPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	const existing = "{\n  \"mode\": \"user-defined\"\n}\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := InjectPiPersona(root, model.PersonaCustom)
+	if err != nil {
+		t.Fatalf("InjectPiPersona(custom) error = %v", err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("InjectPiPersona(custom) result = %#v, want no-op", result)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if string(content) != existing {
+		t.Fatalf("custom Pi persona config = %q, want existing content %q", content, existing)
+	}
+}
+
 func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	home := t.TempDir()
 
@@ -533,6 +593,86 @@ func TestInjectOpenCodeGentlemanDoesNotCreateSDDConductor(t *testing.T) {
 	}
 	if !strings.Contains(text, `"gentleman"`) {
 		t.Fatal("persona injection should still create the gentleman persona agent")
+	}
+	if strings.Contains(text, `"tools"`) {
+		t.Fatal("persona injection must not emit deprecated gentleman tools")
+	}
+}
+
+func TestInjectForSyncOpenCodeGentlemanRemovesOnlyStaleTools(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	before := `{
+  "user-setting": {"keep": true},
+  "agent": {
+    "gentleman": {
+      "mode": "primary",
+      "description": "keep this persona",
+      "tools": {"write": true, "edit": true}
+    },
+    "user-owned": {"tools": {"custom": true}}
+  }
+}
+`
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := InjectForSync(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("InjectForSync() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Gentleman sync did not remove stale tools")
+	}
+	payload, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(payload, &root); err != nil {
+		t.Fatal(err)
+	}
+	if got := root["user-setting"]; fmt.Sprint(got) != "map[keep:true]" {
+		t.Fatalf("user-owned setting changed: %#v", got)
+	}
+	agents := root["agent"].(map[string]any)
+	gentleman := agents["gentleman"].(map[string]any)
+	if _, exists := gentleman["tools"]; exists {
+		t.Fatalf("Gentleman sync retained stale tools: %#v", gentleman["tools"])
+	}
+	if got := gentleman["description"]; got != "keep this persona" {
+		t.Fatalf("Gentleman sync overwrote persona data: %#v", got)
+	}
+	if got := agents["user-owned"].(map[string]any)["tools"]; fmt.Sprint(got) != "map[custom:true]" {
+		t.Fatalf("Gentleman sync changed user-owned agent tools: %#v", got)
+	}
+
+	second, err := InjectForSync(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("second InjectForSync() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Gentleman sync changed already-clean settings")
+	}
+}
+
+func TestInjectForSyncOpenCodeGentlemanSucceedsWithoutSettings(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+
+	result, err := InjectForSync(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("InjectForSync() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("first Gentleman sync should write the persona file")
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("settings file was created or stat failed: %v", err)
 	}
 }
 
@@ -1133,6 +1273,12 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(opencodeAdapter().SettingsPath(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(opencodeAdapter().SettingsPath(home), []byte(`{"theme":"dark","agent":{"gentleman":{"tools":{"write":true}},"user":{"tools":{"read":true}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	first, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
 	if err != nil {
@@ -1140,6 +1286,18 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if !first.Changed {
 		t.Fatalf("Inject() first changed = false")
+	}
+	settings, err := os.ReadFile(opencodeAdapter().SettingsPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settings, &root); err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	if _, exists := agents["gentleman"].(map[string]any)["tools"]; exists || root["theme"] != "dark" || agents["user"].(map[string]any)["tools"].(map[string]any)["read"] != true {
+		t.Fatalf("stale managed tools cleanup changed user settings: %#v", root)
 	}
 
 	second, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
@@ -2024,7 +2182,6 @@ func TestPersonaContentHermesGentleman(t *testing.T) {
 		persona model.PersonaID
 	}{
 		{"gentleman", model.PersonaGentleman},
-		{"gentleman-neutral-artifacts", model.PersonaGentlemanNeutralArtifacts},
 	}
 
 	for _, tt := range tests {
@@ -2047,6 +2204,19 @@ func TestPersonaContentHermesGentleman(t *testing.T) {
 				t.Fatal("hermes gentleman persona is byte-identical to generic — Hermes-specific asset not used")
 			}
 		})
+	}
+}
+
+// TestPersonaContentAliasRoutesToNeutral verifies that the gentleman-neutral-artifacts
+// alias is routed to neutral content, not gentleman content.
+func TestPersonaContentAliasRoutesToNeutral(t *testing.T) {
+	alias := personaContent(model.AgentClaudeCode, model.PersonaGentlemanNeutralArtifacts, false)
+	neutral := personaContent(model.AgentClaudeCode, model.PersonaNeutral, false)
+	if alias != neutral {
+		t.Fatal("gentleman-neutral-artifacts must produce identical content to neutral")
+	}
+	if alias == "" {
+		t.Fatal("alias persona content must not be empty")
 	}
 }
 

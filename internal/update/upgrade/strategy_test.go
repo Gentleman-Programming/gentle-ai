@@ -587,27 +587,32 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 		cmd.Env = append(os.Environ(),
 			"GENTLE_AI_UPGRADE_HELPER=1",
 			"GENTLE_AI_UPGRADE_HELPER_CWD_FILE="+cwdFile,
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH="+filepath.Join(pkgDir, "package.json"),
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION=0.2.0",
 		)
 		return cmd
 	}
 
-	_, err := runStrategy(context.Background(), update.UpdateResult{
+	outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
 		Tool: update.ToolInfo{
 			Name:          pkg,
 			InstallMethod: update.InstallOpenCodePlugin,
 			NpmPackage:    pkg,
 		},
 		InstalledVersion: "0.1.0",
-		LatestVersion:    "0.2.0",
+		LatestVersion:    " 0.2.0 ",
 	}, system.PlatformProfile{PackageManager: "brew"})
 	if err != nil {
 		t.Fatalf("runStrategy OpenCode plugin: unexpected error: %v", err)
+	}
+	if outcome.observedVersion != "0.2.0" {
+		t.Fatalf("observed version = %q, want 0.2.0 from the installed manifest", outcome.observedVersion)
 	}
 
 	if gotName != "bun" {
 		t.Fatalf("exec name = %q, want bun", gotName)
 	}
-	wantArgs := []string{"add", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"add", pkg + "@0.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -633,6 +638,118 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	}
 	if gotCwd != wantCwd {
 		t.Fatalf("command cwd = %q, want %q", gotCwd, wantCwd)
+	}
+}
+
+func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T) {
+	tests := []struct {
+		name           string
+		manifest       string
+		registerOnly   bool
+		latestVersion  string
+		wantFallback   bool
+		wantErrorParts []string
+	}{
+		{
+			name:           "empty expected version skips before package manager mutation",
+			registerOnly:   true,
+			latestVersion:  "  ",
+			wantFallback:   true,
+			wantErrorParts: []string{"expected version is empty"},
+		},
+		{
+			name:           "package manager succeeds without materializing the package",
+			registerOnly:   true,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves the stale version",
+			manifest:       `{"version":"0.7.1"}`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "0.7.1", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves an invalid manifest",
+			manifest:       `{not valid json`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "invalid", "No automatic rollback", "restore or correct"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
+			t.Cleanup(func() {
+				openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
+			})
+
+			home := t.TempDir()
+			opencodeDir := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			pkg := "opencode-subagent-statusline"
+			pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+			if tc.manifest != "" {
+				if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.registerOnly {
+				if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["`+pkg+`"]}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			openCodeHomeDir = func() (string, error) { return home, nil }
+			lookPathCommand = func(file string) (string, error) {
+				if file == "bun" {
+					return "/usr/bin/bun", nil
+				}
+				return "", errors.New("not found")
+			}
+			execCalled := false
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				execCalled = true
+				return mockCmd("true")
+			}
+
+			outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
+				Tool: update.ToolInfo{
+					Name:          pkg,
+					InstallMethod: update.InstallOpenCodePlugin,
+					NpmPackage:    pkg,
+				},
+				LatestVersion: tc.latestVersion,
+				Status:        update.UpdateAvailable,
+			}, system.PlatformProfile{})
+			if err == nil {
+				t.Fatal("expected verification failure after a successful package-manager command")
+			}
+			if outcome.observedVersion != "" {
+				t.Fatalf("observed version = %q, want empty on verification failure", outcome.observedVersion)
+			}
+			if hint, ok := AsManualFallback(err); ok != tc.wantFallback {
+				t.Fatalf("error = %T %v, ManualFallbackError = %t, want %t", err, err, ok, tc.wantFallback)
+			} else if ok && !strings.Contains(hint, tc.wantErrorParts[0]) {
+				t.Errorf("fallback hint %q does not contain %q", hint, tc.wantErrorParts[0])
+			}
+			if tc.wantFallback {
+				if execCalled {
+					t.Fatal("package manager must not run without a pinned expected version")
+				}
+				return
+			}
+			for _, want := range tc.wantErrorParts {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -668,6 +785,13 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
+		pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		return mockCmd("true")
 	}
 
@@ -677,7 +801,8 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 			InstallMethod: update.InstallOpenCodePlugin,
 			NpmPackage:    pkg,
 		},
-		Status: update.RegisteredNotMaterialized,
+		LatestVersion: "1.2.0",
+		Status:        update.RegisteredNotMaterialized,
 	}, system.PlatformProfile{})
 	if err != nil {
 		t.Fatalf("registered OpenCode plugin should be npm-managed during upgrade, got: %v", err)
@@ -685,7 +810,7 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	if gotName != "npm" {
 		t.Fatalf("exec name = %q, want npm", gotName)
 	}
-	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -730,7 +855,7 @@ func TestRunStrategyOpenCodePluginNpmERESOLVERetriesWithLegacyPeerDeps(t *testin
 	if len(callHistory) != 2 {
 		t.Fatalf("expected 2 exec calls (initial + retry), got %d", len(callHistory))
 	}
-	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@latest", "@opencode-ai/plugin@latest"}
+	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(callHistory[1], " ") != strings.Join(wantRetry, " ") {
 		t.Fatalf("retry command = %v, want %v", callHistory[1], wantRetry)
 	}
@@ -808,6 +933,13 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	openCodeHomeDir = func() (string, error) { return home, nil }
 	lookPathCommand = func(file string) (string, error) {
 		if file == "npm" {
@@ -819,7 +951,7 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 }
 
 func openCodePluginUpdateResult(pkg string) update.UpdateResult {
-	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, Status: update.RegisteredNotMaterialized}
+	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, LatestVersion: "1.2.0", Status: update.RegisteredNotMaterialized}
 }
 
 func slicesContain(values []string, want string) bool {
@@ -919,6 +1051,13 @@ func TestOpenCodePluginUpgradeHelperProcess(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("GENTLE_AI_UPGRADE_HELPER_CWD_FILE"), []byte(cwd), 0o644); err != nil {
 		_, _ = os.Stderr.WriteString(err.Error())
 		os.Exit(2)
+	}
+	if manifestPath := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH"); manifestPath != "" {
+		version := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION")
+		if err := os.WriteFile(manifestPath, []byte(`{"version":"`+version+`"}`), 0o644); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
 	}
 	os.Exit(0)
 }
@@ -1344,45 +1483,55 @@ func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 		t.Fatalf("ggaScriptUpgrade: unexpected error: %v", err)
 	}
 
-	// Must have at least 2 exec calls.
-	if len(calls) < 2 {
-		t.Fatalf("expected at least 2 exec calls (git clone + bash install.sh), got %d: %v", len(calls), calls)
+	// Must have at least 4 exec calls (git init, git fetch, git checkout, bash install.sh).
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 exec calls (git init + fetch + checkout + bash install.sh), got %d: %v", len(calls), calls)
 	}
 
-	// First call must be `git clone`.
-	if calls[0].name != "git" {
-		t.Errorf("first exec call name = %q, want %q", calls[0].name, "git")
+	// First call: git init
+	if calls[0].name != "git" || len(calls[0].args) == 0 || calls[0].args[0] != "init" {
+		t.Errorf("first exec call = %v, want git init", calls[0])
 	}
-	if len(calls[0].args) == 0 || calls[0].args[0] != "clone" {
-		t.Errorf("first exec args[0] = %q, want %q", calls[0].args[0], "clone")
-	}
-	// The clone args must include the target tag via --branch.
-	cloneArgs := calls[0].args
+
+	// Second call: git -C <dir> fetch --depth=1 <repoURL> refs/tags/v2.8.0:refs/tags/v2.8.0
+	fetchArgs := calls[1].args
 	foundRepoURL := false
-	foundTag := false
-	for i, a := range cloneArgs {
+	foundTagRef := false
+	for _, a := range fetchArgs {
 		if containsAny(a, "gentleman-guardian-angel") {
 			foundRepoURL = true
 		}
-		if a == "--branch" && i+1 < len(cloneArgs) && cloneArgs[i+1] == "v2.8.0" {
-			foundTag = true
+		if a == "refs/tags/v2.8.0:refs/tags/v2.8.0" {
+			foundTagRef = true
 		}
 	}
 	if !foundRepoURL {
-		t.Errorf("git clone args %v should include the repo URL (gentleman-guardian-angel)", cloneArgs)
+		t.Errorf("git fetch args %v should include the repo URL (gentleman-guardian-angel)", fetchArgs)
 	}
-	if !foundTag {
-		t.Errorf("git clone args %v should include --branch v2.8.0 to pin to the release tag", cloneArgs)
+	if !foundTagRef {
+		t.Errorf("git fetch args %v should include refs/tags/v2.8.0:refs/tags/v2.8.0 to pin to the release tag", fetchArgs)
 	}
 
-	// Second call must be `bash <path-to-install.sh>` (not bash -c <content>).
-	if calls[1].name != "bash" {
-		t.Errorf("second exec call name = %q, want %q", calls[1].name, "bash")
+	// Third call: git -C <dir> checkout -f refs/tags/v2.8.0
+	checkoutArgs := calls[2].args
+	foundCheckoutTag := false
+	for _, a := range checkoutArgs {
+		if a == "refs/tags/v2.8.0" {
+			foundCheckoutTag = true
+		}
 	}
-	if len(calls[1].args) == 0 {
-		t.Fatalf("second exec call has no args")
+	if !foundCheckoutTag {
+		t.Errorf("git checkout args %v should include refs/tags/v2.8.0", checkoutArgs)
 	}
-	installScriptArg := calls[1].args[0]
+
+	// Fourth call must be `bash <path-to-install.sh>` (not bash -c <content>).
+	if calls[3].name != "bash" {
+		t.Errorf("fourth exec call name = %q, want %q", calls[3].name, "bash")
+	}
+	if len(calls[3].args) == 0 {
+		t.Fatalf("fourth exec call has no args")
+	}
+	installScriptArg := calls[3].args[0]
 	if !containsAny(installScriptArg, "install.sh") {
 		t.Errorf("bash arg = %q, want path containing install.sh", installScriptArg)
 	}
@@ -1470,12 +1619,12 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 		t.Fatalf("runStrategy GGA: unexpected error: %v", err)
 	}
 
-	// Must have used git clone (not bash -c).
-	if len(calls) < 2 {
-		t.Fatalf("expected at least 2 calls (git clone + bash), got %d: %v", len(calls), calls)
+	// Must have used git init + fetch (not bash -c).
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 calls (git init + fetch + checkout + bash), got %d: %v", len(calls), calls)
 	}
-	if calls[0].name != "git" || (len(calls[0].args) > 0 && calls[0].args[0] != "clone") {
-		t.Errorf("expected first call to be `git clone`, got: %q %v", calls[0].name, calls[0].args)
+	if calls[0].name != "git" || (len(calls[0].args) > 0 && calls[0].args[0] != "init") {
+		t.Errorf("expected first call to be `git init`, got: %q %v", calls[0].name, calls[0].args)
 	}
 }
 

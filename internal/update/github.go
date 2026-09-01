@@ -33,6 +33,14 @@ type githubRelease struct {
 type githubCommit struct {
 	SHA     string `json:"sha"`
 	HTMLURL string `json:"html_url"`
+	// Commit carries the committer date so the beta main-head check can tell
+	// whether a local pseudo-version build is already ahead of the fetched
+	// commit instead of offering every prefix mismatch as an update.
+	Commit struct {
+		Committer struct {
+			Date time.Time `json:"date"`
+		} `json:"committer"`
+	} `json:"commit"`
 }
 
 // resolveGitHubToken returns a GitHub token for API auth, trying in order:

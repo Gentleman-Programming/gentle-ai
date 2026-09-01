@@ -32,6 +32,16 @@ The uninstall flow is also available from the TUI menu. It lets you:
 
 Before any managed file is modified, `gentle-ai` creates a backup snapshot so the configuration can be restored later if needed.
 
+### Disable TUI spinner animation
+
+Set `GENTLE_AI_NO_ANIMATION=1` to keep TUI spinner frames static:
+
+```bash
+GENTLE_AI_NO_ANIMATION=1 gentle-ai
+```
+
+This disables only spinner animation; install, update, sync, and uninstall operations continue normally. Unset the variable, or use any value other than `1`, to keep the default animation behavior.
+
 ---
 
 ## CLI Commands
@@ -89,7 +99,9 @@ See [Skill Registry](skill-registry.md) for the full index-first flow and diagra
 
 ### sync
 
-Refresh managed assets to the current version. Use after `brew upgrade gentle-ai` or when you want your local configs aligned with the latest release. Does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.
+Refresh managed assets to the current version. Run it after replacing or upgrading the `gentle-ai` binary, including with `brew upgrade`, `gentle-ai upgrade`, or `go install`. It does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.
+
+Managed reviewer and runtime assets are version-bound to the binary. Until sync succeeds, review lifecycle operations fail closed when managed writer provenance is missing or mismatched.
 
 > **Important:** `gentle-ai sync` updates the agents recorded as installed by Gentle AI, not every AI agent config directory on your machine.
 >
@@ -157,7 +169,7 @@ gentle-ai update
 gentle-ai upgrade
 ```
 
-After upgrading, run `gentle-ai sync` to refresh all managed assets to the new version's content.
+After any upgrade or manual binary replacement, run `gentle-ai sync` to refresh all managed assets to the new version's content.
 
 If GitHub rate-limits update checks, export `GITHUB_TOKEN` or `GH_TOKEN` before running `gentle-ai update`/`upgrade`.
 
@@ -172,6 +184,8 @@ brew upgrade gentle-ai
 brew trust --cask gentleman-programming/tap/engram
 brew upgrade engram
 ```
+
+If you choose to install several tools from this tap, run `brew trust gentleman-programming/tap` instead. This broader option trusts all current and future formulas, casks, and external commands published in the tap.
 
 **Self-update prompt behavior** (changed in v1.x slice 5 — `GENTLE_AI_CONFIRM_UPDATE` removed):
 
@@ -300,8 +314,9 @@ gentle-ai install --agent windsurf --preset full-gentleman
 
 Homebrew 6 can require explicit trust for non-official taps and, on Linux, can
 sandbox builds with Bubblewrap. `gentle-ai upgrade` and `scripts/install.sh`
-auto-trust only the Gentle AI formula, but manual upgrades may still need this
-one-time command:
+auto-trust only the Gentle AI formula. For the broader tap-wide trust option,
+see the [update and upgrade guidance](#update--upgrade). Manual upgrades may
+still need this one-time command:
 
 ```bash
 brew trust --formula gentleman-programming/tap/gentle-ai

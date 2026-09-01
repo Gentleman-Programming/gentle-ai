@@ -4,72 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
-
-// finalizeReviewCLIArgs rewrites a legacy `--result <file>` finalize invocation
-// into the native admission route the product now requires, and runs it.
-//
-// `--result` was retired because it bound nothing: it accepted any JSON with
-// findings and evidence arrays, so a hand-written file could mint an approval.
-// The suite had proved almost the entire review lifecycle through that route,
-// which is why the hole survived. Rather than restate every test's fixture, this
-// helper keeps each test's OWN result payload -- the findings and evidence it
-// deliberately set up -- and supplies only the parts a reviewer cannot invent:
-// the provider-issued subject hash and the inspected path manifest, both read
-// back from the product's own capture binding.
-//
-// The result is that these tests now drive `review capture-result` and
-// `review finalize --captured-results`, the exact production path, instead of a
-// route that no longer exists.
-func finalizeReviewCLIArgs(t *testing.T, repo string, args []string, stdout io.Writer) error {
-	t.Helper()
-	rest, resultPaths, lineage := splitReviewCLIResultArgs(args)
-	if len(resultPaths) == 0 {
-		return RunReviewFacadeFinalize(args, stdout)
-	}
-	// A payload the provider refuses to admit is returned, not fataled: tests
-	// that deliberately supply a malformed reviewer result used to observe that
-	// refusal as finalize's error, and admission rejecting it earlier is the
-	// same observation. Fataling here would silently convert those assertions
-	// into unconditional test failures.
-	if err := captureReviewCLIResultFiles(t, repo, lineage, resultPaths); err != nil {
-		return err
-	}
-	return RunReviewFacadeFinalize(append(rest, "--captured-results=true"), stdout)
-}
-
-// splitReviewCLIResultArgs separates the retired --result arguments from the
-// rest of the invocation and reports the explicit --lineage when one was given.
-func splitReviewCLIResultArgs(args []string) (rest, resultPaths []string, lineage string) {
-	rest = make([]string, 0, len(args))
-	for index := 0; index < len(args); index++ {
-		switch {
-		case args[index] == "--result" && index+1 < len(args):
-			resultPaths = append(resultPaths, args[index+1])
-			index++
-		case strings.HasPrefix(args[index], "--result="):
-			resultPaths = append(resultPaths, strings.TrimPrefix(args[index], "--result="))
-		case args[index] == "--lineage" && index+1 < len(args):
-			lineage = args[index+1]
-			rest = append(rest, args[index], args[index+1])
-			index++
-		default:
-			if strings.HasPrefix(args[index], "--lineage=") {
-				lineage = strings.TrimPrefix(args[index], "--lineage=")
-			}
-			rest = append(rest, args[index])
-		}
-	}
-	return rest, resultPaths, lineage
-}
 
 // captureReviewCLIResultFiles admits one reviewer result per selected lens,
 // reusing each supplied file's findings and evidence verbatim.
@@ -84,10 +27,10 @@ func captureReviewCLIResultFiles(t *testing.T, repo, lineage string, resultPaths
 		return err
 	}
 	state := record.State
+	if len(resultPaths) != len(state.SelectedLenses) {
+		return fmt.Errorf("capture reviewer results requires %d --result files for the selected lenses, got %d", len(state.SelectedLenses), len(resultPaths))
+	}
 	for order, lens := range state.SelectedLenses {
-		if order >= len(resultPaths) {
-			break
-		}
 		if err := captureReviewCLIResultFile(t, root, state, order, lens, resultPaths[order]); err != nil {
 			return err
 		}

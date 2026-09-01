@@ -20,14 +20,27 @@ That means you can stay with the built-in multi-profile overlay, or plug Gentle 
 
 OpenCode SDD uses native OpenCode subagents through the `task` permission. Gentle AI no longer installs the legacy `background-agents.ts` plugin by default.
 
-To opt into OpenCode's experimental background subagent execution, start OpenCode with:
+Gentle AI controls the preference with `auto`, `on`, or `off`. The same control is available to both install and sync:
 
-```sh
-export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
-opencode
+```bash
+gentle-ai install --agent opencode --component sdd --opencode-background-subagents=on
+gentle-ai sync --opencode-background-subagents=off
 ```
 
-Gentle AI does not currently write process environment variables into `opencode.json`; keep the flag in your shell, terminal profile, or launcher until OpenCode provides a stable config-level switch.
+The environment equivalent is `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS=auto|on|off`. Resolution precedence is:
+
+1. CLI flag.
+2. Non-empty `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`.
+3. The prior managed choice in Gentle AI state.
+4. `auto`.
+
+In the interactive installer, OpenCode + SDD with no prior, CLI, or environment decision shows a real choice between **Enable managed background subagents** and **Keep foreground**. Prior `on` or `off` choices skip that prompt. The choice is committed only after the install succeeds; going back or cancelling leaves state unchanged.
+
+When managed activation is enabled, Gentle AI owns launchers under `~/.gentle-ai/bin/` (`opencode` on POSIX, `opencode.cmd` and `opencode.ps1` on Windows). The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is absent, so an explicit `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false` remains foreground. Restart OpenCode, and restart the shell if PATH has not refreshed, after activation.
+
+Sessions started through `opencode serve`, `opencode attach`, or OpenCode Desktop may not inherit the managed launcher environment. Those entry points deliberately fall back to foreground execution; Gentle AI does not rewrite server, attach, or Desktop session configuration.
+
+Background jobs are process-local and non-durable: restarting OpenCode loses them. They provide no filesystem isolation, so do not use background work for dependent phases or writers, and never run parallel writers in one worktree.
 
 ## Quick Start (TUI)
 

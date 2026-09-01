@@ -1,10 +1,12 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,16 +14,17 @@ import (
 	"time"
 )
 
-// CompactAbandonAuthorizationSchema is the first line of the exact six-line
-// LF-only abandonment maintainer authorization binding; the remaining lines
-// are, in order: lineage, revision, snapshot_identity, actor, and reason.
+// CompactAbandonAuthorizationSchema is the first line of the exact nine-line
+// LF-only abandonment maintainer authorization binding.
 //
 // It is exported so a refusal in another package that names `review abandon`
 // as its continuation can print the template and be checked against the schema
 // this gate actually verifies, rather than against a copy of the string.
-const CompactAbandonAuthorizationSchema = "gentle-ai.review-abandon-authorization/v1"
+const CompactAbandonAuthorizationSchema = "gentle-ai.review-abandon-authorization/v2"
 
-// CompactAbandonRequest identifies one pristine compact-v2 review lineage to
+const compactLegacyAbandonAuthorizationSchema = "gentle-ai.review-abandon-authorization/v1"
+
+// CompactAbandonRequest identifies one non-terminal compact-v2 review lineage to
 // quarantine, together with the exact maintainer authorization binding for
 // that content.
 type CompactAbandonRequest struct {
@@ -33,10 +36,9 @@ type CompactAbandonRequest struct {
 	AbandonedAt             time.Time
 }
 
-// CompactPristineAbandonmentProof records the natively re-derived pristineness
-// of one abandoned lineage inside the quarantine audit record. Pristineness is
-// a property of the persisted bytes and store topology only; the live worktree
-// is never rebuilt, so stale lineages remain abandonable.
+// CompactPristineAbandonmentProof remains only to decode pre-v2 quarantine
+// records during historical audit readback. New abandonments always write
+// CompactAbandonmentProof.
 type CompactPristineAbandonmentProof struct {
 	LineageID          string `json:"lineage_id"`
 	Revision           string `json:"revision"`
@@ -45,43 +47,120 @@ type CompactPristineAbandonmentProof struct {
 	InvalidationReason string `json:"invalidation_reason,omitempty"` // when pre-invalidated
 }
 
-// RenderCompactAbandonAuthorization renders the abandonment authorization
-// binding over the supplied values. The refusal path renders it with
-// placeholder tokens to print an operator-facing template, and the verifier
-// below binds over this same function, so the template a maintainer is told
-// to fill in and the bytes the gate accepts can never drift apart.
-func RenderCompactAbandonAuthorization(lineage, revision, snapshotIdentity, actor, reason string) string {
-	return compactAbandonAuthorizationBinding(lineage, revision, snapshotIdentity, actor, reason)
+// CompactIncompleteAbandonmentProof remains only to decode pre-v2 quarantine
+// records during historical audit readback. New abandonments always write
+// CompactAbandonmentProof.
+type CompactIncompleteAbandonmentProof struct {
+	LineageID        string   `json:"lineage_id"`
+	Revision         string   `json:"revision"`
+	SnapshotIdentity string   `json:"snapshot_identity"`
+	CapturedLenses   []string `json:"captured_lenses"`
+	UncapturedLenses []string `json:"uncaptured_lenses"`
 }
 
-func compactAbandonAuthorizationBinding(lineage, revision, snapshotIdentity, actor, reason string) string {
+const (
+	CompactAbandonReasonOperatorDisposition = "operator_disposition"
+	CompactAbandonReasonRetiredSchema       = "retired_schema"
+)
+
+type CompactDiscardedWorkSummary struct {
+	CapturedLensResults []string `json:"captured_lens_results"`
+	FindingsPresent     bool     `json:"findings_present"`
+}
+
+type CompactAbandonmentProof struct {
+	Schema           string                      `json:"schema"`
+	LineageID        string                      `json:"lineage_id"`
+	Revision         string                      `json:"revision"`
+	SnapshotIdentity string                      `json:"snapshot_identity"`
+	DiscardedWork    CompactDiscardedWorkSummary `json:"discarded_work"`
+}
+
+// RenderCompactAbandonAuthorization renders a V2 authorization binding over
+// the exact discarded work that the gate will re-derive before accepting it.
+func RenderCompactAbandonAuthorization(lineage, revision, snapshotIdentity, actor, reason string, discarded CompactDiscardedWorkSummary) string {
+	return compactAbandonAuthorizationBindingV2(lineage, revision, snapshotIdentity, actor, reason, discarded)
+}
+
+func compactAbandonAuthorizationBindingV2(lineage, revision, snapshotIdentity, actor, reason string, discarded CompactDiscardedWorkSummary) string {
 	return CompactAbandonAuthorizationSchema + "\nlineage=" + lineage + "\nrevision=" + revision +
-		"\nsnapshot_identity=" + snapshotIdentity +
-		"\nactor=" + strings.TrimSpace(actor) + "\nreason=" + strings.TrimSpace(reason)
+		"\nsnapshot_identity=" + snapshotIdentity + "\nreason=" + reason +
+		"\ncaptured_lens_results=" + strings.Join(discarded.CapturedLensResults, ",") +
+		fmt.Sprintf("\nfindings_present=%t", discarded.FindingsPresent) +
+		"\nactor=" + strings.TrimSpace(actor)
 }
 
-// compactAbandonablePristineState is the single pristineness rule this file
-// applies. AbandonPristineCompactStore calls it to decide, and
-// InspectCompactPristineAbandonment calls the same function to PREDICT, so a
-// refusal elsewhere that names `review abandon` as its continuation can never
-// name it for a lineage this gate would then reject.
-//
-// compactPristineReviewing hard-requires State == StateReviewing and an empty
-// InvalidationReason, so an invalidated record is projected back onto its
-// underlying reviewing authority before the re-derivation; resetting exactly
-// those two fields is load-bearing. The paired non-empty-InvalidationReason
-// check doubles as a structural corruption guard: a persisted invalidated
-// state without a reason never came from Invalidate.
-func compactAbandonablePristineState(state CompactState) bool {
-	switch state.State {
-	case StateReviewing:
-		return compactPristineReviewing(state)
-	case StateInvalidated:
-		reviewing := state
-		reviewing.State, reviewing.InvalidationReason = StateReviewing, ""
-		return strings.TrimSpace(state.InvalidationReason) != "" && compactPristineReviewing(reviewing)
+func validCompactAbandonReason(reason string) bool {
+	return reason == CompactAbandonReasonOperatorDisposition || reason == CompactAbandonReasonRetiredSchema
+}
+
+func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record CompactRecord) (CompactDiscardedWorkSummary, error) {
+	view, err := record.State.CompactReviewView()
+	if err != nil {
+		return CompactDiscardedWorkSummary{}, fmt.Errorf("derive admitted discarded work: %w", err)
 	}
-	return false
+	captured := make([]string, 0, len(record.State.AdmittedRoleResults))
+	for _, entry := range record.State.AdmittedRoleResults {
+		if !record.State.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == CompactRoleLens {
+			captured = append(captured, fmt.Sprintf("%02d-%s", entry.SelectedOrder, entry.Lens))
+		}
+	}
+	sort.Strings(captured)
+	summary := CompactDiscardedWorkSummary{CapturedLensResults: captured, FindingsPresent: len(view.Findings) > 0}
+	if len(captured) == 0 {
+		return summary, nil
+	}
+	if store.repo == "" {
+		return CompactDiscardedWorkSummary{}, errors.New("reviewer result store has no repository") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	builder := SnapshotBuilder{Repo: store.repo}
+	frozen, err := builder.FrozenCandidateContext(ctx, record.State.InitialSnapshot)
+	if err != nil {
+		return CompactDiscardedWorkSummary{}, fmt.Errorf("derive frozen reviewer context: %w", err)
+	}
+	for _, entry := range record.State.AdmittedRoleResults {
+		if entry.Role != CompactRoleLens {
+			continue
+		}
+		value, err := canonicalCompactRoleValue(entry.Value)
+		if err != nil || compactPreservedPayloadDigest(append(value, '\n')) != entry.ArtifactDigest {
+			return CompactDiscardedWorkSummary{}, errors.New("admitted reviewer record value is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		var envelope compactAdmittedReviewerResult
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&envelope); err != nil || decoder.Decode(new(struct{})) != io.EOF {
+			return CompactDiscardedWorkSummary{}, errors.New("decode admitted reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		nativeFrozen, expected, err := artifactSubjectForSchema(ctx, builder, record.State, entry.CapturePhaseRevision,
+			frozen, entry.Lens, entry.SelectedOrder, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
+		if err != nil || envelope.Schema != admittedReviewerResultSchemaForSubject(expected) || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
+			return CompactDiscardedWorkSummary{}, errors.New("admit captured reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen)
+		if !admitted || result.ResultHash != entry.ResultHash {
+			return CompactDiscardedWorkSummary{}, errors.New("admit captured reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+	}
+	return summary, nil
+}
+
+func compactAbandonV2Rerun(repo, lineage, revision, snapshotIdentity, actor, reason string, discarded CompactDiscardedWorkSummary) string {
+	return fmt.Sprintf("Re-run `gentle-ai review abandon --cwd %q --lineage %q --expected-revision %q --reason %q --actor %q --maintainer-authorization <the exact binding below>` using schema %s:\n%s",
+		repo, lineage, revision, reason, strings.TrimSpace(actor), CompactAbandonAuthorizationSchema,
+		compactAbandonAuthorizationBindingV2(lineage, revision, snapshotIdentity, actor, reason, discarded))
+}
+
+// compactAbandonTerminalState follows the public authority-status terminal
+// contract. An invalidated lineage remains auditable, but is no longer an
+// abandonment target.
+func compactAbandonTerminalState(state State) bool {
+	switch authorityStatusForState(state) {
+	case AuthorityStatusApproved, AuthorityStatusEscalated, AuthorityStatusInvalidated:
+		return true
+	default:
+		return false
+	}
 }
 
 // CompactAbandonEligibility reports whether `review abandon` would accept one
@@ -92,16 +171,16 @@ type CompactAbandonEligibility struct {
 	Eligible         bool
 	Revision         string
 	SnapshotIdentity string
+	DiscardedWork    CompactDiscardedWorkSummary
 }
 
 // InspectCompactPristineAbandonment answers, read-only, whether
 // AbandonPristineCompactStore would accept this lineage. It applies the same
-// pristineness rule, the same residue rule, the same superseded rule and the
-// same remaining-graph rule that gate the real operation, and takes no lock and
-// writes nothing.
+// terminal-state, discarded-work, superseded and remaining-graph rules as the
+// real operation, and takes no lock and writes nothing.
 //
 // It is fail-closed by construction: every unreadable, missing, mixed-store,
-// non-pristine, artifact-holding, superseded or graph-breaking target answers
+// terminal, superseded or graph-breaking target answers
 // not eligible. The maintainer authorization and the compare-and-swap are
 // deliberately NOT predicted — they are the operator's own act, and a probe
 // that claimed to know them would be claiming the maintainer had already
@@ -118,37 +197,30 @@ func InspectCompactPristineAbandonment(ctx context.Context, repo, lineage string
 		return CompactAbandonEligibility{}, err
 	}
 	dir := filepath.Join(base, "v2", lineage)
-	record, err := (CompactStore{Dir: dir, lineageID: lineage}).Load()
+	store := CompactStore{Dir: dir, lineageID: lineage, repo: repo}
+	record, err := store.Load()
 	if err != nil {
 		return CompactAbandonEligibility{}, nil
 	}
 	if _, statErr := os.Stat(filepath.Join(base, "v1", lineage)); statErr == nil || !os.IsNotExist(statErr) {
 		return CompactAbandonEligibility{}, nil
 	}
-	if !compactAbandonablePristineState(record.State) {
+	if compactAbandonTerminalState(record.State.State) {
 		return CompactAbandonEligibility{}, nil
 	}
-	items, err := os.ReadDir(dir)
+	discarded, err := compactDiscardedWorkSummary(ctx, store, record)
 	if err != nil {
 		return CompactAbandonEligibility{}, nil
 	}
-	for _, item := range items {
-		if item.Name() != compactStateFileName && compactAuthoritativeArtifact(item.Name()) {
-			return CompactAbandonEligibility{}, nil
-		}
-	}
-	stores, err := DiscoverCompactStores(ctx, repo)
+	// Scoped like every other authority walk (#2743): the probe answers for
+	// THIS lineage, whose own record already loaded above. An unreadable
+	// foreign record is absent from the graph, never a repository-wide
+	// not-eligible verdict that silently locks the abandon escape valve.
+	scan, err := scanCompactAuthority(ctx, repo)
 	if err != nil {
 		return CompactAbandonEligibility{}, err
 	}
-	records := make(map[string]CompactRecord, len(stores))
-	for _, related := range stores {
-		relatedRecord, loadErr := related.Load()
-		if loadErr != nil {
-			return CompactAbandonEligibility{}, nil
-		}
-		records[relatedRecord.State.LineageID] = relatedRecord
-	}
+	records := scan.records
 	for _, related := range records {
 		if related.State.Recovery != nil && related.State.Recovery.PredecessorLineageID == lineage {
 			return CompactAbandonEligibility{}, nil
@@ -158,21 +230,14 @@ func InspectCompactPristineAbandonment(ctx context.Context, repo, lineage string
 		return CompactAbandonEligibility{}, nil
 	}
 	return CompactAbandonEligibility{
-		Eligible: true, Revision: record.Revision, SnapshotIdentity: record.State.InitialSnapshot.Identity,
+		Eligible: true, Revision: record.Revision, SnapshotIdentity: record.State.InitialSnapshot.Identity, DiscardedWork: discarded,
 	}, nil
 }
 
-// AbandonPristineCompactStore quarantines one compact-v2 review lineage that
-// natively re-derives as pristine: a reviewing authority that never captured
-// lens results, findings, corrections, or evidence, or an invalidated
-// authority whose underlying reviewing projection is equally pristine. The
-// entry moves whole — never deleted — into the audited quarantine together
-// with the re-derived proof, so it leaves the walked inventory without
-// destroying history. Terminal, corrected, artifact-holding, superseded, and
-// stale-revision targets are refused, as is any move that would invalidate
-// the remaining authority graph. Pristineness is proven from persisted bytes
-// and store topology alone; the live worktree is never consulted. An exact
-// replay of a committed abandonment converges on the committed record.
+// AbandonPristineCompactStore quarantines a non-terminal compact-v2 review
+// lineage with V2 authorization bound to its exact discarded-work summary.
+// Terminal and graph-breaking targets are refused; source residue is retained
+// in the audit record.
 func AbandonPristineCompactStore(ctx context.Context, repo string, request CompactAbandonRequest) (CompactReclaimRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return CompactReclaimRecord{}, err
@@ -197,7 +262,7 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 		return CompactReclaimRecord{}, err
 	}
 	defer lock.release()
-	store := CompactStore{Dir: dir, lineageID: request.LineageID}
+	store := CompactStore{Dir: dir, lineageID: request.LineageID, repo: repo}
 	record, err := store.Load()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -210,17 +275,9 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 	} else if !os.IsNotExist(statErr) {
 		return CompactReclaimRecord{}, fmt.Errorf("inspect same-lineage legacy authority: %w", statErr)
 	}
-	switch record.State.State {
-	case StateReviewing:
-		if !compactAbandonablePristineState(record.State) {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: reviewing lineage %q is not pristine; it carries review or correction data", request.LineageID)
-		}
-	case StateInvalidated:
-		if !compactAbandonablePristineState(record.State) {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: invalidated lineage %q does not project to a pristine reviewing authority", request.LineageID)
-		}
-	default:
-		return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q holds %q authority; only a pristine reviewing or pristine invalidated lineage may be abandoned", request.LineageID, record.State.State)
+	if compactAbandonTerminalState(record.State.State) {
+		// refusal:by-design human-authority: terminal authority has no review-abandon continuation
+		return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q holds terminal %q authority", request.LineageID, record.State.State)
 	}
 	items, err := os.ReadDir(dir)
 	if err != nil {
@@ -228,40 +285,38 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 	}
 	residue := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.Name() != compactStateFileName && compactAuthoritativeArtifact(item.Name()) {
-			// Refusing is correct: abandoning an entry that holds captured
-			// review work would discard it. But the refusal has to leave the
-			// operator somewhere. `review reclaim` already ends its own
-			// cascade this way, and when reconciliation, reclaim, classified
-			// repair, invalidate and this all refuse in turn, the diagnosis
-			// plus escalation is the only honest exit left.
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: store entry %q holds authoritative artifact %q beyond its pristine state,"+
-				" and abandoning it would discard captured review work."+
-				" Nothing quarantines this shape today; the entry stays exactly as persisted."+
-				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
-				request.LineageID, item.Name(), repo)
-		}
 		residue = append(residue, item.Name())
 	}
 	if record.Revision != request.ExpectedRevision {
 		return CompactReclaimRecord{}, fmt.Errorf("%w: expected compact revision %q, current %q", ErrConcurrentUpdate, request.ExpectedRevision, record.Revision)
 	}
-	if request.MaintainerAuthorization != compactAbandonAuthorizationBinding(request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, request.Actor, request.Reason) {
-		return CompactReclaimRecord{}, fmt.Errorf("review abandon requires an exact maintainer authorization binding (schema %s over lineage %s@%s and snapshot %s)",
-			CompactAbandonAuthorizationSchema, request.LineageID, record.Revision, record.State.InitialSnapshot.Identity)
-	}
-	stores, err := DiscoverCompactStores(ctx, repo)
+	discarded, err := compactDiscardedWorkSummary(ctx, store, record)
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
-	records := make(map[string]CompactRecord, len(stores))
-	for _, related := range stores {
-		relatedRecord, loadErr := related.Load()
-		if loadErr != nil {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: related compact authority %q does not load: %w", related.lineageID, loadErr)
-		}
-		records[relatedRecord.State.LineageID] = relatedRecord
+	if strings.HasPrefix(request.MaintainerAuthorization, compactLegacyAbandonAuthorizationSchema) {
+		// refusal:by-design human-authority: a retired V1 token has no valid V2 reason to preserve
+		return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: v1 maintainer authorization is retired. %s", compactAbandonV2Rerun(repo, request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, request.Actor, CompactAbandonReasonOperatorDisposition, discarded))
 	}
+	if !validCompactAbandonReason(request.Reason) {
+		// refusal:by-design human-authority: only the closed disposition vocabulary can authorize discarded work
+		return CompactReclaimRecord{}, fmt.Errorf("review abandon requires reason %q or %q", CompactAbandonReasonOperatorDisposition, CompactAbandonReasonRetiredSchema)
+	}
+	if request.MaintainerAuthorization != compactAbandonAuthorizationBindingV2(request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, request.Actor, request.Reason, discarded) {
+		// refusal:by-design human-authority: only the maintainer can supply the exact V2 binding the rerun prints
+		return CompactReclaimRecord{}, fmt.Errorf("review abandon requires an exact maintainer authorization binding (schema %s over lineage %s@%s, snapshot %s, reason, and discarded work). %s", CompactAbandonAuthorizationSchema, request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, compactAbandonV2Rerun(repo, request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, request.Actor, request.Reason, discarded))
+	}
+	// Scoped like every other authority walk (#2743): abandon quarantines
+	// THIS lineage, whose record, revision, and authorization binding were
+	// already validated above. An unreadable foreign record is absent from
+	// the graph — the superseded and remaining-graph rules below judge only
+	// the records that actually load — so one historical entry can never
+	// refuse every abandonment in the repository.
+	scan, err := scanCompactAuthority(ctx, repo)
+	if err != nil {
+		return CompactReclaimRecord{}, err
+	}
+	records := scan.records
 	for lineage, related := range records {
 		if related.State.Recovery != nil && related.State.Recovery.PredecessorLineageID == request.LineageID {
 			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q is superseded by recovery successor %q; superseded history is never abandoned", request.LineageID, lineage)
@@ -274,20 +329,18 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 	if request.AbandonedAt.IsZero() {
 		request.AbandonedAt = time.Now().UTC()
 	}
-	return quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
+	quarantined := CompactReclaimRecord{
 		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared, LineageID: request.LineageID,
 		Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		ReclaimedAt: request.AbandonedAt.UTC(), SourcePath: dir, Residue: residue,
-		PristineAbandonment: &CompactPristineAbandonmentProof{
-			LineageID: request.LineageID, Revision: record.Revision,
-			SnapshotIdentity: record.State.InitialSnapshot.Identity,
-			State:            record.State.State, InvalidationReason: record.State.InvalidationReason,
-		},
-	})
+	}
+	quarantined.Abandonment = &CompactAbandonmentProof{Schema: CompactAbandonAuthorizationSchema,
+		LineageID: request.LineageID, Revision: record.Revision, SnapshotIdentity: record.State.InitialSnapshot.Identity, DiscardedWork: discarded}
+	return quarantineCompactStoreEntry(ctx, base, dir, quarantined)
 }
 
 // replayCommittedCompactAbandonment resolves an abandon request whose lineage
-// no longer holds a v2 entry: an exact replay of a committed abandonment
+// no longer holds a v2 entry: an exact replay finishes a prepared or
 // re-emits the committed record so repeated identical requests converge
 // without minting a second quarantine; anything else is refused.
 func replayCommittedCompactAbandonment(base string, request CompactAbandonRequest) (CompactReclaimRecord, error) {
@@ -308,16 +361,32 @@ func replayCommittedCompactAbandonment(base string, request CompactAbandonReques
 		if json.Unmarshal(payload, &record) != nil {
 			continue
 		}
-		proof := record.PristineAbandonment
-		if record.Status != CompactReclaimCommitted || proof == nil {
+		if record.Status != CompactReclaimCommitted {
 			continue
 		}
-		if proof.LineageID != request.LineageID || proof.Revision != request.ExpectedRevision ||
+		proof := record.Abandonment
+		if proof == nil || proof.Schema != CompactAbandonAuthorizationSchema {
+			continue
+		}
+		lineageID, revision, snapshotIdentity := proof.LineageID, proof.Revision, proof.SnapshotIdentity
+		binding := compactAbandonAuthorizationBindingV2(lineageID, revision, snapshotIdentity, request.Actor, request.Reason, proof.DiscardedWork)
+		if lineageID != request.LineageID || revision != request.ExpectedRevision ||
 			record.Reason != strings.TrimSpace(request.Reason) || record.Actor != strings.TrimSpace(request.Actor) {
 			continue
 		}
-		if request.MaintainerAuthorization != compactAbandonAuthorizationBinding(proof.LineageID, proof.Revision, proof.SnapshotIdentity, request.Actor, request.Reason) {
+		if request.MaintainerAuthorization != binding {
 			continue
+		}
+		if record.Status == CompactReclaimPrepared {
+			quarantineDir := filepath.Join(quarantineRoot, entry.Name())
+			residue, statErr := os.Lstat(filepath.Join(quarantineDir, "residue"))
+			if record.LineageID != request.LineageID || record.SourcePath != filepath.Join(base, "v2", request.LineageID) || record.QuarantinePath != quarantineDir || statErr != nil || !residue.IsDir() {
+				continue
+			}
+			record.Status = CompactReclaimCommitted
+			if persistErr := persistReclaimRecord(record); persistErr != nil {
+				return record, fmt.Errorf("commit prepared abandonment replay: %w", persistErr)
+			}
 		}
 		return record, nil
 	}

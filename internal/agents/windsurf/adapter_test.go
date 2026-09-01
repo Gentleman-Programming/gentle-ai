@@ -121,9 +121,6 @@ func TestCapabilities(t *testing.T) {
 	if a.SupportsSlashCommands() {
 		t.Fatal("Windsurf should NOT support slash commands")
 	}
-	if a.SupportsAutoInstall() {
-		t.Fatal("Windsurf should NOT support auto-install (desktop app)")
-	}
 	if !a.SupportsWorkflows() {
 		t.Fatal("Windsurf should support native workflows")
 	}
@@ -142,10 +139,6 @@ func TestWorkflowsDir(t *testing.T) {
 
 func TestDesktopAppNotAutoInstallable(t *testing.T) {
 	a := NewAdapter()
-
-	if a.SupportsAutoInstall() {
-		t.Fatal("Windsurf should not support auto-install (desktop app)")
-	}
 
 	_, err := a.InstallCommand(system.PlatformProfile{})
 	if err == nil {

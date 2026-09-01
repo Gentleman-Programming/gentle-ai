@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1372,6 +1373,27 @@ func TestEngramStopScriptIsDefensive(t *testing.T) {
 	// PowerShell status left behind by defensive no-op commands.
 	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
 		t.Errorf("stop script must explicitly exit 0 on the clean/no-process path\nscript:\n%s", script)
+	}
+}
+
+func TestStopEngramProcessesUsesPowerShellResolver(t *testing.T) {
+	dir := t.TempDir()
+	host := "pwsh"
+	if runtime.GOOS == "windows" {
+		host += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, host), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	runner := system.NewPowerShellRunner()
+	var used string
+	runner.RunCommand = func(_ context.Context, name string, _ ...string) ([]byte, error) { used = name; return nil, nil }
+	if err := stopEngramProcessesWith(runner); err != nil {
+		t.Fatalf("stopEngramProcesses() error = %v", err)
+	}
+	if !strings.HasPrefix(filepath.Base(used), "pwsh") {
+		t.Fatalf("stopEngramProcesses() host = %q, want pwsh", used)
 	}
 }
 

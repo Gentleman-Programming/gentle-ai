@@ -16,7 +16,7 @@ type ReviewReclaimResult struct {
 }
 
 func RunReviewReclaim(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review reclaim", stdout, "Quarantine one explicit incomplete compact-v2 store entry with a persisted audit record; entries holding any authoritative artifact are refused, and the refusal names the operation that admits that entry's shape when one exists — review reconcile-authority for a reconcilable recovery edge, review abandon for a pristine entry — or the exact diagnosis to capture when none does. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
+	flags := newReviewFlagSet("review reclaim", stdout, "Quarantine one explicit incomplete compact-v2 store entry with a persisted audit record; entries holding any authoritative artifact are refused, and the refusal names the operation that admits that entry's shape when one exists — review abandon for a pristine entry — or the exact diagnosis to capture when none does. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
 	lineage := flags.String("lineage", "", "explicit incomplete compact store lineage")
 	reason := flags.String("reason", "", "non-empty reclaim reason")

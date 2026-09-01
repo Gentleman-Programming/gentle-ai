@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  # Manual re-run. `gh run rerun` refuses a run whose workflow file has changed
+  # since, which is exactly when a re-run is needed most: a known-flaky failure
+  # on a commit that is otherwise ready to tag, right after the workflow moved.
+  # Without this the only way to re-run CI on main is to push another commit.
+  workflow_dispatch:
   schedule:
     # 03:00 UTC daily — full Tier 1+2+3 across all platforms as a safety net
     - cron: "0 3 * * *"
@@ -52,6 +57,80 @@ jobs:
       - name: Run unit tests
         run: go test ./...
 
+      - name: Build, vet, and test benchmark module
+        working-directory: bench
+        run: |
+          go build -o "$RUNNER_TEMP/gentle-ai-bench" .
+          go vet ./...
+          go test ./...
+
+      - name: Run benchmark evidence
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-portable.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j51-negotiated-status-correction-continuation") and
+            completed_once("j59-current-status-and-start-ignore-sibling-worktree-transaction") and
+            completed_once("j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow") and
+            completed_once("j75-intended-untracked-selection-executes-printed-start") and
+            completed_once("j81-rc1-consecutive-rescope-repair-executes-printed-command") and
+            completed_once("j89-staged-validation-is-informational-and-unmanaged") and
+            completed_once("j104-repository-context-survives-fresh-process") and
+            completed_once("j110-untracked-terminal-burn-and-unmanaged-staged-validation") and
+            completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged") and
+            completed_once("j113-correction-removes-candidate-only-path") and
+            completed_once("j114-last-reviewer-capture-closes-and-burns") and
+            completed_once("j116-codex-committed-correction-runs-returned-status-continuation") and
+            completed_once("j123-rejected-provider-validator-starts-fresh-high-risk-review")
+          ' "$RUNNER_TEMP/bench-portable.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j105-compiled-provider-capture-retries-same-binding")
+          ' "$RUNNER_TEMP/bench-provider-capture.json"
+          # Transition axis (#2829): sequences of ordinary operations, which is
+          # how #2830 shipped. #2830 now refuses the second consecutive rescope
+          # before publication, so every transition journey must complete.
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis transition --out "$RUNNER_TEMP/bench-transition.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            ([.journeys[] | select(.id | startswith("tr"))] | length) == 11 and
+            ([.journeys[] | select((.id | startswith("tr")) and .status == "completed")] | length) == 11 and
+            completed_once("tr01-consecutive-rescope-keeps-the-ledger-readable") and
+            completed_once("tr02-reset-after-rescope-keeps-the-ledger-readable") and
+            completed_once("tr03-review-disabled-mid-change-keeps-sdd-moving") and
+            completed_once("tr04-reset-then-rescope-keeps-the-ledger-readable") and
+            completed_once("tr05-review-re-enabled-mid-change-keeps-sdd-moving") and
+            completed_once("tr06-mode-flip-during-an-active-attempt") and
+            completed_once("tr07-reset-then-reset-keeps-the-ledger-readable") and
+            completed_once("tr08-scope-change-after-a-delegated-handoff") and
+            completed_once("tr09-mode-flip-while-a-review-lineage-is-open") and
+            completed_once("tr10-scope-change-after-the-review-is-bound") and
+            completed_once("tr11-abandon-the-review-while-an-attempt-is-open")
+          ' "$RUNNER_TEMP/bench-transition.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker-untagged.json"
+          jq -e '
+            def unsupported_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "unsupported");
+            unsupported_once("j97-opencode-custom-agent-model-picker-runtime")
+          ' "$RUNNER_TEMP/bench-model-picker-untagged.json"
+          go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j97-opencode-custom-agent-model-picker-runtime")
+          ' "$RUNNER_TEMP/bench-model-picker.json"
+
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is
       # decoration.
@@ -63,16 +142,60 @@ jobs:
       - name: Check for new unreachable functions
         run: ./scripts/deadcode-ratchet.sh
 
+  claude-network-none:
+    name: Claude Network-None Runtime (Required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build pinned Claude runtime proof image
+        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .
+      - name: Prove Claude transport without external networking
+        run: |
+          docker run --rm --pull=never --network none --cap-drop=ALL \
+            --security-opt=no-new-privileges --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            -e GENTLE_AI_PARENT_NETNS="$(stat -Lc %i /proc/self/ns/net)" \
+            gentle-ai-claude-network-none:ci
+
   windows-runtime:
     name: Windows Runtime
     needs: go-format
     if: always()
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Release blockers only; the full suite moved to windows-full-suite. Must
+    # exceed the sum of its own step budgets, or a step can never reach its
+    # limit -- the previous 30 here killed a 35-minute step at exactly 30m on
+    # every push to main, reporting `cancelled` for the whole run and blocking
+    # the release gate, while pull requests stayed green because the full
+    # suite only ran on push and schedule.
+    timeout-minutes: 20
     steps:
       - name: Require successful Go format
         if: needs.go-format.result != 'success'
         run: exit 1
+
+      # This suite is process- and filesystem-bound, not CPU-bound: it spawns
+      # git constantly and builds throwaway repositories under TEMP. Defender
+      # scans every one of those writes and every spawned image, which is the
+      # single largest reason the same suite takes ~155s on Linux and over
+      # 30m here. Exclusions are scoped to the two trees the run owns and last
+      # only for the life of the ephemeral runner.
+      #
+      # Deliberately not `if: failure()`-guarded or made required: Defender
+      # policy can refuse the call on a hardened image, and a CI lane must not
+      # go red because an optimisation was unavailable. `-ErrorAction
+      # SilentlyContinue` keeps it best-effort.
+      - name: Exclude runner work and temp trees from Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'git.exe','go.exe','gentle-ai.exe' -ErrorAction SilentlyContinue
 
       - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -87,6 +210,23 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Run native Windows junction parent tests
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $selector = '^(TestWriteFileAtomicFollowsDirectoryJunction|TestEnsureAtomicParentDirRejectsUnsafeDirectoryJunctionTargets|TestWriteFileAtomicRejectsJunctionLoop)$'
+          $expected = @(
+            'TestWriteFileAtomicFollowsDirectoryJunction'
+            'TestEnsureAtomicParentDirRejectsUnsafeDirectoryJunctionTargets'
+            'TestWriteFileAtomicRejectsJunctionLoop'
+          )
+          $selected = @(go test ./internal/components/filemerge -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list native Windows junction parent tests' }
+          $missing = @($expected | Where-Object { $_ -notin $selected })
+          if ($missing.Count -gt 0) { throw "Missing native Windows junction parent tests: $($missing -join ', ')" }
+          go test -v ./internal/components/filemerge -count=1 -run $selector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build native test binary
         shell: pwsh
         run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai
@@ -97,15 +237,56 @@ jobs:
         env:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
-        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize)$' -count=1 -timeout=8m
+        run: |
+          $packages = @('./internal/cli', './internal/reviewtransaction', './internal/sddstatus', './internal/components/engram')
+          $expected = @(
+            'TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals',
+            'TestRARPrivateOwnerRemainsTokenUserOnly',
+            'TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags',
+            'TestWindowsSecureOpenDriveFallbackFailsClosed',
+            'TestWindowsSecureOpenDoesNotRetryOtherErrors',
+            'TestWindowsStoreLockUsesExistingInodeAdvisoryTruth',
+            'TestRunGitBoundsLocalAndRemoteCommands',
+            'TestRunGitDistinguishesAggregateDeadlineAndTypedExit',
+            'TestStoreLockReportsLiveOwnerAndCannotBeStolen',
+            'TestStoreLockRecoversCrashAndCorruptOwnerRecords',
+            'TestStoreLockIsReleasedWhenOwnerProcessExits',
+            'TestConcurrentStoreLockRecoverersCannotBothWin',
+            'TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline',
+            'TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance',
+            'TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays',
+            'TestRepairClassifiedAuthorityResumesEachDurablePhase',
+            'TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts',
+            'TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef',
+            'TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection',
+            'TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure',
+            'TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources',
+            'TestStdioHandshake_TerminatesDescendantOnContextEnd',
+            'TestStdioHandshake_PreservesEarlierDeadline',
+            'TestStdioHandshake_PreservesCallerCancellation',
+            'TestProbeStdio_MissingAbsoluteConfiguredCommandFails',
+            'TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled',
+            'TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns',
+            'TestCaptureCorrectionPlanBindsExactRequestAndRefusesBudgetOverrun',
+            'TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize',
+            'TestReviewStartWithZeroLensesIssuesAcknowledgement',
+            'TestReviewRecoverEscalatedRequiresExactSuccessorBoundAuthorization',
+            'TestCompactReceiptAndGateAPIsAreAbsentFromProductionPackages'
+          )
+          $selector = '^(' + [string]::Join('|', $expected) + ')$'
+          $selected = @(go test $packages -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list Windows release-blocker tests' }
+          $missing = @($expected | Where-Object { $_ -notin $selected })
+          if ($missing.Count -gt 0) { throw "Missing Windows release-blocker tests: $($missing -join ', ')" }
+          go test -v $packages -run $selector -count=1 -timeout=8m
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # PR runs the release-blocker subset only; push to main and the nightly
-      # schedule run the full Windows suite, mirroring the E2E tier policy.
-      - name: Run full Windows suite
+      - name: Stress repository-context sharing retry
         shell: pwsh
-        timeout-minutes: 35
-        run: if ($env:GITHUB_EVENT_NAME -eq 'push' -or $env:GITHUB_EVENT_NAME -eq 'schedule') { go test ./... -count=1 -timeout=30m; exit $LASTEXITCODE } else { Write-Host 'Skipping full suite on pull_request; release-blocker tests already ran.' }
+        run: go test ./internal/reviewtransaction -count=100 -timeout=10m -run '^(TestReadReviewRepositoryContextRetriesTransientWindowsSharingViolation|TestReviewRepositoryContextPublicationConvergesAndRejectsUnsafeEntries)$'
 
+      # PR runs the release-blocker subset only; the full Windows suite runs
+      # in the separate, honestly-named "Windows Full Suite" workflow.
   # Native Darwin release blockers (#1853). Four macOS defects (#1773, #1781,
   # #1804, #1850) and the #1872 RAR lock convoy shipped because no CI lane
   # executes Darwin semantics; GOOS=darwin cross-builds prove compilation, not
@@ -157,7 +338,10 @@ jobs:
     needs: go-format
     if: always()
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Issue #3185: the Windows suite legitimately runs 11-13 minutes; a 15m
+    # go-test budget flaked on slow runners with every test passing. The job
+    # limit still bounds a real hang.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -186,20 +370,72 @@ jobs:
           node-version: "24"
 
       - name: Install pinned OpenCode runtime
-        run: npm install --global opencode-ai@1.18.4
+        run: npm install --global opencode-ai@1.18.10
+
+      - name: Install Claude Code runtime
+        # This suite drives the real install pipeline end to end, so it needs
+        # the real binary the same way it needs OpenCode above — gentle-ai
+        # itself no longer installs this (agentInstallStep in
+        # internal/cli/run.go refuses instead), so CI installs what it needs
+        # to test, same as any other test dependency. No exact-pin test
+        # applies here the way TestOrganicRuntimeE2EUsesInstalledOpenCodePin
+        # asserts for OpenCode: there is no versions.go constant backing this
+        # one, since gentle-ai's own display-only refusal for Claude Code
+        # advises "latest" too (see internal/installcmd/resolver.go).
+        run: npm install --global @anthropic-ai/claude-code@latest
+
+      - name: Install pinned Codex runtime
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -eq 'Linux') {
+            npm install --global @openai/codex@0.147.0
+          }
+
+      - name: Verify real-agent detection E2E is registered
+        # organic_runtime_real_agent_detection_test.go is gated behind the
+        # real_agent_e2e build tag precisely so `go test ./...` at the repo
+        # root never runs it against whatever agent binaries happen to be on
+        # that machine's PATH (see the file's own comment). That means this
+        # job is its only runner, so a rename or a dropped -tags flag here
+        # must fail loudly rather than let the suite silently stop proving
+        # real Claude Code / OpenCode detection.
+        shell: pwsh
+        run: |
+          $tests = go test -tags real_agent_e2e -list '^TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents') {
+            throw 'Real-agent detection E2E is missing'
+          }
+
+      - name: Verify live OpenCode provider isolation E2E is registered
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -ne 'Linux') { exit 0 }
+          $tests = go test -list '^TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport') {
+            throw 'Live OpenCode provider isolation E2E is missing'
+          }
 
       - name: Run organic journeys
         # No -run filter: a renamed test must fail this job loudly, never let
         # go test exit 0 having matched nothing. The gated real-agent journey
         # (TestRealAgentOrganicJourneys) is included via its env switch.
+        # -tags real_agent_e2e additionally compiles in
+        # TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents, which
+        # `go test ./...` never does — see that file's build-tag comment.
         env:
           GENTLE_AI_REAL_AGENT_E2E: "1"
+          # The Linux-only Codex journey invokes the registered adapter through
+          # the product CLI under a process-scoped denying proxy and strace.
+          GENTLE_AI_CODEX_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          # The live OpenCode transport stays on Ubuntu because its process-scoped
+          # loopback denying proxy and strace proof require Linux.
+          GENTLE_AI_OPENCODE_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
           # The large-workspace journey spawns one Git subprocess per intended
           # untracked path, so its cost is dominated by process creation. Linux
           # absorbs it; Windows does not, and gating it here keeps the real
           # coverage where it is affordable instead of deleting it outright.
           GENTLE_AI_LARGE_WORKSPACE_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
-        run: go test -v ./e2e/organicruntime -count=1 -timeout=15m
+        run: go test -tags real_agent_e2e -v ./e2e/organicruntime -count=1 -timeout=25m
 
   e2e-tests:
     name: E2E Tests (${{ matrix.platform.name }})
@@ -241,16 +477,18 @@ jobs:
           cache-from: type=gha,scope=e2e-${{ matrix.platform.name }}
           cache-to: type=gha,mode=max,scope=e2e-${{ matrix.platform.name }}
 
-      # PR runs Tier 1 only (binary + dry-run); push to main and the nightly
-      # schedule run the full Tier 1+2+3 suite. The ruleset still requires all
-      # 3 platform checks, so the matrix runs everywhere — only the test scope
-      # changes by event.
+      # Full Tier 1+2+3 on every event (#2527): these checks are required by
+      # the ruleset under the name "E2E Tests", so they must deliver the full
+      # suite wherever they gate. Tiers 2-3 write only inside the container,
+      # and push/schedule already prove they fit the step budget on the same
+      # runners. Do not reintroduce per-event tier selection here without
+      # renaming the checks to state the reduced scope.
       - name: Run E2E tests
         timeout-minutes: 30
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_FULL_E2E: ${{ (github.event_name == 'push' || github.event_name == 'schedule') && '1' || '0' }}
-          RUN_BACKUP_TESTS: ${{ (github.event_name == 'push' || github.event_name == 'schedule') && '1' || '0' }}
+          RUN_FULL_E2E: "1"
+          RUN_BACKUP_TESTS: "1"
         run: |
           docker run --rm \
             -e RUN_FULL_E2E \

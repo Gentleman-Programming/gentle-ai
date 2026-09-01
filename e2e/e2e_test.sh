@@ -493,11 +493,13 @@ test_cc_engram_injection() {
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component engram --persona neutral 2>&1; then
-        # MCP config
-        assert_file_exists "$HOME/.claude/mcp/engram.json" "engram.json MCP config"
-        assert_file_contains "$HOME/.claude/mcp/engram.json" '"command"' "engram.json has 'command' key"
-        assert_file_contains "$HOME/.claude/mcp/engram.json" 'engram' "engram.json command points to engram binary (absolute or relative)"
-        assert_valid_json "$HOME/.claude/mcp/engram.json" "engram.json is valid JSON"
+        # User-scope MCP registry
+        local registry="$HOME/.claude.json"
+        assert_file_exists "$registry" "Claude user MCP registry"
+        assert_file_contains "$registry" '"mcpServers"' "Registry has mcpServers"
+        assert_file_contains "$registry" '"engram"' "Registry has Engram server"
+        assert_valid_json "$registry" "Claude user MCP registry is valid JSON"
+        assert_file_not_exists "$HOME/.claude/mcp/engram.json" "legacy Engram MCP file is not written"
 
         # CLAUDE.md section
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
@@ -519,7 +521,7 @@ test_cc_sdd_injection() {
         assert_file_contains "$HOME/.claude/CLAUDE.md" "sub-agent\|dependency\|orchestrator" "CLAUDE.md has real SDD content"
         assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md SDD section is substantial"
 
-        for phase in sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive; do
+        for phase in sdd-init sdd-explore sdd-research sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard; do
             assert_file_exists "$HOME/.claude/agents/${phase}.md" "Claude native sub-agent exists: ${phase}"
             assert_file_size_min "$HOME/.claude/agents/${phase}.md" 200 "Claude native sub-agent is substantial: ${phase}"
         done
@@ -639,7 +641,7 @@ test_cc_skills_minimal() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Minimal preset = 12 files: 10 SDD + judgment-day + _shared/SKILL.md
+        # Minimal preset = 12 files: 11 SDD phases + judgment-day. _shared is support-only.
         assert_file_count "$skills_dir" "SKILL.md" 12 "Minimal preset: 12 skill files"
 
         # Verify specific SDD skills exist
@@ -663,15 +665,15 @@ test_cc_skills_minimal() {
 }
 
 test_cc_skills_full() {
-    log_test "Claude Code: skills injection (full-gentleman = 10 foundation skills)"
+    log_test "Claude Code: skills injection (full-gentleman = 13 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Full preset = 22 files: 10 SDD + judgment-day + 10 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 22 "Full preset: 22 skill files"
+        # Full preset = 25 files: 11 SDD phases + judgment-day + 13 foundation. _shared is support-only.
+        assert_file_count "$skills_dir" "SKILL.md" 25 "Full preset: 25 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
@@ -692,15 +694,15 @@ test_cc_skills_full() {
 }
 
 test_cc_skills_ecosystem() {
-    log_test "Claude Code: skills injection (ecosystem-only = 10 foundation skills)"
+    log_test "Claude Code: skills injection (ecosystem-only = 13 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset ecosystem-only --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # ecosystem-only = 22 files: 10 SDD + judgment-day + 10 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 22 "Ecosystem preset: 22 skill files"
+        # ecosystem-only = 25 files: 11 SDD phases + judgment-day + 13 foundation. _shared is support-only.
+        assert_file_count "$skills_dir" "SKILL.md" 25 "Ecosystem preset: 25 skill files"
 
         # SDD skills present
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "SDD skills present"
@@ -732,9 +734,9 @@ test_cc_custom_skills_with_flag() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
 
-        # Note: --component skills auto-resolves sdd (graph dep), which installs 11 SDD skills + _shared/SKILL.md.
-        # Total = 11 SDD skills + 2 explicit skills + 1 _shared/SKILL.md = 14 SKILL.md files.
-        assert_file_count "$skills_dir" "SKILL.md" 14 "Custom + explicit skills: 11 SDD + 2 explicit + 1 _shared = 14 files"
+        # Note: --component skills auto-resolves sdd (graph dep), which installs 12 SDD/orchestration skills.
+        # Total = 12 SDD/orchestration skills + 2 explicit skills = 14 SKILL.md files.
+        assert_file_count "$skills_dir" "SKILL.md" 14 "Custom + explicit skills: 12 SDD/orchestration + 2 explicit = 14 files"
 
         # SDD skills ARE present (from the sdd dependency)
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md (from sdd dep)"
@@ -750,11 +752,11 @@ test_cc_custom_no_skills_flag_installs_nothing() {
     if $BINARY install --agent claude-code --preset custom --component skills --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         # --component skills auto-resolves sdd as a hard dependency (graph: skills → sdd → engram).
-        # The SDD component always installs its 11 SDD+orchestration skills.
+        # The SDD component always installs its 12 SDD/orchestration skills.
         # The skills component itself is a no-op (SkillsForPreset(custom) returns nil, no --skills flag).
-        # Result: exactly 12 SKILL.md files from the sdd dependency (11 SDD + _shared/SKILL.md).
+        # Result: exactly 12 SKILL.md files from the SDD dependency. _shared is support-only.
         assert_dir_exists "$skills_dir" "Skills directory created by sdd dependency"
-        assert_file_count "$skills_dir" "SKILL.md" 12 "12 skill files from sdd dependency (11 SDD + _shared/SKILL.md)"
+        assert_file_count "$skills_dir" "SKILL.md" 12 "12 skill files from the SDD dependency"
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init installed by sdd dependency"
     else
         log_fail "custom + skills component (no flag) install command failed"
@@ -776,7 +778,7 @@ test_cc_custom_sdd_plus_skills() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md (from --skills flag)"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md (from --skills flag)"
 
-        # Total: 11 SDD skills + 2 explicit skills + _shared/SKILL.md = 14
+        # Total: 12 SDD/orchestration skills + 2 explicit skills = 14.
         assert_file_count "$skills_dir" "SKILL.md" 14 "SDD + explicit skills: 14 skill files total"
     else
         log_fail "custom + SDD + skills install command failed"
@@ -784,16 +786,19 @@ test_cc_custom_sdd_plus_skills() {
 }
 
 test_cc_context7_injection() {
-    log_test "Claude Code: context7 injection (settings.json MCP servers)"
+    log_test "Claude Code: context7 injection (~/.claude.json user MCP registry)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component context7 --persona neutral 2>&1; then
-        local settings="$HOME/.claude/settings.json"
-        assert_file_exists "$settings" "Claude settings.json"
-        assert_file_contains "$settings" '"mcpServers"' "settings.json has mcpServers key"
-        assert_file_contains "$settings" '"context7"' "settings.json has context7 server"
-        assert_file_contains "$settings" 'context7-mcp' "settings.json points to context7-mcp"
-        assert_valid_json "$settings" "settings.json is valid JSON"
+        # Claude Code only reads user-scope MCP servers from ~/.claude.json;
+        # the settings.json mcpServers block earlier versions wrote is inert
+        # and no longer written (issue #1868, PR #1909).
+        local registry="$HOME/.claude.json"
+        assert_file_exists "$registry" "Claude user MCP registry (~/.claude.json)"
+        assert_file_contains "$registry" '"mcpServers"' "user registry has mcpServers key"
+        assert_file_contains "$registry" '"context7"' "user registry has context7 server"
+        assert_file_contains "$registry" 'context7-mcp' "user registry points to context7-mcp"
+        assert_valid_json "$registry" "user registry is valid JSON"
         assert_file_not_exists "$HOME/.claude/mcp/context7.json" "legacy context7 MCP file is not written"
     else
         log_fail "context7 install command failed"
@@ -823,7 +828,7 @@ test_cc_theme_injection() {
         local settings="$HOME/.claude/settings.json"
         assert_file_exists "$settings" "Claude settings.json"
         assert_file_contains "$settings" '"theme"' "Has theme key"
-        assert_file_contains "$settings" 'gentleman-kanagawa' "Has gentleman-kanagawa theme"
+        assert_file_contains "$settings" 'gentleman' "Has gentleman theme"
         assert_valid_json "$settings" "settings.json is valid JSON"
     else
         log_fail "theme install command failed"
@@ -863,17 +868,17 @@ test_oc_sdd_injection() {
         local commands_dir="$HOME/.config/opencode/commands"
         local skill_dir="$HOME/.config/opencode/skills"
 
-        # Command files (8 SDD commands from embedded assets)
+        # Command files (11 SDD commands from embedded assets)
         assert_dir_exists "$commands_dir" "OpenCode commands directory"
-        assert_file_count_min "$commands_dir" "*.md" 7 "At least 7 SDD command files"
+        assert_file_count "$commands_dir" "sdd-*.md" 11 "All 11 SDD command files"
 
         # Validate command file content
         assert_file_exists "$commands_dir/sdd-init.md" "sdd-init command file"
         assert_file_contains "$commands_dir/sdd-init.md" "sdd" "sdd-init command has SDD content"
 
-        # SDD + orchestration skill files (11)
+        # SDD phases and judgment-day (12 files). _shared is support-only.
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count_min "$skill_dir" "SKILL.md" 11 "At least 11 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 12 "All 12 SDD and orchestration skill files"
 
         # Validate skill file content
         assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
@@ -927,13 +932,13 @@ test_oc_skills_minimal() {
 }
 
 test_oc_skills_full() {
-    log_test "OpenCode: skills injection (full-gentleman = 10 foundation skills)"
+    log_test "OpenCode: skills injection (full-gentleman = 13 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 22 "Full preset: 22 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 25 "Full preset: 25 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"
@@ -984,8 +989,8 @@ test_qwen_engram_idempotency() {
 
     local settings="$HOME/.qwen/settings.json"
 
-    # First run — `|| true` keeps `set -e` from aborting the suite if install
-    # errors out (e.g. transient npm failure); we assert on the resulting file.
+    # First run — the install's exit code is irrelevant here (e.g. transient
+    # npm failure); we assert on the resulting file.
     $BINARY install --agent qwen-code --component engram --persona neutral > /dev/null 2>&1 || true
     if [ ! -f "$settings" ]; then
         log_fail "Qwen settings.json missing after first install"
@@ -1034,7 +1039,7 @@ test_oc_theme_injection() {
         local settings="$HOME/.config/opencode/opencode.json"
         assert_file_exists "$settings" "OpenCode opencode.json"
         assert_file_contains "$settings" '"theme"' "Has theme key"
-        assert_file_contains "$settings" 'gentleman-kanagawa' "Has gentleman-kanagawa theme"
+        assert_file_contains "$settings" 'gentleman' "Has gentleman theme"
         assert_valid_json "$settings" "opencode.json is valid JSON"
     else
         log_fail "OpenCode theme install command failed"
@@ -1071,10 +1076,14 @@ test_full_preset_claude_code() {
         assert_file_contains "$settings" '"theme"' "Has theme"
         assert_valid_json "$settings" "settings.json is valid JSON"
 
-        # MCP config is merged into Claude settings.json.
-        assert_file_contains "$settings" '"mcpServers"' "Has MCP servers"
-        assert_file_contains "$settings" '"context7"' "Has context7 MCP"
-        assert_file_contains "$settings" 'context7-mcp' "Context7 MCP uses pinned package"
+        # MCP registration lives in the ~/.claude.json user registry, the only
+        # user-scope file Claude Code reads MCP servers from (issue #1868).
+        local registry="$HOME/.claude.json"
+        assert_file_exists "$registry" "Claude user MCP registry (~/.claude.json)"
+        assert_file_contains "$registry" '"mcpServers"' "Has MCP servers"
+        assert_file_contains "$registry" '"context7"' "Has context7 MCP"
+        assert_file_contains "$registry" 'context7-mcp' "Context7 MCP uses pinned package"
+        assert_valid_json "$registry" "user registry is valid JSON"
 
         # Skills
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "At least 11 skill files"
@@ -1185,7 +1194,7 @@ test_ecosystem_both_agents() {
         # Claude Code
         assert_file_exists "$HOME/.claude/CLAUDE.md" "Claude CLAUDE.md"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "Claude has SDD"
-        assert_file_contains "$HOME/.claude/settings.json" '"context7"' "Claude context7 MCP"
+        assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7 MCP"
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "Claude skills"
 
         # OpenCode
@@ -1271,21 +1280,15 @@ test_content_mcp_json_valid() {
     $BINARY install --agent claude-code --component context7 --persona neutral 2>&1 || true
     $BINARY install --agent claude-code --component engram --persona neutral 2>&1 || true
 
-    # Validate all JSON files in MCP directory
-    if [ -d "$HOME/.claude/mcp" ]; then
-        local all_ok=true
-        while IFS= read -r json_file; do
-            if ! assert_valid_json "$json_file" "$(basename "$json_file") is valid JSON"; then
-                all_ok=false
-            fi
-        done < <(find "$HOME/.claude/mcp" -name "*.json" -type f)
-
-        if $all_ok; then
-            log_pass "All MCP JSON files are valid"
-        fi
-    else
-        log_fail "MCP directory not created"
-    fi
+    # Claude Code reads user-scoped MCP servers from ~/.claude.json. The legacy
+    # ~/.claude/mcp directory is intentionally no longer created.
+    local registry="$HOME/.claude.json"
+    assert_file_exists "$registry" "Claude user MCP registry"
+    assert_valid_json "$registry" "Claude user MCP registry is valid JSON"
+    assert_file_contains "$registry" '"context7"' "Registry has Context7 server"
+    assert_file_contains "$registry" '"engram"' "Registry has Engram server"
+    assert_file_not_exists "$HOME/.claude/mcp/context7.json" "legacy Context7 MCP file is not written"
+    assert_file_not_exists "$HOME/.claude/mcp/engram.json" "legacy Engram MCP file is not written"
 }
 
 test_content_opencode_commands_valid_markdown() {
@@ -1376,10 +1379,10 @@ test_idempotent_engram_claude() {
     if [ -f "$claude_md" ]; then
         assert_no_duplicate_section "$claude_md" "engram-protocol" "No duplicate engram section after 2 runs"
 
-        # Also check MCP JSON is identical
-        local mcp_file="$HOME/.claude/mcp/engram.json"
+        # Also check the user registry remains valid.
+        local mcp_file="$HOME/.claude.json"
         if [ -f "$mcp_file" ]; then
-            assert_valid_json "$mcp_file" "engram.json still valid after 2 runs"
+            assert_valid_json "$mcp_file" "Claude user MCP registry still valid after 2 runs"
         fi
     else
         log_fail "CLAUDE.md not found"
@@ -1561,7 +1564,7 @@ test_edge_multiple_agents_same_component() {
 
     if $BINARY install --agent claude-code --agent opencode --component context7 --persona neutral 2>&1; then
         # Both agents should have context7
-        assert_file_contains "$HOME/.claude/settings.json" '"context7"' "Claude context7"
+        assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7"
         assert_file_contains "$HOME/.config/opencode/opencode.json" '"context7"' "OpenCode context7"
     else
         log_fail "Multiple agents + context7 install command failed"
@@ -1700,7 +1703,7 @@ test_gga_reinstall_is_idempotent() {
 # --- Category 10: Cursor agent files ---
 
 test_cursor_sdd_subagents() {
-    log_test "Cursor: SDD install writes 9 agent files to ~/.cursor/agents/"
+    log_test "Cursor: SDD install writes 11 agent files to ~/.cursor/agents/"
     cleanup_test_env
 
     # Cursor is a desktop app — create the config dir to signal it's "installed"
@@ -1712,9 +1715,10 @@ test_cursor_sdd_subagents() {
         # Directory must exist
         assert_dir_exists "$agents_dir" "~/.cursor/agents/ directory"
 
-        # All 9 SDD agent files must exist
+        # All 11 SDD agent files must exist
         assert_file_exists "$agents_dir/sdd-init.md" "sdd-init.md agent file"
         assert_file_exists "$agents_dir/sdd-explore.md" "sdd-explore.md agent file"
+        assert_file_exists "$agents_dir/sdd-research.md" "sdd-research.md agent file"
         assert_file_exists "$agents_dir/sdd-propose.md" "sdd-propose.md agent file"
         assert_file_exists "$agents_dir/sdd-spec.md" "sdd-spec.md agent file"
         assert_file_exists "$agents_dir/sdd-design.md" "sdd-design.md agent file"
@@ -1722,6 +1726,7 @@ test_cursor_sdd_subagents() {
         assert_file_exists "$agents_dir/sdd-apply.md" "sdd-apply.md agent file"
         assert_file_exists "$agents_dir/sdd-verify.md" "sdd-verify.md agent file"
         assert_file_exists "$agents_dir/sdd-archive.md" "sdd-archive.md agent file"
+        assert_file_exists "$agents_dir/sdd-onboard.md" "sdd-onboard.md agent file"
 
         # readonly flags: explore and verify are readonly: false (issue #156 — readonly: true
         # blocks MCP tools and terminal in Cursor, not just file writes)
@@ -1732,7 +1737,7 @@ test_cursor_sdd_subagents() {
         assert_file_not_contains "$agents_dir/sdd-apply.md" "readonly: true" "sdd-apply is NOT readonly"
 
         # All agent files must have substantial content
-        for phase in sdd-init sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive; do
+        for phase in sdd-init sdd-explore sdd-research sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard; do
             assert_file_size_min "$agents_dir/$phase.md" 200 "$phase agent has real content"
         done
     else
@@ -1774,6 +1779,9 @@ test_antigravity_sdd_skills_path() {
     log_test "Antigravity: SDD skills install to ~/.gemini/antigravity-cli/skills/"
     cleanup_test_env
 
+    # Antigravity is a desktop app — create the config dir to signal it's "installed"
+    mkdir -p "$HOME/.gemini/antigravity"
+
     if $BINARY install --agent antigravity --component sdd --persona neutral 2>&1; then
         local skills_dir="$HOME/.gemini/antigravity-cli/skills"
         assert_dir_exists "$skills_dir" "Antigravity skills directory"
@@ -1798,6 +1806,9 @@ test_antigravity_sdd_skills_path() {
 test_windsurf_persona_and_sdd_content() {
     log_test "Windsurf: persona + SDD inject into global_rules.md"
     cleanup_test_env
+
+    # Windsurf is a desktop app — create the config dir to signal it's "installed"
+    mkdir -p "$HOME/.codeium/windsurf"
 
     if $BINARY install --agent windsurf --component persona --component sdd --persona gentleman 2>&1; then
         local rules="$HOME/.codeium/windsurf/memories/global_rules.md"
@@ -1830,7 +1841,10 @@ test_codex_context7_in_toml() {
     # Idempotent: re-running must not duplicate the block.
     $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true
     local count
-    count=$(grep -c "\[mcp_servers.context7\]" "$config_toml" 2>/dev/null || echo 0)
+    # `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
+    # yield the two-line string "0\n0" and break the numeric comparison below.
+    count=$(grep -c "\[mcp_servers.context7\]" "$config_toml" 2>/dev/null || true)
+    count=${count:-0}
     if [ "$count" -eq 1 ]; then
         log_pass "Codex context7 block is idempotent (exactly 1 entry)"
     else
@@ -1847,7 +1861,7 @@ test_integrity_sdd_skills_nonempty() {
     if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         local all_ok=true
-        local sdd_skills=(sdd-init sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive)
+        local sdd_skills=(sdd-init sdd-explore sdd-research sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard)
 
         for skill in "${sdd_skills[@]}"; do
             local path="$skill_dir/$skill/SKILL.md"
@@ -1865,7 +1879,7 @@ test_integrity_sdd_skills_nonempty() {
         done
 
         if $all_ok; then
-            log_pass "All 9 SDD skills have >= 100 bytes of real content"
+            log_pass "All 11 SDD skills have >= 100 bytes of real content"
         fi
     else
         log_fail "SDD install command failed"
@@ -1889,13 +1903,13 @@ test_integrity_sdd_orchestrator_in_opencode_json() {
 }
 
 test_integrity_all_sdd_commands_have_frontmatter() {
-    log_test "Integrity: all 8 SDD command files have YAML frontmatter"
+    log_test "Integrity: all 11 SDD command files have YAML frontmatter"
     cleanup_test_env
 
     if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
         local commands_dir="$HOME/.config/opencode/commands"
         local all_ok=true
-        local expected_commands=(sdd-init sdd-apply sdd-archive sdd-continue sdd-explore sdd-ff sdd-new sdd-verify)
+        local expected_commands=(sdd-init sdd-apply sdd-archive sdd-continue sdd-explore sdd-ff sdd-new sdd-onboard sdd-research sdd-status sdd-verify)
 
         for cmd in "${expected_commands[@]}"; do
             local path="$commands_dir/$cmd.md"
@@ -1919,7 +1933,7 @@ test_integrity_all_sdd_commands_have_frontmatter() {
         done
 
         if $all_ok; then
-            log_pass "All 8 SDD commands present with frontmatter and content"
+            log_pass "All 11 SDD commands present with frontmatter and content"
         fi
     else
         log_fail "SDD install for command check failed"

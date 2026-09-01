@@ -24,12 +24,14 @@ func TestGGAFixInstallErrorWhenAlreadyAvailable(t *testing.T) {
 	origCmdLookPath := cmdLookPath
 	origRunCmd := runCommand
 	origGGAAvailableCheck := ggaAvailableCheck
+	origCleanup := cleanupGGAInstallDir
 
 	t.Cleanup(func() {
 		osUserHomeDir = origHome
 		cmdLookPath = origCmdLookPath
 		runCommand = origRunCmd
 		ggaAvailableCheck = origGGAAvailableCheck
+		cleanupGGAInstallDir = origCleanup
 	})
 
 	// Setup mocks
@@ -42,8 +44,14 @@ func TestGGAFixInstallErrorWhenAlreadyAvailable(t *testing.T) {
 	runCommandCalled := false
 	runCommand = func(name string, args ...string) error {
 		runCommandCalled = true
-		// Simulate install.sh failing due to TTY issue
-		return errors.New("exit status 1: read: open /dev/tty: no such device or address")
+		// Simulate install.sh failing due to TTY issue. The production path
+		// prints this error to os.Stderr, and `go test` without -v attributes
+		// it to no test at all, so a shard log shows a bare "gga install
+		// command reported an error" warning quoting a real-looking git clone.
+		// That has already been misread once as a live network clone hanging
+		// the Windows lane; the "simulated" marker makes the fixture
+		// unmistakable in a log where nothing else names this test.
+		return errors.New("simulated install failure: exit status 1: read: open /dev/tty: no such device or address")
 	}
 
 	// Make ggaAvailable return false initially (simulating install needed),
@@ -53,6 +61,7 @@ func TestGGAFixInstallErrorWhenAlreadyAvailable(t *testing.T) {
 		// (this is the fix scenario: install failed but GGA is there)
 		return runCommandCalled
 	}
+	cleanupGGAInstallDir = func() error { return nil }
 
 	// Create a minimal config so the test can run
 	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -98,12 +107,14 @@ func TestGGAFixInstallErrorWhenNotAvailable(t *testing.T) {
 	origRunCmd := runCommand
 	origGGAAvailableCheck := ggaAvailableCheck
 	origCmdLookPath := cmdLookPath
+	origCleanup := cleanupGGAInstallDir
 
 	t.Cleanup(func() {
 		osUserHomeDir = origHome
 		runCommand = origRunCmd
 		ggaAvailableCheck = origGGAAvailableCheck
 		cmdLookPath = origCmdLookPath
+		cleanupGGAInstallDir = origCleanup
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
@@ -115,6 +126,7 @@ func TestGGAFixInstallErrorWhenNotAvailable(t *testing.T) {
 	ggaAvailableCheck = func(profile system.PlatformProfile) bool {
 		return false
 	}
+	cleanupGGAInstallDir = func() error { return nil }
 
 	// Simulate a REAL install error (not the TTY issue)
 	runCommand = func(name string, args ...string) error {

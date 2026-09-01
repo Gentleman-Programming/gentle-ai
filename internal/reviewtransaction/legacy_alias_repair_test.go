@@ -87,7 +87,7 @@ func TestRepairHistoricalLegacyAliasPreservesEvidenceAndRestoresOnlySafeInventor
 		t.Fatal(err)
 	}
 
-	committed, err := RepairHistoricalLegacyAlias(context.Background(), repo, request)
+	committed, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{})
 	if err != nil {
 		t.Fatalf("repair historical alias: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestRepairHistoricalLegacyAliasPreservesEvidenceAndRestoresOnlySafeInventor
 		t.Fatalf("post-repair inventory = %#v", report)
 	}
 
-	replayed, err := RepairHistoricalLegacyAlias(context.Background(), repo, request)
+	replayed, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{})
 	if err != nil || replayed.QuarantinePath != committed.QuarantinePath {
 		t.Fatalf("idempotent repair = %#v, %v", replayed, err)
 	}
@@ -124,7 +124,7 @@ func TestRepairHistoricalLegacyCompleteFixAliasUsesValidationCanonicalOperation(
 	store, head, event := legacyAliasRepairFixture(t, repo, "alias-repair-historical-complete", "review/complete-fix")
 	request := legacyAliasRepairRequest(t, repo, "alias-repair-historical-complete", head)
 
-	committed, err := RepairHistoricalLegacyAlias(context.Background(), repo, request)
+	committed, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{})
 	if err != nil {
 		t.Fatalf("repair historical complete-fix alias: %v", err)
 	}
@@ -145,15 +145,18 @@ func TestRepairHistoricalLegacyAliasLeavesInventoryFailClosedForOtherCorruption(
 	_, head, _ := legacyAliasRepairFixture(t, repo, "alias-repair-first")
 	legacyAliasRepairFixture(t, repo, "alias-repair-unhandled", "review/unknown-fix")
 	request := legacyAliasRepairRequest(t, repo, "alias-repair-first", head)
-	if _, err := RepairHistoricalLegacyAlias(context.Background(), repo, request); err != nil {
+	if _, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	report, err := InventoryAuthority(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete || report.Authoritative || !hasAuthorityInventoryStatus(report.Entries, "alias-repair-unhandled", AuthorityStatusInvalid) {
-		t.Fatalf("repair incorrectly made mixed inventory authoritative: %#v", report)
+	// The unhandled alias entry stays invalid on its own account. Repairing
+	// one entry was never allowed to make another entry healthy, and one
+	// unhandled entry was never a statement about the repaired one.
+	if !hasAuthorityInventoryStatus(report.Entries, "alias-repair-unhandled", AuthorityStatusInvalid) {
+		t.Fatalf("repair incorrectly cleared the unhandled alias entry: %#v", report)
 	}
 }
 
@@ -195,7 +198,7 @@ func TestRepairHistoricalLegacyAliasRefusesOutsideApprovedClass(t *testing.T) {
 			store, head, _ := legacyAliasRepairFixture(t, repo, "alias-repair-refusal")
 			request := legacyAliasRepairRequest(t, repo, "alias-repair-refusal", head)
 			tt.prepare(t, repo, store, &request)
-			_, err := RepairHistoricalLegacyAlias(context.Background(), repo, request)
+			_, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("repair error = %v, want %q", err, tt.want)
 			}
@@ -209,7 +212,7 @@ func TestRepairHistoricalLegacyAliasRefusesOutsideApprovedClass(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		store, head, _ := legacyAliasRepairFixture(t, repo, "alias-repair-unknown", "review/unknown-fix")
 		request := legacyAliasRepairRequest(t, repo, "alias-repair-unknown", head)
-		if _, err := RepairHistoricalLegacyAlias(context.Background(), repo, request); err == nil || !strings.Contains(err.Error(), "unsupported successor anomaly") {
+		if _, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{}); err == nil || !strings.Contains(err.Error(), "unsupported successor anomaly") {
 			t.Fatalf("unknown alias repair error = %v", err)
 		}
 		if _, err := os.Stat(store.Dir); err != nil {
@@ -221,7 +224,7 @@ func TestRepairHistoricalLegacyAliasRefusesOutsideApprovedClass(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		store, head, _ := legacyAliasRepairFixture(t, repo, "alias-repair-valid", "review/validate-fix-delta")
 		request := legacyAliasRepairRequest(t, repo, "alias-repair-valid", head)
-		if _, err := RepairHistoricalLegacyAlias(context.Background(), repo, request); err == nil || !strings.Contains(err.Error(), "no approved unsupported") {
+		if _, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{}); err == nil || !strings.Contains(err.Error(), "no approved unsupported") {
 			t.Fatalf("valid chain repair error = %v", err)
 		}
 		if _, err := os.Stat(store.Dir); err != nil {
@@ -238,7 +241,7 @@ func TestRepairHistoricalLegacyAliasLeavesPreparedAuditOnPartialFailure(t *testi
 	reclaimQuarantineResidue = func(_, _ string) error { return errors.New("rename failed") }
 	t.Cleanup(func() { reclaimQuarantineResidue = original })
 
-	record, err := RepairHistoricalLegacyAlias(context.Background(), repo, request)
+	record, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{})
 	if err == nil || record.Status != CompactReclaimPrepared || record.QuarantinePath == "" {
 		t.Fatalf("partial repair = %#v, %v", record, err)
 	}
@@ -260,7 +263,7 @@ func TestRepairHistoricalLegacyAliasRespectsSharedMaintenanceLock(t *testing.T) 
 	request := legacyAliasRepairRequest(t, repo, "alias-repair-maintenance-lock", head)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := RepairHistoricalLegacyAlias(ctx, repo, request); !errors.Is(err, ErrAuthorityLockCancelled) {
+	if _, err := repairHistoricalLegacyAlias(ctx, repo, request, legacyAliasRepairOptions{}); !errors.Is(err, ErrAuthorityLockCancelled) {
 		t.Fatalf("maintenance contention error = %v", err)
 	}
 }
@@ -272,7 +275,7 @@ func TestRepairHistoricalLegacyAliasUsesCommonAuthorityAcrossWorktrees(t *testin
 	gitSnapshot(t, repo, "worktree", "add", "--detach", linked)
 	t.Cleanup(func() { gitSnapshot(t, repo, "worktree", "remove", "--force", linked) })
 	request := legacyAliasRepairRequest(t, linked, "alias-repair-linked-worktree", head)
-	if _, err := RepairHistoricalLegacyAlias(context.Background(), linked, request); err != nil {
+	if _, err := repairHistoricalLegacyAlias(context.Background(), linked, request, legacyAliasRepairOptions{}); err != nil {
 		t.Fatalf("repair through linked worktree: %v", err)
 	}
 	report, err := InventoryAuthority(context.Background(), repo)
@@ -290,7 +293,7 @@ func TestRepairHistoricalLegacyAliasConcurrentRequestsDoNotCorruptAuthority(t *t
 	for range 2 {
 		go func() {
 			<-start
-			_, err := RepairHistoricalLegacyAlias(context.Background(), repo, request)
+			_, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{})
 			results <- err
 		}()
 	}

@@ -115,7 +115,7 @@ func TestLensAgentPromptsStateTheAdmissionEnvelope(t *testing.T) {
 				runtime, len(paths), paths, len(envelope.LensAgentNames), envelope.LensAgentNames)
 		}
 		for _, path := range paths {
-			prompt := renderBoundedReviewAsset(path)
+			prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 
 			for _, field := range envelope.RequiredTopLevelFields {
 				if !strings.Contains(prompt, field) {
@@ -199,41 +199,35 @@ func declaredLensTools(t *testing.T, path string) (tools []string, readOnlyAsser
 }
 
 // TestLensAgentPromptsStateWhereTheirInputComesFrom is the input-side twin of
-// the envelope guard. A reviewer that is not told the immutable candidate diff
-// and changed-path manifest arrive in its prompt invents an input contract:
-// one real run tried to generate the diff and verify its SHA-256 itself,
-// reported inspection.status "access_failure" when it could not, and blocked a
-// publication. Its declared tools never permitted execution in the first place.
+// the envelope guard. Claude Code receives immutable prompt context, while
+// unsupported runtimes stop before they can inspect mutable workspace files.
 func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 
-	// The orchestrator contract is the source for what it promises the provider
-	// will inject after native preflight.
+	// The orchestrator contract is the source for the current immutable
+	// inspection route that rendered reviewer prompts must preserve.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "plugin appends the artifact subject, exact candidate diff, and changed-path manifest only after native preflight succeeds") {
-		t.Fatalf("%s no longer requires native injection of the diff and manifest; update the guard's derivation", boundedReviewContractAsset)
+	if !strings.Contains(contract, "Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract") ||
+		!strings.Contains(contract, "Reviewers inspect only the provider-bound immutable trees") {
+		t.Fatalf("%s no longer requires provider-bound frozen-tree inspection; update the guard's derivation", boundedReviewContractAsset)
 	}
 
 	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {
 		for _, path := range paths {
-			tools, readOnlyAsserted := declaredLensTools(t, path)
-			for _, tool := range tools {
-				for _, execution := range executionToolVocabulary {
-					if strings.Contains(strings.ToLower(tool), execution) {
-						t.Errorf("%s declares the execution-capable tool %q; a lens prompt that tells the reviewer it cannot execute would now be lying", path, tool)
-					}
-				}
+			if strings.HasPrefix(path, "claude/agents/") {
+				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
 			}
-			if len(tools) == 0 && !readOnlyAsserted {
-				continue
-			}
-
-			prompt := strings.ToLower(renderBoundedReviewAsset(path))
+			prompt := strings.ToLower(renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 			for claim, why := range map[string]string{
-				"candidate diff":        "does not say the immutable candidate diff arrives in the prompt",
-				"changed-path manifest": "does not say the changed-path manifest arrives in the prompt",
-				"never derive":          "does not forbid deriving its own input",
-				"no execution tools":    "does not state that it cannot execute anything",
+				"artifact_subject":      "does not name the bound artifact subject",
+				"changed_path_manifest": "does not name the ordered manifest",
+				"base_tree":             "does not name the immutable base tree",
+				"candidate_tree":        "does not name the immutable candidate tree",
+				"inspect-candidate":     "does not require provider-owned native inspection",
+				"--operation numstat":   "does not require compact numstat discovery",
+				"--path-index":          "does not select paths by canonical manifest index",
+				"provider binding":      "does not resolve trees from the provider binding",
+				"never read the live":   "does not prohibit mutable workspace inspection",
 			} {
 				if !strings.Contains(prompt, claim) {
 					t.Errorf("%s %s (missing %q)", path, why, claim)
@@ -245,9 +239,8 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 // TestJudgmentDayPromptsDoNotClaimTheLensEnvelope pins the resolution of the
 // contradiction between the two documents: a judgment-day judge result is a
-// different artifact (Transaction mode judgment_day records judge proofs and
-// selects no lenses), so it must NOT carry the capture-result envelope, and it
-// must say so rather than leaving a reader to infer which shape wins.
+// separate standalone artifact, so it must NOT carry the capture-result
+// envelope and must say so rather than leaving a reader to infer which shape wins.
 func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 	judgePaths := []string{}
@@ -270,7 +263,7 @@ func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	sort.Strings(judgePaths)
 
 	for _, path := range judgePaths {
-		prompt := renderBoundedReviewAsset(path)
+		prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 		// Match the JSON key forms, not the English words: a judge prompt may
 		// legitimately talk about inspecting a target.
 		if strings.Contains(prompt, `"subject_hash"`) || strings.Contains(prompt, `"inspection"`) {

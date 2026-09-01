@@ -44,7 +44,8 @@
       "$ref": "capabilities-v1.4.schema.json#/properties/executable"
     },
     "operations": {
-      "$ref": "capabilities-v1.4.schema.json#/properties/operations"
+      "type": "array", "minItems": 5, "maxItems": 5, "uniqueItems": true,
+      "items": {"enum": ["review.capabilities", "review.repair", "review.start", "review.status", "review.validate"]}
     },
     "gates": {
       "$ref": "capabilities-v1.4.schema.json#/properties/gates"
@@ -54,8 +55,8 @@
     },
     "schemas": {
       "type": "array",
-      "minItems": 21,
-      "maxItems": 21,
+      "minItems": 18,
+      "maxItems": 18,
       "uniqueItems": true,
       "items": {
         "enum": [
@@ -66,7 +67,6 @@
           "gentle-ai.review-gate-request/v1",
           "gentle-ai.review-integration.capabilities/v1.5",
           "gentle-ai.review-integration.failure/v1",
-          "gentle-ai.review-final-verification-incident/v1",
           "gentle-ai.review-integration.operation/v1",
           "gentle-ai.review-integration.projection/v1",
           "gentle-ai.review-integration.repair/v1",
@@ -76,7 +76,6 @@
           "gentle-ai.review-receipt/v2",
           "gentle-ai.review-result-artifact/v2",
           "gentle-ai.review-targeted-validation-request/v1",
-          "gentle-ai.review-verification-evidence/v2",
           "https://gentle-ai.dev/schema/review/refuter/v1",
           "https://gentle-ai.dev/schema/review/reviewer/v1",
           "https://gentle-ai.dev/schema/review/validator/v1"
@@ -89,13 +88,10 @@
       "required": ["mandatory", "optional"],
       "properties": {
         "mandatory": {
-          "$ref": "capabilities-v1.4.schema.json#/properties/features/properties/mandatory"
+          "type": "array", "minItems": 7, "maxItems": 7, "items": {"$ref": "#/$defs/feature"}
         },
         "optional": {
-          "type": "array",
-          "minItems": 16,
-          "maxItems": 16,
-          "items": {"$ref": "#/$defs/feature"}
+          "type": "array", "minItems": 13, "maxItems": 13, "items": {"$ref": "#/$defs/feature"}
         }
       }
     },
@@ -118,17 +114,12 @@
             "bounded_process_waits",
             "classified_authority_repair",
             "compact_v2_authority",
-            "exact_gate_receipt_discovery",
-            "exact_receipt_replay",
-            "five_delivery_gates",
             "immutable_snapshot",
             "legacy_v1_target_scoped_read_only",
             "native_frozen_candidate_context",
             "native_low_risk_verification",
             "native_next_transition",
-            "one_shot_final_verification_retry",
             "opaque_repository_context",
-            "outcome_bound_verification_evidence",
             "provider_artifact_admission",
             "provider_targeted_validation_request",
             "recovered_correction_evidence",

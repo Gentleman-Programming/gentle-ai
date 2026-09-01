@@ -10,15 +10,12 @@ metadata:
   delegate_only: true
 ---
 
-> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are
-> the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Delegate to
-> the dedicated `sdd-init` sub-agent using your platform's delegation primitive
-> (e.g., `task(...)`, sub-agent invocation, etc.). This skill is for EXECUTORS
-> only.
+## Execution Role
 
-## Executor Override
+Confirm your role before acting. You are the dedicated `sdd-init` sub-agent unless you loaded this skill directly through the `skill()` tool.
 
-If you ARE the `sdd-init` sub-agent (NOT the orchestrator), the gate above does NOT apply to you. Continue with the phase work below. Do NOT delegate. Do NOT call the Skill tool. You are the executor — execute.
+- If you are the `sdd-init` sub-agent, continue with the phase work below. Do not delegate. Do not call the Skill tool.
+- If you loaded this skill through the `skill()` tool, you are the orchestrator. Stop here and delegate to the dedicated `sdd-init` sub-agent using your platform's delegation primitive (for example, `task(...)` or a sub-agent invocation).
 
 ## Language Domain Contract
 
@@ -51,19 +48,22 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 | `mode=openspec` | Create/update openspec bootstrap files only. |
 | `mode=hybrid` | Do both Engram and openspec persistence. |
 | `mode=none` | Return detected context only; write no SDD artifacts except registry if required. |
-| strict TDD marker/config found | Use that value. |
-| no marker/config but test runner exists | Default `strict_tdd: true`. |
-| no test runner | Set `strict_tdd: false` and explain unavailable. |
+| explicit `strict_tdd: false` marker/config | Preserve `strict_tdd: false`. |
+| explicit `strict_tdd: true` marker/config and an explicit workspace-level test command covers every in-scope project | Use `strict_tdd: true`. |
+| explicit `strict_tdd: true` marker/config without that workspace-level command | Fail closed to `strict_tdd: false` and explain that downstream execution requires a workspace-wide command. |
+| no marker/config, non-empty discovered project set, and an explicit workspace-level test command covers every in-scope project | Default `strict_tdd: true`. |
+| zero projects are discovered or no explicit workspace-level test command covers every in-scope project | Set `strict_tdd: false`; preserve and report every project-local command, including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project. Explain the no-runner or workspace-wide-command fallback. |
 
 ## Execution Steps
 
-1. Inspect project files (`package.json`, `go.mod`, `pyproject.toml`, CI, lint/test config) and summarize stack/conventions.
-2. Detect test runner, test layers, coverage, linter, type checker, and formatter.
-3. Resolve Strict TDD from agent marker, `openspec/config.yaml`, detected runner fallback, or no-runner fallback.
-4. Initialize persistence for the resolved mode.
-5. Build `.atl/skill-registry.md` using the skill-registry scan rules.
-6. Persist testing capabilities and project context.
-7. Return the structured initialization envelope.
+1. Identify the authoritative workspace root. Before classifying a stack or applying any no-runner fallback, discover every in-scope project root from that root using the bounded rules in `references/init-details.md`.
+2. Inspect each discovered project for `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, CI, and lint/test config; preserve its relative path and summarize its stack/conventions.
+3. Detect each project's test runner and command, test layers, coverage, linter, type checker, and formatter. Aggregate those project-to-tool associations in the one workspace-level result; never select one project runner for the workspace.
+4. Resolve Strict TDD from an agent marker or `openspec/config.yaml` only after every discovered project has been evaluated. Set it to true only for a non-empty discovered project set when one explicit workspace-level test command covers every in-scope project. Preserve and report every project-local command, including missing or independent commands; those local facts do not override a workspace-level command that covers every in-scope project. Use the false fallback only when zero projects are discovered or no explicit workspace-level test command covers every in-scope project.
+5. Initialize persistence for the resolved mode.
+6. Build `.atl/skill-registry.md` using the skill-registry scan rules.
+7. Persist testing capabilities and project context.
+8. Return the structured initialization envelope.
 
 ## Output Contract
 

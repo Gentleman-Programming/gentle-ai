@@ -109,10 +109,6 @@ func TestStrategies(t *testing.T) {
 func TestDesktopAppNotAutoInstallable(t *testing.T) {
 	a := NewAdapter()
 
-	if a.SupportsAutoInstall() {
-		t.Fatalf("Cursor should not support auto-install (desktop app)")
-	}
-
 	_, err := a.InstallCommand(system.PlatformProfile{})
 	if err == nil {
 		t.Fatalf("InstallCommand() should return error for desktop app")

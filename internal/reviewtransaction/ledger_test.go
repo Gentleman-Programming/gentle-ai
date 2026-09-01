@@ -109,7 +109,11 @@ func TestLegacyTransactionLedgerHashUsesStableCausalFieldProjection(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseTransaction(payload); err != nil {
+	var parsed Transaction
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(Transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err != nil {
 		t.Fatalf("causal-field transaction no longer validates against its stable v1 ledger projection: %v", err)
 	}
 }

@@ -57,7 +57,7 @@ func TestEnsureSupportedPlatformRejectsUnsupportedLinuxDistro(t *testing.T) {
 		t.Fatalf("expected ErrUnsupportedLinuxDistro, got %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family") {
-		t.Fatalf("expected distro guard message, got %q", err.Error())
+	if !strings.Contains(err.Error(), "no package manager found on PATH") {
+		t.Fatalf("expected package-manager guard message, got %q", err.Error())
 	}
 }

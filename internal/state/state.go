@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,13 +41,15 @@ type ClaudePhaseAssignmentState struct {
 
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
-	InstalledAgents     []string            `json:"installed_agents"`
-	SelectionConfigured bool                `json:"selection_configured,omitempty"`
-	Components          []model.ComponentID `json:"components,omitempty"`
-	Skills              []model.SkillID     `json:"skills,omitempty"`
-	Preset              model.PresetID      `json:"preset,omitempty"`
-	SDDMode             model.SDDModeID     `json:"sdd_mode,omitempty"`
-	StrictTDD           bool                `json:"strict_tdd,omitempty"`
+	InstalledAgents        []string            `json:"installed_agents"`
+	InstalledBinaryVersion string              `json:"installed_binary_version,omitempty"`
+	ManagedAssetDigest     string              `json:"managed_asset_digest,omitempty"`
+	SelectionConfigured    bool                `json:"selection_configured,omitempty"`
+	Components             []model.ComponentID `json:"components,omitempty"`
+	Skills                 []model.SkillID     `json:"skills,omitempty"`
+	Preset                 model.PresetID      `json:"preset,omitempty"`
+	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
+	StrictTDD              bool                `json:"strict_tdd,omitempty"`
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -98,6 +102,9 @@ type InstallState struct {
 	// Empty for state files written before persona persistence was added —
 	// callers fall back to PersonaGentleman in that case.
 	Persona string `json:"persona,omitempty"`
+	// PersonaPresent distinguishes an omitted legacy field from an explicit
+	// empty persona, which must fail closed during sync validation.
+	PersonaPresent bool `json:"-"`
 
 	// LastUpdateCheck records the last time a successful remote update check was
 	// performed. Used by the cooldown gate (UpdateCheckTTL = 6h) to avoid
@@ -115,7 +122,7 @@ type InstallState struct {
 	// false for backward-compatibility with existing state files.
 	PendingSync bool `json:"pending_sync,omitempty"`
 
-	// RDDMode is the global, user-owned review-driven-development kill switch
+	// RDDMode is the global, user-owned receipt-driven-development kill switch
 	// ("on"|"off"). It lives in uncommitted user state precisely so that no
 	// repository can ship, share, or force a review policy onto a clone.
 	// Empty means the user never expressed a preference, which preserves the
@@ -129,6 +136,32 @@ type InstallState struct {
 	// recorded is authority, not a cosmetic audit field. Nil for state files
 	// written before the switch existed.
 	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
+
+	BackgroundIntent model.OpenCodeBackgroundIntent `json:"opencode_background_subagents,omitempty"`
+
+	// PiBackgroundIntent is the managed Pi background-subagent choice. It is
+	// persisted separately from the OpenCode field because each key is part of
+	// an independent state contract.
+	PiBackgroundIntent model.PiBackgroundIntent `json:"pi_background_subagents,omitempty"`
+}
+
+// UnmarshalJSON preserves whether the persisted persona field was present.
+// The value itself is still decoded into the public InstallState field.
+func (s *InstallState) UnmarshalJSON(data []byte) error {
+	type plainInstallState InstallState
+	var decoded plainInstallState
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	*s = InstallState(decoded)
+	_, s.PersonaPresent = fields["persona"]
+	return nil
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -194,6 +227,8 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
+		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
+		ManagedAssetDigest:          existing.ManagedAssetDigest,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
@@ -211,10 +246,14 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
+		PersonaPresent:              existing.PersonaPresent,
 		LastUpdateCheck:             existing.LastUpdateCheck,
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
 		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
+
+		BackgroundIntent:   existing.BackgroundIntent,
+		PiBackgroundIntent: existing.PiBackgroundIntent,
 	}
 }
 
@@ -225,10 +264,36 @@ func Write(homeDir string, s InstallState) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := marshal(s)
 	if err != nil {
 		return err
 	}
-	_, err = filemerge.WriteFileAtomic(Path(homeDir), append(data, '\n'), 0o644)
+	_, err = filemerge.WriteFileAtomic(Path(homeDir), data, 0o644)
 	return err
+}
+
+// WriteReconciled persists install state and treats an atomic-write error as
+// successful when the requested bytes are visible on disk after the error.
+func WriteReconciled(homeDir string, s InstallState) error {
+	err := Write(homeDir, s)
+	if err == nil {
+		return nil
+	}
+
+	data, marshalErr := marshal(s)
+	if marshalErr == nil {
+		if visible, readErr := os.ReadFile(Path(homeDir)); readErr == nil && bytes.Equal(visible, data) {
+			log.Printf("state: write returned %v but requested state is visible; treating persistence as successful", err)
+			return nil
+		}
+	}
+	return err
+}
+
+func marshal(s InstallState) ([]byte, error) {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }

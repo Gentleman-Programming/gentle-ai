@@ -8,8 +8,16 @@ import (
 )
 
 const (
+	// MinimumGPT56RuntimeVersion is a floor, not a pin: any installed Codex
+	// at or above this version satisfies GPT-5.6 profiles.
 	MinimumGPT56RuntimeVersion = "0.144.0"
-	codexUpdateCommand         = "npm install -g --ignore-scripts @openai/codex@0.144.0"
+	// codexUpdateCommand advises the latest release rather than pinning to
+	// the floor above. gentle-ai no longer installs anything on the user's
+	// behalf (see agentInstallStep in internal/cli/run.go), so this string is
+	// advice a human reads and runs themselves — pinning it to the exact
+	// floor value would go stale the moment a newer Codex ships and would
+	// tell users to downgrade to years-old releases as time passes.
+	codexUpdateCommand = "npm install -g --ignore-scripts @openai/codex@latest"
 )
 
 var (

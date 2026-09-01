@@ -32,8 +32,13 @@ const (
 	envYesUpdate      = "GENTLE_AI_YES"
 )
 
+// isTerminal reports whether fd belongs to a native or Cygwin/MSYS2 terminal.
+func isTerminal(fd uintptr) bool {
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
 // isattyFn is a package-level var for TTY detection, injectable for tests.
-var isattyFn = func(fd uintptr) bool { return isatty.IsTerminal(fd) }
+var isattyFn = isTerminal
 
 // selfUpdateYesFn returns true when the caller wants the upgrade to proceed
 // without an interactive prompt. Set GENTLE_AI_YES=1 for scripted upgrades.
@@ -207,4 +212,18 @@ func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {
 	// Tradeoff: Unix loses seamless re-exec restart; mitigated by clear copy below.
 	_, _ = fmt.Fprintf(stdout, "Updated to v%s — restart gentle-ai to continue.\n", latestVersion)
 	return nil
+}
+
+// printPostUpgradeDoctorAdvisory prints a non-blocking informational advisory
+// suggesting the user run 'gentle-ai doctor' to verify ecosystem health after
+// a successful gentle-ai upgrade. It is purely informational: it does not run
+// any checks, does not change exit status, and does not block the upgrade.
+//
+// The advisory is shown in two places:
+//  1. After a successful `gentle-ai upgrade` CLI invocation (printed by runUpgrade).
+//  2. On the next launch under the new binary when PendingSync=true is observed
+//     (covers the TUI self-update path, where the new binary was not yet running
+//     when the upgrade completed).
+func printPostUpgradeDoctorAdvisory(stdout io.Writer) {
+	_, _ = fmt.Fprintf(stdout, "\n[info]    Run 'gentle-ai doctor' to verify ecosystem health after upgrade\n")
 }

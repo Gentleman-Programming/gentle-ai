@@ -90,12 +90,26 @@ func TestRunInstallPersistsConfiguredSelection(t *testing.T) {
 	original := osUserHomeDir
 	osUserHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { osUserHomeDir = original })
+	// This test targets state persistence, not agent install behavior, so
+	// simulate Cursor as already installed (its Detect checks for ~/.cursor)
+	// — otherwise gentle-ai correctly refuses to proceed for an undetected
+	// desktop-app agent.
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.cursor): %v", err)
+	}
 	if _, err := RunInstall([]string{"--agent", "cursor", "--preset", "custom", "--sdd-mode", "multi"}, system.DetectionResult{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := state.Read(home)
 	if err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || len(got.Components) != 0 {
 		t.Fatalf("persisted selection = %#v, err = %v", got, err)
+	}
+	wantDigest, err := managedAssetDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ManagedAssetDigest != wantDigest {
+		t.Fatalf("managed asset digest = %q, want %q", got.ManagedAssetDigest, wantDigest)
 	}
 }
 

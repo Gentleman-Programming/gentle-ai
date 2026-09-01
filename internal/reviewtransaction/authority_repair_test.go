@@ -696,7 +696,7 @@ func TestRepairClassifiedAuthorityRejectsCompatibilityReplayOrigin(t *testing.T)
 		repository, compatibility.LineageID, compatibility.ExpectedRevision, compatibility.ExpectedDiagnostic,
 		compatibility.Disposition, compatibility.Actor, compatibility.Reason,
 	)
-	if _, err := RepairHistoricalLegacyAlias(context.Background(), repo, compatibility); err != nil {
+	if _, err := repairHistoricalLegacyAlias(context.Background(), repo, compatibility, legacyAliasRepairOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err == nil {

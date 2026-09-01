@@ -4,6 +4,7 @@
     "skills": [
       "sdd-init",
       "sdd-explore",
+      "sdd-research",
       "sdd-propose",
       "sdd-spec",
       "sdd-design",
@@ -14,6 +15,7 @@
       "sdd-onboard",
       "judgment-day",
       "go-testing",
+      "gentle-ai-bench",
       "skill-creator",
       "skill-improver",
       "branch-pr",
@@ -22,7 +24,9 @@
       "chained-pr",
       "cognitive-doc-design",
       "comment-writer",
-      "work-unit-commits"
+      "work-unit-commits",
+      "rdd-defect-workflow",
+      "systemic-issue-triage"
     ]
   },
   {
@@ -30,6 +34,7 @@
     "skills": [
       "sdd-init",
       "sdd-explore",
+      "sdd-research",
       "sdd-propose",
       "sdd-spec",
       "sdd-design",
@@ -40,6 +45,7 @@
       "sdd-onboard",
       "judgment-day",
       "go-testing",
+      "gentle-ai-bench",
       "skill-creator",
       "skill-improver",
       "branch-pr",
@@ -48,7 +54,9 @@
       "chained-pr",
       "cognitive-doc-design",
       "comment-writer",
-      "work-unit-commits"
+      "work-unit-commits",
+      "rdd-defect-workflow",
+      "systemic-issue-triage"
     ]
   },
   {
@@ -56,6 +64,7 @@
     "skills": [
       "sdd-init",
       "sdd-explore",
+      "sdd-research",
       "sdd-propose",
       "sdd-spec",
       "sdd-design",

@@ -29,10 +29,9 @@ func TestAdapterIdentityAndCapabilities(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"SupportsAutoInstall", a.SupportsAutoInstall(), true},
 		{"SupportsSkills", a.SupportsSkills(), false},
 		{"SupportsMCP", a.SupportsMCP(), true},
-		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), true},
+		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), false},
 		{"SupportsSlashCommands", a.SupportsSlashCommands(), false},
 		{"SupportsOutputStyles", a.SupportsOutputStyles(), false},
 		{"SupportsSubAgents", a.SupportsSubAgents(), false},
@@ -307,7 +306,7 @@ func TestAdapterInstallCommandSequenceUsesSameSubagentsPackageForWindows(t *test
 	}
 }
 
-func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *testing.T) {
+func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {
 			if file == "pnpm" {
@@ -322,7 +321,7 @@ func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *test
 		t.Fatalf("InstallCommand() error = %v", err)
 	}
 
-	want := []string{"pnpm", "dlx", "gentle-engram@latest", "pi-engram", "init"}
+	want := []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 	if !reflect.DeepEqual(commands[3], want) {
 		t.Fatalf("InstallCommand()[3] = %#v, want %#v", commands[3], want)
 	}

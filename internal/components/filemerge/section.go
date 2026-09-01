@@ -290,11 +290,32 @@ func InjectMarkdownSection(existing, sectionID, content string) string {
 
 	// If both markers are found and in the correct order, replace the section.
 	if openIdx >= 0 && closeIdx >= 0 && closeIdx > openIdx {
+		before := existing[:openIdx]
+		after := existing[closeIdx+len(close):]
+
+		var preservedAfter strings.Builder
+		for {
+			duplicateOpen := strings.Index(after, open)
+			if duplicateOpen < 0 {
+				preservedAfter.WriteString(after)
+				break
+			}
+
+			bodyStart := duplicateOpen + len(open)
+			duplicateCloseOffset := strings.Index(after[bodyStart:], close)
+			if duplicateCloseOffset < 0 {
+				preservedAfter.WriteString(after)
+				break
+			}
+
+			duplicateEnd := bodyStart + duplicateCloseOffset + len(close)
+			preservedAfter.WriteString(after[:duplicateOpen])
+			after = after[duplicateEnd:]
+		}
+		after = preservedAfter.String()
+
 		// If content is empty, remove the entire section including markers.
 		if content == "" {
-			before := existing[:openIdx]
-			after := existing[closeIdx+len(close):]
-
 			// Clean up trailing newline after close marker.
 			if len(after) > 0 && after[0] == '\n' {
 				after = after[1:]
@@ -311,9 +332,6 @@ func InjectMarkdownSection(existing, sectionID, content string) string {
 			}
 			return result
 		}
-
-		before := existing[:openIdx]
-		after := existing[closeIdx+len(close):]
 
 		var sb strings.Builder
 		sb.WriteString(before)

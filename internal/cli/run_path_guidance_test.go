@@ -33,52 +33,6 @@ func TestEngramPathGuidanceDefault(t *testing.T) {
 	}
 }
 
-func TestOpenCodeExperimentalGuidance(t *testing.T) {
-	tests := []struct {
-		name  string
-		shell string
-		want  string
-	}{
-		{name: "fish", shell: "/usr/bin/fish", want: "set -Ux OPENCODE_EXPERIMENTAL true"},
-		{name: "zsh", shell: "/bin/zsh", want: "echo 'export OPENCODE_EXPERIMENTAL=true' >> ~/.zshrc && source ~/.zshrc"},
-		{name: "bash", shell: "/bin/bash", want: "echo 'export OPENCODE_EXPERIMENTAL=true' >> ~/.bashrc && source ~/.bashrc"},
-		{name: "fallback", shell: "", want: "OPENCODE_EXPERIMENTAL=true"},
-		{name: "powershell-fallback", shell: "powershell.exe", want: "SetEnvironmentVariable"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msg := openCodeExperimentalGuidance(tt.shell)
-			if !strings.Contains(msg, tt.want) {
-				t.Fatalf("openCodeExperimentalGuidance(%q) missing %q: %s", tt.shell, tt.want, msg)
-			}
-		})
-	}
-}
-
-func TestWithOpenCodeExperimentalNoteGatedOnOpenCode(t *testing.T) {
-	tests := []struct {
-		name     string
-		agents   []model.AgentID
-		wantNote bool
-	}{
-		{name: "opencode selected", agents: []model.AgentID{model.AgentOpenCode}, wantNote: true},
-		{name: "opencode not selected", agents: []model.AgentID{model.AgentClaudeCode}, wantNote: false},
-		{name: "no agents", agents: nil, wantNote: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			report := verify.Report{Ready: true, FinalNote: "You're ready."}
-			resolved := planner.ResolvedPlan{Agents: tt.agents}
-
-			updated := withOpenCodeExperimentalNote(report, resolved)
-			hasNote := strings.Contains(updated.FinalNote, "OpenCode experimental features")
-			if hasNote != tt.wantNote {
-				t.Fatalf("withOpenCodeExperimentalNote note present = %v, want %v; got: %q", hasNote, tt.wantNote, updated.FinalNote)
-			}
-		})
-	}
-}
-
 func TestGoInstallBinDirDefaultsToHomeGoBin(t *testing.T) {
 	t.Setenv("GOBIN", "")
 	t.Setenv("GOPATH", "")

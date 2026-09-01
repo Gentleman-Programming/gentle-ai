@@ -67,12 +67,28 @@ func TestCodexModelPickerOptionCount(t *testing.T) {
 }
 
 func TestCodexModelPickerOptionCount_PhaseListMode(t *testing.T) {
-	// Phase-list sub-mode: 13 phases + 1 Confirm = 14
+	// Phase-list sub-mode: 14 phases + 1 Confirm = 15
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	count := screens.CodexModelPickerOptionCount(state)
-	if count != 14 {
-		t.Errorf("CodexModelPickerOptionCount(phase-list) = %d, want 14", count)
+	if count != 15 {
+		t.Errorf("CodexModelPickerOptionCount(phase-list) = %d, want 15", count)
+	}
+}
+
+func TestCodexCustomModelSelect_UsesStateCatalog(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModeModelSelect
+	state.AvailableModels = []string{"state-model-a", "state-model-b"}
+
+	out := screens.RenderCodexModelPicker(state, 0)
+	for _, id := range state.AvailableModels {
+		if !strings.Contains(out, id) {
+			t.Fatalf("custom model picker missing state model %q; output:\n%s", id, out)
+		}
+	}
+	if strings.Contains(out, "gpt-5.5") {
+		t.Fatalf("custom model picker should use state catalog; output:\n%s", out)
 	}
 }
 
@@ -261,15 +277,14 @@ func TestHandleCodexModelPickerNav_CustomRowEntersPhaseList(t *testing.T) {
 	}
 }
 
-// TestCodexCustomPhaseList_Has13Phases verifies that the phase list mode renders
-// all 13 expected SDD phases.
-func TestCodexCustomPhaseList_Has13Phases(t *testing.T) {
+// TestCodexCustomPhaseList_Has14Phases verifies the complete phase inventory.
+func TestCodexCustomPhaseList_Has14Phases(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	out := screens.RenderCodexModelPicker(state, 0)
 
 	expectedPhases := []string{
-		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+		"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
 		"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 		"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
 	}
@@ -478,7 +493,7 @@ func TestCodexCustomModelSelect_EnterSelectsThirdModel(t *testing.T) {
 	}
 
 	// The pending model must be the third model in the list, not the second.
-	allModels := model.FilterCodexModels("")
+	allModels := model.FilterCodexModelList(model.CodexAvailableModels(), "")
 	if len(allModels) < 3 {
 		t.Skip("fewer than 3 models available")
 	}
@@ -521,8 +536,8 @@ func TestCodexCustom_ConfirmReturnsPhaseModelAssignments(t *testing.T) {
 		"sdd-propose": {ModelID: "gpt-5.4", Effort: model.CodexEffortHigh},
 	}
 
-	// Confirm row is the LAST row in phase-list mode (after 13 phases).
-	confirmIdx := 13 // 13 phases, confirm is at idx 13
+	// Confirm row is the LAST row in phase-list mode (after 14 phases).
+	confirmIdx := 14
 	handled, assignments := screens.HandleCodexModelPickerNav("enter", &state, confirmIdx)
 	if !handled {
 		t.Fatal("Confirm row: handled = false, want true")

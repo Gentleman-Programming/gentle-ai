@@ -5,7 +5,7 @@ description: >
   ready and the change needs to be sliced into actionable, ordered work items.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
-tools: Read, Edit, Write, Grep, Glob, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
+tools: Read, Edit, Write, Grep, Glob, {{ENGRAM_TOOL_PREFIX}}mem_search, {{ENGRAM_TOOL_PREFIX}}mem_get_observation, {{ENGRAM_TOOL_PREFIX}}mem_save
 ---
 
 You are the SDD **tasks** executor. Do this phase's work yourself. Do NOT delegate further.
@@ -17,8 +17,8 @@ Read the skill file at `~/.claude/skills/sdd-tasks/SKILL.md` and follow it exact
 Also read shared conventions at `~/.claude/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read spec artifact (required): `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-2. Read design artifact (required): `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
+1. Read spec artifact (required): read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+2. Read design artifact (required): read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 3. Decompose work into ordered tasks (small enough to ship in isolation)
 4. Link each task to the spec requirement it satisfies
 5. Mark which tasks can run in parallel vs sequential

@@ -1,0 +1,96 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const codexLane = "codex"
+
+const codexModel = `#!/bin/sh
+set -eu
+log=${CROSSLANE_CODEX_LOG:?}; printf '%s\n' "$@" > "$log/argv"
+cat > "$log/stdin"
+scratch= output=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C) scratch=$2; shift 2 ;;
+    --output-last-message) output=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ "$scratch" = "$PWD" ] && [ -z "$(ls -A "$PWD")" ] && [ "$output" = "$PWD/result" ]
+hash=$(sed -n 's/.*"subject_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$log/stdin" | head -n 1)
+[ -n "$hash" ]
+printf '{"subject_hash":"%s","inspection":{"status":"completed","paths":["src/add.js"]},"evidence":["double is introduced by the committed candidate and violates the required behavior"],"findings":[{"claim":"double returns an incorrect committed candidate result","severity":"CRITICAL","evidence_class":"deterministic","causal_disposition":"introduced","lens":"review-reliability","location":"src/add.js:5","proof_refs":["src/add.js:4-6 is an introduced committed candidate hunk"]}]}' "$hash" | tee "$output" > "$log/raw"
+`
+
+func (b *battery) runCodexLane() {
+	base := "export function add(a, b) {\n  return a + b;\n}\n"
+	candidate := base + "export function double(a) {\n  return add(a, a);\n}\n"
+	repo, baseTree, ok := b.committedMediumCandidate(codexLane, "codex-committed", "src/add.js", base, candidate)
+	if !ok || !b.startCommittedMedium(codexLane, repo, "codex", baseTree) {
+		return
+	}
+	log := filepath.Join(b.workRoot, "codex-model")
+	if err := os.MkdirAll(filepath.Join(log, "bin"), 0o755); err != nil {
+		b.fail(codexLane, "fake model setup", err.Error())
+		return
+	}
+	if err := os.WriteFile(filepath.Join(log, "bin", "codex"), []byte(codexModel), 0o755); err != nil {
+		b.fail(codexLane, "fake model setup", err.Error())
+		return
+	}
+	env := []string{"CROSSLANE_CODEX_LOG=" + log, "PATH=" + filepath.Join(log, "bin") + string(os.PathListSeparator) + os.Getenv("PATH")}
+	status, stderr, _ := b.statusEnv(repo, "codex", env)
+	input := collectInput(status)
+	if input == nil || input["capture_operation"] != "review.capture-result" {
+		b.fail(codexLane, "compiled adapter capture", "no Codex capture slot: "+firstLine(stderr))
+		return
+	}
+	subject := getString(input, "artifact_subject", "subject_hash")
+	if subject == "" {
+		b.fail(codexLane, "compiled adapter capture", "Codex capture slot omitted artifact subject hash")
+		return
+	}
+	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,
+		append([]string{"review", "capture-result"}, argumentTokens(input)...)...)
+	if code != 0 || !admittedCapture(capture) {
+		b.fail(codexLane, "compiled adapter capture", fmt.Sprintf("exit=%d state=%q %s", code, operationState(capture), firstLine(stderr)))
+		return
+	}
+	if !b.checkCodexBoundary(log, subject) {
+		return
+	}
+	if operationState(capture) != "correction_required" {
+		b.fail(codexLane, "committed Codex correction capture", fmt.Sprintf("terminal state = %q, want correction_required", operationState(capture)))
+		return
+	}
+	continuation := getMap(capture, "status_continuation")
+	if getString(continuation, "operation") != "review.status" ||
+		!transitionCarriesToken(continuation, "--lineage="+operationLineage(capture)) ||
+		!transitionCarriesToken(continuation, "--base-ref="+baseTree) ||
+		!transitionCarriesToken(continuation, "--committed-only=true") ||
+		!transitionCarriesToken(continuation, "--agent=codex") {
+		b.fail(codexLane, "committed Codex correction continuation", "closure did not preserve lineage, frozen base, committed-only mode, and Codex binding")
+		return
+	}
+	b.pass(codexLane, "committed Codex correction continuation", "closure preserved lineage, frozen base, committed-only mode, and Codex binding in ordered tokens")
+	b.hostCorrectionReentry(codexLane, "committed Codex correction re-entry", repo, env, capture)
+}
+
+func (b *battery) checkCodexBoundary(log, subject string) bool {
+	argv, argvErr := os.ReadFile(filepath.Join(log, "argv"))
+	stdin, stdinErr := os.ReadFile(filepath.Join(log, "stdin"))
+	raw, rawErr := os.ReadFile(filepath.Join(log, "raw"))
+	var result map[string]any
+	if argvErr != nil || stdinErr != nil || rawErr != nil || json.Unmarshal(raw, &result) != nil || !strings.HasPrefix(string(argv), "exec\n--skip-git-repo-check\n--ignore-user-config\n--sandbox\nread-only\n-C\n") || strings.Contains(string(argv), "GENTLE_AI_REVIEW_") || !strings.Contains(string(stdin), subject) || getString(result, "subject_hash") != subject {
+		b.fail(codexLane, "adapter argv/stdin/raw boundary", "compiled adapter did not preserve the isolated opaque raw-result boundary")
+		return false
+	}
+	b.pass(codexLane, "adapter argv/stdin/raw boundary", "fake model received opaque stdin, echoed subject_hash, and wrote raw output in the empty adapter scratch")
+	return true
+}

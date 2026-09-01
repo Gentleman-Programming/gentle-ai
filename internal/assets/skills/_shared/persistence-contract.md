@@ -51,6 +51,25 @@ Read priority: Engram first; fall back to filesystem if Engram returns no result
 Write behavior: both writes MUST succeed for the operation to be complete.
 Token cost warning: hybrid consumes MORE tokens per operation. Use only when you need both cross-session persistence AND local file artifacts.
 
+### Research reconciliation
+
+For selected research, readiness follows the selected artifact-store mode: `openspec` validates only OpenSpec; `engram` validates only Engram; `hybrid` writes and reads both stores with identical revision and bytes; `none` cannot make selected research ready.
+
+For hybrid `gentle-ai.sdd-preproposal/v1`, retain pre-write intent and canonical desired content before any write. On one-sided failure, never derive content from either surviving store: use the retained values to write a new positive revision to both stores, then read and compare both before readiness. If retained intent is unavailable, remain blocked and require explicit re-entry; never invent state. A matching restart restores the request and evidence references.
+
+For selected research, apply this closed readiness matrix:
+
+| Mode | Outcome | Evidence | Required persistence/readback | Decisions | Ready |
+|---|---|---|---|---|---|
+| openspec | done | valid | OpenSpec success and readback | confirmed | yes |
+| engram | done | valid | Engram success and readback | confirmed | yes |
+| hybrid | done | valid | OpenSpec and Engram success; same revision and bytes on readback | confirmed | yes |
+| none | done | valid | no store | any | no |
+| any | partial | any | any | any | no |
+| any | blocked | any | any | any | no |
+| any | done | missing or invalid | any | any | no |
+| hybrid | done | valid | failed, missing, unequal, or divergent store | any | no |
+
 ## State Persistence (Orchestrator)
 
 The orchestrator persists DAG state after each phase transition to enable SDD recovery after compaction.

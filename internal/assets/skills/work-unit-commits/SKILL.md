@@ -30,6 +30,7 @@ Use it for:
 | Tell a story | A reviewer should understand why each commit exists from its diff and message. |
 | Future PR-ready | Each commit should be a candidate chained PR when the change grows. |
 | SDD workload guard | If SDD tasks forecast a >400-line change, group commits into chained PR slices before implementation. |
+| Budget is not code-golf | Never shrink a diff by deleting comments, blank lines, docs, or tests, or by compressing code, to fit the review budget (400 by default, or the session `review_budget_lines`). Slice by work unit or report the overage. |
 
 ## Work Unit Checklist
 
@@ -70,6 +71,7 @@ When `sdd-tasks` produces a Review Workload Forecast:
 - Medium risk: commit by work unit and monitor changed lines before PR creation.
 - High risk: follow SDD `delivery_strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
 - Count authored additions plus deletions for the `>400` threshold. Exclude generated goldens from that authored count, but include every generated file in complete snapshot identity and receipt validation.
+- Splitting is bounded: after one honest slicing pass, if no cohesive work-unit split fits the budget, stop and report the smallest honest count with a `size:exception` recommendation. Do not iterate shrinking the code to reach the number.
 
 Each SDD work unit should map cleanly to a commit or PR with:
 
