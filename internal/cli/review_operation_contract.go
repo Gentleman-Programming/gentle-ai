@@ -176,6 +176,30 @@ type ReviewIntegrationFailure struct {
 
 type ReviewIntegrationFailureContext struct {
 	ScopeChange *ReviewIntegrationScopeChange `json:"scope_change,omitempty"`
+	// ManagedAssets is additive (#3848): the managed_assets_outdated refusal
+	// used to carry only its constant cause sentence, which could not reveal
+	// that a DIFFERENT gentle-ai binary had run the recommended sync and
+	// therefore could never converge this binary's preflight.
+	ManagedAssets *ReviewIntegrationManagedAssetSkew `json:"managed_assets,omitempty"`
+}
+
+// ReviewIntegrationManagedAssetSkew names both sides of a managed-asset
+// provenance disagreement and the executable doing the comparing, so a caller
+// can see WHICH binary must run the sync instead of retrying a remediation
+// that already succeeded under another binary.
+type ReviewIntegrationManagedAssetSkew struct {
+	// ExpectedDigest is the running binary's own embedded-asset digest; empty
+	// when the digest could not be derived.
+	ExpectedDigest string `json:"expected_digest"`
+	// PersistedDigest is the managed_asset_digest recorded in state.json.
+	PersistedDigest string `json:"persisted_digest"`
+	// BinaryVersion is the running binary's version (`gentle-ai --version`).
+	BinaryVersion string `json:"binary_version"`
+	// BinaryPath is the running binary's resolved executable path; empty when
+	// it could not be resolved.
+	BinaryPath string `json:"binary_path"`
+	// Remediation is the runnable same-binary sync sentence.
+	Remediation string `json:"remediation"`
 }
 
 type ReviewIntegrationScopeChange struct {
@@ -753,6 +777,19 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			preflightFailure.RetrySafe = false
 		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
+		// #3848: the managed-asset refusal is the one preflight whose cause
+		// alone cannot make the caller converge -- the remediation depends on
+		// WHICH executable is refusing, and the scrubbed cause prose redacts
+		// paths. The typed diagnostics travel in the additive context field.
+		// v2 only: the v1 contract directory is frozen byte-unchanged (its
+		// gate_context admits scope_change alone), so a legacy envelope keeps
+		// the enriched cause without the structured context.
+		var managedAssets *managedAssetProvenanceError
+		if preflightFailure.Contract == ReviewIntegrationContractV2 && errors.As(preflight, &managedAssets) {
+			preflightFailure.Context = &ReviewIntegrationFailureContext{
+				ManagedAssets: publicReviewManagedAssetSkewContext(managedAssets),
+			}
+		}
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError
@@ -969,6 +1006,40 @@ func reviewLockOperationLabel(operation string) string {
 		return metadata.Label
 	}
 	return "Review operation"
+}
+
+// Managed-asset context field bounds; mirrored by the published
+// failure.schema.json `managed_assets` definition.
+const (
+	reviewManagedAssetDigestLimit      = 128
+	reviewManagedAssetVersionLimit     = 128
+	reviewManagedAssetPathLimit        = 4096
+	reviewManagedAssetRemediationLimit = 4200
+)
+
+// publicReviewManagedAssetSkewContext bounds the typed refusal to the
+// published single-line context shape. The digests come from state.json, which
+// hostile or corrupt content can inflate, so every field is cut to its
+// schema-pinned maxLength instead of trusting the source.
+func publicReviewManagedAssetSkewContext(skew *managedAssetProvenanceError) *ReviewIntegrationManagedAssetSkew {
+	return &ReviewIntegrationManagedAssetSkew{
+		ExpectedDigest:  boundReviewManagedAssetContextField(skew.ExpectedDigest, reviewManagedAssetDigestLimit),
+		PersistedDigest: boundReviewManagedAssetContextField(skew.PersistedDigest, reviewManagedAssetDigestLimit),
+		BinaryVersion:   boundReviewManagedAssetContextField(skew.BinaryVersion, reviewManagedAssetVersionLimit),
+		BinaryPath:      boundReviewManagedAssetContextField(skew.BinaryPath, reviewManagedAssetPathLimit),
+		Remediation:     boundReviewManagedAssetContextField(skew.remediation(), reviewManagedAssetRemediationLimit),
+	}
+}
+
+func boundReviewManagedAssetContextField(value string, limit int) string {
+	value = strings.ReplaceAll(value, "\r", "")
+	if newline := strings.IndexByte(value, '\n'); newline >= 0 {
+		value = value[:newline]
+	}
+	if runes := []rune(value); len(runes) > limit {
+		value = string(runes[:limit])
+	}
+	return value
 }
 
 func publicReviewScopeChangeContext(scope *reviewtransaction.GateScopeChangeDiagnostics) *ReviewIntegrationFailureContext {
@@ -1215,16 +1286,31 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	if failure.Context != nil {
-		scope := failure.Context.ScopeChange
-		if scope == nil || failure.Operation != ReviewIntegrationOperationValidate {
+		scope, managedAssets := failure.Context.ScopeChange, failure.Context.ManagedAssets
+		if scope != nil && managedAssets != nil {
+			return errors.New("negotiated review failure context carries more than one diagnostic") // refusal:by-design world-action: an envelope carrying two context diagnostics is a construction bug and requires a code fix, not an operator command
+		}
+		if managedAssets != nil {
+			// The frozen v1 contract cannot admit this context; only the v2
+			// failure schema publishes the managed_assets definition.
+			if !nativeGitContract || failure.Code != "managed_assets_outdated" ||
+				!validReviewManagedAssetContextField(managedAssets.ExpectedDigest, reviewManagedAssetDigestLimit, false) ||
+				!validReviewManagedAssetContextField(managedAssets.PersistedDigest, reviewManagedAssetDigestLimit, true) ||
+				!validReviewManagedAssetContextField(managedAssets.BinaryVersion, reviewManagedAssetVersionLimit, true) ||
+				!validReviewManagedAssetContextField(managedAssets.BinaryPath, reviewManagedAssetPathLimit, false) ||
+				!validReviewManagedAssetContextField(managedAssets.Remediation, reviewManagedAssetRemediationLimit, true) {
+				return errors.New("negotiated review managed-asset diagnostics are incomplete") // refusal:by-design world-action: malformed managed-asset diagnostics are a construction bug and require a code fix, not an operator command
+			}
+		}
+		if managedAssets == nil && (scope == nil || failure.Operation != ReviewIntegrationOperationValidate) {
 			return errors.New("negotiated review scope context is not a gate denial")
 		}
-		if failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || scope.DifferingPathCount < 0 || scope.DifferingPathCount > 1000000 ||
+		if scope != nil && (failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || scope.DifferingPathCount < 0 || scope.DifferingPathCount > 1000000 ||
 			!validReviewGitTree(scope.Expected.CandidateTree) || !validReviewCapabilitySHA256(scope.Expected.PathsDigest) ||
 			!validReviewGitTree(scope.Actual.CandidateTree) || !validReviewCapabilitySHA256(scope.Actual.PathsDigest) || !validReviewCapabilitySHA256(scope.DifferingPathsDigest) ||
 			!validReviewIntegrationLineage(scope.PredecessorLineageID) || !validReviewCapabilitySHA256(scope.PredecessorRevision) ||
 			scope.RecoveryOperation != "review.recover" || !reflect.DeepEqual(failure.RequiredInputs, scope.RecoveryRequiredInputs) ||
-			!reflect.DeepEqual(scope.RecoveryRequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) {
+			!reflect.DeepEqual(scope.RecoveryRequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"})) {
 			return errors.New("negotiated review scope-change diagnostics are incomplete")
 		}
 	}
@@ -1254,6 +1340,17 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validReviewManagedAssetContextField enforces the published managed_assets
+// context shape: single-line, bounded, and non-empty where the schema pins a
+// minLength (expected_digest and binary_path stay optional because deriving
+// either can itself fail on the machine being diagnosed).
+func validReviewManagedAssetContextField(value string, limit int, required bool) bool {
+	if value == "" {
+		return !required
+	}
+	return !strings.ContainsAny(value, "\r\n") && len([]rune(value)) <= limit
 }
 
 func supportedReviewIntegrationFailureInput(input string) bool {

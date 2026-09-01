@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,6 +94,74 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 	})
 }
 
+// TestZeroAgentSyncConvergesManagedAssetProvenance pins issue #3848 hole 1: a
+// sync that discovers zero agents used to return its no-op before the managed
+// asset persistence step, so a stale recorded digest survived a successful
+// `gentle-ai sync` and the START preflight refused forever with the exact
+// remediation it had already run. The zero-agent no-op must converge this
+// binary additively: its digest joins managed_asset_digests while the scalar
+// stays whatever binary wrote it, so the very next preflight authorizes
+// without revoking another binary's authorization.
+func TestZeroAgentSyncConvergesManagedAssetProvenance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+
+	result, err := RunSyncWithSelection(home, model.Selection{})
+	if err != nil || !result.NoOp {
+		t.Fatalf("zero-agent sync = NoOp %v, %v, want a clean no-op", result.NoOp, err)
+	}
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	persisted, err := state.Read(home)
+	requireManagedAssetProvenanceNoError(t, err)
+	if persisted.ManagedAssetDigest != "sha256:stale" {
+		t.Fatalf("zero-agent sync rewrote the scalar managed_asset_digest to %q, want the writer's %q preserved", persisted.ManagedAssetDigest, "sha256:stale")
+	}
+	if !slices.Contains(persisted.ManagedAssetDigests, digest) {
+		t.Fatalf("zero-agent sync recorded set %v, want it to contain this binary's %q", persisted.ManagedAssetDigests, digest)
+	}
+	if err := authorizeManagedReviewerAssets(); err != nil {
+		t.Fatalf("preflight after zero-agent sync = %v, want authorized", err)
+	}
+}
+
+// TestZeroAgentSyncDoesNotClobberOtherBinaryDigest pins the two-binary
+// regression: with binary B's digest in the scalar slot, a zero-agent sync by
+// THIS binary must not overwrite it — otherwise B's next sync overwrites ours
+// back and the two preflights revoke each other forever. The zero-agent sync
+// converges additively: the scalar stays B's, this binary's digest joins the
+// managed_asset_digests set (idempotently), and both preflights authorize.
+func TestZeroAgentSyncDoesNotClobberOtherBinaryDigest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	recordManagedAssetDigest(t, home, "sha256:other-binary")
+
+	for _, pass := range []string{"first", "idempotent second"} {
+		result, err := RunSyncWithSelection(home, model.Selection{})
+		if err != nil || !result.NoOp {
+			t.Fatalf("%s zero-agent sync = NoOp %v, %v, want a clean no-op", pass, result.NoOp, err)
+		}
+	}
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	persisted, err := state.Read(home)
+	requireManagedAssetProvenanceNoError(t, err)
+	// The scalar is binary B's authorization: B's own preflight compares its
+	// digest against exactly this field, so it must survive our sync untouched.
+	if persisted.ManagedAssetDigest != "sha256:other-binary" {
+		t.Fatalf("zero-agent sync clobbered the other binary's scalar digest: %q", persisted.ManagedAssetDigest)
+	}
+	if !slices.Equal(persisted.ManagedAssetDigests, []string{digest}) {
+		t.Fatalf("zero-agent sync recorded set %v, want exactly this binary's %q", persisted.ManagedAssetDigests, digest)
+	}
+	if err := authorizeManagedReviewerAssets(); err != nil {
+		t.Fatalf("this binary's preflight after zero-agent sync = %v, want authorized via set membership", err)
+	}
+}
+
 func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
@@ -111,11 +180,88 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 		failure.NextAction != "stop" {
 		t.Fatalf("stale managed assets failure = %#v", failure)
 	}
-	if failure.Cause != managedAssetProvenanceRefusal {
-		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, managedAssetProvenanceRefusal)
+	// #3848: the cause keeps its historical sentence as a stable prefix and now
+	// names both digests; the executable path is redacted by the envelope's
+	// privacy gate, so the runnable same-binary invocation travels in the
+	// dedicated managed_assets context instead.
+	expected, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	if !strings.HasPrefix(failure.Cause, managedAssetProvenanceRefusal) ||
+		!strings.Contains(failure.Cause, expected) || !strings.Contains(failure.Cause, "sha256:stale") {
+		t.Fatalf("stale managed assets cause = %q, want prefix %q naming both digests", failure.Cause, managedAssetProvenanceRefusal)
+	}
+	if failure.Context == nil || failure.Context.ManagedAssets == nil ||
+		failure.Context.ManagedAssets.ExpectedDigest != expected ||
+		failure.Context.ManagedAssets.PersistedDigest != "sha256:stale" {
+		t.Fatalf("stale managed assets context = %#v", failure.Context)
 	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("stale managed assets failure does not satisfy its published contract: %v", err)
+	}
+	schema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+}
+
+// TestManagedAssetProvenanceRefusalCarriesConvergenceDiagnostics pins issue
+// #3848 hole 2: two different gentle-ai binaries share the one home-scoped
+// digest, and each compares against its OWN embedded assets, so a sync run by
+// binary A can never satisfy binary B's preflight. The refusal must therefore
+// name both digests and the running binary's identity, and its remediation
+// must bind the sync to this exact executable.
+func TestManagedAssetProvenanceRefusalCarriesConvergenceDiagnostics(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+	expected, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	binaryPath, err := reviewCapabilitiesExecutablePath()
+	requireManagedAssetProvenanceNoError(t, err)
+
+	refusal := authorizeManagedReviewerAssets()
+	var skew *managedAssetProvenanceError
+	if !errors.As(refusal, &skew) {
+		t.Fatalf("stale refusal = %T %v, want *managedAssetProvenanceError", refusal, refusal)
+	}
+	if skew.ExpectedDigest != expected || skew.PersistedDigest != "sha256:stale" ||
+		skew.BinaryVersion == "" || skew.BinaryPath != binaryPath {
+		t.Fatalf("refusal diagnostics = %#v, want expected %q, persisted %q, this binary", skew, expected, "sha256:stale")
+	}
+	for _, want := range []string{managedAssetProvenanceRefusal, expected, "sha256:stale", skew.BinaryVersion, binaryPath, binaryPath + " sync"} {
+		if !strings.Contains(refusal.Error(), want) {
+			t.Fatalf("refusal error %q does not name %q", refusal.Error(), want)
+		}
+	}
+	if strings.ContainsAny(refusal.Error(), "\r\n") {
+		t.Fatalf("refusal error is not single-line: %q", refusal.Error())
+	}
+
+	failure := newReviewIntegrationFailure("review.start", []string{"--contract", ReviewIntegrationContractV2},
+		reviewPreflightRefusal(reviewPreflightManagedAssetsReason, refusal))
+	if failure.Code != "managed_assets_outdated" || failure.Context == nil || failure.Context.ManagedAssets == nil {
+		t.Fatalf("stale managed assets envelope = %#v, want managed_assets context", failure)
+	}
+	managed := failure.Context.ManagedAssets
+	if managed.ExpectedDigest != expected || managed.PersistedDigest != "sha256:stale" ||
+		managed.BinaryVersion != skew.BinaryVersion || managed.BinaryPath != binaryPath ||
+		!strings.Contains(managed.Remediation, binaryPath+" sync") {
+		t.Fatalf("managed assets context = %#v", managed)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("managed assets envelope does not satisfy its published contract: %v", err)
+	}
+
+	// The v1 contract directory is frozen byte-unchanged, so its gate_context
+	// cannot admit the new diagnostics: a legacy envelope keeps the enriched
+	// cause and carries no context.
+	legacy := newReviewIntegrationFailure("review.start", nil,
+		reviewPreflightRefusal(reviewPreflightManagedAssetsReason, refusal))
+	if legacy.Contract != ReviewIntegrationContractV1 || legacy.Context != nil ||
+		!strings.HasPrefix(legacy.Cause, managedAssetProvenanceRefusal) {
+		t.Fatalf("legacy managed assets envelope = %#v", legacy)
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("legacy managed assets envelope does not satisfy its published contract: %v", err)
 	}
 }
 
