@@ -4782,6 +4782,35 @@ func TestInjectModelAssignments_VariantInjected(t *testing.T) {
 	}
 }
 
+func TestInjectModelAssignments_NativeFallbackAssignmentWins(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "general": {"mode": "subagent", "model": "openai/gpt-5.6-terra", "variant": "medium"},
+    "explore": {"mode": "subagent"}
+  }
+}`)
+	assignments := map[string]model.ModelAssignment{
+		"general": {ProviderID: "openai", ModelID: "gpt-5.6-luna", Effort: "max"},
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments, "", map[string]bool{"general": true, "explore": true})
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+	general := parsed["agent"].(map[string]any)["general"].(map[string]any)
+	if got := general["model"]; got != "openai/gpt-5.6-luna" {
+		t.Fatalf("general model = %v, want openai/gpt-5.6-luna", got)
+	}
+	if got := general["variant"]; got != "max" {
+		t.Fatalf("general variant = %v, want max", got)
+	}
+}
+
 // TestInjectModelAssignments_EmptyEffortSetsEmptyVariant verifies that when
 // Effort is empty, the "variant" key is set to "" so the deep merge overwrites
 // any pre-existing variant in the user's config.

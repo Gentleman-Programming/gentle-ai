@@ -101,6 +101,15 @@ func JDPhases() []string {
 	}
 }
 
+// NativeFallbackPhases returns OpenCode's built-in delegation agents managed
+// by Gentle AI. They are global runtime agents, not profile-scoped SDD phases.
+func NativeFallbackPhases() []string {
+	return []string{
+		"general",
+		"explore",
+	}
+}
+
 const (
 	ReviewRefuterAgent   = "review-refuter"
 	ReviewValidatorAgent = "review-validator"
@@ -130,6 +139,7 @@ func ReviewPhases() []string {
 func ConfigurableAgentPhases() []string {
 	phases := SDDPhases()
 	phases = append(phases, JDPhases()...)
+	phases = append(phases, NativeFallbackPhases()...)
 	phases = append(phases, ReviewPhases()...)
 	return phases
 }
