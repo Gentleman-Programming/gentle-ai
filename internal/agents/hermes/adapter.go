@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -104,7 +105,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 
 // --- MCP ---
 
-// MCPConfigPath returns the path to ~/.hermes/config.yaml for both context7 and
+// MCPConfigPath returns the shared Hermes config.yaml path for both context7 and
 // engram. Hermes stores all MCP servers in a single YAML config file, so the
 // serverName argument is intentionally ignored.
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
@@ -162,8 +163,15 @@ func defaultStat(path string) statResult {
 	return statResult{isDir: info.IsDir()}
 }
 
-// ConfigPath returns the path to ~/.hermes, the Hermes global config directory.
+// ConfigPath returns the Hermes global config directory.
+// On Windows: %LOCALAPPDATA%/hermes (matches Hermes Desktop).
+// On other platforms: ~/.hermes.
 func ConfigPath(homeDir string) string {
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
+			return filepath.Join(appData, "hermes")
+		}
+	}
 	return filepath.Join(homeDir, ".hermes")
 }
 

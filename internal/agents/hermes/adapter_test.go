@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,14 @@ import (
 )
 
 func TestDetect(t *testing.T) {
+	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+	wantConfigPath := filepath.Join(homeDir, ".hermes")
+	if runtime.GOOS == "windows" {
+		localAppData := filepath.Join(t.TempDir(), "localappdata")
+		t.Setenv("LOCALAPPDATA", localAppData)
+		wantConfigPath = filepath.Join(localAppData, "hermes")
+	}
+
 	tests := []struct {
 		name            string
 		lookPathPath    string
@@ -72,8 +81,6 @@ func TestDetect(t *testing.T) {
 					return tt.stat
 				},
 			}
-			homeDir := filepath.Join(string(filepath.Separator), "home", "test")
-
 			installed, binaryPath, configPath, configFound, err := a.Detect(context.Background(), homeDir)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Detect() error = %v, wantErr %v", err, tt.wantErr)
@@ -91,7 +98,6 @@ func TestDetect(t *testing.T) {
 				t.Fatalf("Detect() binaryPath = %q, want %q", binaryPath, tt.wantBinaryPath)
 			}
 
-			wantConfigPath := filepath.Join(homeDir, ".hermes")
 			if configPath != wantConfigPath {
 				t.Fatalf("Detect() configPath = %q, want %q", configPath, wantConfigPath)
 			}
@@ -101,6 +107,38 @@ func TestDetect(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigPath(t *testing.T) {
+	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+
+	if runtime.GOOS != "windows" {
+		t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "localappdata"))
+		want := filepath.Join(homeDir, ".hermes")
+		if got := ConfigPath(homeDir); got != want {
+			t.Fatalf("ConfigPath() = %q, want %q", got, want)
+		}
+		return
+	}
+
+	t.Run("uses LOCALAPPDATA", func(t *testing.T) {
+		localAppData := filepath.Join(t.TempDir(), "localappdata")
+		t.Setenv("LOCALAPPDATA", localAppData)
+
+		want := filepath.Join(localAppData, "hermes")
+		if got := ConfigPath(homeDir); got != want {
+			t.Fatalf("ConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to home directory when LOCALAPPDATA is empty", func(t *testing.T) {
+		t.Setenv("LOCALAPPDATA", "")
+
+		want := filepath.Join(homeDir, ".hermes")
+		if got := ConfigPath(homeDir); got != want {
+			t.Fatalf("ConfigPath() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestInstallCommand(t *testing.T) {
@@ -127,6 +165,11 @@ func TestConfigPaths(t *testing.T) {
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
 	configDir := filepath.Join(homeDir, ".hermes")
+	if runtime.GOOS == "windows" {
+		localAppData := filepath.Join(t.TempDir(), "localappdata")
+		t.Setenv("LOCALAPPDATA", localAppData)
+		configDir = filepath.Join(localAppData, "hermes")
+	}
 	configYAML := filepath.Join(configDir, "config.yaml")
 	soulMD := filepath.Join(configDir, "SOUL.md")
 	skillsDir := filepath.Join(configDir, "skills")
