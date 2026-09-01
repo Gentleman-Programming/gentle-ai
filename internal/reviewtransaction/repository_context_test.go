@@ -187,7 +187,9 @@ func TestRctx2HostResolverRefusesUnregisteredAndUnrelatedWorktreesWithoutMutatio
 func registeredRctx2HostFixture(t *testing.T, lineage string) (string, string, CompactStore, ReviewRepositoryContextBinding, string) {
 	t.Helper()
 	host := initSnapshotRepo(t)
-	target := filepath.Join(t.TempDir(), "review-target")
+	// canonicalTempDir, not t.TempDir: the resolver answers with the canonical
+	// worktree root, and the Windows runner's TEMP is an 8.3 short name.
+	target := filepath.Join(canonicalTempDir(t), "review-target")
 	if err := runSnapshotGit(host, "worktree", "add", "-q", "-b", lineage+"-target", target, "HEAD"); err != nil {
 		t.Fatal(err)
 	}
