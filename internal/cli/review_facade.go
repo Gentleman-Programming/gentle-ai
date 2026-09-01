@@ -728,6 +728,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if reviewFlagWasProvided(flags, "intended-untracked-selection") {
 		if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+			// refusal:by-design operator-knowledge: only the caller can supply one intended-untracked selection representation.
 			return reviewPreflightError(errors.New("--intended-untracked-selection is mutually exclusive with legacy untracked selection flags"))
 		}
 		var err error

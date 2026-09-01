@@ -65,6 +65,7 @@ func decodeReviewIntendedUntrackedSelection(raw string) (reviewSingleValueFlag, 
 	decoder.DisallowUnknownFields()
 	var value reviewIntendedUntrackedSelection
 	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF || value.Schema != reviewIntendedUntrackedSelectionSchema || value.Intended == nil {
+		// refusal:by-design operator-knowledge: only the caller can supply the exact provider-owned intended-untracked selection JSON.
 		return reviewSingleValueFlag{}, nil, reviewSingleValueFlag{}, errors.New("--intended-untracked-selection must be exact gentle-ai.review-intended-untracked-selection/v1 JSON")
 	}
 	return reviewSingleValueFlag{value: value.UntrackedScope, set: true}, reviewRepeatedPathFlag(value.Intended), reviewSingleValueFlag{value: value.ExpectedInventory, set: true}, nil

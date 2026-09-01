@@ -1234,9 +1234,11 @@ func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection(
 	}
 	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != 4 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
 		len(tokens) != 5 || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[3] != "--projection=workspace" || tokens[4] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
 		return errors.New("intended-untracked submission descriptor is invalid")
 	}
 	if _, err := reviewRuntimeWithImmutableTransport(agent); err != nil {
+		// refusal:by-design world-action: the provider-generated intended-untracked submission runtime requires a provider code fix.
 		return errors.New("intended-untracked submission runtime is unsupported")
 	}
 	return nil
