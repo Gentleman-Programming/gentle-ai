@@ -30,10 +30,34 @@
     "next_action": {"$ref": "../../v1/schemas/failure.schema.json#/properties/next_action"},
     "cause_category": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause_category"},
     "cause": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause"},
-    "context": {"$ref": "../../v1/schemas/failure.schema.json#/properties/context"}
+    "context": {"$ref": "#/$defs/gate_context"}
   },
   "allOf": [
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
-  ]
+  ],
+  "$defs": {
+    "managed_assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_digest", "persisted_digest", "binary_version", "binary_path", "remediation"],
+      "properties": {
+        "expected_digest": {"type": "string", "maxLength": 128, "pattern": "^[^\\r\\n]*$"},
+        "persisted_digest": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\r\\n]+$"},
+        "binary_version": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\r\\n]+$"},
+        "binary_path": {"type": "string", "maxLength": 4096, "pattern": "^[^\\r\\n]*$"},
+        "remediation": {"type": "string", "minLength": 1, "maxLength": 4200, "pattern": "^[^\\r\\n]+$"}
+      }
+    },
+    "gate_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "scope_change": {"$ref": "../../v1/schemas/failure.schema.json#/$defs/scope_change"},
+        "managed_assets": {"$ref": "#/$defs/managed_assets"}
+      }
+    }
+  }
 }

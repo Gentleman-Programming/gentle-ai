@@ -41,15 +41,22 @@ type ClaudePhaseAssignmentState struct {
 
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
-	InstalledAgents        []string            `json:"installed_agents"`
-	InstalledBinaryVersion string              `json:"installed_binary_version,omitempty"`
-	ManagedAssetDigest     string              `json:"managed_asset_digest,omitempty"`
-	SelectionConfigured    bool                `json:"selection_configured,omitempty"`
-	Components             []model.ComponentID `json:"components,omitempty"`
-	Skills                 []model.SkillID     `json:"skills,omitempty"`
-	Preset                 model.PresetID      `json:"preset,omitempty"`
-	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
-	StrictTDD              bool                `json:"strict_tdd,omitempty"`
+	InstalledAgents        []string `json:"installed_agents"`
+	InstalledBinaryVersion string   `json:"installed_binary_version,omitempty"`
+	ManagedAssetDigest     string   `json:"managed_asset_digest,omitempty"`
+	// ManagedAssetDigests is the additive set of binaries (by managed-asset
+	// digest) that have converged this home through a zero-agent sync (#3848).
+	// It exists so two binaries sharing one home stop revoking each other's
+	// review preflight: a zero-agent sync joins the set without touching the
+	// scalar above, and a full sync resets the set to its own digest. Sorted
+	// for deterministic serialization.
+	ManagedAssetDigests []string            `json:"managed_asset_digests,omitempty"`
+	SelectionConfigured bool                `json:"selection_configured,omitempty"`
+	Components          []model.ComponentID `json:"components,omitempty"`
+	Skills              []model.SkillID     `json:"skills,omitempty"`
+	Preset              model.PresetID      `json:"preset,omitempty"`
+	SDDMode             model.SDDModeID     `json:"sdd_mode,omitempty"`
+	StrictTDD           bool                `json:"strict_tdd,omitempty"`
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -229,6 +236,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		InstalledAgents:             merged,
 		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
 		ManagedAssetDigest:          existing.ManagedAssetDigest,
+		ManagedAssetDigests:         existing.ManagedAssetDigests,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
