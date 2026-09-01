@@ -25,6 +25,38 @@
 # fails the job loudly instead of letting `go test -run` match nothing and
 # exit 0. Adding or renaming an entry is a one-line diff, reviewed like code.
 
+# --- #306: symlink containment through aliased ancestors ----------------------
+# The resolver must compare filesystem identity, not `/var` and `/private/var`
+# path spellings. These tests exercise the affected write and read paths.
+./internal/components/filemerge TestWriteFileAtomicPreservesExistingSymlink
+./internal/components/filemerge TestWriteFileAtomicSymlinkNoopPreservesLink
+./internal/components/filemerge TestWriteFileAtomicCreatesDanglingSymlinkTarget
+./internal/components/filemerge TestWriteFileAtomicAllowsSymlinkWithinHome
+./internal/components/filemerge TestWriteFileAtomicCreatesNestedDanglingSymlinkTarget
+./internal/components/filemerge TestWriteFileAtomicFollowsSymlinkParentDirectory
+./internal/components/filemerge TestWriteFileAtomicAcceptsEquivalentPathSpellings
+./internal/components/filemerge TestWriteFileAtomicAllowsSymlinkWithinAliasedHome
+./internal/components/uninstall TestReadManagedFile_FollowsSymlink
+./internal/components/uninstall TestReadManagedFile_AllowsSymlinkWithinHome
+./internal/components/uninstall TestReadManagedFile_BrokenSymlinkReturnsNotExist
+./internal/components/uninstall TestReadManagedFile_RejectsSymlinkEscape
+./internal/components/uninstall TestReadManagedFile_RejectsBrokenSymlinkEscape
+./internal/components/uninstall TestReadManagedFile_RejectsEscapingSymlinkParentDirectory
+./internal/components/uninstall TestProtectRemovalOperationAllowsInRootSymlinkedParent
+./internal/components/uninstall TestProtectRemovalOperationRemovesTreeThroughInRootSymlinkedParent
+./internal/components/uninstall TestProtectRemovalOperationRemovesFinalSymlinkOnly
+./internal/components/uninstall TestProtectRemovalOperationRejectsExternalSymlinkedParent
+./internal/backup TestSnapshotterRejectsSymlinkOutsideSourceRoot
+./internal/backup TestSnapshotterArchivesInRootSymlinkTarget
+./internal/symlinkguard TestEnsureWithinRootAcceptsSymlinkedAncestorSpelling
+./internal/symlinkguard TestEnsureWithinRootStillRejectsEscape
+./internal/symlinkguard TestResolveExistingRejectsEscapeThroughSymlinkedAncestor
+./internal/symlinkguard TestCanonicalizeExistingKeepsMissingComponents
+./internal/symlinkguard TestSafeRemovalPathCanonicalizesInRootSymlinkedParent
+./internal/symlinkguard TestSafeRemovalPathPreservesFinalSymlink
+./internal/symlinkguard TestSafeRemovalPathRejectsExternalSymlinkedParent
+./internal/symlinkguard TestSafeRemovalPathAllowsConfiguredRootSymlink
+
 # --- #1773: /var vs /private/var repository-path canonicalization -------------
 # macOS $TMPDIR lives under /var/folders, and /var is a symlink to /private/var,
 # so one repository has two valid absolute spellings. These tests only exercise

@@ -204,6 +204,73 @@ func TestWriteFileAtomicAllowsSymlinkWithinHome(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicAcceptsEquivalentPathSpellings(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(realDir) error = %v", err)
+	}
+	aliasDir := filepath.Join(base, "alias")
+	mustSymlink(t, realDir, aliasDir)
+
+	target := filepath.Join(realDir, "target.txt")
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	path := filepath.Join(aliasDir, "linked.txt")
+	mustSymlink(t, filepath.Join(aliasDir, "target.txt"), path)
+
+	if _, err := WriteFileAtomic(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic(equivalent path spellings) error = %v, want success", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(symlink) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("WriteFileAtomic replaced symlink, want symlink preserved")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "new\n" {
+		t.Fatalf("target content = %q err=%v, want updated target", got, err)
+	}
+}
+
+func TestWriteFileAtomicAllowsSymlinkWithinAliasedHome(t *testing.T) {
+	realHome := t.TempDir()
+	aliasParent := t.TempDir()
+	homeAlias := filepath.Join(aliasParent, "home")
+	mustSymlink(t, realHome, homeAlias)
+	setTestHome(t, homeAlias)
+
+	target := filepath.Join(realHome, ".dotfiles", "claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("MkdirAll(target dir) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	path := filepath.Join(homeAlias, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(path dir) error = %v", err)
+	}
+	mustSymlink(t, target, path)
+
+	if _, err := WriteFileAtomic(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic(aliased home) error = %v, want success", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(home symlink) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("WriteFileAtomic replaced home symlink, want symlink preserved")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "new\n" {
+		t.Fatalf("target content = %q err=%v, want updated target", got, err)
+	}
+}
+
 func TestWriteFileAtomicCreatesNestedDanglingSymlinkTarget(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "linked.txt")
