@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor"
 	"gopkg.in/yaml.v3"
 )
 

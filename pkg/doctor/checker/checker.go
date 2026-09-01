@@ -4,7 +4,7 @@ import (
 	"context"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor"
 )
 
 // Checker is the interface for health checks.

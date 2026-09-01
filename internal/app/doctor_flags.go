@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor/checker"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor/checker"
 )
 
 // DoctorFlags holds parsed flags for the doctor subcommand.
