@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor"
 )
 
 // SoftwareChecker performs software-related health checks.

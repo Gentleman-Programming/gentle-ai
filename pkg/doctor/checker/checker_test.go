@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor"
 )
 
 func TestNewHardwareChecker(t *testing.T) {

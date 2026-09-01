@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor/fixer"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor/fixer"
 	"github.com/mattn/go-isatty"
 )
 

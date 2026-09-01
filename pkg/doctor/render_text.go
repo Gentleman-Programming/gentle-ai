@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 // TextRenderer outputs the report as a colored table.

@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/pkg/doctor/fixer"
+	"github.com/gentleman-programming/gentle-ai/v2/pkg/doctor/fixer"
 )
 
 // Status represents the outcome of a health check.
