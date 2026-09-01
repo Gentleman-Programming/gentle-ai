@@ -265,14 +265,21 @@ func validVerifyReportVerdict(verdict string) bool {
 	return false
 }
 
+// verifyEnvelopeFenceRefusal names the exact first line the contract admits
+// and the command that checks candidate bytes, so a refused report can be
+// fixed from the message alone (#2828).
+const verifyEnvelopeFenceRefusal = "missing valid gentle-ai.verify-result/v1 envelope: the first non-empty line must be ```yaml (```yml and any letter case are admitted; ~~~ fences, untagged fences, and content before the fence are not); check the exact bytes with gentle-ai sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>"
+
 func parseLeadingEnvelope(text string) ([]string, int, string) {
+	// PowerShell 5.1 writes a UTF-8 BOM that TrimSpace never removes (#2828).
+	text = strings.TrimPrefix(text, "\ufeff")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
 		return nil, -1, "YAML front matter is unsupported; the first non-empty content must be a fenced yaml envelope"
 	}
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "```yaml" {
-		return nil, -1, "missing valid gentle-ai.verify-result/v1 envelope: the first non-empty content must be fenced yaml"
+	if len(lines) == 0 || !isYAMLFenceOpener(lines[0]) {
+		return nil, -1, verifyEnvelopeFenceRefusal
 	}
 	for index := 1; index < len(lines); index++ {
 		if strings.TrimSpace(lines[index]) == "```" {
@@ -280,6 +287,11 @@ func parseLeadingEnvelope(text string) ([]string, int, string) {
 		}
 	}
 	return nil, -1, "unterminated verify result envelope"
+}
+
+func isYAMLFenceOpener(line string) bool {
+	tag, fenced := strings.CutPrefix(strings.TrimSpace(line), "```")
+	return fenced && (strings.EqualFold(tag, "yaml") || strings.EqualFold(tag, "yml"))
 }
 
 func parseScalarFields(lines []string, allowed map[string]bool, label string) (map[string]string, string) {

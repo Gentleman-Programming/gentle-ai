@@ -137,6 +137,16 @@ func TestEveryReviewStopReasonCodeHasAShippedContinuation(t *testing.T) {
 		}
 		t.Errorf("shipped %s entry for %q names no runnable `gentle-ai` command, no `--flag` to pass on the same invocation, and no D/S continuation alias, so this stop reads as a dead end", reviewLedgerContractAsset, code)
 	}
+
+	// Issue #3972: the clone-local override can only disable, so
+	// `enable --scope clone` cannot turn reviews on when the global switch is
+	// unset or off; it only clears a clone-local off. The one command that
+	// enables is the global form, and the rdd_disabled continuation must name
+	// it, or the documented loop is rdd_disabled -> clone enable (no-op) ->
+	// rdd_disabled.
+	if continuation := assetCodes["rdd_disabled"]; !strings.Contains(continuation, "`gentle-ai review mode enable --scope global`") {
+		t.Errorf("shipped %s entry for rdd_disabled does not name the command that enables (`gentle-ai review mode enable --scope global`): %q", reviewLedgerContractAsset, continuation)
+	}
 }
 
 // TestReviewStopReasonDocsSectionStopsAtTheNextHeadingOfAnyLevel is the

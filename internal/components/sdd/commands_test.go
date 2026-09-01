@@ -2,11 +2,13 @@ package sdd
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
@@ -124,5 +126,31 @@ func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *tes
 				}
 			}
 		})
+	}
+}
+
+// #2644: only Claude Code namespaces its commands, and only there does a
+// retired unprefixed predecessor exist.
+func TestSlashCommandPathsNamespaceClaudeOnly(t *testing.T) {
+	dir := filepath.Join("home", ".claude", "commands")
+	claude := SlashCommandPaths(model.AgentClaudeCode, dir)
+	if len(claude) != 2*len(OpenCodeCommands()) {
+		t.Fatalf("claude paths = %d, want new and retired name per command", len(claude))
+	}
+	if claude[0] != filepath.Join(dir, "gentle-sdd-init.md") || claude[1] != filepath.Join(dir, "sdd-init.md") {
+		t.Fatalf("claude paths start = %v", claude[:2])
+	}
+	if !IsLegacyClaudeCommandPath(claude[1]) || IsLegacyClaudeCommandPath(claude[0]) {
+		t.Fatalf("legacy detection wrong for %v", claude[:2])
+	}
+	if IsLegacyClaudeCommandPath(filepath.Join("home", ".config", "opencode", "commands", "sdd-init.md")) {
+		t.Fatal("OpenCode command misreported as retired Claude command")
+	}
+	opencode := SlashCommandPaths(model.AgentOpenCode, "cmds")
+	if len(opencode) != len(OpenCodeCommands()) || opencode[0] != filepath.Join("cmds", "sdd-init.md") {
+		t.Fatalf("opencode paths = %v", opencode)
+	}
+	if got := LegacyClaudeCommandPath(model.AgentOpenCode, "cmds", "gentle-sdd-init.md"); got != "" {
+		t.Fatalf("OpenCode legacy path = %q, want none", got)
 	}
 }

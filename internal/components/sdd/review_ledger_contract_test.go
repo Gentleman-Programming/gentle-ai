@@ -471,7 +471,15 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// runtime orchestrator: the native surface resolves the declared store, so
 	// the actor no longer determines or branches on it. Kilo renders through the
 	// OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "45b63ab97aad4a5f31b20bf834a43d1df25a5521db2e8008473cb99ebaaa593f"
+	// #3696 spells out every required `sdd-attempt settle` flag in the shared
+	// Native Runtime Attempt Authority section and drops `--successor-lineage`,
+	// a flag settle never defined. Kilo renders that shared section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	// #3105 adds the planned-path carve-out to the automatic gate's
+	// no-hallucination clause in every runtime orchestrator, so a design that
+	// names files apply will create is no longer failed by the gate. Kilo
+	// renders the OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "b3c375b834db28f97daaf05c19b55f088c470e7ed58b0ba3dd965569ef04c74c"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -694,12 +702,33 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3748 adds the public status_continuation execution rule (+339 rendered
 		// characters in each row), so the pins move from 14,657/27,002 to
 		// 14,996/27,341 after deterministic fixture measurement.
+		// #2941 replaces the capture-transport sentence's retired
+		// `--result-artifact-file` / `--result-artifact` / `--captured-results`
+		// forms with the real `--input <path|->` flag and the in-process
+		// `--agent` rule (+27 rendered characters per row: 15,813/28,158 ->
+		// 15,840/28,185). Ceilings unchanged; the standard row stays under its
+		// 15,866 budget.
 		// #3894 rewrites the Stay bound step around the START-published
 		// next_transition.execute(review.status) re-entry (+187 rendered
 		// characters in each row): the old sentence told consumers to pass a
 		// revision selector the CLI refuses. Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_676, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_021, maxCharacters: 30_063},
+		// wantChars then grew by 137 per case (15_676 -> 15_813 / 28_021 -> 28_158)
+		// when #3946 made review acknowledge-approved print its
+		// gentle-ai.review-acknowledged/v1 envelope and the contract told
+		// orchestrators to report the burn from it. Deliberate, not drift.
+		// +42 per case (15_813 -> 15_855 / 28_158 -> 28_200) when #3928 named
+		// the root status `action` field informational: callers route only on
+		// next_transition. Deliberate, not drift; the ceilings are unchanged.
+		// -23 per case (15_855 -> 15_832 / 28_200 -> 28_177) when #2941 replaced the
+		// retired capture flags with `--input` and shortened the sentence so the
+		// standard total stays under its unchanged ceiling. Deliberate, not drift.
+		// +31 per case (15_832 -> 15_863 / 28_177 -> 28_208) when #3972 made the
+		// rdd_disabled continuation name the command that enables
+		// (`--scope global`): the clone form only clears a clone-local off, so
+		// the old row documented a no-op loop. Deliberate, not drift; the
+		// ceilings are unchanged and the standard row stays under 15_866.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_863, maxCharacters: 15_866},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_208, maxCharacters: 30_063},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

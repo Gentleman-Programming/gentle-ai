@@ -275,6 +275,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		})
 	}
 	var rawPayload []byte
+	var admitted reviewProviderAdmittedResult
 	if providerExecution {
 		request, materializeErr := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), root, contextHandle, *lens, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
@@ -303,19 +304,32 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if adapterErr != nil {
 			return reviewPreflightError(adapterErr)
 		}
-		rawPayload, err = adapter.Review(ctx, request.Invocation)
+		// --agent is refused together with --preflight above, so this branch
+		// never runs under preflight and its preservation needs no guard.
+		admitted, rawPayload, err = reviewProviderCaptureWithOneCorrection(ctx, reviewProviderCapture{
+			root: root, runtime: providerRuntime, adapter: adapter, state: state, frozen: frozen, subject: subject,
+		}, request.Invocation)
 		if err != nil {
-			return reviewPreflightError(fmt.Errorf("invoke provider reviewer: %w", err))
+			return reviewPreflightError(err)
 		}
 	} else {
 		rawPayload, err = readFacadeBytes(*input)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("read reviewer result: %w", err))
 		}
-	}
-	admitted, err := reviewProviderAdmitRaw(ctx, root, state, state.CapturePhaseRevision, frozen, subject, rawPayload)
-	if err != nil {
-		return reviewPreflightError(err)
+		admitted, err = reviewProviderAdmitRaw(ctx, root, state, state.CapturePhaseRevision, frozen, subject, rawPayload)
+		if err != nil {
+			// A host-submitted result gets no corrective re-invocation, since
+			// the host owns the reviewer, but its rejected bytes are preserved
+			// the same way. This is the only branch --preflight can reach, and
+			// --preflight persists nothing, as documented.
+			if *preflight {
+				return reviewPreflightError(err)
+			}
+			return reviewPreflightError(fmt.Errorf("%w%s", err, reviewRejectedResultClause(ctx, root, reviewRejectedResultMeta{
+				LineageID: state.LineageID, Lens: *lens, Attempt: 1, Reason: err.Error(),
+			}, rawPayload)))
+		}
 	}
 	frozen, subject = admitted.Frozen, admitted.Subject
 	if *preflight {

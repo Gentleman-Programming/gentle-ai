@@ -213,7 +213,7 @@ type CompactAtomicStartConflictError struct {
 }
 
 func (err *CompactAtomicStartConflictError) Error() string {
-	return fmt.Sprintf("compact atomic START conflicts with active lineage %q at %s", err.LineageID, err.Field)
+	return fmt.Sprintf("compact atomic START conflicts with active lineage %q on immutable field %q", err.LineageID, err.Field)
 }
 
 // CompactAtomicStartCorruptionError reports an unreadable exact compact
@@ -1188,10 +1188,14 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 		}
 		return compactCorrectionTargetBlocked, nil
 	}
-	if compactRecoveryAddsGenesisPath(existing, live) {
-		return compactCorrectionTargetRecover, nil
-	}
-	if pathsAreSubset(live.Paths, existing.GenesisPaths) != nil {
+	// A live scope the bounded correction may not own is either a widening
+	// this lineage can recover into or unrelated work. The boundary is the
+	// same admission CompleteCorrection applies (#3375): staying inside
+	// genesis, or adding only companion test paths, is still this correction.
+	if correctionScopeRefused(live.Paths, existing.GenesisPaths) {
+		if compactRecoveryAddsGenesisPath(existing, live) {
+			return compactCorrectionTargetRecover, nil
+		}
 		return compactCorrectionTargetUnclaimed, nil
 	}
 	if compactLiveTargetMatchesValidatedSnapshot(existing, requested.InitialSnapshot, false) {
@@ -1269,7 +1273,7 @@ func compactCorrectionCandidateMatches(ctx context.Context, repo string, existin
 	if err != nil {
 		return false, err
 	}
-	if fix.CandidateTree != requested.InitialSnapshot.CandidateTree || pathsAreSubset(fix.Paths, existing.GenesisPaths) != nil {
+	if fix.CandidateTree != requested.InitialSnapshot.CandidateTree || correctionScopeRefused(fix.Paths, existing.GenesisPaths) {
 		return false, nil
 	}
 	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(ctx, fix)
@@ -1666,8 +1670,9 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		!snapshotsEqual(previous.InitialSnapshot, next.InitialSnapshot) || !equalStrings(previous.GenesisPaths, next.GenesisPaths) ||
 		previous.PolicyHash != next.PolicyHash || !reflect.DeepEqual(previous.FrozenPolicyContent, next.FrozenPolicyContent) ||
 		previous.RiskLevel != next.RiskLevel || !equalStrings(previous.SelectedLenses, next.SelectedLenses) || previous.OriginalChangedLines != next.OriginalChangedLines ||
-		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy {
-		return fmt.Errorf("%w: compact review scope, tier, policy, and budget are immutable", ErrInvalidSuccessor)
+		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy ||
+		previous.RuntimeAgent != next.RuntimeAgent {
+		return fmt.Errorf("%w: compact review scope, tier, policy, budget, and runtime are immutable", ErrInvalidSuccessor)
 	}
 	switch operation {
 	case "review/invalidate":

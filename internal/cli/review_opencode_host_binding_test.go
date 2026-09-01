@@ -35,9 +35,9 @@ func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.C
 		t.Fatal(err)
 	}
 	subject = mustArtifactSubject(t, repo, record, lens, 0)
-	// The managed shim starts this relay inside the repository it reviews, and
-	// the transport takes no flags, so process cwd is the repository the
-	// provider-issued context digest is verified against.
+	// The relay runs in a host worktree, which may differ from the provider-bound
+	// repository. The rctx2 handle discovers exactly one common-directory
+	// registered target, whose compact authority admits review.
 	t.Chdir(repo)
 	return repo, store, record, lens, contextHandle, subject
 }

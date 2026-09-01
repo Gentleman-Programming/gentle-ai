@@ -135,12 +135,12 @@ The orchestrator MUST carry `actionContext` into any phase launch.
 
 ## Edit Authority Consent
 
-A change whose tasks.md work units target paths outside `allowedEditRoots` never reports apply ready. Native status reports `applyState: blocked` and `blockedReasons` carries a `blocked(edit_authority_missing)` reason naming each unauthorized edit root and both exits: edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named edit roots.
+A change whose tasks.md work units target paths outside `allowedEditRoots` never reports apply ready. Native status reports `applyState: blocked` and `blockedReasons` carries a `blocked(edit_authority_missing)` reason naming each unauthorized edit root and the three exits: edit tasks.md so every work unit stays inside the authorized edit roots, grant this change edit authority for the named edit roots, or mark a read-only input with `(read-only)` on its line.
 
-- Detection is conservative prose inspection: backticked path-like tokens inside markdown checkbox lines that resolve to a path in a Git repository outside the authorized roots. A different repository is named by its Git root; a same-repository target is narrowed to its containing edit root. A context reference can raise a false consent question; the consequence is a question, never silent authority.
+- Detection is conservative prose inspection: backticked path-like tokens inside markdown checkbox lines that resolve to a path outside the authorized roots. A different repository is named by its Git root; a same-repository target is narrowed to its containing edit root; a directory in no Git repository is named as itself. A backticked path immediately followed by `(read-only)` (case-insensitive) is a read-only input and not an edit target; the marker annotates only the path it follows, so an unmarked path on the same line still counts.
 - An OpenSpec-backed native status that reports `blocked(edit_authority_missing)` also carries the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block: headline, reason, `value`, the missing roots as evidence, exactly two choices with answer tokens `granted` and `declined` (each with label, effect, and an exact invocation), and an off-path note.
 - Answer flow: the orchestrator relays the COMPLETE envelope losslessly as a blocking prompt. Only on the human's explicit `granted` answer does the agent execute the envelope's named grant invocation, verbatim and exactly once, then re-enter through native status. The agent NEVER runs the grant unprompted and NEVER answers on the human's behalf.
-- Decline stays blocked: the agent runs the envelope's decline invocation, nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the reason names both exits.
+- Decline stays blocked: the agent runs the envelope's decline invocation, nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the reason names all three exits.
 
 ## Status Output
 
@@ -150,4 +150,4 @@ Every command that acts on a change MUST show status before launching an executo
 - Artifact statuses and paths/topics used as context.
 - Task progress and unchecked task list when tasks exist.
 - Next recommended action.
-- `blockedReasons` when `nextRecommended` is not `verify`, plus any edit-root blockers.
+- `blockedReasons` whenever it is non-empty, including a `verify` route that must refresh stale or post-remediation evidence, plus any edit-root blockers.

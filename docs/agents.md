@@ -94,6 +94,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 ### Claude Code
 
 - Sub-agents via the native Task tool with isolated context windows
+- Slash commands for SDD phases are namespaced `/gentle-sdd-*` (`/gentle-sdd-init`, `/gentle-sdd-new`, `/gentle-sdd-continue`, etc.) so no command shares a name with a delegate-only SDD skill
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`

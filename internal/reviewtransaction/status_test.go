@@ -169,16 +169,17 @@ func TestInventoryAuthorityDistinguishesReleasedBusyAndMalformedLockTruth(t *tes
 				report.Complete != tt.complete || (report.Locks[0].Problem != "") != tt.wantProblem {
 				t.Fatalf("lock report = %#v", report)
 			}
-			if release != nil {
-				_ = release()
-				release = nil
-			}
+			// Read before release: release itself clears the owner payload (#2504).
 			after, err := os.ReadFile(lockPath)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("lock inventory mutated the existing LOCK inode contents")
+			}
+			if release != nil {
+				_ = release()
+				release = nil
 			}
 		})
 	}

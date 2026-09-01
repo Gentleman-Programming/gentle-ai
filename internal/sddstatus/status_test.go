@@ -256,7 +256,7 @@ func TestResolveStatusJSONUsesEmptyBlockedReasonsArray(t *testing.T) {
 func TestBlockerReasonsForRoute(t *testing.T) {
 	expected := []string{
 		"proposal.md is missing or partial.",
-		"spec.md or specs/**/spec.md is missing or partial.",
+		"openspec/changes/thin/specs/<domain>/spec.md is missing or partial.",
 		"design.md is missing or partial.",
 		"tasks.md is missing or partial.",
 	}
@@ -500,6 +500,43 @@ func TestResolveArtifactStatesAndTaskProgress(t *testing.T) {
 	}
 	if status.Dependencies.Verify != DependencyBlocked {
 		t.Fatalf("Verify dependency = %q, want %q until all tasks complete", status.Dependencies.Verify, DependencyBlocked)
+	}
+}
+
+// #3311: status built Relationships.DependsOn as an unconditional empty list
+// and never read openspec/changes/<change>/state.yaml, the file the OpenSpec
+// convention names as the change's DAG state.
+func TestResolveProjectsOpenSpecStateDependsOn(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  []string
+	}{
+		{"flow list", "dependsOn: [parent-change]\n", []string{"parent-change"}},
+		{"block list", "phase: apply\ndependsOn:\n  - parent-change\n  - other-change\n", []string{"parent-change", "other-change"}},
+		{"no file", "", []string{}},
+		{"missing key", "phase: apply\n", []string{}},
+		{"malformed", "dependsOn: [unclosed\n", []string{}},
+		{"scalar instead of list", "dependsOn: parent-change\n", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "add-auth", "- [ ] 1.1 Work\n")
+			if tt.state != "" {
+				write(t, filepath.Join(changeRoot, "state.yaml"), tt.state)
+			}
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "add-auth"})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.Relationships.DependsOn == nil || !reflect.DeepEqual(status.Relationships.DependsOn, tt.want) {
+				t.Fatalf("Relationships.DependsOn = %#v, want %#v", status.Relationships.DependsOn, tt.want)
+			}
+			if status.NextRecommended != "apply" {
+				t.Fatalf("NextRecommended = %q, want apply: state.yaml must never block status", status.NextRecommended)
+			}
+		})
 	}
 }
 
@@ -828,19 +865,25 @@ func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T)
 	const staleSpec = completeSpec + "#### Scenario: Added after verification\n"
 	invalidOutputHash := "sha256:" + strings.Repeat("b", 64)
 	tests := []struct {
-		name   string
-		spec   string
-		report string
+		name        string
+		spec        string
+		report      string
+		wantReasons []string
 	}{
 		{
 			name:   "stale complete pass after a spec scenario is added",
 			spec:   staleSpec,
 			report: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0),
+			wantReasons: []string{
+				"verify result total 1 does not match actual scenario count 2",
+				"rerun SDD verification",
+			},
 		},
 		{
-			name:   "current-format incomplete failed evidence",
-			spec:   completeSpec,
-			report: testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+			name:        "current-format incomplete failed evidence",
+			spec:        completeSpec,
+			report:      testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+			wantReasons: []string{"failed verification evidence is incomplete"},
 		},
 		{
 			name: "malformed failed evidence with an invalid output hash",
@@ -851,6 +894,7 @@ func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T)
 				"test_output_hash: sha256:invalid",
 				1,
 			),
+			wantReasons: []string{"verification evidence is incomplete"},
 		},
 	}
 
@@ -891,6 +935,14 @@ func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T)
 				}
 				if strings.Contains(strings.Join(status.BlockedReasons, "\n"), "missing_review_authority") {
 					t.Fatalf("BlockedReasons = %v, want no legacy missing_review_authority routing", status.BlockedReasons)
+				}
+				// A verify route that exists only to refresh evidence must name
+				// why the persisted report cannot stand (#3538).
+				joined := strings.Join(status.BlockedReasons, "\n")
+				for _, want := range tt.wantReasons {
+					if !strings.Contains(joined, want) {
+						t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
+					}
 				}
 			})
 		}
@@ -1291,4 +1343,98 @@ func equalStringPtr(left *string, right *string) bool {
 		return left == right
 	}
 	return *left == *right
+}
+
+// #2212: a flat openspec/changes/<change>/specs/<cap>.md layout reports
+// partial and routes to spec, but the spec route drops expected planning
+// blockers, so the reporter saw an empty blockedReasons forever. The layout
+// guidance is a genuine reason so it survives the spec route.
+func TestResolveFlatSpecsLayoutNamesNestedLayoutOnSpecRoute(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := filepath.Join(root, "openspec", "changes", "flat-specs")
+	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "specs", "example.md"), "# Spec\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "flat-specs"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	assertArtifact(t, status, "specs", ArtifactPartial)
+	if status.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, "spec")
+	}
+	want := "openspec/changes/flat-specs/specs/ has files but no non-empty <domain>/spec.md; the spec phase writes every capability (new ones as full specs) at openspec/changes/flat-specs/specs/<domain>/spec.md, and sdd-archive promotes new ones to openspec/specs/<domain>/spec.md"
+	if !reflect.DeepEqual(status.BlockedReasons, []string{want}) {
+		t.Fatalf("BlockedReasons = %v, want [%q]", status.BlockedReasons, want)
+	}
+}
+
+func TestResolveNestedSpecsLayoutReportsDoneWithoutLayoutGuidance(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := filepath.Join(root, "openspec", "changes", "nested-specs")
+	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "specs", "example", "spec.md"), "# Spec\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "nested-specs"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	assertArtifact(t, status, "specs", ArtifactDone)
+	if status.NextRecommended != "apply" {
+		t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, "apply")
+	}
+	for _, reason := range status.BlockedReasons {
+		if strings.Contains(reason, "<domain>/spec.md") {
+			t.Fatalf("BlockedReasons carries layout guidance for a nested layout: %v", status.BlockedReasons)
+		}
+	}
+}
+
+func TestArtifactBlockedReasonsNamesChangeLocalSpecPath(t *testing.T) {
+	artifacts := map[string]ArtifactState{"proposal": ArtifactDone, "specs": ArtifactMissing, "design": ArtifactDone, "tasks": ArtifactDone}
+	reasons := artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "thin")
+	want := []string{"openspec/changes/thin/specs/<domain>/spec.md is missing or partial."}
+	if !reflect.DeepEqual(reasons.expectedPlanning, want) {
+		t.Fatalf("expectedPlanning = %v, want %v", reasons.expectedPlanning, want)
+	}
+	if len(reasons.genuine) != 0 {
+		t.Fatalf("genuine = %v, want none for a missing specs directory", reasons.genuine)
+	}
+
+	reasons = artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "")
+	if want := []string{"openspec/changes/<change>/specs/<domain>/spec.md is missing or partial."}; !reflect.DeepEqual(reasons.expectedPlanning, want) {
+		t.Fatalf("expectedPlanning without a change name = %v, want %v", reasons.expectedPlanning, want)
+	}
+}
+
+// An empty Engram spec artifact also reports partial, but the change-local
+// filesystem layout guidance belongs to the OpenSpec store only.
+func TestResolveEngramPartialSpecOmitsOpenSpecLayoutGuidance(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	runRuntimeLedgerGit(t, root, "init", "-q")
+	runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/thin/spec", Content: "   \n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/thin/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/thin/tasks", Content: "- [ ] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
+	})
+	defer restore()
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	assertArtifact(t, status, "specs", ArtifactPartial)
+	if status.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want spec", status.NextRecommended)
+	}
+	if want := []string{}; !reflect.DeepEqual(status.BlockedReasons, want) {
+		t.Fatalf("BlockedReasons = %v, want %v", status.BlockedReasons, want)
+	}
 }

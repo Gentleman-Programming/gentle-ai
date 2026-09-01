@@ -11,7 +11,7 @@ import (
 
 var intendedUntrackedStatusCapability = &Capability{
 	Verb:  []string{"review", "status"},
-	Flags: []string{"--cwd", "--contract", "--next-transition", "--untracked-scope", "--intended-untracked", "--expected-untracked-inventory"},
+	Flags: []string{"--cwd", "--contract", "--agent", "--next-transition", "--untracked-scope", "--intended-untracked", "--expected-untracked-inventory"},
 }
 
 var unbornIntendedUntrackedStatusCapability = &Capability{
@@ -21,7 +21,40 @@ var unbornIntendedUntrackedStatusCapability = &Capability{
 
 const unbornIntendedDeliveryPath = "docs/unborn-candidate.md"
 
+type intendedUntrackedSelectionStatus struct {
+	Schema     string    `json:"schema"`
+	Authority  *struct{} `json:"authority"`
+	Projection struct {
+		Paths []string `json:"paths"`
+	} `json:"projection"`
+	NextTransition struct {
+		Kind       string `json:"kind"`
+		ReasonCode string `json:"reason_code"`
+		Collect    struct {
+			Inputs []struct {
+				Name             string                         `json:"name"`
+				Schema           string                         `json:"schema"`
+				CaptureOperation string                         `json:"capture_operation"`
+				Arguments        []struct{ Name, Value string } `json:"arguments"`
+				Submission       *waveSubmissionDescriptor      `json:"submission"`
+			} `json:"inputs"`
+		} `json:"collect"`
+		Execute struct {
+			Operation string `json:"operation"`
+			Command   string `json:"command"`
+		} `json:"execute"`
+	} `json:"next_transition"`
+}
+
+type closedIntendedUntrackedSelection struct {
+	Schema                     string   `json:"schema"`
+	UntrackedScope             string   `json:"untracked_scope"`
+	ExpectedUntrackedInventory string   `json:"expected_untracked_inventory"`
+	IntendedUntracked          []string `json:"intended_untracked"`
+}
+
 func mixedIntendedUntrackedCandidate(sandbox *Sandbox) error {
+	sandbox.PiReviewRelayContract = "gentle-pi.review-relay/v1"
 	if err := sandbox.write(filepath.Join(sandbox.Repo, "README.md"), "# demo\n\ntracked review candidate\n"); err != nil {
 		return err
 	}
@@ -30,47 +63,116 @@ func mixedIntendedUntrackedCandidate(sandbox *Sandbox) error {
 		"docs/second file,with comma.md": "# Second\n",
 		"unrelated-credentials.env":      "EXAMPLE_API_TOKEN=synthetic-placeholder\n",
 		"ignored.txt":                    "ignored\n",
-		".gitignore":                     "ignored.txt\n",
 	} {
 		if err := sandbox.write(filepath.Join(sandbox.Repo, path), contents); err != nil {
 			return err
 		}
 	}
-	return nil
+	return sandbox.write(filepath.Join(sandbox.Repo, ".git", "info", "exclude"), "ignored.txt\n")
 }
 
 func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
-	status, err := readStatusForContract(r, reviewContractV2)
-	if err != nil {
+	initialObservation := r.run(productArgsFor(r,
+		"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContractV2,
+		"--agent", "pi", "--next-transition"), false)
+	var initial intendedUntrackedSelectionStatus
+	if err := decodeWaveObservation(initialObservation, &initial, "initial Pi STATUS"); err != nil {
 		return err
 	}
-	if status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
-		len(status.NextTransition.Collect.Inputs) != 1 {
-		return fmt.Errorf("initial STATUS did not collect intended untracked selection: %+v", status.NextTransition)
+	if initial.Schema != statusSchemaV6 || initial.Authority != nil ||
+		initial.NextTransition.Kind != "collect" || initial.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
+		len(initial.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("initial Pi STATUS = %+v", initial)
 	}
-	digest := status.argument("expected_untracked_inventory")
+	input := initial.NextTransition.Collect.Inputs[0]
+	if input.Name != "intended_untracked_selection" || input.Schema != "gentle-ai.review-intended-untracked-selection/v1" ||
+		input.CaptureOperation != "external.select_intended_untracked" || input.Submission == nil {
+		return fmt.Errorf("initial intended-untracked submission = %+v", input)
+	}
+	inventory := ""
+	for _, argument := range input.Arguments {
+		if argument.Name == "expected_untracked_inventory" {
+			inventory = argument.Value
+			break
+		}
+	}
+	if inventory == "" {
+		return fmt.Errorf("initial intended-untracked selection omitted its inventory: %+v", input.Arguments)
+	}
 	selectedPaths := []string{"docs/chosen, file.md", "docs/second file,with comma.md"}
-	selectors := []string{"--untracked-scope=select", "--expected-untracked-inventory=" + digest}
-	for _, path := range selectedPaths {
-		selectors = append(selectors, "--intended-untracked="+path)
+	answer, err := json.Marshal(closedIntendedUntrackedSelection{
+		Schema:                     "gentle-ai.review-intended-untracked-selection/v1",
+		UntrackedScope:             "select",
+		ExpectedUntrackedInventory: inventory,
+		IntendedUntracked:          selectedPaths,
+	})
+	if err != nil {
+		return fmt.Errorf("encode intended-untracked selection: %w", err)
 	}
-	selected, err := readStatusForContract(r, reviewContractV2, selectors...)
+	arguments, err := intendedUntrackedSelectionSubmissionArguments(input.Submission, string(answer))
 	if err != nil {
 		return err
 	}
-	if selected.NextTransition.Kind != "execute" || selected.NextTransition.Execute.Operation != "review.start" ||
-		slices.Contains(selected.Projection.Paths, "unrelated-credentials.env") ||
-		!slices.Contains(selected.Projection.Paths, selectedPaths[0]) || !slices.Contains(selected.Projection.Paths, selectedPaths[1]) {
-		return fmt.Errorf("selected STATUS = %+v", selected)
+	selectedObservation := r.runAt(r.sandbox.Repo, arguments, false)
+	var selected intendedUntrackedSelectionStatus
+	if err := decodeWaveObservation(selectedObservation, &selected, "selected intended-untracked STATUS"); err != nil {
+		return err
 	}
-	started, err := runPrintedTransition(r, selected)
+	if selected.Schema != statusSchemaV6 || selected.NextTransition.Kind != "execute" ||
+		selected.NextTransition.Execute.Operation != "review.start" ||
+		!slices.Equal(selected.Projection.Paths, []string{"README.md", selectedPaths[0], selectedPaths[1]}) {
+		return fmt.Errorf("selected Pi STATUS = %+v", selected)
+	}
+	var printed statusEnvelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(selectedObservation.Stdout)), &printed); err != nil {
+		return fmt.Errorf("parse selected printed START: %w", err)
+	}
+	started, err := runPrintedTransition(r, printed)
 	if err != nil {
 		return err
 	}
-	if started.ExitCode != 0 {
-		return fmt.Errorf("printed selected START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	var terminal struct {
+		State  string `json:"state"`
+		Action string `json:"action"`
+	}
+	if err := decodeWaveObservation(started, &terminal, "printed selected START"); err != nil {
+		return err
+	}
+	if terminal.State != "approved" || terminal.Action != "closed" {
+		return fmt.Errorf("printed selected START terminal result = %+v", terminal)
 	}
 	return nil
+}
+
+func intendedUntrackedSelectionSubmissionArguments(descriptor *waveSubmissionDescriptor, value string) ([]string, error) {
+	if descriptor == nil || descriptor.OperationToken != "status" || descriptor.Value == nil || len(descriptor.Values) != 0 ||
+		descriptor.Value.Slot != "intended_untracked_selection" || descriptor.Value.Domain != "schema_bound_json" ||
+		descriptor.Value.Schema != "gentle-ai.review-intended-untracked-selection/v1" ||
+		descriptor.Value.SubstitutionLocation < 0 || descriptor.Value.SubstitutionLocation >= len(descriptor.ArgumentTokens) {
+		return nil, fmt.Errorf("intended-untracked submission descriptor = %+v", descriptor)
+	}
+	placeholders := 0
+	for index, token := range descriptor.ArgumentTokens {
+		if !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return nil, fmt.Errorf("intended-untracked submission leaked a caller-owned token: %q", token)
+		}
+		if strings.Contains(token, "{{value}}") {
+			placeholders++
+			if index != descriptor.Value.SubstitutionLocation || strings.Count(token, "{{value}}") != 1 {
+				return nil, fmt.Errorf("intended-untracked submission slot = %q at %d", token, index)
+			}
+		}
+	}
+	if placeholders != 1 {
+		return nil, fmt.Errorf("intended-untracked submission descriptor has %d value slots: %+v", placeholders, descriptor)
+	}
+	arguments := append([]string{"review", descriptor.OperationToken}, descriptor.ArgumentTokens...)
+	index := descriptor.Value.SubstitutionLocation + 2
+	arguments[index] = strings.Replace(arguments[index], "{{value}}", value, 1)
+	if strings.Contains(strings.Join(arguments, "\x00"), "{{value}}") {
+		return nil, fmt.Errorf("intended-untracked submission did not replace its value slot: %v", arguments)
+	}
+	return arguments, nil
 }
 
 func unbornUntrackedExecutableCandidate(sandbox *Sandbox) error {

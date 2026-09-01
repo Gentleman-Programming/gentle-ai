@@ -178,13 +178,16 @@ func TestResolveExplainsFreshVerificationAfterEvidenceOnlyRuntimeRemediation(t *
 			if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
 				t.Fatalf("post-remediation routing: verify=%q archive=%q next=%q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 			}
-			if len(status.BlockedReasons) != 0 {
-				t.Fatalf("BlockedReasons = %v, want empty for healthy sequencing", status.BlockedReasons)
+			const want = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+			// The refresh obligation must reach blockedReasons, not only the
+			// opt-in phase instructions, so a status without --instructions
+			// never projects a silent verify-ready tuple (#3538).
+			if occurrences := strings.Count(strings.Join(status.BlockedReasons, "\n"), want); occurrences != 1 {
+				t.Fatalf("BlockedReasons = %v, want the post-remediation refresh instruction exactly once, found %d", status.BlockedReasons, occurrences)
 			}
 			if status.PhaseInstructions == nil {
 				t.Fatal("PhaseInstructions is nil")
 			}
-			const want = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
 			if instructions := strings.Join(status.PhaseInstructions.Verify, "\n"); !strings.Contains(instructions, want) {
 				t.Fatalf("verify instructions omit the post-remediation fresh-report obligation:\n%s", instructions)
 			}
@@ -331,7 +334,7 @@ func newEvidenceOnlyRuntimeRemediationFixture(t *testing.T, change string) evide
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: change + "-begin-failed-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +358,7 @@ func newEvidenceOnlyRuntimeRemediationFixture(t *testing.T, change string) evide
 	}
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: reset.Revision, RequestID: change + "-begin-remediation", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -150,9 +150,9 @@ The parent orchestrator coordinates one native transaction; reviewers, refuters,
 
 2. **Freeze once.** Invoke only the returned START operation and its ordered tokens unchanged. START freezes one compact atomic transaction with an explicit lineage, worktree, and target binding. It ignores every other lineage and worktree. Capture the returned lineage, revision, and target tokens. An exact replay of an active START may return `replayed`; a genuinely new START is independent.
 
-3. **Stay bound.** A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding: run that provider-issued command verbatim, with the repository as process cwd, and satisfy every later STATUS and collection call only with the exact tokens each returned transition names. Route only from that transaction's returned `next_transition`; never infer a command from prose, ambient state, a gate, or a stale reply. Do not start another lineage, reuse an acknowledged-and-burned lineage, or perform ambient recovery. For `execute`, run the exact operation and ordered arguments. For `collect`, satisfy only the named inputs and their exact capture operations, then ask STATUS again with the same binding. For `stop`, run no lifecycle operation.
+3. **Stay bound.** A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding: run that provider-issued command verbatim, with the repository as process cwd, and satisfy every later STATUS and collection call only with the exact tokens each returned transition names. Route only from that transaction's returned `next_transition`; the root `action` field is informational. Never infer a command from prose, ambient state, a gate, or a stale reply. Do not start another lineage, reuse an acknowledged-and-burned lineage, or perform ambient recovery. For `execute`, run the exact operation and ordered arguments. For `collect`, satisfy only the named inputs and their exact capture operations, then ask STATUS again with the same binding. For `stop`, run no lifecycle operation.
 
-4. **Acknowledge exactly.** Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, targeted validation, and approved closure. A final approved capture commits one pending acknowledgement token and returns `review.acknowledge-approved`; restarted STATUS returns the same operation, ordered arguments, token, and live revision. Only that exact invocation burns authority and artifacts. Wrong, stale, or replayed acknowledgement refuses without creating a receipt, tombstone, witness, mirror, sidecar, or delivery authority. Unrelated transactions survive unchanged.
+4. **Acknowledge exactly.** Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, targeted validation, and approved closure. A final approved capture commits one pending acknowledgement token and returns `review.acknowledge-approved`; restarted STATUS returns the same operation, ordered arguments, token, and live revision. Only that exact invocation burns authority and artifacts, and on success it prints one `gentle-ai.review-acknowledged/v1` envelope; report the burn from that envelope, never from a later STATUS. Wrong, stale, or replayed acknowledgement refuses without creating a receipt, tombstone, witness, mirror, sidecar, or delivery authority. Unrelated transactions survive unchanged.
 
 The final reviewer, refuter, or targeted-validator capture owns closure. A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot. Never invent a binding or retry from prose.
 
@@ -173,7 +173,7 @@ This lifecycle is rendered for exactly Claude Code, Codex, OpenCode, and Pi. Uns
 
 For each returned `review.capture-result` input, run its exact capture operation once with its argument tokens exactly as returned. This runtime captures in process: those tokens carry `--agent` and no `--input`, and running them makes Go materialize the immutable reviewer context, run its own locked-down reviewer on it, and admit the result. Never assemble a reviewer prompt, never launch a lens subagent, and never add `--input` to a returned token list. Each of those rebuilds the returned command into the relay form and moves the complete candidate evidence onto the parent for every lens, to reach a result the returned command already produces carrying nothing. An empty, malformed, schema-invalid, or incomplete result is handled by the recovery rule below, exactly as a relayed one is.
 
-After an empty, malformed, schema-invalid, access/provider-failed, or incomplete capture, query the same exact-lineage STATUS. Relaunch only if its fresh `next_transition` reoffers the same bound slot. Never infer a retry from transcript text. Use repeated `--result-artifact-file <path>` in lens order; BOM-less UTF-8 is required on Windows PowerShell 5.1. POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatibility forms.
+After an empty, malformed, schema-invalid, access/provider-failed, or incomplete capture, query the same exact-lineage STATUS. Relaunch only if its fresh `next_transition` reoffers the same bound slot. Never infer a retry from transcript text. A relayed capture passes its result through `--input <path|->`, one per lens in lens order; BOM-less UTF-8 is required on Windows PowerShell 5.1. Tokens carrying `--agent` capture in process with no `--input`.
 
 Only candidate-caused severe findings block. Pre-existing/base-only findings are follow-ups; unknown causality escalates. A deterministic blocker needs no refuter; inferential blockers share one read-only refuter batch. A four-lens review is long work: before its first lens, give one forecast covering four reviewer runs, the frozen correction budget, and the at-most-one bounded correction.
 
@@ -216,7 +216,7 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover, or drop `--workspace-overlay` and start fresh; otherwise `D`. |
 | `corrected_candidate_unavailable` | Change B correction candidate, then `S`; do not reuse the pre-correction target. |
 | `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `gentle-ai review recover`. |
-| `rdd_disabled` | Enable `gentle-ai review mode enable --scope clone --cwd <B>`, then `S`. |
+| `rdd_disabled` | `--scope clone` only clears a clone-local off; `gentle-ai review mode enable --scope global`, then `S`. |
 
 ## Delivery follows ordinary repository policy
 
@@ -225,6 +225,12 @@ Shipped `review validate` and gate commands are compatibility/informational only
 After exact acknowledgement burns terminal `approved` authority, the review lifecycle stops. Commit, push, PR, and release remain separate human decisions under ordinary repository policy. A review outcome is informational and never authorizes delivery, including when the selected repository is B.
 
 Historical compatibility commands may read older artifacts manually, but they are never the ordinary lifecycle and never restore delivery authority.
+
+### Concurrent Reviewer Group (MANDATORY)
+
+When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.
+
+Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot.
 
 #### Cost and Context Balance
 
@@ -239,7 +245,7 @@ Historical compatibility commands may read older artifacts manually, but they ar
 
 The detailed SDD procedure is intentionally NOT embedded in this always-on parent thread. Before handling any SDD command, meta-command, continuation, apply/verify/archive routing, or SDD/Judgment-Day phase delegation, read:
 
-`~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
+`.claude/skills/_shared/sdd-orchestrator-workflow.md` under the workspace when a workspace-scope install wrote it there, otherwise `~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
 
 That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, model assignments, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
 <!-- /gentle-ai:sdd-orchestrator -->

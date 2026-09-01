@@ -363,9 +363,12 @@ func TestInjectClaudeWritesCommandFiles(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
+	// Every Claude command carries the gentle- prefix so none shares its name
+	// with a delegate-only skill directory (#2644, #2322).
 	expectedCommands := []string{
-		"sdd-apply.md", "sdd-archive.md", "sdd-continue.md", "sdd-explore.md",
-		"sdd-ff.md", "sdd-init.md", "sdd-new.md", "sdd-onboard.md", "sdd-status.md", "sdd-verify.md",
+		"gentle-sdd-apply.md", "gentle-sdd-archive.md", "gentle-sdd-continue.md", "gentle-sdd-explore.md",
+		"gentle-sdd-ff.md", "gentle-sdd-init.md", "gentle-sdd-new.md", "gentle-sdd-onboard.md",
+		"gentle-sdd-research.md", "gentle-sdd-status.md", "gentle-sdd-verify.md",
 	}
 	for _, name := range expectedCommands {
 		path := filepath.Join(home, ".claude", "commands", name)
@@ -374,24 +377,55 @@ func TestInjectClaudeWritesCommandFiles(t *testing.T) {
 		}
 	}
 
-	commandPath := filepath.Join(home, ".claude", "commands", "sdd-init.md")
+	commandPath := filepath.Join(home, ".claude", "commands", "gentle-sdd-init.md")
 	content, err := os.ReadFile(commandPath)
 	if err != nil {
-		t.Fatalf("ReadFile(sdd-init.md) error = %v", err)
+		t.Fatalf("ReadFile(gentle-sdd-init.md) error = %v", err)
 	}
 
 	text := string(content)
 	if !strings.Contains(text, "description:") {
-		t.Fatal("sdd-init.md missing frontmatter description")
+		t.Fatal("gentle-sdd-init.md missing frontmatter description")
 	}
 	if strings.Contains(text, "agent: sdd-orchestrator") {
-		t.Fatal("sdd-init.md contains OpenCode-specific agent frontmatter")
+		t.Fatal("gentle-sdd-init.md contains OpenCode-specific agent frontmatter")
 	}
 	if !strings.Contains(text, "If the native `sdd-init` sub-agent is available") {
-		t.Fatal("sdd-init.md missing Claude delegation guidance")
+		t.Fatal("gentle-sdd-init.md missing Claude delegation guidance")
 	}
 	if !strings.Contains(text, "~/.claude/skills/sdd-init/SKILL.md") {
-		t.Fatal("sdd-init.md missing Claude skill path")
+		t.Fatal("gentle-sdd-init.md missing Claude skill path")
+	}
+}
+
+func TestInjectClaudeRetiresUnprefixedCommands(t *testing.T) {
+	home := t.TempDir()
+	commandsDir := filepath.Join(home, ".claude", "commands")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(commandsDir, "sdd-init.md")
+	if err := os.WriteFile(legacy, []byte("# pre-#2644 managed command\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	custom := filepath.Join(commandsDir, "my-command.md")
+	if err := os.WriteFile(custom, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("retired command %q still present: %v", legacy, err)
+	}
+	if !containsString(result.Files, legacy) {
+		t.Fatalf("result.Files missing retired command %q: %v", legacy, result.Files)
+	}
+	if _, err := os.Stat(custom); err != nil {
+		t.Fatalf("user-owned command removed: %v", err)
 	}
 }
 
@@ -3950,12 +3984,12 @@ func TestInjectSkillDirectoryRemovesLegacySharedSkillMarker(t *testing.T) {
 		t.Fatalf("WriteFile(%q) error = %v", legacyMarker, err)
 	}
 
-	result, err := InjectSkillDirectory(skillDir, "")
+	result, err := InjectSkillDirectoryForAgent(skillDir, "", "")
 	if err != nil {
-		t.Fatalf("InjectSkillDirectory() error = %v", err)
+		t.Fatalf("InjectSkillDirectoryForAgent() error = %v", err)
 	}
 	if !result.Changed {
-		t.Fatal("InjectSkillDirectory() changed = false, want legacy marker cleanup to report a change")
+		t.Fatal("InjectSkillDirectoryForAgent() changed = false, want legacy marker cleanup to report a change")
 	}
 	if _, err := os.Stat(legacyMarker); !os.IsNotExist(err) {
 		t.Fatalf("legacy shared marker %q still exists or could not be checked: %v", legacyMarker, err)
@@ -3986,9 +4020,9 @@ func TestInjectSkillDirectoryRefusesToRemoveNonRegularLegacySharedMarker(t *test
 		t.Fatalf("MkdirAll(%q) error = %v", legacyMarker, err)
 	}
 
-	_, err := InjectSkillDirectory(skillDir, "")
+	_, err := InjectSkillDirectoryForAgent(skillDir, "", "")
 	if err == nil {
-		t.Fatal("InjectSkillDirectory() error = nil, want refusal to remove a non-regular legacy marker")
+		t.Fatal("InjectSkillDirectoryForAgent() error = nil, want refusal to remove a non-regular legacy marker")
 	}
 	info, statErr := os.Stat(legacyMarker)
 	if statErr != nil {

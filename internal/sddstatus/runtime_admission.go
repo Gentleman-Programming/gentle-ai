@@ -68,7 +68,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
 	if status.ActiveAttempt != nil {
-		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		return runtimeBeginAdmissionResult{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 	}
 	// A passed objective terminates its own scope, not the change. When the
 	// request names a distinct work unit, the ordinary continuation is the
@@ -196,7 +196,10 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	normalized = runtimeRescopeSuccessorRequest(status, normalized, inheritIntendedUntracked)
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
-	}); terminal && result.State == CompactStateBlocked {
+	}); terminal && result.State != CompactStateProceed {
+		// A complete verdict has no block reason, but its exit (the successor
+		// acquire, #3884) rides BlockedExit rather than a new field, so the
+		// read-only surface names the same continuation acquire does.
 		status.BlockedReason, status.BlockedExit = result.Reason, result.Exit
 		// An exhausted budget is a decision, so it asks instead of ending the
 		// conversation. The grant is the reset the ledger already admits at

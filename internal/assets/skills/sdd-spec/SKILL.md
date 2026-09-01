@@ -56,13 +56,15 @@ Read the proposal's **Capabilities section** — this is your primary contract:
 
 ```
 FOR EACH entry under "New Capabilities":
-├── This becomes a NEW full spec: openspec/specs/<capability-name>/spec.md
+├── This becomes a NEW FULL spec: openspec/changes/{change-name}/specs/<capability-name>/spec.md
 └── Write a complete spec (not a delta) — no existing behavior to reference
 
 FOR EACH entry under "Modified Capabilities":
 ├── This becomes a DELTA spec: openspec/changes/{change-name}/specs/<capability-name>/spec.md
 └── Read existing openspec/specs/<capability-name>/spec.md first — your delta modifies it
 ```
+
+Both kinds live under the change. A new capability is written under the change; sdd-archive promotes it to `openspec/specs/<capability-name>/spec.md`; never write to `openspec/specs/` during the spec phase. The dispatcher reads only `openspec/changes/{change-name}/specs/<capability-name>/spec.md`, and a spec written anywhere else keeps the change routed to `spec`.
 
 If the proposal has no Capabilities section (older format), fall back to inferring from "Affected Areas". But always prefer the explicit Capabilities mapping when present.
 
@@ -168,7 +170,7 @@ The system {MUST/SHALL/SHOULD} {do something specific}.
 
 #### For NEW Specs (No Existing Spec)
 
-If this is a completely new domain, create a FULL spec (not a delta):
+If this is a completely new domain, create a FULL spec (not a delta) at `openspec/changes/{change-name}/specs/{domain}/spec.md`. Do not write it to `openspec/specs/{domain}/spec.md`; sdd-archive promotes it there.
 
 ```markdown
 # {Domain} Specification

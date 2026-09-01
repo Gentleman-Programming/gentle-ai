@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,8 +76,14 @@ var (
 	// continuation: the reset it refers to needs six flags the message never
 	// listed, and it is itself refused when the candidate has not drifted.
 	ErrRuntimeObjectiveChange = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone   = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
-	ErrRuntimeNoObjective     = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeObjectiveDone names the successor route (#3884): a complete
+	// objective continues through acquire with a different --work-unit, and
+	// rescope refuses it, so pointing at status alone left callers circling.
+	ErrRuntimeObjectiveDone = errors.New("SDD runtime objective is complete; it continues through a successor objective, so run " +
+		"`gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id \"<unique-request-id>\" --work-unit \"<a different label>\" " +
+		"--evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>` with a different --work-unit (rescope applies only " +
+		"to an objective that is not complete); " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeResetNotAllowed named a STATE and no continuation, which is the
 	// same defect class as the sentinels above: an operator holding it knows
 	// what is refused and not one command that moves. The state it named was
@@ -671,6 +678,9 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
+		if abs, absErr := filepath.Abs(repo); absErr == nil && !workspaceHasGitMetadata(abs) {
+			return RuntimeStore{}, &RuntimeRepositoryRequiredError{Workspace: abs, Cause: err}
+		}
 		return RuntimeStore{}, err
 	}
 	workspace, err := filepath.Abs(repo)
@@ -689,6 +699,20 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
 }
+
+// RuntimeRepositoryRequiredError refuses to open the runtime attempt ledger
+// outside a Git repository (#2612, #3202): its authority lives in the Git
+// common directory, so there is nowhere to keep it until one exists.
+type RuntimeRepositoryRequiredError struct {
+	Workspace string
+	Cause     error
+}
+
+func (err *RuntimeRepositoryRequiredError) Error() string {
+	return fmt.Sprintf("the SDD runtime attempt ledger needs a Git repository because its authority lives in the Git common directory, and %s is not inside one; run `git init` in that workspace (or run from the repository that contains it), then rerun the same `gentle-ai sdd-attempt` command", err.Workspace)
+}
+
+func (err *RuntimeRepositoryRequiredError) Unwrap() error { return err.Cause }
 
 func validRuntimeChange(change string) bool {
 	return len(change) <= 96 && runtimeChangePattern.MatchString(change)
@@ -851,10 +875,15 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, errors.New("interrupted attempts must omit evidence_revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
 		}
 		// Check the effective binding before candidate capture or line charging.
-		if active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
+		// A vanished bound worktree (#2661) admits only an interrupted settle.
+		bound, boundMissing := runtimeBoundWorktree(*active)
+		if boundMissing && request.Outcome != AttemptInterrupted {
+			return runtimeRecord{}, store.runtimeMissingWorktreeRefusal(ErrRuntimeWorktreeMismatch, *active, bound)
+		}
+		if !boundMissing && active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeEffectiveWorktreeMismatchRefusal(*active)
 		}
-		if active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
+		if !boundMissing && active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
 		// Failed-evidence remediation is an SDD-only invariant. The immutable
@@ -885,6 +914,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// records the attempt's own product as no change at all (#3806). This
 		// resolves which selection this settlement overlays, and refuses while
 		// the caller can still act when the answer is nobody's decision yet.
+		if boundMissing {
+			return runtimeMissingWorktreeInterruptedRecord(status, *active, request)
+		}
 		intendedUntracked, declaredInventory, err := store.settlementUntrackedSelection(ctx, *active, request)
 		if err != nil {
 			return runtimeRecord{}, err
@@ -1252,6 +1284,67 @@ func (store RuntimeStore) runtimeEffectiveWorktreeMismatchRefusal(active Runtime
 		ErrRuntimeWorktreeMismatch, active.Ordinal, pathquote.Quote(active.BeginWorktree), pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), pathquote.Quote(active.EffectiveWorktree))
 }
 
+// runtimeBoundWorktree names the worktree an active attempt is bound to and
+// whether that path has vanished from disk (#2661): a removed and pruned
+// linked worktree made every exit that named it unrunnable. Only a not-exist
+// stat counts; any other failure keeps the ordinary binding checks.
+func runtimeBoundWorktree(active RuntimeAttempt) (string, bool) {
+	bound := active.EffectiveWorktree
+	if bound == "" {
+		bound = active.BeginWorktree
+	}
+	if bound == "" {
+		return "", false
+	}
+	_, err := os.Stat(bound)
+	return bound, errors.Is(err, os.ErrNotExist)
+}
+
+// runtimeMissingWorktreeExit is the one exit for a vanished bound worktree:
+// passed and failed need evidence measured there, so only interrupted is
+// admitted, from any worktree of the repository. cwd and change arrive
+// rendered so the compact readiness surface can pass placeholders.
+func runtimeMissingWorktreeExit(active RuntimeAttempt, bound, cwd, change, token string) string {
+	return fmt.Sprintf("attempt %d is bound to worktree %s, which no longer exists on disk, so its passed or failed evidence cannot be measured; "+
+		"settle it as interrupted from any worktree of this repository with `gentle-ai sdd-attempt settle --cwd %s --change %s --token %s "+
+		"--request-id \"<unique-request-id>\" --outcome interrupted --diagnosis \"<why-the-worktree-is-gone>\" --harness-disposition invalidated "+
+		"--cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`, then follow the ledger's next_action, or have a maintainer discard "+
+		"the objective with `gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision <the revision that status prints> "+
+		"--request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`",
+		active.Ordinal, pathquote.Quote(bound), cwd, change, token, cwd, change)
+}
+
+func (store RuntimeStore) runtimeMissingWorktreeRefusal(sentinel error, active RuntimeAttempt, bound string) error {
+	return fmt.Errorf("%w: %s", sentinel, runtimeMissingWorktreeExit(active, bound, pathquote.Quote(store.Workspace), fmt.Sprintf("%q", store.Change), "\"<acquire-token>\""))
+}
+
+// runtimeAttemptActiveRefusal is ErrRuntimeAttemptActive with the vanished
+// worktree exit composed in when that is the state the caller is actually in.
+func (store RuntimeStore) runtimeAttemptActiveRefusal(active RuntimeAttempt) error {
+	if bound, missing := runtimeBoundWorktree(active); missing {
+		return store.runtimeMissingWorktreeRefusal(ErrRuntimeAttemptActive, active, bound)
+	}
+	return ErrRuntimeAttemptActive
+}
+
+// runtimeMissingWorktreeInterruptedRecord closes an attempt whose bound
+// worktree is gone on its own begin candidate with no line charge; a later
+// begin or reset measures drift against the worktree it runs from, as before.
+func runtimeMissingWorktreeInterruptedRecord(status RuntimeStatus, active RuntimeAttempt, request FinishAttemptRequest) (runtimeRecord, error) {
+	if request.IntendedUntracked != nil {
+		return runtimeRecord{}, fmt.Errorf("%w: the bound worktree no longer exists, so no untracked inventory can be declared against it; rerun `gentle-ai sdd-attempt settle` with --outcome interrupted and without --untracked-scope", ErrRuntimeUndeclaredUntracked)
+	}
+	intended := slices.Clone(active.IntendedUntracked)
+	return runtimeRecord{Operation: runtimeOperationFinish, Finish: &runtimeFinishEvent{
+		Ordinal: active.Ordinal, FinishCandidateIdentity: active.BeginCandidateIdentity, FinishCandidateTree: active.BeginCandidateTree,
+		Outcome: AttemptInterrupted, Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
+		CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+		ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, 0),
+		IntendedUntracked:          &intended,
+	}}, nil
+}
+
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
 // a refusal that names the continuation that actually clears it.
 //
@@ -1428,7 +1521,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
+			return runtimeRecord{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 		}
 		if status.Objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
@@ -1516,11 +1609,16 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
+			return runtimeRecord{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 		}
 		objective := status.Objective
 		if objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
+		}
+		// A complete objective is refused by the sentinel that names its
+		// successor (#3884), not by the generic structural refusal.
+		if status.Complete {
+			return runtimeRecord{}, ErrRuntimeObjectiveDone
 		}
 		if !runtimeObjectiveRescopeStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
@@ -1912,18 +2010,27 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 //
 // Condition names the failed predicate; Revision names the offending record so
 // an operator does not have to re-derive which one violated it by reading the
-// chain. Expected/actual pairs are deliberately absent: that detail is where
-// the bespoke messages came from (#3816).
+// chain; Path names its file under the Git common directory (#3938) so a
+// record an older binary admitted is a maintainer decision, not a dead end.
+// Expected/actual pairs are deliberately absent: that detail is where the
+// bespoke messages came from (#3816).
 type RuntimeRecordRejectedError struct {
 	Condition string
 	Revision  string
+	Path      string
 }
 
 func (err *RuntimeRecordRejectedError) Error() string {
 	if err.Revision == "" {
 		return fmt.Sprintf("SDD runtime record rejected (condition %s); %s", err.Condition, runtimeLedgerStatusPointer)
 	}
-	return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); %s", err.Condition, err.Revision, runtimeLedgerStatusPointer)
+	if err.Path == "" {
+		return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); %s", err.Condition, err.Revision, runtimeLedgerStatusPointer)
+	}
+	// No repair command exists here by design (human authority): nothing may
+	// rewrite or drop a published chain record; a maintainer inspects or
+	// removes the named file, then the status pointer is the read-only re-entry.
+	return fmt.Sprintf("SDD runtime record rejected (condition %s, revision %s); the record file is %s; a maintainer must inspect or remove that record, then %s", err.Condition, err.Revision, err.Path, runtimeLedgerStatusPointer)
 }
 
 // rejectRuntimeRecord refuses a record that disagrees with what the authority
@@ -1934,19 +2041,21 @@ func rejectRuntimeRecord(condition string) error {
 	return &RuntimeRecordRejectedError{Condition: condition}
 }
 
-// withRuntimeRecordRevision stamps the offending revision onto a rejection once
-// the caller knows it. Unrelated errors pass through untouched.
-func withRuntimeRecordRevision(err error, revision string) error {
+// withRuntimeRecordRevision stamps the offending revision and its record file
+// onto a rejection once the caller knows them. Unrelated errors pass through
+// untouched.
+func withRuntimeRecordRevision(err error, revision string, path string) error {
 	var rejected *RuntimeRecordRejectedError
 	if err == nil || !errors.As(err, &rejected) || rejected.Revision != "" {
 		return err
 	}
-	return &RuntimeRecordRejectedError{Condition: rejected.Condition, Revision: revision}
+	return &RuntimeRecordRejectedError{Condition: rejected.Condition, Revision: revision, Path: path}
 }
 
-// applyRuntimeRecord stamps every rejection with the offending revision.
+// applyRuntimeRecord stamps every rejection with the offending revision and
+// the record file it was read from.
 func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
-	return withRuntimeRecordRevision(applyRuntimeRecordLocked(store, replay, revision, record), revision)
+	return withRuntimeRecordRevision(applyRuntimeRecordLocked(store, replay, revision, record), revision, store.recordPath(revision))
 }
 
 func applyRuntimeRecordLocked(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
@@ -2684,12 +2793,6 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
-	if request.MaxAttempts == 0 {
-		request.MaxAttempts = DefaultRuntimeAttemptLimit
-	}
-	if request.MaxChangedLines == 0 {
-		request.MaxChangedLines = DefaultRuntimeChangedLines
-	}
 	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
 		return BeginAttemptRequest{}, fmt.Errorf("max_attempts must be within 1..%d", maximumRuntimeAttemptLimit)
 	}
@@ -3031,6 +3134,9 @@ func (store RuntimeStore) runtimeHandoffStatusExit() string {
 }
 
 func (store RuntimeStore) runtimeHandoffSourceRefusal(active RuntimeAttempt) error {
+	if bound, missing := runtimeBoundWorktree(active); missing {
+		return store.runtimeMissingWorktreeRefusal(ErrRuntimeHandoffSource, active, bound)
+	}
 	return fmt.Errorf("%w: attempt %d has effective worktree %s, but handoff ran from %s; %s",
 		ErrRuntimeHandoffSource, active.Ordinal, pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), store.runtimeHandoffStatusExit())
 }
@@ -3320,7 +3426,7 @@ func (store RuntimeStore) ensureDirectories() error {
 
 func (store RuntimeStore) publishRecord(revision string, payload []byte) error {
 	recordsDir := filepath.Join(store.Dir, "records")
-	path := filepath.Join(recordsDir, strings.TrimPrefix(revision, "sha256:")+".json")
+	path := store.recordPath(revision)
 	temp, err := os.CreateTemp(recordsDir, ".record-*")
 	if err != nil {
 		return err
@@ -3410,11 +3516,17 @@ func readRuntimeHead(path string) (string, bool, error) {
 	return revision, true, nil
 }
 
+// recordPath is the one derivation of a record's file under the Git common
+// directory: <common>/gentle-ai/sdd-runtime/v1/<change>/records/<sha256>.json.
+func (store RuntimeStore) recordPath(revision string) string {
+	return filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+}
+
 func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if !runtimeRevisionPattern.MatchString(revision) {
 		return runtimeRecord{}, errors.New("invalid SDD runtime record revision")
 	}
-	path := filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+	path := store.recordPath(revision)
 	payload, err := readBoundedRuntimeFile(path)
 	if err != nil {
 		return runtimeRecord{}, fmt.Errorf("load SDD runtime revision %s: %w", revision, err)
@@ -3424,8 +3536,13 @@ func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if actual != revision {
 		return runtimeRecord{}, fmt.Errorf("SDD runtime record revision mismatch: expected %s, got %s", revision, actual)
 	}
+	// #2702: unknown fields are tolerated, not refused. The sha256 revision
+	// above already pins the bytes, so a strict decode added no integrity; it
+	// only made a record with one additive field from a newer binary
+	// unreadable by every operation, reset included. The trade-off is that an
+	// older binary ignores fields it does not understand. A record whose
+	// schema version is newer than this binary's stays a typed refusal.
 	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	var record runtimeRecord
 	if err := decoder.Decode(&record); err != nil {
 		return runtimeRecord{}, fmt.Errorf("decode SDD runtime revision %s: %w", revision, err)
@@ -3434,14 +3551,64 @@ func (store RuntimeStore) loadRecord(revision string) (runtimeRecord, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return runtimeRecord{}, errors.New("SDD runtime record contains multiple JSON values")
 	}
+	if runtimeRecordSchemaIsNewer(record.Schema) {
+		return runtimeRecord{}, &RuntimeRecordSchemaUnsupportedError{Revision: revision, Schema: record.Schema}
+	}
 	_, canonical, err := runtimeRecordRevision(record)
-	if err != nil || !bytes.Equal(payload, canonical) {
+	if err != nil || !runtimeRecordPayloadCanonical(payload, canonical) {
 		return runtimeRecord{}, errors.New("SDD runtime record is not canonical")
 	}
 	if record.Change != store.Change {
 		return runtimeRecord{}, errors.New("SDD runtime record change does not match store")
 	}
 	return record, nil
+}
+
+// runtimeRecordPayloadCanonical accepts the exact canonical encoding, or a
+// compact encoding whose every known top-level field is byte-identical to the
+// canonical one and which carries only additive unknown fields (#2702).
+func runtimeRecordPayloadCanonical(payload, canonical []byte) bool {
+	if bytes.Equal(payload, canonical) {
+		return true
+	}
+	var actual, expected map[string]json.RawMessage
+	if json.Unmarshal(payload, &actual) != nil || json.Unmarshal(canonical, &expected) != nil || len(actual) <= len(expected) {
+		return false
+	}
+	for key, value := range expected {
+		if !bytes.Equal(actual[key], value) {
+			return false
+		}
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, payload) != nil {
+		return false
+	}
+	compact.WriteByte('\n')
+	return bytes.Equal(compact.Bytes(), payload)
+}
+
+// runtimeRecordSchemaIsNewer reports whether a record declares a later
+// version of the runtime record schema than this binary supports.
+func runtimeRecordSchemaIsNewer(schema string) bool {
+	prefix := runtimeRecordSchema[:strings.LastIndex(runtimeRecordSchema, "/v")+2]
+	supported, err := strconv.Atoi(strings.TrimPrefix(runtimeRecordSchema, prefix))
+	if err != nil || !strings.HasPrefix(schema, prefix) {
+		return false
+	}
+	version, err := strconv.Atoi(strings.TrimPrefix(schema, prefix))
+	return err == nil && version > supported
+}
+
+// RuntimeRecordSchemaUnsupportedError refuses a runtime record written under
+// a schema version newer than this binary supports.
+type RuntimeRecordSchemaUnsupportedError struct {
+	Revision string
+	Schema   string
+}
+
+func (err *RuntimeRecordSchemaUnsupportedError) Error() string {
+	return fmt.Sprintf("SDD runtime revision %s declares \"schema\" %s, newer than this binary supports (%s); run `gentle-ai update` to install a build that reads it, then rerun the same `gentle-ai sdd-attempt` command", err.Revision, err.Schema, runtimeRecordSchema)
 }
 
 func readBoundedRuntimeFile(path string) ([]byte, error) {

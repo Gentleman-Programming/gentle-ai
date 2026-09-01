@@ -90,6 +90,54 @@ func TestOpenCodeReviewTransportLeavesNoContextEmissionSidecar(t *testing.T) {
 	}
 }
 
+func TestOpenCodeReviewTransportResolvesARegisteredTargetWorktreeFromTheHost(t *testing.T) {
+	reviewEnabledHome(t)
+	target, _, store, record := newArtifactReview(t, false)
+	host := filepath.Join(t.TempDir(), "opencode-host")
+	runReviewCLIGit(t, target, "worktree", "add", "-q", "-b", "opencode-registered-host", host, "HEAD")
+	t.Cleanup(func() { runReviewCLIGit(t, target, "worktree", "remove", "--force", host) })
+	lens := record.State.SelectedLenses[0]
+	relay := startOpenCodeTransportRelay(t, host, openCodeLensTransportStart(t, target, record, lens))
+	hostOutput := string(admittedReviewerPayloadForTest(t, target, record, lens, 0))
+	if _, err := relay.complete(openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
+	if _, _, err := discoverCompactFacadeReview(t.Context(), host, record.State.LineageID, false); err == nil {
+		t.Fatal("A-hosted relay created or selected authority outside target worktree B")
+	}
+}
+
+func TestOpenCodeReviewTransportRefusesAnUnrelatedHostAndReoffersTargetSlots(t *testing.T) {
+	reviewEnabledHome(t)
+	target, started, store, record := newArtifactReview(t, false)
+	host := initReviewCLIRepo(t)
+	t.Chdir(host)
+	start := openCodeLensTransportStart(t, target, record, record.State.SelectedLenses[0])
+	payload, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = runReviewOpenCodeTransport(nil, bytes.NewReader(payload), &output)
+	var bindingErr *openCodeTransportBindingError
+	if !errors.As(err, &bindingErr) || output.Len() != 0 {
+		t.Fatalf("unrelated host transport = error %v, output %q", err, output.String())
+	}
+	assertOpenCodeRelayAuthorityUnchanged(t, target, started.LineageID, store, record)
+	var statusOutput bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", target, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition"}, &statusOutput); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != len(record.State.SelectedLenses) {
+		t.Fatalf("unrelated host did not reoffer B reviewer slots: %#v", status.NextTransition)
+	}
+}
+
 func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutation(t *testing.T) {
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
@@ -702,9 +750,9 @@ type openCodeTransportRelay struct {
 
 func startOpenCodeTransportRelay(t *testing.T, repo string, start openCodeTransportEnvelope) openCodeTransportRelay {
 	t.Helper()
-	// The managed shim starts this relay inside the repository it reviews, and
-	// the transport takes no flags, so process cwd is the repository the
-	// provider-issued context digest is verified against.
+	// The relay runs in OpenCode's host worktree, which may differ from the
+	// provider-bound repository. The rctx2 handle discovers exactly one
+	// common-directory registered target, whose compact authority admits review.
 	t.Chdir(repo)
 	inputReader, input := io.Pipe()
 	outputReader, output := io.Pipe()

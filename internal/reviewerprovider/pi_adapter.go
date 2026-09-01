@@ -60,7 +60,7 @@ func (adapter *PiAdapter) Review(ctx context.Context, invocation Invocation) ([]
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return nil, fmt.Errorf("pi reviewer transport failed: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("pi reviewer transport failed: %w: %s", err, reviewerTransportFailureDetail(stderr.String(), stdout.String()))
 	}
 	if len(bytes.TrimSpace(stdout.Bytes())) == 0 {
 		return nil, errors.New("pi reviewer transport produced no final message")

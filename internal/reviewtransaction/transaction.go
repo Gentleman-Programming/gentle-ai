@@ -116,6 +116,9 @@ type Start struct {
 	RiskLevel            RiskLevel
 	SelectedLenses       []string
 	OriginalChangedLines *int
+	// RuntimeAgent is the validated runtime identity START was bound to, or
+	// empty on the manual/non-agent route. It is frozen with the lineage.
+	RuntimeAgent string
 }
 
 type LensResult struct {
@@ -170,6 +173,9 @@ type RefuterClaim struct {
 	FindingID        string `json:"finding_id"`
 	SnapshotIdentity string `json:"snapshot_identity"`
 	Proof            string `json:"proof"`
+	// Claim is the finding's own assertion. Without it the refuter has no
+	// proposition to corroborate or refute (issue #3482).
+	Claim string `json:"claim,omitempty"`
 }
 
 type EvidenceRoute struct {

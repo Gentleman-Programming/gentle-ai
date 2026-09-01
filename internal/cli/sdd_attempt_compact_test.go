@@ -286,7 +286,7 @@ func TestRunSDDAttemptCompactPreservesTokenCASAndIdempotentReplay(t *testing.T) 
 	settleArgs := compactSettleArgs(repo, change, first.Token, "replay-settle", "passed")
 	completed, completedPayload := runCompactSDDAttempt(t, settleArgs)
 	completedReplay, completedReplayPayload := runCompactSDDAttempt(t, settleArgs)
-	if completed != (compactAttemptOutput{State: "complete"}) || completedReplay != completed || !bytes.Equal(completedPayload, completedReplayPayload) {
+	if completed.State != "complete" || completed.Exit == "" || completed.Detail != completed.Exit || completedReplay != completed || !bytes.Equal(completedPayload, completedReplayPayload) {
 		t.Fatalf("settle replay completed=%#v replayed=%#v", completed, completedReplay)
 	}
 	status, err := store.Status()
@@ -429,7 +429,7 @@ func TestRunSDDAttemptSettleSurvivesOffToOnReviewModeTransition(t *testing.T) {
 	settled, _ := runCompactSDDAttempt(t, append(compactSettleArgsWithEvidence(repo, change, correction.Token, "correction-settle", "passed", cliAttemptHash('b')),
 		"--remediates-evidence-revision", failedEvidence,
 	))
-	if settled != (compactAttemptOutput{State: "complete"}) {
+	if settled.State != "complete" || settled.Exit == "" {
 		t.Fatalf("correction settle after off-to-on review transition = %#v", settled)
 	}
 	status := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})

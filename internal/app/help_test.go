@@ -105,17 +105,20 @@ func TestHelpDocumentsUserControlledReviewModeKillSwitch(t *testing.T) {
 		"--scope <global|clone>",
 		"off wins",
 		"status never mutates",
-		"asks once per clone",
+		"asks per candidate",
+		"nothing is granted for later candidates",
 		"'not now' applies to that candidate only",
 		"gentle-ai review mode disable",
+		"[--locale <en|es>]",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing review mode documentation %q:\n%s", want, output)
 		}
 	}
 	// The permanent disable stopped being a numbered answer, so the help must
-	// not keep advertising it as one.
-	for _, stale := range []string{"never ask again", "Never ask again"} {
+	// not keep advertising it as one; issue #3445: the per-clone latch is
+	// retired, consent is asked per candidate and never recorded for later ones.
+	for _, stale := range []string{"never ask again", "Never ask again", "asks once per clone", "records that answer"} {
 		if strings.Contains(output, stale) {
 			t.Fatalf("help output still offers a permanent disable as an answer %q:\n%s", stale, output)
 		}
