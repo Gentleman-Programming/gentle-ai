@@ -151,6 +151,10 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	if err != nil {
 		return false, StreamResult{}, err
 	}
+	// Every message below must name the destination the caller asked for.
+	// A resolved symlink target is a path the caller never passed in, so
+	// reporting it turns a legible error into a confusing one.
+	reportPath := path
 	path = writePath
 
 	dir := filepath.Dir(path)
@@ -160,7 +164,7 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 
 	tmp, err := createStagedFile(dir)
 	if err != nil {
-		return false, StreamResult{}, fmt.Errorf("create temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("create temp file for %q: %w", reportPath, err)
 	}
 
 	tmpPath := tmp.Name()
@@ -179,26 +183,26 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	written, err := io.Copy(io.MultiWriter(tmp, staged), src)
 	if err != nil {
 		_ = tmp.Close()
-		return false, StreamResult{}, fmt.Errorf("write temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("write temp file for %q: %w", reportPath, err)
 	}
 	stagedDigest := hex.EncodeToString(staged.Sum(nil))
 
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
-		return false, StreamResult{}, fmt.Errorf("set permissions on temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("set permissions on temp file for %q: %w", reportPath, err)
 	}
 
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return false, StreamResult{}, fmt.Errorf("sync temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("sync temp file for %q: %w", reportPath, err)
 	}
 
 	if err := tmp.Close(); err != nil {
-		return false, StreamResult{}, fmt.Errorf("close temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("close temp file for %q: %w", reportPath, err)
 	}
 
 	if err := renameFn(tmpPath, path); err != nil {
-		return false, StreamResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("replace %q atomically: %w", reportPath, err)
 	}
 
 	// Read the destination back before claiming anything about it. A rename that
@@ -207,12 +211,12 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	// point of this sequence is that its result describes disk, not intent.
 	diskDigest, diskBytes, err := digestFileOnDisk(path)
 	if err != nil {
-		return false, StreamResult{}, fmt.Errorf("read back %q after replacement: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("read back %q after replacement: %w", reportPath, err)
 	}
 	if diskBytes != written || diskDigest != stagedDigest {
 		return false, StreamResult{}, fmt.Errorf(
 			"replace %q atomically: the replacement did not land. The destination holds %d bytes (%s); %d bytes (%s) were written",
-			path, diskBytes, diskDigest, written, stagedDigest)
+			reportPath, diskBytes, diskDigest, written, stagedDigest)
 	}
 
 	// Past this point the destination holds the new bytes. Every remaining
@@ -221,7 +225,7 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	result = StreamResult{Bytes: diskBytes, Digest: diskDigest}
 
 	if err := SyncDir(dir); err != nil {
-		return true, result, fmt.Errorf("sync parent directory for %q: %w", path, err)
+		return true, result, fmt.Errorf("sync parent directory for %q: %w", reportPath, err)
 	}
 
 	return true, result, nil
