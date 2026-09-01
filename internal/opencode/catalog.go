@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -14,7 +15,8 @@ import (
 
 const (
 	catalogTimeout   = 15 * time.Second
-	maxCatalogOutput = 1 << 20
+	maxCatalogOutput = 16 << 20
+	maxStderrOutput  = 64 << 10
 )
 
 // Command describes the bounded OpenCode command used for runtime discovery.
@@ -25,8 +27,7 @@ type Command struct {
 	OutputLimit int
 }
 
-type CommandOutput struct{ Stdout, Stderr []byte }
-type CommandRunner func(context.Context, Command) (CommandOutput, error)
+type CommandRunner func(context.Context, Command) (io.Reader, error)
 
 type CatalogErrorKind string
 
@@ -53,14 +54,20 @@ func DiscoverCatalog(ctx context.Context, projectDir string) (map[string]Provide
 func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner CommandRunner) (map[string]Provider, error) {
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
-	output, err := runner(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: projectDir, OutputLimit: maxCatalogOutput})
+	limit := maxCatalogOutput
+	r, err := runner(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: projectDir, OutputLimit: limit})
 	if err != nil {
 		return nil, catalogCommandError(ctx, err)
 	}
-	if len(output.Stdout) > maxCatalogOutput || len(output.Stderr) > maxCatalogOutput {
-		return nil, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+	if closer, ok := r.(io.Closer); ok {
+		defer closer.Close()
 	}
-	return parseVerboseCatalog(output.Stdout)
+	limitReader := &countingLimitReader{r: r, limit: int64(limit), cancel: cancel}
+	providers, parseErr := parseVerboseCatalog(limitReader)
+	if parseErr != nil {
+		return nil, catalogCommandError(ctx, parseErr)
+	}
+	return providers, nil
 }
 
 func catalogCommandError(ctx context.Context, err error) error {
@@ -78,26 +85,41 @@ func catalogCommandError(ctx context.Context, err error) error {
 	return &CatalogError{Kind: CatalogErrorCommandFailed}
 }
 
-func parseVerboseCatalog(data []byte) (map[string]Provider, error) {
+func parseVerboseCatalog(r io.Reader) (map[string]Provider, error) {
 	providers := map[string]Provider{}
 	sawNoise := false
-	for len(bytes.TrimSpace(data)) > 0 {
-		data = bytes.TrimLeft(data, "\r\n\t ")
-		line, rest := data, []byte(nil)
-		if end := bytes.IndexByte(data, '\n'); end >= 0 {
-			line, rest = data[:end], data[end+1:]
+	s := newStreamBuffer(r)
+
+	for {
+		line, err := s.readLine()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
 		}
-		header := strings.TrimSpace(string(line))
-		if !isCatalogHeader(header) || !startsJSONObject(rest) {
-			// Plugins and hooks (e.g. the managed skill-registry plugin outside
-			// a project root) may log to stdout before or between catalog
-			// records. Skip such lines instead of failing the whole discovery,
-			// but remember them so noise-only output still fails closed.
-			sawNoise = true
-			data = rest
+		header := strings.TrimSpace(line)
+		if !isCatalogHeader(header) {
+			if header != "" {
+				sawNoise = true
+			}
 			continue
 		}
-		data = rest
+
+		nextByte, err := s.peekNonWhitespace()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				sawNoise = true
+				break
+			}
+			return nil, err
+		}
+		if nextByte != '{' {
+			// A log line containing a slash but not followed by JSON
+			sawNoise = true
+			continue
+		}
+
 		var raw struct {
 			ID           string `json:"id"`
 			Name         string `json:"name"`
@@ -110,15 +132,19 @@ func parseVerboseCatalog(data []byte) (map[string]Provider, error) {
 			Cost     ModelCost                  `json:"cost"`
 			Variants map[string]json.RawMessage `json:"variants"`
 		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		if err := decoder.Decode(&raw); err != nil {
+
+		if err := s.decodeJSON(&raw); err != nil {
+			var catalogErr *CatalogError
+			if errors.As(err, &catalogErr) {
+				return nil, catalogErr
+			}
 			var typeErr *json.UnmarshalTypeError
 			if errors.As(err, &typeErr) {
 				return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
 			}
 			return nil, &CatalogError{Kind: CatalogErrorMalformed}
 		}
-		consumed := decoder.InputOffset()
+
 		if raw.ID == "" || raw.Capabilities == nil || raw.Capabilities.ToolCall == nil || !strings.HasSuffix(header, "/"+raw.ID) {
 			return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
 		}
@@ -136,14 +162,116 @@ func parseVerboseCatalog(data []byte) (map[string]Provider, error) {
 		}
 		sortVariants(variants)
 		reasoning := raw.Capabilities.Reasoning != nil && *raw.Capabilities.Reasoning
-		provider.Models[raw.ID] = Model{ID: raw.ID, Name: raw.Name, Family: raw.Family, ToolCall: *raw.Capabilities.ToolCall, Reasoning: reasoning, Limit: raw.Limit, Cost: raw.Cost, Variants: variants}
+		provider.Models[raw.ID] = Model{
+			ID:        raw.ID,
+			Name:      raw.Name,
+			Family:    raw.Family,
+			ToolCall:  *raw.Capabilities.ToolCall,
+			Reasoning: reasoning,
+			Limit:     raw.Limit,
+			Cost:      raw.Cost,
+			Variants:  variants,
+		}
 		providers[providerID] = provider
-		data = data[consumed:]
 	}
+
 	if len(providers) == 0 && sawNoise {
 		return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
 	}
 	return providers, nil
+}
+
+type streamBuffer struct {
+	r   io.Reader
+	buf []byte
+	eof bool
+}
+
+func newStreamBuffer(r io.Reader) *streamBuffer {
+	return &streamBuffer{r: r}
+}
+
+func (s *streamBuffer) fill() error {
+	if s.eof {
+		return io.EOF
+	}
+	var chunk [4096]byte
+	n, err := s.r.Read(chunk[:])
+	if n > 0 {
+		s.buf = append(s.buf, chunk[:n]...)
+	}
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			s.eof = true
+			if len(s.buf) == 0 {
+				return io.EOF
+			}
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *streamBuffer) readLine() (string, error) {
+	for {
+		if idx := bytes.IndexByte(s.buf, '\n'); idx >= 0 {
+			line := string(s.buf[:idx])
+			s.buf = s.buf[idx+1:]
+			return line, nil
+		}
+		if err := s.fill(); err != nil {
+			if errors.Is(err, io.EOF) {
+				if len(s.buf) > 0 {
+					line := string(s.buf)
+					s.buf = nil
+					return line, nil
+				}
+				return "", io.EOF
+			}
+			return "", err
+		}
+	}
+}
+
+func (s *streamBuffer) peekNonWhitespace() (byte, error) {
+	for {
+		for i, b := range s.buf {
+			if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
+				s.buf = s.buf[i:]
+				return b, nil
+			}
+		}
+		s.buf = nil
+		if err := s.fill(); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func (s *streamBuffer) Read(p []byte) (int, error) {
+	if len(s.buf) > 0 {
+		n := copy(p, s.buf)
+		s.buf = s.buf[n:]
+		return n, nil
+	}
+	if s.eof {
+		return 0, io.EOF
+	}
+	return s.r.Read(p)
+}
+
+func (s *streamBuffer) decodeJSON(v interface{}) error {
+	dec := json.NewDecoder(s)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	buffered, err := io.ReadAll(dec.Buffered())
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	s.buf = append(buffered, s.buf...)
+	return nil
 }
 
 // isCatalogHeader reports whether line has the `provider/model` header shape:
@@ -151,14 +279,6 @@ func parseVerboseCatalog(data []byte) (map[string]Provider, error) {
 // block. Anything else on stdout is log noise, never a catalog record.
 func isCatalogHeader(line string) bool {
 	return line != "" && !strings.ContainsAny(line, " \t") && strings.Contains(line, "/") && line[0] != '{'
-}
-
-// startsJSONObject reports whether the bytes after a candidate header begin a
-// JSON object. A header-shaped log line (a bare path, a URL) is only accepted
-// as a record header when its JSON block actually follows.
-func startsJSONObject(rest []byte) bool {
-	rest = bytes.TrimLeft(rest, "\r\n\t ")
-	return len(rest) > 0 && rest[0] == '{'
 }
 
 // effortRank orders the known reasoning-effort variant names semantically.
@@ -176,38 +296,122 @@ func sortVariants(variants []string) {
 	sort.Slice(variants, func(i, j int) bool { return effortRank[variants[i]] < effortRank[variants[j]] })
 }
 
-func runCatalogCommand(ctx context.Context, command Command) (CommandOutput, error) {
+func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
-	stdout, stderr := &limitedBuffer{limit: command.OutputLimit, cancel: cancel}, &limitedBuffer{limit: command.OutputLimit, cancel: cancel}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-	err := cmd.Run()
-	if stdout.overflow || stderr.overflow {
-		return CommandOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-	return CommandOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
-}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdoutPipe.Close()
+		cancel()
+		return nil, err
+	}
 
-type limitedBuffer struct {
-	buffer   bytes.Buffer
-	limit    int
-	overflow bool
-	cancel   context.CancelFunc
-}
+	if err := cmd.Start(); err != nil {
+		_ = stdoutPipe.Close()
+		_ = stderrPipe.Close()
+		cancel()
+		return nil, err
+	}
 
-func (b *limitedBuffer) Write(data []byte) (int, error) {
-	remaining := b.limit - b.buffer.Len()
-	if len(data) > remaining {
-		if remaining > 0 {
-			_, _ = b.buffer.Write(data[:remaining])
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		var buf [maxStderrOutput]byte
+		for {
+			_, readErr := stderrPipe.Read(buf[:])
+			if readErr != nil {
+				break
+			}
 		}
-		b.overflow = true
-		b.cancel()
-		return len(data), nil
-	}
-	return b.buffer.Write(data)
+	}()
+
+	return &processStreamReader{
+		cmd:        cmd,
+		stdout:     stdoutPipe,
+		stderrDone: stderrDone,
+		cancel:     cancel,
+	}, nil
 }
 
-func (b *limitedBuffer) Bytes() []byte { return b.buffer.Bytes() }
+type processStreamReader struct {
+	cmd        *exec.Cmd
+	stdout     io.ReadCloser
+	stderrDone chan struct{}
+	cancel     context.CancelFunc
+	closed     bool
+	waitErr    error
+	eof        bool
+}
+
+func (p *processStreamReader) Read(buf []byte) (int, error) {
+	if p.eof {
+		if p.waitErr != nil {
+			return 0, p.waitErr
+		}
+		return 0, io.EOF
+	}
+	n, err := p.stdout.Read(buf)
+	if err != nil {
+		p.eof = true
+		p.closeAndReap()
+		if err == io.EOF {
+			if p.waitErr != nil {
+				return n, p.waitErr
+			}
+			return n, io.EOF
+		}
+	}
+	return n, err
+}
+
+func (p *processStreamReader) Close() error {
+	p.cancel()
+	p.closeAndReap()
+	return nil
+}
+
+func (p *processStreamReader) closeAndReap() {
+	if p.closed {
+		return
+	}
+	p.closed = true
+	_ = p.stdout.Close()
+	<-p.stderrDone
+	p.waitErr = p.cmd.Wait()
+}
+
+type countingLimitReader struct {
+	r      io.Reader
+	limit  int64
+	read   int64
+	cancel context.CancelFunc
+}
+
+func (c *countingLimitReader) Read(p []byte) (int, error) {
+	if c.read >= c.limit {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		return 0, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+	}
+	maxToRead := int64(len(p))
+	if remaining := c.limit - c.read; maxToRead > remaining {
+		maxToRead = remaining
+	}
+	n, err := c.r.Read(p[:maxToRead])
+	c.read += int64(n)
+	if c.read >= c.limit {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		return n, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+	}
+	return n, err
+}

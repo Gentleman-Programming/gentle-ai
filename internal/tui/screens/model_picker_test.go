@@ -1246,6 +1246,68 @@ func TestRuntimeCatalogDiscoveryUpdatesPickerWithoutPrivateFixtures(t *testing.T
 	}
 }
 
+func TestRuntimeCatalogDiscoverySpecificErrorDiagnostics(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantMessage string
+		wantSubtext string
+		forbidText  string
+	}{
+		{
+			name:        "output too large",
+			err:         &opencode.CatalogError{Kind: opencode.CatalogErrorOutputTooLarge},
+			wantMessage: "OpenCode model catalog is too large.",
+			wantSubtext: "OpenCode produced more model data than can be safely processed.",
+			forbidText:  "Verify OpenCode is installed",
+		},
+		{
+			name:        "timeout",
+			err:         &opencode.CatalogError{Kind: opencode.CatalogErrorTimeout},
+			wantMessage: "Model discovery timed out.",
+			wantSubtext: "OpenCode took too long to return models for this project.",
+			forbidText:  "Verify OpenCode is installed",
+		},
+		{
+			name:        "command failed",
+			err:         &opencode.CatalogError{Kind: opencode.CatalogErrorCommandFailed},
+			wantMessage: "Could not discover models from OpenCode.",
+			wantSubtext: "OpenCode command failed. Verify OpenCode can run in this project",
+			forbidText:  "Verify OpenCode is installed",
+		},
+		{
+			name:        "malformed output",
+			err:         &opencode.CatalogError{Kind: opencode.CatalogErrorMalformed},
+			wantMessage: "Could not parse models from OpenCode.",
+			wantSubtext: "OpenCode returned an unexpected model catalog format.",
+			forbidText:  "Verify OpenCode is installed",
+		},
+		{
+			name:        "missing binary",
+			err:         &opencode.CatalogError{Kind: opencode.CatalogErrorMissingBinary},
+			wantMessage: "Could not discover models from OpenCode.",
+			wantSubtext: "Verify OpenCode is installed and can run in this project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := ModelPickerState{CatalogStatus: RuntimeCatalogLoading}
+			state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 0, ProjectDir: "", Err: tt.err})
+			rendered := RenderModelPicker(nil, state, 0)
+			if !strings.Contains(rendered, tt.wantMessage) {
+				t.Fatalf("rendered output = %q, want message %q", rendered, tt.wantMessage)
+			}
+			if !strings.Contains(rendered, tt.wantSubtext) {
+				t.Fatalf("rendered output = %q, want subtext %q", rendered, tt.wantSubtext)
+			}
+			if tt.forbidText != "" && strings.Contains(rendered, tt.forbidText) {
+				t.Fatalf("rendered output = %q contains forbidden text %q", rendered, tt.forbidText)
+			}
+		})
+	}
+}
+
 func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
 	state := ModelPickerState{
 		CustomAgents:     []string{"custom-1", "custom-2"},

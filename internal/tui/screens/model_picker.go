@@ -2,6 +2,7 @@ package screens
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -83,6 +84,7 @@ type ModelPickerState struct {
 	SDDModels         map[string][]opencode.Model // provider ID -> SDD-capable models
 	ConfigWarning     string
 	CatalogStatus     RuntimeCatalogStatus
+	CatalogError      error
 	CatalogRequestID  uint64
 	CatalogProjectDir string
 
@@ -160,8 +162,10 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		}
 		if discovery.Err != nil {
 			state.CatalogStatus = RuntimeCatalogFailed
+			state.CatalogError = discovery.Err
 			return state
 		}
+		state.CatalogError = nil
 		state.Providers = discovery.Providers
 		state.refreshRuntimeModels()
 		state.CatalogStatus = RuntimeCatalogReady
@@ -809,8 +813,7 @@ func renderPhaseList(
 			message = "Discovering models from OpenCode..."
 			subtext = "You can continue with default assignments while discovery runs."
 		case RuntimeCatalogFailed:
-			message = "Could not discover models from OpenCode."
-			subtext = "Verify OpenCode is installed and can run in this project, then return to this picker."
+			message, subtext = modelPickerCatalogFailureExplanation(state.CatalogError)
 		}
 		b.WriteString(styles.WarningStyle.Render(message))
 		b.WriteString("\n")
@@ -1043,4 +1046,23 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	}
 
 	return provName, modelName
+}
+
+func modelPickerCatalogFailureExplanation(err error) (string, string) {
+	var catalogErr *opencode.CatalogError
+	if errors.As(err, &catalogErr) {
+		switch catalogErr.Kind {
+		case opencode.CatalogErrorOutputTooLarge:
+			return "OpenCode model catalog is too large.", "OpenCode produced more model data than can be safely processed. Check your configured providers."
+		case opencode.CatalogErrorTimeout:
+			return "Model discovery timed out.", "OpenCode took too long to return models for this project. Check your OpenCode configuration."
+		case opencode.CatalogErrorCommandFailed:
+			return "Could not discover models from OpenCode.", "OpenCode command failed. Verify OpenCode can run in this project, then return to this picker."
+		case opencode.CatalogErrorMalformed, opencode.CatalogErrorUnsupportedSchema:
+			return "Could not parse models from OpenCode.", "OpenCode returned an unexpected model catalog format. Verify your OpenCode version."
+		case opencode.CatalogErrorMissingBinary:
+			return "Could not discover models from OpenCode.", "Verify OpenCode is installed and can run in this project, then return to this picker."
+		}
+	}
+	return "Could not discover models from OpenCode.", "Verify OpenCode is installed and can run in this project, then return to this picker."
 }
