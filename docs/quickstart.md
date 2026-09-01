@@ -74,6 +74,15 @@ go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
+### Install via mise (macOS / Linux)
+
+```bash
+mise use -g gentle-ai@latest
+gentle-ai version
+```
+
+`mise use -g` only pins the version — it doesn't put `gentle-ai` on `PATH` by itself. Run `gentle-ai version` from a shell where [mise is activated](https://mise.jdx.dev/getting-started.html) or its shims directory is on `PATH`; otherwise use `mise exec -- gentle-ai version`.
+
 ### Install the opt-in prerelease
 
 ```bash

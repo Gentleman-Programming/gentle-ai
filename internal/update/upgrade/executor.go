@@ -464,7 +464,10 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 
 	var preflightSkips []ToolUpgradeResult
 	if !dryRun {
-		executable, preflightSkips = preflightWindowsGentleAIUpgrades(executable, profile)
+		var miseSkips, windowsSkips []ToolUpgradeResult
+		executable, miseSkips = preflightMiseGentleAIUpgrades(executable, profile)
+		executable, windowsSkips = preflightWindowsGentleAIUpgrades(executable, profile)
+		preflightSkips = append(miseSkips, windowsSkips...)
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
@@ -578,6 +581,40 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		Results:       toolResults,
 		DryRun:        dryRun,
 	}
+}
+
+// preflightMiseGentleAIUpgrades removes a mise-managed gentle-ai self-upgrade
+// before the backup phase, replacing it with an actionable manual hint.
+// Overwriting the running binary in place would desync the version mise
+// tracks, so this must run before executeOne ever touches gentle-ai.
+//
+// Gated on tool name plus runningBinaryIsMiseManaged() only — no
+// effectiveMethod filter. Containment already excludes non-mise roots (a
+// Homebrew or go-install binary is never under mise's installs root), so a
+// method filter would be redundant. Runs before the Windows preflight
+// (executor.go composition site) so a mise-managed candidate is removed from
+// the executable set before the Windows preflight can ever see it — this is
+// what keeps the two preflights from double-skipping the same candidate.
+func preflightMiseGentleAIUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
+	remaining := make([]executableUpdate, 0, len(executable))
+	skipped := make([]ToolUpgradeResult, 0)
+	for _, candidate := range executable {
+		r := candidate.result
+		if r.Tool.Name != "gentle-ai" || !runningBinaryIsMiseManaged() {
+			remaining = append(remaining, candidate)
+			continue
+		}
+
+		skipped = append(skipped, ToolUpgradeResult{
+			ToolName:   r.Tool.Name,
+			OldVersion: r.InstalledVersion,
+			NewVersion: r.LatestVersion,
+			Method:     effectiveMethod(r.Tool, profile),
+			Status:     UpgradeSkipped,
+			ManualHint: "mise-managed install — run `mise upgrade gentle-ai` instead; replacing the binary in place would desync the version mise tracks",
+		})
+	}
+	return remaining, skipped
 }
 
 // preflightWindowsGentleAIUpgrades removes unsafe Windows self-upgrades before
