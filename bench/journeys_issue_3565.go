@@ -3,26 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
-
-// issue3565Axis identifies the black-box coverage for relative skill-registry cwd handling.
-const issue3565Axis = "issue-3565-skill-registry-cwd"
-
-func init() {
-	RegisterAxis(Axis{
-		Name:     issue3565Axis,
-		Title:    "Skill registry commands canonicalize explicit relative cwd values",
-		BlackBox: true,
-		Properties: []string{
-			"Replays #3565 through the public CLI only: `skill-registry list --json --cwd .` and `skill-registry refresh --cwd .`.",
-			"The fixture is a normal git worktree with a project-local skill; failure means literal dot cwd was treated as filesystem root or as a user-scope path.",
-		},
-		Review:   reviewUntouched,
-		Journeys: issue3565Journeys,
-	})
-}
 
 // issue3565ProjectSkillFixture creates a git project with one project-local skill.
 func issue3565ProjectSkillFixture(sandbox *Sandbox) error {
@@ -65,8 +49,22 @@ func issue3565VerifyListDot(sandbox *Sandbox, observation Observation) error {
 		return fmt.Errorf("list --json --cwd . returned %#v, want exactly the project skill", rows)
 	}
 	wantPath := filepath.Join(sandbox.Repo, "skills", "project-local", "SKILL.md")
-	if rows[0].Name != "project-local" || rows[0].Scope != "project" || !filepath.IsAbs(rows[0].Path) || filepath.Clean(rows[0].Path) != wantPath {
+	if rows[0].Name != "project-local" || rows[0].Scope != "project" {
 		return fmt.Errorf("list --json --cwd . row = %#v, want project-local/project/%s", rows[0], wantPath)
+	}
+	if !filepath.IsAbs(rows[0].Path) {
+		return fmt.Errorf("list --json --cwd . path = %q, want an absolute project skill path", rows[0].Path)
+	}
+	gotInfo, err := os.Stat(rows[0].Path)
+	if err != nil {
+		return fmt.Errorf("stat listed skill path %q: %w", rows[0].Path, err)
+	}
+	wantInfo, err := os.Stat(wantPath)
+	if err != nil {
+		return fmt.Errorf("stat expected skill path %q: %w", wantPath, err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		return fmt.Errorf("list --json --cwd . path = %q, want same file as %s", rows[0].Path, wantPath)
 	}
 	return nil
 }
@@ -89,6 +87,7 @@ func issue3565VerifyRefreshDot(sandbox *Sandbox, observation Observation) error 
 func issue3565Journeys() []Journey {
 	return []Journey{{
 		ID:     "j3565-skill-registry-dot-cwd",
+		Review: reviewUntouched,
 		Title:  "#3565: skill-registry list and refresh honor literal dot cwd",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3565",
 		Steps: []Step{

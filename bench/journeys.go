@@ -378,17 +378,6 @@ func rejectedThenRecaptureFor(r *journeyRun, lineage string) error {
 	return captureExactSelectedReviewerSlots(r, lineage, false)
 }
 
-func finalizeRejectedRecapture(r *journeyRun) error {
-	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", rejectedRecaptureLineage, "--captured-evidence=true"), false)
-	if observation.ExitCode != 0 {
-		return fmt.Errorf("finalize rejected-recapture evidence: %s", firstLine(observation.Stderr))
-	}
-	if err := requirePendingApproval(rejectedRecaptureLineage)(r.sandbox, observation); err != nil {
-		return err
-	}
-	return requireAtomicLineageAcknowledged(r, rejectedRecaptureLineage)
-}
-
 // executeNextTransitionVerbatim is the guide's flow 11: take the tokens the
 // product prints and run them exactly, with no repair. If a token is not a
 // complete flag, this step fails and the friction is visible.
@@ -817,6 +806,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue3043Journeys()...)
 	journeys = append(journeys, issue3557Journeys()...)
 	journeys = append(journeys, issue3561Journeys()...)
+	journeys = append(journeys, issue3565Journeys()...)
 	journeys = append(journeys, repositoryContextJourneys()...)
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)

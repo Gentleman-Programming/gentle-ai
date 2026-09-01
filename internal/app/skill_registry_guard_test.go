@@ -194,7 +194,7 @@ func TestSkillRegistryRefreshLiteralDotCWDProceedsInGitProject(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	chdir(t, project)
+	t.Chdir(project)
 
 	var buf bytes.Buffer
 	err := runSkillRegistryRefresh([]string{"--quiet", "--no-gitignore", "--cwd", "."}, &buf)
@@ -218,7 +218,7 @@ description: project skill visible from literal dot cwd
 
 Use the project skill.
 `)
-	chdir(t, project)
+	t.Chdir(project)
 
 	var buf bytes.Buffer
 	err := runSkillRegistryList([]string{"--json", "--cwd", "."}, &buf)
@@ -243,27 +243,21 @@ Use the project skill.
 	if rows[0].Scope != "project" {
 		t.Fatalf("skill scope = %q, want project for literal --cwd .", rows[0].Scope)
 	}
+	if !filepath.IsAbs(rows[0].Path) {
+		t.Fatalf("skill path = %q, want an absolute project skill path", rows[0].Path)
+	}
 	wantPath := filepath.Join(project, "skills", "project-local", "SKILL.md")
-	if !filepath.IsAbs(rows[0].Path) || filepath.Clean(rows[0].Path) != wantPath {
-		t.Fatalf("skill path = %q, want absolute project path %q", rows[0].Path, wantPath)
-	}
-}
-
-// chdir moves the process working directory for app-boundary cwd tests and restores it during cleanup.
-func chdir(t *testing.T, dir string) {
-	t.Helper()
-	old, err := os.Getwd()
+	gotInfo, err := os.Stat(rows[0].Path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("stat skill path %q: %v", rows[0].Path, err)
 	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
+	wantInfo, err := os.Stat(wantPath)
+	if err != nil {
+		t.Fatalf("stat expected skill path %q: %v", wantPath, err)
 	}
-	t.Cleanup(func() {
-		if err := os.Chdir(old); err != nil {
-			t.Fatalf("restore working directory: %v", err)
-		}
-	})
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("skill path = %q, want same file as %q", rows[0].Path, wantPath)
+	}
 }
 
 // writeSkillFile writes a skill file fixture, creating parent directories as needed.
