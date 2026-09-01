@@ -117,8 +117,12 @@ func TestSafeRemovalPathCanonicalizesInRootSymlinkedParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SafeRemovalPath() error = %v", err)
 	}
-	if safePath != filepath.Join(realDir, "config.json") {
-		t.Fatalf("SafeRemovalPath() = %q, want %q", safePath, filepath.Join(realDir, "config.json"))
+	wantDir, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(): %v", err)
+	}
+	if safePath != filepath.Join(wantDir, "config.json") {
+		t.Fatalf("SafeRemovalPath() = %q, want %q", safePath, filepath.Join(wantDir, "config.json"))
 	}
 }
 
@@ -170,7 +174,11 @@ func TestSafeRemovalPathAllowsConfiguredRootSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SafeRemovalPath() error = %v", err)
 	}
-	if safePath != filepath.Join(rootTarget, "config.json") {
-		t.Fatalf("SafeRemovalPath() = %q, want %q", safePath, filepath.Join(rootTarget, "config.json"))
+	wantRoot, err := filepath.EvalSymlinks(rootTarget)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(): %v", err)
+	}
+	if safePath != filepath.Join(wantRoot, "config.json") {
+		t.Fatalf("SafeRemovalPath() = %q, want %q", safePath, filepath.Join(wantRoot, "config.json"))
 	}
 }
