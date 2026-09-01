@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,77 @@ func TestSnapshotterSkipsUnixSockets(t *testing.T) {
 	}
 	if manifest.Entries[1].Existed {
 		t.Errorf("socket manifest entry Existed = true, want false so special files are skipped")
+	}
+}
+
+func TestSnapshotterRejectsSymlinkOutsideSourceRoot(t *testing.T) {
+	base := t.TempDir()
+	sourceRoot := filepath.Join(base, "managed")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sourceRoot): %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outsideFile): %v", err)
+	}
+
+	link := filepath.Join(sourceRoot, "config.txt")
+	if err := os.Symlink(outsideFile, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	_, err := NewSnapshotter().Create(filepath.Join(base, "snapshot"), []string{link})
+	if err == nil {
+		t.Fatal("Create() error = nil, want external symlink rejection")
+	}
+	if !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("Create() error = %v, want allowed-root rejection", err)
+	}
+}
+
+func TestSnapshotterArchivesInRootSymlinkTarget(t *testing.T) {
+	base := t.TempDir()
+	managed := filepath.Join(base, "managed")
+	if err := os.MkdirAll(filepath.Join(managed, "real"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(managed): %v", err)
+	}
+
+	target := filepath.Join(managed, "real", "config.txt")
+	if err := os.WriteFile(target, []byte("managed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target): %v", err)
+	}
+	link := filepath.Join(managed, "config.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	snapshotDir := filepath.Join(base, "snapshot")
+	manifest, err := NewSnapshotter().Create(snapshotDir, []string{link})
+	if err != nil {
+		t.Fatalf("Create() error = %v, want in-root symlink accepted", err)
+	}
+	if len(manifest.Entries) != 1 || !manifest.Entries[0].Existed {
+		t.Fatalf("manifest entries = %+v, want one existing entry", manifest.Entries)
+	}
+
+	extracted, err := ExtractArchive(filepath.Join(snapshotDir, ArchiveFilename), filepath.Join(base, "extracted"))
+	if err != nil {
+		t.Fatalf("ExtractArchive() error = %v", err)
+	}
+	if len(extracted) != 1 {
+		t.Fatalf("extracted entries = %d, want 1", len(extracted))
+	}
+	got, err := os.ReadFile(extracted[0].SourcePath)
+	if err != nil {
+		t.Fatalf("ReadFile(extracted): %v", err)
+	}
+	if string(got) != "managed\n" {
+		t.Fatalf("archived content = %q, want %q", got, "managed\n")
 	}
 }
 
