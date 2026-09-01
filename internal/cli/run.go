@@ -2028,6 +2028,10 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 			for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
 				paths[filepath.Join(pluginsDir, name)] = struct{}{}
 			}
+			if adapter.Agent() == model.AgentOpenCode {
+				settingsPath := adapter.SettingsPath(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentSDD))
+				paths[sdd.NativeFallbackOwnershipPath(settingsPath)] = struct{}{}
+			}
 		}
 	}
 	// Routing guidance is delivered per agent outside the component loop, so a
