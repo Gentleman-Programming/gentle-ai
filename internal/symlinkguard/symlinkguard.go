@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
 )
 
 const maxSymlinkDepth = 255
@@ -18,6 +20,10 @@ func ResolveExisting(path string) (string, bool, error) {
 }
 
 func resolvePath(path, original string, depth int) (string, bool, error) {
+	return resolvePathInternal(path, original, depth, true)
+}
+
+func resolvePathInternal(path, original string, depth int, enforceAllowedRoot bool) (string, bool, error) {
 	if depth > maxSymlinkDepth {
 		return "", false, fmt.Errorf("resolve symlink %q: too many links", original)
 	}
@@ -41,14 +47,23 @@ func resolvePath(path, original string, depth int) (string, bool, error) {
 		if err != nil {
 			return "", false, err
 		}
-		root, err := AllowedRoot(candidate)
+		var root string
+		if enforceAllowedRoot {
+			root, err = AllowedRoot(candidate)
+			if err != nil {
+				return "", false, err
+			}
+		}
+		resolved, exists, err := resolvePathInternal(filepath.Join(append([]string{target}, parts[i+1:]...)...), original, depth+1, enforceAllowedRoot)
 		if err != nil {
 			return "", false, err
 		}
-		if err := EnsureWithinRoot(target, root, candidate); err != nil {
-			return "", false, err
+		if enforceAllowedRoot {
+			if err := EnsureWithinRoot(resolved, root, candidate); err != nil {
+				return "", false, err
+			}
 		}
-		return resolvePath(filepath.Join(append([]string{target}, parts[i+1:]...)...), original, depth+1)
+		return resolved, exists, nil
 	}
 	return current, true, nil
 }
@@ -72,19 +87,27 @@ func AllowedRoot(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute path %q: %w", path, err)
 	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(pathAbs))
+	if err != nil {
+		return "", fmt.Errorf("resolve parent directory %q: %w", filepath.Dir(pathAbs), err)
+	}
+	physicalPath := filepath.Join(parent, filepath.Base(pathAbs))
+
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		homeAbs, absErr := filepath.Abs(home)
 		if absErr != nil {
 			return "", fmt.Errorf("resolve home directory %q: %w", home, absErr)
 		}
-		// Same identity-vs-spelling rule as EnsureWithinRoot: a home whose
-		// path traverses a symlink must still be recognised as the root.
-		if WithinRoot(pathAbs, homeAbs) || WithinRoot(canonicalizeExisting(pathAbs), canonicalizeExisting(homeAbs)) {
-			return filepath.Clean(homeAbs), nil
+		if homeResolved, resolveErr := filepath.EvalSymlinks(homeAbs); resolveErr == nil {
+			pathInHome, pathErr := isWithinRootIdentity(pathAbs, homeResolved)
+			physicalPathInHome, physicalPathErr := isWithinRootIdentity(physicalPath, homeResolved)
+			if (pathErr == nil && pathInHome) || (physicalPathErr == nil && physicalPathInHome) {
+				return filepath.Clean(homeResolved), nil
+			}
 		}
 	}
-	return filepath.Clean(filepath.Dir(pathAbs)), nil
+	return filepath.Clean(parent), nil
 }
 
 func DanglingTarget(path string) (string, error) {
@@ -107,35 +130,110 @@ func EnsureWithinRoot(path, root, original string) error {
 	if err != nil {
 		return fmt.Errorf("resolve absolute path %q: %w", path, err)
 	}
-	// Containment must compare filesystem identity, not path spelling. A
-	// symlinked ancestor (macOS /var -> /private/var and /tmp, or a Linux
-	// /home -> /export/home layout) makes an in-root target read as an
-	// escape when only the literal strings are compared.
-	if !WithinRoot(pathAbs, root) && !WithinRoot(canonicalizeExisting(pathAbs), canonicalizeExisting(root)) {
+	within, err := isWithinRootIdentity(pathAbs, root)
+	if err != nil {
+		return fmt.Errorf("resolve path %q for containment: %w", path, err)
+	}
+	if !within {
 		return fmt.Errorf("symlink %q resolves outside allowed root %q: %q", original, root, pathAbs)
 	}
 	return nil
 }
 
-// canonicalizeExisting resolves the deepest existing ancestor of path through
-// symlinks and re-appends the components that do not exist yet. Dangling
-// targets stay comparable because only the existing prefix is resolved.
-func canonicalizeExisting(path string) string {
-	current := filepath.Clean(path)
-	remainder := ""
+func isWithinRootIdentity(path, root string) (bool, error) {
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false, err
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false, err
+	}
+	if WithinRoot(pathAbs, rootAbs) {
+		return true, nil
+	}
+
+	pathResolved, err := canonicalPath(pathAbs)
+	if err != nil {
+		return false, err
+	}
+	rootResolved, err := canonicalPath(rootAbs)
+	if err != nil {
+		return false, err
+	}
+	return pathidentity.Contains(rootResolved, pathResolved), nil
+}
+
+// SafeRemovalPath validates a path against an explicit managed root and
+// returns the physical path that can be removed safely. A final symlink is
+// returned unchanged so callers remove the link rather than its target.
+// Symlinked ancestors are canonicalized and are allowed only when they remain
+// inside root.
+func SafeRemovalPath(path, root string) (string, error) {
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve removal path %q: %w", path, err)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve removal root %q: %w", root, err)
+	}
+	rootResolved, err := filepath.EvalSymlinks(filepath.Clean(rootAbs))
+	if err != nil {
+		return "", fmt.Errorf("resolve removal root %q: %w", root, err)
+	}
+
+	resolved, _, err := resolvePathInternal(filepath.Clean(pathAbs), filepath.Clean(pathAbs), 0, false)
+	if err != nil {
+		return "", err
+	}
+	physical, err := canonicalPath(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve removal path %q: %w", path, err)
+	}
+	within, err := isWithinRootIdentity(physical, rootResolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve removal path %q for containment: %w", path, err)
+	}
+	if !within {
+		return "", fmt.Errorf("path %q resolves outside allowed root %q: %q", path, rootResolved, physical)
+	}
+
+	info, err := os.Lstat(filepath.Clean(pathAbs))
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return filepath.Clean(pathAbs), nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat removal path %q: %w", path, err)
+	}
+	return physical, nil
+}
+
+func canonicalPath(path string) (string, error) {
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := filepath.Clean(pathAbs)
+	missing := make([]string, 0)
+
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
-			if remainder == "" {
-				return filepath.Clean(resolved)
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
 			}
-			return filepath.Join(resolved, remainder)
+			return filepath.Clean(resolved), nil
 		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+
 		parent := filepath.Dir(current)
 		if parent == current {
-			return filepath.Clean(path)
+			return "", err
 		}
-		remainder = filepath.Join(filepath.Base(current), remainder)
+		missing = append(missing, filepath.Base(current))
 		current = parent
 	}
 }
