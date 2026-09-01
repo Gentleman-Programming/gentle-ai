@@ -70,6 +70,16 @@ If a key may be compromised, stop releases. Do not silently replace a trust anch
 
 ## Release gates
 
+### Release-note upgrade instruction
+
+Every release note that tells users to replace or upgrade the binary must include this step:
+
+```bash
+gentle-ai sync
+```
+
+Never publish binary-only upgrade guidance. Managed reviewer and runtime assets are version-bound to the binary, and review lifecycle operations fail closed until sync repairs missing or mismatched writer provenance.
+
 ### Windows distribution restoration gate
 
 Windows source compatibility, CI, and runtime tests remain supported. Official

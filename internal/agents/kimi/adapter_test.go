@@ -85,7 +85,6 @@ func TestAdapter_Capabilities(t *testing.T) {
 		{"SupportsSlashCommands", a.SupportsSlashCommands(), false},
 		{"SupportsOutputStyles", a.SupportsOutputStyles(), false},
 		{"SupportsSubAgents", a.SupportsSubAgents(), true},
-		{"SupportsAutoInstall", a.SupportsAutoInstall(), true},
 	}
 
 	for _, tc := range tests {
@@ -266,6 +265,9 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 			}
 
 			msg := a.PostInstallMessage(homeDir)
+			if !strings.Contains(msg, "/skill:sdd-explore\n  /skill:sdd-research\n  /skill:sdd-propose") {
+				t.Fatalf("PostInstallMessage() missing research phase order:\n%s", msg)
+			}
 
 			// Construct expected path to verify against quoted output
 			gentlemanYaml := filepath.Join(homeDir, ".kimi", "agents", "gentleman.yaml")

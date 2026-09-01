@@ -1,0 +1,250 @@
+[
+  {
+    "gate": "post-apply",
+    "relation": "exact",
+    "verdict": "allow",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: seeded approved compact authority, then validated --gate post-apply on the identical workspace candidate"
+  },
+  {
+    "gate": "post-apply",
+    "relation": "compatible_base_advance",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "post-apply",
+    "relation": "provable_contraction",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "post-apply",
+    "relation": "changed",
+    "verdict": "scope-changed",
+    "next_step": "review start",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: approved candidate drifted, then evaluator validation for --gate post-apply denies with Relation/Next populated by gateVerdict (Slice 3)"
+  },
+  {
+    "gate": "post-apply",
+    "relation": "ambiguous",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "post-apply",
+    "relation": "unknown",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "post-apply",
+    "relation": "unrelated",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "exact",
+    "verdict": "allow",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: seeded approved compact authority, staged the identical candidate, then validated --gate pre-commit"
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "compatible_base_advance",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "provable_contraction",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "changed",
+    "verdict": "scope-changed",
+    "next_step": "review start",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: approved candidate drifted, then evaluator validation for --gate pre-commit denies with Relation/Next populated by gateVerdict (Slice 3)"
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "ambiguous",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "unknown",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-commit",
+    "relation": "unrelated",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-push",
+    "relation": "exact",
+    "verdict": "allow",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: seeded approved compact authority, committed the candidate, then validated --gate pre-push against an unchanged origin remote"
+  },
+  {
+    "gate": "pre-push",
+    "relation": "compatible_base_advance",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-push",
+    "relation": "provable_contraction",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-push",
+    "relation": "changed",
+    "verdict": "scope-changed",
+    "next_step": "review start",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: approved candidate drifted, then evaluator validation for --gate pre-push denies with Relation/Next populated by gateVerdict (Slice 3)"
+  },
+  {
+    "gate": "pre-push",
+    "relation": "ambiguous",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-push",
+    "relation": "unknown",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-push",
+    "relation": "unrelated",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "exact",
+    "verdict": "allow",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: seeded approved compact authority, committed the candidate, then validated --gate pre-pr against an unchanged origin remote base"
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "compatible_base_advance",
+    "verdict": "",
+    "explained": true,
+    "reason": "pre-pr's compatible_base_advance cell legitimately diverges from the other four gates by design (decision 7): compact_gate.go:91-102 forces baseMatches = true and admits a current-changes boundary proof for pre-PR specifically, so a pre-PR candidate can reach compatible_base_advance under conditions the other gates' identical relation never admits. This is a named, explained architectural divergence, not an un-investigated gap -- unlike the generic 'not wired yet' reason, which the other 26 remaining skip cells still carry."
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "provable_contraction",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "changed",
+    "verdict": "invalidated",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: three lineages reviewing the same path in sequence, each individually approved and committed; lineage-free evaluator validation for --gate pre-pr denies base-mismatch"
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "ambiguous",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "unknown",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "pre-pr",
+    "relation": "unrelated",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "release",
+    "relation": "exact",
+    "verdict": "allow",
+    "explained": false,
+    "reason": "driven via the retained historical in-process gate evaluator: seeded approved compact authority, then validated --gate release with the five release-boundary artifacts on the identical, unchanged candidate"
+  },
+  {
+    "gate": "release",
+    "relation": "compatible_base_advance",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "release",
+    "relation": "provable_contraction",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "release",
+    "relation": "changed",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "release",
+    "relation": "ambiguous",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "release",
+    "relation": "unknown",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  },
+  {
+    "gate": "release",
+    "relation": "unrelated",
+    "verdict": "",
+    "explained": true,
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's retained historical in-process gate evaluator fixture has not been built yet, not because the underlying mechanism is missing. This harness evaluates the existing gate algebra through the retained historical evaluator seam, not by reimplementing it, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+  }
+]

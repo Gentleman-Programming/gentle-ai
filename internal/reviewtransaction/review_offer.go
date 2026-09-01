@@ -1,0 +1,83 @@
+// Package reviewtransaction manages native review transaction state and exposes
+// the mode-only post-verification offer consumed by SDD status.
+package reviewtransaction
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+)
+
+// Offer is OfferReviewAfterVerify's complete mode-only result. Available
+// false never means "denied" — it means no offer is made for this call.
+type Offer struct {
+	Available bool
+}
+
+// OfferReviewAfterVerify is the post-verify offer point: after independent SDD
+// verification succeeds, it asks whether receipt-driven development should now
+// offer a fresh review.
+//
+// The kill switch is evaluated at its EFFECTIVE scope — global mode combined
+// with this clone's off-only local override, through the exact same
+// ResolveRDDMode path every other gate uses (internal/cli's review-validate
+// gates, AuthorizeRDDCandidate, AuthorizeRDDOperation) — never the global
+// scope alone. A clone can disable reviews locally without touching the
+// global switch (`gentle-ai review mode disable --scope clone`), and that
+// clone-local disable must be just as invisible to the offer as a global
+// disable: reading only the global scope missed exactly this case (a
+// reproduced regression, CRITICAL-3 of the corrective verify cycle).
+// Resolving the effective mode necessarily reads the clone-local override
+// file under the repository's Git common directory, but that read has no
+// side effect — it never writes, so the "zero side effects while disabled"
+// property this function must uphold is unaffected.
+//
+// When enabled, an offer remains a genuine invitation to start a review. It
+// does not inspect or replay compact receipt authority.
+func OfferReviewAfterVerify(ctx context.Context, repo string) (Offer, error) {
+	if err := ctx.Err(); err != nil {
+		return Offer{}, err
+	}
+	global, err := readGlobalRDDModeForOffer()
+	if err != nil {
+		return Offer{}, err
+	}
+	status, resolveErr := ResolveRDDMode(ctx, repo, global)
+	if resolveErr != nil {
+		return Offer{}, resolveErr
+	}
+	if !status.Enabled() {
+		return Offer{Available: false}, nil
+	}
+	return Offer{Available: true}, nil
+}
+
+// readGlobalRDDModeForOffer reads only the uncommitted global kill-switch
+// value, never the repository. It intentionally duplicates
+// internal/cli's readGlobalRDDMode rather than calling it: reviewtransaction
+// is the lower layer in this wave's package boundary (design's own note on
+// FreezeCandidateIdentity/authorizeReviewStart — cli-owned reuse is called
+// FROM cli INTO reviewtransaction, never the reverse), so this package
+// cannot import internal/cli without a cycle. Both read exactly
+// internal/state's persisted RDDMode field the same way.
+func readGlobalRDDModeForOffer() (RDDGlobalMode, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return RDDGlobalMode{}, err
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return RDDGlobalMode{}, nil
+		}
+		return RDDGlobalMode{}, err
+	}
+	global := RDDGlobalMode{Value: persisted.RDDMode}
+	if persisted.RDDModeRecordedAt != nil {
+		global.RecordedAt = persisted.RDDModeRecordedAt.UTC()
+	}
+	return global, nil
+}

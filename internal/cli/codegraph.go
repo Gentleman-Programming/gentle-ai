@@ -7,11 +7,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var (
 	codeGraphGitTopLevel = defaultCodeGraphGitTopLevel
-	codeGraphInit        = func(name string, args ...string) error { return exec.Command(name, args...).Run() }
+	codeGraphInit        = func(name string, args ...string) error {
+		cmd := exec.Command(name, args...)
+		system.EnsureCommandDir(cmd)
+		return cmd.Run()
+	}
 	codeGraphUserHomeDir = os.UserHomeDir
 	codeGraphTempDir     = os.TempDir
 )

@@ -26,6 +26,24 @@ RUN echo 'DisableSandbox' >> /etc/pacman.conf && \
     && pacman -Scc --noconfirm
 
 # ---------------------------------------------------------------------------
+# Agent runtimes the E2E suite drives through the real install pipeline
+# ---------------------------------------------------------------------------
+# Gentle-AI itself no longer installs agent runtimes (agentInstallStep in
+# internal/cli/run.go refuses instead — see PR #2450/#2458). This suite
+# exercises the install pipeline end to end for these agents, so the test
+# image provisions what it needs to test, same as any other test dependency
+# — the same reasoning already applied to the organic-runtime-e2e job in
+# .github/workflows/ci.yml. OpenCode is pinned to match that job and
+# internal/versions.OpenCode, the one runtime with a real version owner.
+# The rest advise "latest" in gentle-ai's own display-only refusal text (see
+# each adapter's InstallCommand), so there is no pin to reuse here either.
+RUN npm install --global opencode-ai@1.18.10 && \
+    npm install --global @anthropic-ai/claude-code@latest && \
+    npm install --global @openai/codex@latest && \
+    npm install --global @google/gemini-cli@latest && \
+    npm install --global @qwen-code/qwen-code@latest
+
+# ---------------------------------------------------------------------------
 # Create non-root test user with passwordless sudo
 # ---------------------------------------------------------------------------
 RUN useradd -m -s /bin/bash testuser && \

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type Availability string
@@ -84,6 +87,8 @@ func (fn RunnerFunc) Run(name string, args ...string) error { return fn(name, ar
 var (
 	codeGraphPackageLookPath = exec.LookPath
 	codeGraphPnpmGlobalBin   = defaultPnpmGlobalBin
+	codeGraphCLIUsable       = defaultCodeGraphCLIUsable
+	codeGraphWSL             = defaultCodeGraphWSL
 )
 
 var definitions = []Definition{
@@ -175,9 +180,30 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 
 	targets := detectedCodeGraphTargets(homeDir)
+	// The target ids come from a compatibility table written against
+	// codeGraphUpstreamVersion. Upstream rejects the whole comma-separated
+	// list when it does not recognise a single id, so passing them to an
+	// older CodeGraph takes down the targets it does support along with the
+	// ones it does not. When the installed CLI is provably older, drop the
+	// ids and let CodeGraph select targets itself instead of guessing which
+	// of ours it understands. A CLI that is not installed yet is exempt: the
+	// install command below fetches @latest, which meets the contract.
+	droppedBlindTargets := false
+	if before.CLI == AvailabilityAvailable && len(targets) > 0 {
+		if installed, ok := codeGraphInstalledVersion(before.CLIPath); ok && codeGraphVersionLess(installed, codeGraphUpstreamVersion) {
+			targets = nil
+			droppedBlindTargets = true
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
+				installed, codeGraphUpstreamVersion))
+		}
+	}
 	commands := make([][]string, 0, 2)
-	if len(targets) > 0 {
+	switch {
+	case len(targets) > 0:
 		commands = append(commands, []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"})
+	case droppedBlindTargets:
+		commands = append(commands, []string{"codegraph", "install", "--yes"})
 	}
 	if before.CLI != AvailabilityAvailable {
 		var err error
@@ -189,13 +215,20 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 			commands = commands[:1]
 		}
 	}
-	for _, command := range commands {
+	for index, command := range commands {
 		if len(command) == 0 {
 			continue
 		}
 		result.CommandsRun = append(result.CommandsRun, strings.Join(command, " "))
 		if err := runner.Run(command[0], command[1:]...); err != nil {
 			return rollback(fmt.Errorf("run %q: %w", strings.Join(command, " "), err))
+		}
+		if before.CLI != AvailabilityAvailable && index == 0 {
+			afterPackageInstall := DetectStatus(id, homeDir, detector)
+			result.StatusAfter = &afterPackageInstall
+			if afterPackageInstall.CLI != AvailabilityAvailable {
+				return rollback(fmt.Errorf("CodeGraph package installation did not leave a runnable codegraph CLI available"))
+			}
 		}
 	}
 	if _, err := ReconcileOpenCodeCodeGraph(homeDir, runner); err != nil {
@@ -293,13 +326,40 @@ func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) S
 	if detector == nil {
 		detector = DetectorFunc(exec.LookPath)
 	}
-	if path, err := detector.LookPath(def.CommandName); err == nil && strings.TrimSpace(path) != "" {
+	if path, err := detector.LookPath(def.CommandName); err == nil && strings.TrimSpace(path) != "" && codeGraphCLIUsable(path) {
 		status.CLI = AvailabilityAvailable
 		status.CLIPath = path
 	}
 	status.Agents = detectCodeGraphAgents(homeDir)
 	status.FollowUps = append(status.FollowUps, "CodeGraph markers can vary by upstream version; detection currently checks conservative MCP entries and instruction markers containing codegraph.")
 	return status
+}
+
+// defaultCodeGraphCLIUsable rejects only the Windows npm launcher namespace
+// exposed to WSL. Admission intentionally does not inspect or execute the
+// detector result: callers may supply a valid injected path that is absent on
+// this machine, and a status read must not run an unbounded subprocess.
+func defaultCodeGraphCLIUsable(path string) bool {
+	if !codeGraphWSL() {
+		return true
+	}
+	return !isWSLWindowsNpmShim(path)
+}
+
+func isWSLWindowsNpmShim(path string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(filepath.Clean(path), "\\", "/"))
+	mountedPath := strings.TrimPrefix(normalized, "/mnt/")
+	drive, _, mounted := strings.Cut(mountedPath, "/")
+	if !mounted || len(drive) != 1 || drive[0] < 'a' || drive[0] > 'z' {
+		return false
+	}
+	return strings.HasSuffix(normalized, "/appdata/roaming/npm/codegraph") ||
+		strings.HasSuffix(normalized, "/appdata/roaming/npm/codegraph.cmd") ||
+		strings.HasSuffix(normalized, "/appdata/roaming/npm/codegraph.ps1")
+}
+
+func defaultCodeGraphWSL() bool {
+	return runtime.GOOS == "linux" && (strings.TrimSpace(os.Getenv("WSL_INTEROP")) != "" || strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "")
 }
 
 func (s Status) CodeGraphReconcileSatisfied() bool {
@@ -463,7 +523,9 @@ func CodeGraphCommandsForDetectorAndTargets(detector Detector, targets []string)
 }
 
 func defaultPnpmGlobalBin() (string, error) {
-	output, err := exec.Command("pnpm", "bin", "-g").CombinedOutput()
+	command := exec.Command("pnpm", "bin", "-g")
+	system.EnsureCommandDir(command)
+	output, err := command.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {

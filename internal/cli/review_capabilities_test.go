@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const capabilityFixtureExecutable = "gentle-ai capability fixture\n"
@@ -83,6 +84,135 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	}
 }
 
+func TestReviewCapabilitiesV23ArtifactRemainsReadable(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.3.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ReviewCapabilitiesResult
+	if err := json.Unmarshal(fixture, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
+		t.Fatalf("v2.3 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
+	}
+	if got.Schema != ReviewIntegrationCapabilitiesSchemaV23 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 3}) ||
+		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
+		t.Fatalf("v2.3 capabilities artifact surface = %#v", got)
+	}
+	if !slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV4) || slices.Contains(got.Schemas, ReviewIntegrationStartSchemaV3) {
+		t.Fatalf("v2.3 capabilities must advertise start/v4 instead of start/v3: %v", got.Schemas)
+	}
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.3.schema.json", ReviewIntegrationCapabilitiesSchemaIDV23, fixture)
+	var malformed map[string]any
+	if err := json.Unmarshal(fixture, &malformed); err != nil {
+		t.Fatal(err)
+	}
+	features := malformed["features"].(map[string]any)
+	optional := features["optional"].([]any)
+	optional[0].(map[string]any)["requires"] = []any{"unknown_required_feature"}
+	if err := schema.Validate(malformed); err == nil {
+		t.Fatal("v2.3 schema accepted an unknown required feature")
+	}
+}
+
+func TestReviewCapabilitiesV24AdvertisementIsCurrent(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV2}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var got ReviewCapabilitiesResult
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Schema != "gentle-ai.review-integration.capabilities/v2.4" || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 4}) ||
+		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV5) || !slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV6) ||
+		!slices.Contains(got.Schemas, "gentle-ai.review-intended-untracked-selection/v1") || !slices.Contains(got.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(got.Schemas, ReviewIntegrationConsentSchemaV3) ||
+		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) {
+		t.Fatalf("current v2 capabilities advertisement = %#v", got)
+	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.4.schema.json", ReviewIntegrationCapabilitiesSchemaIDV24, output.Bytes())
+}
+
+func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Schema   string                     `json:"schema"`
+		Protocol ReviewCapabilitiesProtocol `json:"protocol"`
+	}
+	if err := json.Unmarshal(fixture, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.Schema != ReviewIntegrationCapabilitiesSchemaV22 || identity.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 2}) {
+		t.Fatalf("v2.2 capabilities identity = %#v", identity)
+	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
+}
+
+func TestReviewCapabilitiesV21ArtifactRemainsReadable(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.1.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Schema   string                     `json:"schema"`
+		Protocol ReviewCapabilitiesProtocol `json:"protocol"`
+	}
+	if err := json.Unmarshal(fixture, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.Schema != ReviewIntegrationCapabilitiesSchemaV21 || identity.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 1}) {
+		t.Fatalf("v2.1 capabilities identity = %#v", identity)
+	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.1.schema.json", ReviewIntegrationCapabilitiesSchemaIDV21, fixture)
+}
+
+func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []byte) *jsonschema.Schema {
+	t.Helper()
+	root := filepath.Join("..", "..", "contracts", "review-integration")
+	v14, err := os.ReadFile(filepath.Join(root, "v1", "schemas", "capabilities-v1.4.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v23, err := os.ReadFile(filepath.Join(root, "v2", "schemas", "capabilities-v2.3.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := os.ReadFile(filepath.Join(root, "v2", "schemas", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	for uri, payload := range map[string][]byte{
+		"https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json": v14,
+		"https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.3.schema.json": v23,
+		id: capabilities,
+	} {
+		var document any
+		if err := json.Unmarshal(payload, &document); err != nil {
+			t.Fatal(err)
+		}
+		if err := compiler.AddResource(uri, document); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema, err := compiler.Compile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("%s rejected fixture: %v", name, err)
+	}
+	return schema
+}
+
 func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -90,8 +220,9 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "supported", contract: ReviewIntegrationContractV1},
+		{name: "native Git", contract: ReviewIntegrationContractV2},
 		{name: "empty", contract: "", wantErr: true},
-		{name: "future major", contract: "gentle-ai.review-integration/v2", wantErr: true},
+		{name: "future major", contract: "gentle-ai.review-integration/v3", wantErr: true},
 		{name: "surrounding whitespace", contract: " " + ReviewIntegrationContractV1, wantErr: true},
 	}
 	for _, tt := range tests {
@@ -103,12 +234,13 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 	}
 	outside := t.TempDir()
 	var output bytes.Buffer
-	err := RunReview([]string{"capabilities", "--contract", "gentle-ai.review-integration/v2"}, &output)
-	if err == nil {
-		t.Fatalf("unsupported contract result = %q, %v", output.String(), err)
+	err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV2}, &output)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if failure := decodeReviewIntegrationFailure(t, output.Bytes()); failure.Code != "unsupported_contract" {
-		t.Fatalf("unsupported contract failure = %#v", failure)
+	var nativeGit ReviewCapabilitiesResult
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV24 {
+		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)
 	if readErr != nil || len(entries) != 0 {
@@ -132,14 +264,14 @@ func TestReviewCapabilitiesAdvertisesOnlyNativeSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantOperations := []string{
-		"review.bind_sdd", "review.capabilities", "review.finalize", "review.repair", "review.retry_final_verification", "review.start", "review.status", "review.validate",
+		"review.capabilities", "review.repair", "review.start", "review.status", "review.validate",
 	}
 	wantGates := []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"}
 	wantProjections := []string{"staged", "workspace"}
 	if !slices.Equal(result.Operations, wantOperations) || !slices.Equal(result.Gates, wantGates) || !slices.Equal(result.Projections, wantProjections) {
 		t.Fatalf("capability surface = operations %v gates %v projections %v", result.Operations, result.Gates, result.Projections)
 	}
-	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchema) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) || !slices.Contains(result.Schemas, reviewtransaction.FinalVerificationIncidentSchema) {
+	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchemaV2) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) {
 		t.Fatalf("capability schemas do not advertise the negotiated provider surface: %v", result.Schemas)
 	}
 	if result.Bootstrap == nil || result.Bootstrap.Command != "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition" ||
@@ -180,7 +312,7 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateFinalVerificationContractSchema(t, "capabilities-v1.5.schema.json", fixture)
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "capabilities-v1.5.schema.json"), fixture)
 	decoder := json.NewDecoder(bytes.NewReader(fixture))
 	decoder.DisallowUnknownFields()
 	var result ReviewCapabilitiesResult
@@ -496,13 +628,10 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 	}
 	wantMandatory := []ReviewCapabilityFeature{
 		{Name: "compact_v2_authority", Supported: true, Requires: []string{}},
-		{Name: "exact_receipt_replay", Supported: true, Requires: []string{"compact_v2_authority"}},
-		{Name: "five_delivery_gates", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "immutable_snapshot", Supported: true, Requires: []string{}},
 		{Name: "legacy_v1_target_scoped_read_only", Supported: true, Requires: []string{"target_scoped_status"}},
 		{Name: "repository_independent_capabilities", Supported: true, Requires: []string{}},
 		{Name: "restart_safe_projection", Supported: true, Requires: []string{"target_scoped_status"}},
-		{Name: "sdd_receipt_binding", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "target_scoped_status", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 		{Name: "uniform_failure_envelope", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 	}
@@ -510,13 +639,10 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "base_ref_workspace_overlay", Supported: true, Requires: []string{"immutable_snapshot", "restart_safe_projection"}},
 		{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 		{Name: "classified_authority_repair", Supported: true, Requires: []string{"native_next_transition", "uniform_failure_envelope"}},
-		{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
 		{Name: "native_frozen_candidate_context", Supported: true, Requires: []string{"immutable_snapshot"}},
 		{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "native_next_transition", Supported: true, Requires: []string{"target_scoped_status"}},
-		{Name: "one_shot_final_verification_retry", Supported: true, Requires: []string{"compact_v2_authority", "exact_receipt_replay", "native_next_transition"}},
 		{Name: "opaque_repository_context", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
-		{Name: "outcome_bound_verification_evidence", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "provider_artifact_admission", Supported: true, Requires: []string{"compact_v2_authority", "native_frozen_candidate_context", "opaque_repository_context"}},
 		{Name: "provider_targeted_validation_request", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
@@ -561,15 +687,14 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 	document := string(payload)
 	for _, required := range []string{
 		"`stop`", "`legacy_v1_read_only`", "`mutation_outcome`", "`not_started`", "`unknown`", "`committed`",
-		"Legacy-v1 never reports `publication_pending`", "retry and replay disabled",
-		"Historical `ordinary_4r` legacy status omits `frozen`", "START, finalize, BIND-SDD, invalidation, and direct append",
-		"`native_frozen_candidate_context`", "`candidate_diff`", "`changed_path_manifest`",
+		"retry and replay disabled", "Historical `ordinary_4r` legacy status omits `frozen`",
+		"START, BIND-SDD, invalidation, and direct append",
+		"`native_frozen_candidate_context`", "`base_tree`", "`candidate_tree`", "`changed_path_manifest`",
 		"`opaque_repository_context`", "`provider_targeted_validation_request`",
 		"`provider_artifact_admission`", "`validating_result_reopen`", "`recovered_correction_evidence`",
-		"`one_shot_final_verification_retry`", "`outcome_bound_verification_evidence`", "`review.retry_final_verification`", "`procedural_tooling_failure`",
 		"`artifact_subjects`", "`subject_hash`", "`admission_decision: completed`",
 		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
-		"25-second aggregate budget", "15-second budget", "20-second budget", "one-second wait delay",
+		"25-second aggregate budget", "120-second budget", "180-second budget", "one-second wait delay",
 		"Persistent compact `LOCK` JSON is advisory diagnostics", "`context.scope_change`", "`review.recover`",
 	} {
 		if !strings.Contains(document, required) {

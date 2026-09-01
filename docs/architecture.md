@@ -35,7 +35,7 @@ internal/
   verify/                  Post-apply health checks + reporting
   tui/                     Bubbletea TUI (Rose Pine theme)
     styles/  screens/
-scripts/                   Installer scripts (bash + PowerShell)
+scripts/                   Installer, release, and maintainer scripts (install.sh, release preflights, cross-lane battery)
 e2e/                       Docker-based E2E tests (Ubuntu + Arch)
 testdata/                  Golden test fixtures
 ```

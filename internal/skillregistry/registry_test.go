@@ -58,6 +58,77 @@ description: React patterns
 	}
 }
 
+func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	skillPath := filepath.Join(cwd, "skills", "react", "SKILL.md")
+	firstContent := "---\nname: react\ndescription: first\n---\n"
+	secondContent := "---\nname: react\ndescription: other\n---\n"
+	writeSkill(t, skillPath, firstContent)
+
+	firstInfo, err := os.Stat(skillPath)
+	if err != nil {
+		t.Fatalf("stat original skill: %v", err)
+	}
+	first, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("first Regenerate() error = %v", err)
+	}
+	if !first.Regenerated || first.Reason != "fingerprint-changed" {
+		t.Fatalf("first result = %#v", first)
+	}
+
+	writeSkill(t, skillPath, secondContent)
+	if err := os.Chtimes(skillPath, firstInfo.ModTime(), firstInfo.ModTime()); err != nil {
+		t.Fatalf("restore skill timestamps: %v", err)
+	}
+	secondInfo, err := os.Stat(skillPath)
+	if err != nil {
+		t.Fatalf("stat changed skill: %v", err)
+	}
+	if secondInfo.Size() != firstInfo.Size() || !secondInfo.ModTime().Equal(firstInfo.ModTime()) {
+		t.Fatalf("test setup changed metadata: first=%+v second=%+v", firstInfo, secondInfo)
+	}
+
+	changed, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("changed Regenerate() error = %v", err)
+	}
+	if !changed.Regenerated || changed.Reason != "fingerprint-changed" {
+		t.Fatalf("changed result = %#v", changed)
+	}
+	if registry := readFile(t, filepath.Join(cwd, RegistryRelPath)); !strings.Contains(registry, "| `react` | other | project |") {
+		t.Fatalf("registry did not reflect changed skill content:\n%s", registry)
+	}
+
+	unchanged, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("unchanged Regenerate() error = %v", err)
+	}
+	if unchanged.Regenerated || unchanged.Reason != "cache-hit" {
+		t.Fatalf("unchanged result = %#v", unchanged)
+	}
+}
+
+func TestFingerprintChangesForFileSetAndIsOrderIndependent(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first", "SKILL.md")
+	secondPath := filepath.Join(dir, "second", "SKILL.md")
+	writeSkill(t, firstPath, "first")
+	writeSkill(t, secondPath, "second")
+
+	forward := Fingerprint([]string{firstPath, secondPath})
+	if reverse := Fingerprint([]string{secondPath, firstPath}); reverse != forward {
+		t.Fatalf("Fingerprint() depends on input order: forward=%s reverse=%s", forward, reverse)
+	}
+	if err := os.Remove(secondPath); err != nil {
+		t.Fatalf("remove skill: %v", err)
+	}
+	if withoutSecond := Fingerprint([]string{firstPath}); withoutSecond == forward {
+		t.Fatal("Fingerprint() did not change after deleting a skill")
+	}
+}
+
 func TestRegenerateForceBypassesCacheAndProjectSkillWins(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()

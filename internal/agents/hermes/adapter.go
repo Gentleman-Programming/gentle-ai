@@ -66,10 +66,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentHermes)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, AgentNotInstallableError{Agent: a.Agent()}
 }

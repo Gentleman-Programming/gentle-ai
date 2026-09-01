@@ -18,19 +18,27 @@
 ---
 
 > [!IMPORTANT]
-> **RDD is unstable.** Receipt-Driven Development started in `gentle-ai` `v1.47.0`. Every release from `v1.47.0` onward is part of the RDD development line and may change while remaining issues are fixed.
+> **Receipt-Driven Development (RDD) is opt-in and provides bounded review evidence.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and once RDD is enabled every route can converge on structural proof and an informational bounded-review outcome. Ordinary repository policy owns delivery. RDD is off until you enable it with `gentle-ai review mode enable --scope global`.
 >
-> For a stable installation without RDD, use the last version before RDD, `v1.46.0`:
+> The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` is the stable channel:
+>
 > ```bash
-> go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > ```
-> To test the latest released RDD build, use `@latest`. Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
 >
-> The `v1.46.0` pin above uses the unsuffixed import path; every `v2.x` install uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`, because Go requires the `/vN` suffix for major version 2 and above.
+> To opt into the current prerelease, [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), install its exact tag:
+>
+> ```bash
+> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+> ```
+>
+> Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
+>
+> Note the `/v2` suffix: Go requires it for major version 2 and above. Releases before `v2.0.0` use the unsuffixed import path.
 
 ## What It Does
 
-Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is an **ecosystem configurator** that equips the AI coding agent(s) you already use with persistent memory, Spec-Driven Development (SDD), curated skills, MCP servers, model routing, a teaching-oriented persona, and bounded native review.
+Gentle-AI is NOT an AI agent installer. It adapts the agent runtime(s) already on your machine; it never installs one for you. If a selected agent isn't detected, Gentle-AI refuses and names the exact command you'd run yourself instead. It is an **ecosystem configurator** that equips the AI coding agent(s) you already use with persistent memory, Spec-Driven Development (SDD), curated skills, MCP servers, model routing, a teaching-oriented persona, and bounded native review.
 
 **Before**: "I installed Claude Code / OpenCode / Cursor, but it's just a chatbot that writes code."
 
@@ -71,7 +79,7 @@ Every configured agent receives the same outcome-first routing, even when the op
 | Understanding needs 4+ files, reading prepares a write, broad research is needed, or a writer changes 2+ non-trivial files | Delegate the narrow exploration or one focused writer without creating SDD state. |
 | Durable proposal, spec, design, and task artifacts would materially reduce substantial ambiguity | Offer optional SDD; select it only after an explicit request or an accepted proposal. |
 | A candidate is ready for review | Freeze the exact bytes and derive review effort from evidence, never size alone. Interactive starts ask once per clone before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. |
-| Commit, push, PR, or release | Validate the same content-bound receipt at the applicable delivery gate; never silently reopen review or create another budget. |
+| Commit, push, PR, or release | Follow ordinary repository policy. Review outcomes are informational and never authorize, block, or govern delivery. |
 | Scope changes or an operation is interrupted | Use provider-owned status, recovery, and reconciliation; do not infer authority or replay safety from narration. |
 
 Implementation routing does not decide review strength, and per-action test, build, install, or review workers do not change the selected route. Native commands own repository identity, candidate scope, lifecycle transitions, receipts, and safe continuations. See [Organic Implementation Routing](docs/trigger-rules.md), the [Organic RDD architecture](docs/architecture/organic-rdd.md), and the [review authority threat model](docs/review-authority-threat-model.md).
@@ -100,16 +108,19 @@ go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > [!WARNING]
 > Windows source builds and CI/runtime tests remain supported, but official Windows binary distribution and Scoop are temporarily unavailable. Windows installation and upgrades require Go 1.25.10+ and fail closed to source-install guidance; they never download an unsigned Gentle AI executable or execute a remote update script.
 
+> [!IMPORTANT]
+> After replacing or upgrading the `gentle-ai` binary, run `gentle-ai sync` to refresh its managed assets. See the [sync and upgrade reference](docs/usage.md#sync).
+
 ### Configure project context
 
 Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:
 
 | Command                            | What it does                                                                | When to re-run                                                                 |
 | ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `/sdd-init`                        | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
+| `/sdd-init` (`/gentle-sdd-init` in Claude Code) | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
 | `gentle-ai skill-registry refresh` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
 
-These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Codex, Claude Code, OpenCode, and Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
+These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. In Claude Code every SDD command carries the `gentle-sdd-` prefix (`/gentle-sdd-init`, `/gentle-sdd-new`, `/gentle-sdd-continue`, and so on) because Claude Code resolves a same-named delegate-only skill before a command; the other runtimes keep the bare `/sdd-*` names. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Codex, Claude Code, OpenCode, and Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
 
 Run `gentle-ai doctor` at any time for a read-only health check of your ecosystem (tool binaries, `state.json`, Engram reachability, disk space).
 
@@ -119,20 +130,21 @@ Run `gentle-ai doctor` at any time for a read-only health check of your ecosyste
 **Homebrew (macOS / Linux)**
 
 ```bash
-brew tap Gentleman-Programming/homebrew-tap
-brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebrew tap trust
+brew tap gentleman-programming/tap
+brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, if Homebrew requires trust
 brew install gentle-ai
 ```
 
-**Go install, stable pin (any platform with Go 1.25.10+)**
+To install several tools from this tap, you can instead run `brew trust gentleman-programming/tap`. This broader option trusts all current and future formulas, casks, and external commands published in the tap.
+
+**Go install: stable channel (any platform with Go 1.25.10+)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 ```
 
-The stable pin keeps the unsuffixed import path because `v1.46.0` predates the
-`/v2` module path. Releases on the `v2.x` line install from
-`github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`.
+Note the `/v2` in the module path: Go requires it for major version 2 and
+above. Releases before `v2.0.0` use the unsuffixed path.
 
 **Scoop (Windows)** — temporarily unavailable while official Windows binary distribution is held for public-trust Authenticode signing. Use the Windows `go install` command above.
 
@@ -144,7 +156,7 @@ gentle-ai install --scope=workspace
 
 Workspace scope applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
 
-**Beta channel** — use only to test unreleased `main` builds. It requires Go 1.25.10+:
+**Unreleased development channel (`main`)** — use only to test changes that are not part of a release. The managed beta installer tracks `main`; it requires Go 1.25.10+:
 
 ```bash
 # macOS / Linux
@@ -154,27 +166,50 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
-### RDD version policy
-
-Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions. Every release from `v1.47.0` onward is part of the unstable RDD development line. New releases will continue improving RDD until the project declares the line stable. The stable version for normal use without RDD is the last release before RDD, `v1.46.0`.
-
-Use `@latest` when you want to try the latest released RDD build. Use `@main` only when you explicitly want unreleased RDD development changes. The negotiated public review contract was published in `v2.1.6`.
-
-**Stable version (`v1.46.0`)**
+To update a beta installation later, preserve the beta channel:
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
-gentle-ai version
+# macOS / Linux
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
 ```
 
-**Latest released RDD build (unstable)**
+> [!NOTE]
+> **Beta upgrades & Go proxy caching**: On macOS, Linux, and Windows with Go on `PATH`, `gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools (Engram, plugins, etc.). If you re-run an installer instead, pass beta explicitly because both installers default to stable:
+>
+> ```bash
+> # macOS / Linux
+> curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+>
+> # Windows (PowerShell)
+> $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+> ```
+>
+> If a manual `go install ...@main` does not pick up recent commits because `proxy.golang.org` is stale, bypass it with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
+
+### RDD version policy
+
+Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. Those are historical milestones; the negotiated public review contract was published in `v2.1.6`.
+
+The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). The current prerelease is [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1). `main` is unreleased development.
+
+**Stable channel (`@latest`, currently `v2.3.0`)**
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
-**Unreleased RDD development build (`main`)**
+**Prerelease channel (`v2.4.0-rc.1`)**
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+gentle-ai version
+```
+
+**Unreleased development (`main`)**
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
@@ -191,31 +226,112 @@ The managed installer tracks the channel's latest version and does not accept an
 
 1. **Install and configure.** Run the installer, select the agents and components you want, then open your agent in a project.
 2. **Use the smallest implementation route.** Keep bounded work direct, delegate actions that need fresh context, and use SDD only after an explicit request or an accepted proposal. SDD artifacts can live in **Engram** for cross-session memory, **OpenSpec** for versioned files, or **hybrid** for both.
-3. **Build with discipline.** `/sdd-init` detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
-4. **Review one candidate.** After implementation, bounded native review freezes the candidate and issues one content-bound receipt. Commit, push, and PR validate that same receipt. Releases validate native authority and its receipt, unless the protected-main fast path has the exact tag/current `origin/main` SHA, exact-SHA successful CI, a remote-head recheck, and no fresh risk.
+3. **Build with discipline.** `/sdd-init` (`/gentle-sdd-init` in Claude Code) detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
+4. **Review one candidate.** After implementation, bounded native review freezes the candidate and reports an informational outcome. Commit, push, PR, and release remain separate decisions under ordinary repository policy; review does not authorize, block, or govern them.
 
-> **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native authority and delivery gates independently derive what may be trusted.
+> **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native review records bounded evidence while ordinary repository policy owns delivery.
 
-5. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
+1. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
 
    ```bash
    gentle-ai upgrade
    gentle-ai sync
    ```
 
-### Control review-driven development
+### The flow at a glance
 
-Review mode is user-owned and available independently of the review lifecycle:
+Once you enable it, both implementation routes can converge on RDD: a bounded native review freezes the candidate and reports an informational outcome — review is never reopened for unchanged content. RDD is opt-in, and ordinary repository policy owns delivery whether it is on or off.
+
+**Organic route (no SDD)** — the agent picks the smallest useful route and RDD enters at the end, over the frozen candidate:
+
+```mermaid
+flowchart TD
+    A["User requests a change<br/>(Claude Code · OpenCode · Codex...)"] --> B{"Implementation<br/>route"}
+    B -->|"decide/verify<br/>1–3 files"| C["Direct inline"]
+    B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
+    C --> E["Implementation + tests"]
+    D --> E
+    E --> F{"RDD enabled?<br/>(user-owned, opt-in)"}
+    F -->|"off (default)"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
+    F -->|"on (explicitly enabled)"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
+    G --> H{"Risk frozen<br/>at START"}
+    H -->|"low"| I["Structural readback<br/>0 lenses · silent"]
+    H -->|"standard"| J["1 focus lens<br/>+ consent"]
+    H -->|"high"| K["Canonical 4R + consent + forecast<br/>Risk · Readability · Reliability · Resilience"]
+    J --> L["Reviewers inspect the immutable candidate<br/>(review inspect-candidate)"]
+    K --> L
+    L --> M{"Severe candidate-caused<br/>findings?"}
+    I --> N["Review outcome: approved<br/>(informational)"]
+    M -->|"no"| N
+    M -->|"yes"| O["One bounded correction<br/>(frozen budget)"]
+    O --> P["Fix validator<br/>(read-only, immutable trees)"]
+    P -->|"passes"| N
+    P -->|"fails with evidence"| Q["Escalated"]
+    P -->|"no access to the diff"| R["Inconclusive: attempt not<br/>consumed, capture again"]
+    R --> P
+    Q --> S["review recover<br/>(authorized successor)"]
+    N --> T["Ordinary repository policy"]
+    T --> U["Commit → Push → PR"]
+    Z --> U
+
+    style N fill:#2D4F67,color:#fff
+    style Q fill:#B8860B,color:#fff
+    style U fill:#2D4F67,color:#fff
+```
+
+**SDD route** — durable planning artifacts first, then apply, independent verify, and an optional RDD review offer; archive and delivery follow ordinary repository policy:
+
+```mermaid
+flowchart TD
+    A["User: sdd-new / sdd-explore<br/>(or sdd-ff to fast-forward planning)"] --> B["Explore<br/>investigate codebase and approaches"]
+    B --> C["Propose<br/>intent · scope · approach"]
+    C --> D{"User approves<br/>the proposal?"}
+    D -->|"no"| B
+    D -->|"yes"| E["Spec<br/>requirements + scenarios"]
+    E --> F["Design<br/>architecture decisions"]
+    F --> G["Tasks<br/>ordered deliverable checklist"]
+    G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
+    H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
+        Q -->|"passes"| I["Optional RDD review offer"]
+        Q -->|"fails"| H
+
+    subgraph RDD["RDD — same machine as the organic route"]
+        I --> J{"Risk"}
+        J -->|"low"| K["Structural readback"]
+        J -->|"standard / high"| L["1 lens or 4R + consent"]
+        L --> M{"Severe findings?"}
+        M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
+        M -->|"no"| O["Review outcome: approved<br/>(informational)"]
+        K --> O
+        N -->|"validates"| O
+        N -->|"fails"| P["Escalated → recover"]
+    end
+
+    O --> R["Archive<br/>merge delta-specs · close the cycle"]
+    Q -->|"fails"| H
+    R --> S["Ordinary repository policy"]
+    S --> T["Commit → Push → PR"]
+
+    style O fill:#2D4F67,color:#fff
+    style P fill:#B8860B,color:#fff
+    style T fill:#2D4F67,color:#fff
+```
+
+Size, file count, or perceived risk never select SDD on their own — only an explicit request or an accepted proposal does. Either way, one candidate gets one review, one possible correction, and one receipt.
+
+### Control receipt-driven development
+
+Review mode is user-owned and available independently of the review lifecycle. **Receipt-driven development is opt-in: it is off until you turn it on.**
 
 ```bash
 gentle-ai review mode status --cwd .
+gentle-ai review mode enable --scope global --cwd .
 gentle-ai review mode disable --cwd .
-gentle-ai review mode enable --cwd .
 ```
 
-`status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
+`status` is read-only. With no source expressing an opinion the effective mode is `off`, reported as decided by `default`; only an explicit global enable turns review on. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on, so `--scope global` is the only way in. Enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is off, native review does not run. Review outcomes are informational in every mode, and ordinary repository policy decides delivery without fabricated approval.
 
-The current unstable RDD line still has two limitations, both about SDD while review mode is disabled. The SDD pre-verify status path can still require review. And the native archive gate now defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
+Historical note: `v2.2.2` introduced the native `disabled/unmanaged` disposition. Current SDD status does not use that disposition: with review disabled, it skips review authority, emits no `reviewGate`, and pre-verify continues without routing to a review that cannot start. Archive and delivery proceed under ordinary repository policy; any present review outcome is informational.
 
 ### Release verification
 
@@ -338,10 +454,12 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 - **Reviewing a focused change?** Start with the [Organic RDD architecture](docs/architecture/organic-rdd.md) and [review authority threat model](docs/review-authority-threat-model.md).
 - **Maintaining Gentle AI?** Use the [Codebase Guide](docs/CODEBASE-GUIDE.md) to find package ownership and review boundaries.
 - **Using Pi?** Read [Pi Agent](docs/pi.md) for the `gentle-pi` harness, Pi commands, persona, and model assignments.
-- **Ready to contribute?** Check [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3Aapproved%22).
+- **Ready to contribute?** Start at the [Community Roadmap](docs/community-roadmap.md) — everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, approved and unclaimed. Then read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
 <div align="center">
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </div>
+
+> **Trademark notice:** The Gentle AI names and logos are trademarks of Alan Buscaglia. The MIT License applies to the code; it does not permit implying endorsement or official affiliation. See [TRADEMARKS.md](TRADEMARKS.md).

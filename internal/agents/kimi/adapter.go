@@ -115,10 +115,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentKimi)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	resolver := a.resolver
 	if resolver == nil {
@@ -235,6 +231,7 @@ Usage:
 Native SDD entrypoints:
   /skill:sdd-init
   /skill:sdd-explore
+  /skill:sdd-research
   /skill:sdd-propose
   /skill:sdd-spec
   /skill:sdd-design

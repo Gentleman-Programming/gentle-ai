@@ -54,7 +54,7 @@ Installed routing guidance MUST make the user-owned RDD kill switch discoverable
 
 #### Scenario: User asks to stop using RDD
 - GIVEN a configured agent whose installed routing guidance is present
-- WHEN the user asks to stop using review-driven development
+- WHEN the user asks to stop using receipt-driven development
 - THEN the agent runs `gentle-ai review mode disable` without arguing or proposing an alternative first
 - AND it keeps implementing through direct, delegated, or optional SDD
 

@@ -1,18 +1,12 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -20,656 +14,321 @@ type compactReviewerCaptureFixture struct {
 	store   CompactStore
 	state   CompactState
 	request CompactAdmittedReviewerResultRequest
-	path    string
 }
 
-func newCompactReviewerCaptureFixture(
-	t *testing.T,
-	lineage string,
-) compactReviewerCaptureFixture {
+func captureAdmittedCorrectionFinding(t *testing.T, store CompactStore, state CompactState, finding Finding) LensResult {
+	t.Helper()
+	frozen, err := (SnapshotBuilder{Repo: store.repo}).FrozenCandidateContext(t.Context(), state.InitialSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := state.SelectedLenses[0]
+	subject, err := NewArtifactSubject(state, state.CapturePhaseRevision, frozen, lens, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := LensResult{Lens: lens, Findings: []Finding{finding}, Evidence: []string{"inspected the complete frozen candidate scope"}}
+	inspection := ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: append([]string(nil), state.InitialSnapshot.Paths...)}
+	raw, err := json.Marshal(compactProviderReviewerResult{SubjectHash: subject.SubjectHash, Inspection: inspection, Lens: lens, Findings: result.Findings, Evidence: result.Evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := store.CaptureAdmittedReviewerResult(t.Context(), CompactAdmittedReviewerResultRequest{
+		ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+		FrozenContext: frozen, ArtifactSubject: subject, Inspection: inspection, Result: result,
+		CandidateCausalFindingIDs: []string{finding.ID}, RawPayload: append(raw, '\n'),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return capture.LensResult
+}
+
+func newCompactReviewerCaptureFixture(t *testing.T, lineage string) compactReviewerCaptureFixture {
 	t.Helper()
 	repo := initSnapshotRepo(t)
 	if err := os.MkdirAll(filepath.Join(repo, "internal"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(repo, "internal", "a.go")
-	if err := os.WriteFile(
-		path,
-		[]byte("package internal\n\nfunc Value() int { return 1 }\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(repo, "internal", name), []byte("package internal\n\nfunc Value() int { return 1 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	gitSnapshot(t, repo, "add", "--", "internal/a.go")
+	gitSnapshot(t, repo, "add", "--", "internal/a.go", "internal/b.go")
 	gitSnapshot(t, repo, "commit", "-m", "add go fixture")
-	if err := os.WriteFile(
-		path,
-		[]byte("package internal\n\nfunc Value() int { return 2 }\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(repo, "internal", name), []byte("package internal\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-
 	state := newCompactTestState(t, repo, lineage)
-	if len(state.SelectedLenses) != 1 ||
-		state.SelectedLenses[0] != LensReliability {
+	if len(state.SelectedLenses) != 1 || state.SelectedLenses[0] != LensReliability {
 		t.Fatalf("fixture lenses = %v", state.SelectedLenses)
 	}
-	store, err := CompactAuthoritativeStore(
-		context.Background(),
-		repo,
-		lineage,
-	)
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision, err := store.Replace("", "review/start", state)
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), state.InitialSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(
-		context.Background(),
-		state.InitialSnapshot,
-	)
+	subject, err := NewArtifactSubject(state, state.CapturePhaseRevision, frozen, LensReliability, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := NewArtifactSubject(
-		state,
-		revision,
-		frozen,
-		LensReliability,
-		0,
-		"",
-	)
+	inspection := ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: append([]string(nil), state.InitialSnapshot.Paths...)}
+	result := LensResult{Lens: LensReliability, Findings: []Finding{}, Evidence: []string{"inspected internal/a.go:1 against the complete frozen candidate"}}
+	raw, err := json.Marshal(compactProviderReviewerResult{SubjectHash: subject.SubjectHash, Inspection: inspection, Lens: subject.Lens, Findings: result.Findings, Evidence: result.Evidence})
 	if err != nil {
 		t.Fatal(err)
 	}
-	inspection := ArtifactInspection{
-		Status: ArtifactInspectionCompleted,
-		Paths:  append([]string(nil), state.InitialSnapshot.Paths...),
-	}
-	result := LensResult{
-		Lens:     LensReliability,
-		Findings: []Finding{},
-		Evidence: []string{
-			"inspected internal/a.go:1 against the complete frozen candidate",
-		},
-	}
-	raw, err := json.Marshal(compactProviderReviewerResult{
-		SubjectHash: subject.SubjectHash,
-		Inspection:  inspection,
-		Lens:        subject.Lens,
-		Findings:    result.Findings,
-		Evidence:    result.Evidence,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw = append(raw, '\n')
 	return compactReviewerCaptureFixture{
-		store: store,
-		state: state,
+		store: store, state: state,
 		request: CompactAdmittedReviewerResultRequest{
-			ExpectedRevision:          revision,
-			TargetIdentity:            state.InitialSnapshot.Identity,
-			FrozenContext:             frozen,
-			ArtifactSubject:           subject,
-			Inspection:                inspection,
-			Result:                    result,
-			CandidateCausalFindingIDs: []string{},
-			RawPayload:                raw,
+			ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+			FrozenContext: frozen, ArtifactSubject: subject, Inspection: inspection, Result: result,
+			CandidateCausalFindingIDs: []string{}, RawPayload: append(raw, '\n'),
 		},
-		path: filepath.Join(
-			store.Dir,
-			CompactReviewerResultsDir,
-			"00-"+LensReliability+".json",
-		),
 	}
 }
 
-func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
-	t *testing.T,
-) {
-	fixture := newCompactReviewerCaptureFixture(
-		t,
-		"native-admitted-reviewer",
-	)
-	got, err := fixture.store.CaptureAdmittedReviewerResult(
-		context.Background(),
-		fixture.request,
-	)
+// TestCompactReviewerResultSidecarOwnersAreAbsent prevents the retired result
+// directory from becoming a lifecycle owner again. Lens result bytes and their
+// digests live only in CompactState.AdmittedRoleResults.
+func TestCompactReviewerResultSidecarOwnersAreAbsent(t *testing.T) {
+	for _, source := range []string{
+		"compact_store.go",
+		"compact_reclaim.go",
+		filepath.Join("..", "cli", "review_opencode_transport.go"),
+	} {
+		payload, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatalf("read production owner %s: %v", source, err)
+		}
+		for _, forbidden := range []string{
+			"CompactReviewerResultsDir", "reviewer-results", "reviewResultArtifactPath",
+			"CompactIncidentsDir", "EnsureCompactIncidentsDir", "ResultDispositions",
+		} {
+			if strings.Contains(string(payload), forbidden) {
+				t.Fatalf("retired compact result owner %q remains in %s", forbidden, source)
+			}
+		}
+	}
+	if _, err := os.Stat("compact_result_disposition.go"); !os.IsNotExist(err) {
+		t.Fatalf("retired compact result disposition owner remains: %v", err)
+	}
+}
+
+func TestApprovedAcknowledgementHasNoImmediateBurnOrSidecarRevival(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, source := range []string{
+		filepath.Join(root, "internal", "cli", "review_facade.go"),
+		filepath.Join(root, "internal", "cli", "review_last_event_closure.go"),
+		filepath.Join(root, "internal", "cli", "review_next_transition.go"),
+		filepath.Join(root, "internal", "cli", "review_start_contract.go"),
+		filepath.Join(root, "internal", "cli", "review_status_contract.go"),
+		filepath.Join(root, "internal", "reviewtransaction", "compact_burn.go"),
+		filepath.Join(root, "scripts", "crosslane", "battery.go"),
+		filepath.Join(root, "bench", "journeys_wave3.go"),
+		filepath.Join(root, "bench", "journeys_provider_capture.go"), filepath.Join(root, "e2e", "organicruntime", "organic_runtime_test.go"),
+	} {
+		payload, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatalf("read current acknowledgement owner %s: %v", source, err)
+		}
+		for _, forbidden := range []string{"BurnApprovedCompactAuthority(", "IssueApprovedCompactAcknowledgement(", "burnApproved(", "requireAtomicLineageBurned", "requireBurnedApproval", "PublishReviewRepositoryContext", "CompactReviewerResultsDir", "EffectIntents", "lens-contexts", "rctx1_"} {
+			if strings.Contains(string(payload), forbidden) {
+				t.Fatalf("current acknowledgement owner %s revived forbidden %q", source, forbidden)
+			}
+		}
+	}
+	for _, schema := range []string{
+		filepath.Join(root, "contracts", "review-integration", "v2", "schemas", "start.schema.json"),
+		filepath.Join(root, "contracts", "review-integration", "v2", "schemas", "status-v5.schema.json"),
+		filepath.Join(root, "contracts", "review-integration", "v2", "schemas", "last-event-closure.schema.json"),
+	} {
+		payload, err := os.ReadFile(schema)
+		if err != nil {
+			t.Fatalf("read acknowledgement schema %s: %v", schema, err)
+		}
+		for _, forbidden := range []string{"review-integration/v3", "consent/v4", "consent-v4"} {
+			if strings.Contains(string(payload), forbidden) {
+				t.Fatalf("acknowledgement schema %s expanded prohibited protocol %q", schema, forbidden)
+			}
+		}
+	}
+}
+
+func TestCorrectionPlanRequestUsesAdmittedCaptureOverLegacyProjections(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "correction-plan-admitted-capture")
+	finding := Finding{
+		ID: "R3-001", Lens: strings.TrimPrefix(fixture.state.SelectedLenses[0], "review-"), Location: "internal/a.go:1", Severity: "CRITICAL",
+		Claim: "candidate needs correction", ProofRefs: []string{"changed hunk causes failure"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced,
+	}
+	result := captureAdmittedCorrectionFinding(t, fixture.store, fixture.state, finding)
+	record, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ResultHash == "" ||
-		got.ResultHash != LensResultHash(got) ||
-		got.Lens != LensReliability {
-		t.Fatalf("admitted result = %#v", got)
-	}
-	payload, digest, err := readCompactReviewerArtifact(fixture.path)
-	if err != nil {
+	state := record.State
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     []LensResult{result},
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk causes failure"}},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if digest != compactPreservedPayloadDigest(payload) {
-		t.Fatalf("artifact digest = %q", digest)
+	if err := state.BeginCorrection(1); err != nil {
+		t.Fatal(err)
 	}
-	var envelope compactAdmittedReviewerResult
-	decodeStrictReviewerCaptureJSON(t, payload, &envelope)
-	if envelope.Schema != AdmittedReviewerResultSchema ||
-		envelope.Subject != fixture.request.ArtifactSubject ||
-		envelope.Admission.Validate(fixture.request.ArtifactSubject) != nil {
-		t.Fatalf("admitted envelope = %#v", envelope)
-	}
-	var provider compactProviderReviewerResult
-	decodeStrictReviewerCaptureJSON(t, envelope.Result, &provider)
-	if provider.SubjectHash != fixture.request.ArtifactSubject.SubjectHash ||
-		provider.Inspection.Status != ArtifactInspectionCompleted ||
-		provider.Lens != LensReliability {
-		t.Fatalf("canonical provider result = %#v", provider)
-	}
-	reAdmitted, ok := reAdmitCompactReviewerResult(
-		envelope,
-		fixture.request.ArtifactSubject,
-		fixture.request.FrozenContext,
-	)
-	if !ok || reAdmitted.ResultHash != got.ResultHash {
-		t.Fatalf("re-admitted result = %#v, %t", reAdmitted, ok)
-	}
-	beforeArtifact := append([]byte(nil), payload...)
-	beforeDigest, err := os.ReadFile(fixture.path + ".sha256")
+	want, err := BuildCorrectionPlanRequest(state, state.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	replayed, err := fixture.store.CaptureAdmittedReviewerResult(
-		context.Background(),
-		fixture.request,
-	)
-	if err != nil {
-		t.Fatalf("exact replay: %v", err)
-	}
-	afterArtifact, err := os.ReadFile(fixture.path)
+	// Retired projections cannot be reintroduced into CompactState; the read must
+	// remain entirely derived from the canonical admitted capture.
+	got, err := BuildCorrectionPlanRequest(state, state.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterDigest, err := os.ReadFile(fixture.path + ".sha256")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("correction plan from tampered legacy projections = %#v, want admitted capture %#v", got, want)
+	}
+}
+
+func TestCompactStoreCaptureAdmittedReviewerResultPublishesOneRecordExactReplay(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "native-admitted-reviewer")
+	first, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if replayed.ResultHash != got.ResultHash ||
-		!bytes.Equal(beforeArtifact, afterArtifact) ||
-		!bytes.Equal(beforeDigest, afterDigest) {
-		t.Fatal("exact replay changed admitted reviewer artifacts")
-	}
-	if err := os.Remove(fixture.path + ".sha256"); err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := fixture.store.CaptureAdmittedReviewerResult(
-		context.Background(),
-		fixture.request,
-	)
-	if err != nil {
-		t.Fatalf("recover missing digest sidecar: %v", err)
-	}
-	recoveredDigest, err := os.ReadFile(fixture.path + ".sha256")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recovered.ResultHash != got.ResultHash ||
-		!bytes.Equal(recoveredDigest, beforeDigest) {
-		t.Fatal("exact replay did not recover the missing digest sidecar")
 	}
 	record, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Revision != fixture.request.ExpectedRevision ||
-		record.State.State != StateReviewing {
-		t.Fatalf("capture mutated compact authority = %#v", record)
+	if !first.Slot.Occupied || len(record.State.AdmittedRoleResults) != 1 || record.State.AdmittedRoleResults[0].ArtifactDigest != first.Slot.Digest {
+		t.Fatalf("capture did not persist one canonical role value: %#v", record)
+	}
+	replayed, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("exact replay: %v", err)
+	}
+	after, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Slot.Digest != first.Slot.Digest || after.Revision != record.Revision {
+		t.Fatalf("exact replay changed authority: before=%#v after=%#v", record, after)
 	}
 }
 
-func TestCompactStoreResolveAdmittedReviewerResultIsExactAndReadOnly(
-	t *testing.T,
-) {
-	fixture := newCompactReviewerCaptureFixture(
-		t,
-		"resolve-native-admitted-reviewer",
-	)
-	stateBefore, err := os.ReadFile(fixture.store.StatePath())
+func TestCompactStoreCaptureAdmittedReviewerResultRefusesStalePhaseWithoutMutation(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "native-admitted-stale")
+	before, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	missing, found, err := fixture.store.ResolveAdmittedReviewerResult(
-		context.Background(),
-		fixture.request.ExpectedRevision,
-		fixture.request.TargetIdentity,
-		fixture.request.FrozenContext,
-		fixture.request.ArtifactSubject,
-	)
-	if err != nil || found || !reflect.DeepEqual(missing, LensResult{}) {
-		t.Fatalf("missing admitted result = %#v, %t, %v", missing, found, err)
+	request := fixture.request
+	request.ExpectedRevision = hash("a")
+	request.ArtifactSubject.AuthorityRevision = request.ExpectedRevision
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), request); err == nil {
+		t.Fatal("stale capture phase was accepted")
 	}
-	if _, err := os.Lstat(filepath.Dir(fixture.path)); !errors.Is(
-		err,
-		fs.ErrNotExist,
-	) {
-		t.Fatalf("read-only miss created reviewer directory: %v", err)
-	}
-	want, err := fixture.store.CaptureAdmittedReviewerResult(
-		context.Background(),
-		fixture.request,
-	)
+	after, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifactBefore, err := os.ReadFile(fixture.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digestBefore, err := os.ReadFile(fixture.path + ".sha256")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, found, err := fixture.store.ResolveAdmittedReviewerResult(
-		context.Background(),
-		fixture.request.ExpectedRevision,
-		fixture.request.TargetIdentity,
-		fixture.request.FrozenContext,
-		fixture.request.ArtifactSubject,
-	)
-	if err != nil || !found || !reflect.DeepEqual(got, want) {
-		t.Fatalf("resolved admitted result = %#v, %t, %v", got, found, err)
-	}
-	stateAfter, err := os.ReadFile(fixture.store.StatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactAfter, err := os.ReadFile(fixture.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digestAfter, err := os.ReadFile(fixture.path + ".sha256")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(stateBefore, stateAfter) ||
-		!bytes.Equal(artifactBefore, artifactAfter) ||
-		!bytes.Equal(digestBefore, digestAfter) {
-		t.Fatal("resolver changed compact authority or reviewer artifacts")
+	if after.Revision != before.Revision || len(after.State.AdmittedRoleResults) != 0 {
+		t.Fatalf("stale phase mutated authority: before=%#v after=%#v", before, after)
 	}
 }
 
-func TestCompactStoreResolveAdmittedReviewerResultFailsClosed(
-	t *testing.T,
-) {
-	fixture := newCompactReviewerCaptureFixture(
-		t,
-		"resolve-admitted-reviewer-refusal",
-	)
-	if _, err := fixture.store.CaptureAdmittedReviewerResult(
-		context.Background(),
-		fixture.request,
-	); err != nil {
+func TestCompactStoreMergesRefuterTupleAndReplaysWithoutAWrite(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "record-refuter-capture")
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
-		context.Background(),
-		fixture.request.ExpectedRevision,
-		verificationTestHash("different-review-target"),
-		fixture.request.FrozenContext,
-		fixture.request.ArtifactSubject,
-	); err == nil || found {
-		t.Fatalf("mismatched target = found %t, error %v", found, err)
-	}
-	tamperedFrozen := fixture.request.FrozenContext
-	tamperedFrozen.ChangedPathManifest = append(
-		[]ChangedPathManifestEntry(nil),
-		tamperedFrozen.ChangedPathManifest...,
-	)
-	tamperedFrozen.ChangedPathManifest[0].ModeOnly = true
-	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
-		context.Background(),
-		fixture.request.ExpectedRevision,
-		fixture.request.TargetIdentity,
-		tamperedFrozen,
-		fixture.request.ArtifactSubject,
-	); err == nil || found {
-		t.Fatalf("tampered frozen context = found %t, error %v", found, err)
-	}
-
-	payload, err := os.ReadFile(fixture.path)
+	current, err := fixture.store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload = append(
-		append([]byte(nil), bytes.TrimSuffix(payload, []byte("}\n"))...),
-		[]byte(",\"unexpected\":true}\n")...,
-	)
-	if err := os.WriteFile(fixture.path, payload, 0o600); err != nil {
+	request := CompactAdmittedRefuterResultRequest{
+		ExpectedRevision: current.State.CapturePhaseRevision, TargetIdentity: current.State.InitialSnapshot.Identity,
+		RequestHash: hash("b"), Payload: []byte(`{"results":[]}`),
+	}
+	if err := fixture.store.CaptureAdmittedRefuterResult(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(
-		fixture.path+".sha256",
-		[]byte(compactPreservedPayloadDigest(payload)+"\n"),
-		0o600,
-	); err != nil {
+	merged, err := fixture.store.Load()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
-		context.Background(),
-		fixture.request.ExpectedRevision,
-		fixture.request.TargetIdentity,
-		fixture.request.FrozenContext,
-		fixture.request.ArtifactSubject,
-	); err == nil || found {
-		t.Fatalf("unknown-field artifact = found %t, error %v", found, err)
+	if len(merged.State.AdmittedRoleResults) != 2 {
+		t.Fatalf("record values = %d, want lens plus refuter", len(merged.State.AdmittedRoleResults))
+	}
+	if err := fixture.store.CaptureAdmittedRefuterResult(t.Context(), request); err != nil {
+		t.Fatalf("refuter replay: %v", err)
+	}
+	replayed, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Revision != merged.Revision {
+		t.Fatal("refuter exact replay wrote a successor")
 	}
 }
 
-func TestCompactStoreCaptureAdmittedReviewerResultRejectsUnsafeOrConflictingSlots(
-	t *testing.T,
-) {
-	tests := []struct {
-		name       string
-		arrange    func(*testing.T, compactReviewerCaptureFixture)
-		wantUnsafe bool
-	}{
-		{
-			name: "different immutable artifact",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				writePrivateReviewerCaptureFile(
-					t,
-					fixture.path,
-					[]byte("different\n"),
-					0o600,
-				)
-			},
-		},
-		{
-			name: "conflicting digest sidecar",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				writePrivateReviewerCaptureFile(
-					t,
-					fixture.path+".sha256",
-					[]byte("sha256:"+strings.Repeat("9", 64)+"\n"),
-					0o600,
-				)
-			},
-		},
-		{
-			name: "symlinked artifact",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				if runtime.GOOS == "windows" {
-					t.Skip("symlink creation requires optional Windows privileges")
-				}
-				if _, err := createPrivateRARDirectory(
-					filepath.Dir(fixture.path),
-				); err != nil {
-					t.Fatal(err)
-				}
-				target := filepath.Join(t.TempDir(), "target")
-				if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, fixture.path); err != nil {
-					t.Skipf("symlink unavailable: %v", err)
-				}
-			},
-			wantUnsafe: true,
-		},
-		{
-			name: "hardlinked artifact",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				if _, err := createPrivateRARDirectory(
-					filepath.Dir(fixture.path),
-				); err != nil {
-					t.Fatal(err)
-				}
-				target := filepath.Join(t.TempDir(), "target")
-				if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Link(target, fixture.path); err != nil {
-					t.Skipf("hardlink unavailable: %v", err)
-				}
-			},
-			wantUnsafe: true,
-		},
-		{
-			name: "hardlinked digest sidecar",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				if _, err := createPrivateRARDirectory(
-					filepath.Dir(fixture.path),
-				); err != nil {
-					t.Fatal(err)
-				}
-				target := filepath.Join(t.TempDir(), "target")
-				if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Link(target, fixture.path+".sha256"); err != nil {
-					t.Skipf("hardlink unavailable: %v", err)
-				}
-			},
-			wantUnsafe: true,
-		},
-		{
-			name: "symlinked reviewer directory",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				if runtime.GOOS == "windows" {
-					t.Skip("symlink creation requires optional Windows privileges")
-				}
-				target := t.TempDir()
-				if err := os.Symlink(
-					target,
-					filepath.Dir(fixture.path),
-				); err != nil {
-					t.Skipf("symlink unavailable: %v", err)
-				}
-			},
-			wantUnsafe: true,
-		},
-		{
-			name: "group-readable artifact",
-			arrange: func(t *testing.T, fixture compactReviewerCaptureFixture) {
-				if runtime.GOOS == "windows" {
-					t.Skip("POSIX mode fixture")
-				}
-				writePrivateReviewerCaptureFile(
-					t,
-					fixture.path,
-					[]byte("unsafe\n"),
-					0o640,
-				)
-			},
-			wantUnsafe: true,
-		},
+func TestReopenedRefuterWithRetiredPayloadRequiresCurrentPhase(t *testing.T) {
+	repo, store, state := highRiskCaptureAuthority(t, "reopen-refuter-current-phase")
+	for order := range state.SelectedLenses {
+		captureCompactLens(t, store, state, order)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newCompactReviewerCaptureFixture(
-				t,
-				"capture-refusal-"+strings.ReplaceAll(test.name, " ", "-"),
-			)
-			test.arrange(t, fixture)
-			_, err := fixture.store.CaptureAdmittedReviewerResult(
-				context.Background(),
-				fixture.request,
-			)
-			if err == nil {
-				t.Fatal("unsafe/conflicting capture succeeded")
-			}
-			if test.wantUnsafe && !errors.Is(err, errUnsafeRARAuthorityPath) {
-				t.Fatalf("unsafe capture error = %v", err)
-			}
-			if _, statErr := os.Lstat(fixture.path + ".sha256"); test.name != "conflicting digest sidecar" &&
-				test.name != "hardlinked digest sidecar" &&
-				!errors.Is(statErr, fs.ErrNotExist) {
-				t.Fatalf("refused capture published digest sidecar: %v", statErr)
-			}
-			if test.name == "conflicting digest sidecar" {
-				if _, statErr := os.Lstat(fixture.path); !errors.Is(statErr, fs.ErrNotExist) {
-					t.Fatalf("sidecar conflict published artifact: %v", statErr)
-				}
-			}
-		})
-	}
-}
-
-func TestCompactStoreCaptureAdmittedReviewerResultRejectsCallerDerivedContext(
-	t *testing.T,
-) {
-	fixture := newCompactReviewerCaptureFixture(
-		t,
-		"capture-rederive-frozen-context",
-	)
-	tampered := fixture.request
-	tampered.FrozenContext.ChangedPathManifest = append(
-		[]ChangedPathManifestEntry(nil),
-		tampered.FrozenContext.ChangedPathManifest...,
-	)
-	tampered.FrozenContext.ChangedPathManifest[0].ModeOnly = true
-	if _, err := fixture.store.CaptureAdmittedReviewerResult(
-		context.Background(),
-		tampered,
-	); err == nil || !strings.Contains(
-		err.Error(),
-		"does not match repository authority",
-	) {
-		t.Fatalf("caller-derived frozen context error = %v", err)
-	}
-	if _, err := os.Lstat(filepath.Dir(fixture.path)); !errors.Is(
-		err,
-		fs.ErrNotExist,
-	) {
-		t.Fatalf("context refusal published reviewer directory: %v", err)
-	}
-}
-
-func TestCompactStoreCaptureAdmittedReviewerResultSerializesConcurrentReplayAndConflict(
-	t *testing.T,
-) {
-	t.Run("exact replay", func(t *testing.T) {
-		fixture := newCompactReviewerCaptureFixture(
-			t,
-			"capture-concurrent-replay",
-		)
-		const attempts = 8
-		var wait sync.WaitGroup
-		errorsByAttempt := make([]error, attempts)
-		hashes := make([]string, attempts)
-		for index := 0; index < attempts; index++ {
-			wait.Add(1)
-			go func(index int) {
-				defer wait.Done()
-				result, err := fixture.store.CaptureAdmittedReviewerResult(
-					context.Background(),
-					fixture.request,
-				)
-				errorsByAttempt[index] = err
-				hashes[index] = result.ResultHash
-			}(index)
-		}
-		wait.Wait()
-		for index := range errorsByAttempt {
-			if errorsByAttempt[index] != nil ||
-				hashes[index] == "" ||
-				hashes[index] != hashes[0] {
-				t.Fatalf(
-					"concurrent replay[%d] = hash %q, error %v",
-					index,
-					hashes[index],
-					errorsByAttempt[index],
-				)
-			}
-		}
-		if _, _, err := readCompactReviewerArtifact(fixture.path); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("different raw authority", func(t *testing.T) {
-		fixture := newCompactReviewerCaptureFixture(
-			t,
-			"capture-concurrent-conflict",
-		)
-		alternate := fixture.request
-		alternate.RawPayload = append(
-			[]byte("review transport prefix\n"),
-			alternate.RawPayload...,
-		)
-		requests := []CompactAdmittedReviewerResultRequest{
-			fixture.request,
-			alternate,
-		}
-		var wait sync.WaitGroup
-		results := make([]error, len(requests))
-		for index := range requests {
-			wait.Add(1)
-			go func(index int) {
-				defer wait.Done()
-				_, results[index] = fixture.store.CaptureAdmittedReviewerResult(
-					context.Background(),
-					requests[index],
-				)
-			}(index)
-		}
-		wait.Wait()
-		successes, conflicts := 0, 0
-		for _, err := range results {
-			switch {
-			case err == nil:
-				successes++
-			case strings.Contains(
-				err.Error(),
-				"different canonical bytes",
-			):
-				conflicts++
-			default:
-				t.Fatalf("concurrent conflict error = %v", err)
-			}
-		}
-		if successes != 1 || conflicts != 1 {
-			t.Fatalf(
-				"concurrent conflict = %d success, %d conflict",
-				successes,
-				conflicts,
-			)
-		}
-	})
-}
-
-func decodeStrictReviewerCaptureJSON(
-	t *testing.T,
-	payload []byte,
-	value any,
-) {
-	t.Helper()
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(value); err != nil {
+	initial := requireCompactRoleCount(t, store, 4)
+	request := CompactAdmittedRefuterResultRequest{ExpectedRevision: initial.State.CapturePhaseRevision, TargetIdentity: initial.State.InitialSnapshot.Identity, RequestHash: hash("c"), Payload: []byte(`{"results":[]}`)}
+	if err := store.CaptureAdmittedRefuterResult(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		t.Fatalf("extra JSON value: %v", err)
+	initial = requireCompactRoleCount(t, store, 5)
+	retiredDigest := ""
+	for _, entry := range initial.State.AdmittedRoleResults {
+		if entry.Role == CompactRoleRefuter {
+			retiredDigest = entry.ArtifactDigest
+		}
 	}
-}
-
-func writePrivateReviewerCaptureFile(
-	t *testing.T,
-	path string,
-	payload []byte,
-	mode fs.FileMode,
-) {
-	t.Helper()
-	if _, err := createPrivateRARDirectory(filepath.Dir(path)); err != nil {
-		t.Fatal(err)
+	reopened := reopenOneCapturedLens(t, repo, store, initial, LensRisk)
+	captureCompactLens(t, store, reopened.State, 0)
+	current := requireCompactRoleCount(t, store, 4)
+	request.ExpectedRevision = current.State.CapturePhaseRevision
+	if err := store.CaptureAdmittedRefuterResult(t.Context(), request); err != nil {
+		t.Fatalf("fresh refuter with retired payload: %v", err)
 	}
-	if err := os.WriteFile(path, payload, mode); err != nil {
-		t.Fatal(err)
+	current = requireCompactRoleCount(t, store, 5)
+	currentDigest := ""
+	for _, entry := range current.State.AdmittedRoleResults {
+		if entry.Role == CompactRoleRefuter && entry.CapturePhaseRevision == current.State.CapturePhaseRevision {
+			currentDigest = entry.ArtifactDigest
+		}
+	}
+	if _, found := current.State.AdmittedRoleResult(CompactRoleRefuter, current.State.CapturePhaseRevision, current.State.InitialSnapshot.Identity, request.RequestHash); !found || currentDigest != retiredDigest {
+		t.Fatalf("fresh current-phase refuter was not admitted from matching bytes: found=%t digest=%q", found, currentDigest)
+	}
+	beforeReplay := current.Revision
+	if err := store.CaptureAdmittedRefuterResult(t.Context(), request); err != nil {
+		t.Fatalf("current-phase exact replay: %v", err)
+	}
+	if replay := requireCompactRoleCount(t, store, 5); replay.Revision != beforeReplay {
+		t.Fatal("current-phase exact refuter replay wrote authority")
+	}
+	request.ExpectedRevision = initial.State.CapturePhaseRevision
+	if err := store.CaptureAdmittedRefuterResult(t.Context(), request); err == nil {
+		t.Fatal("stale prior refuter phase satisfied the current slot")
+	}
+	if stale := requireCompactRoleCount(t, store, 5); stale.Revision != beforeReplay {
+		t.Fatal("stale prior refuter phase replay mutated authority")
 	}
 }

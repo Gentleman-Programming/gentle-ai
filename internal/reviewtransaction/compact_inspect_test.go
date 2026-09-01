@@ -94,6 +94,109 @@ func TestInspectCompactRecoveryEdges(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadCompactRecoveryRecordsIsTheSingleSeam satisfies tasks.md 1.1
+// (mandatory obligation (a)): InspectCompactRecoveryEdges and
+// deriveAuthorityDispositionPlanAtRepo (authority_disposition_plan.go) MUST
+// both call loadCompactRecoveryRecords for their report/records inputs, and
+// no independent second record-loading path may feed either one. It proves
+// this the same way review_inspect_authority_test.go proves a single-call
+// domain: swap the package-level seam var for an instrumented wrapper and
+// count calls plus compare the exact report/record content each caller saw.
+func TestLoadCompactRecoveryRecordsIsTheSingleSeam(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	forgedRecoveryPair(t, repo, "seam", "seam target\n")
+
+	original := loadCompactRecoveryRecords
+	t.Cleanup(func() { loadCompactRecoveryRecords = original })
+	calls := 0
+	var seenReports []CompactRecoveryInspectionReport
+	var seenRecordCounts []int
+	loadCompactRecoveryRecords = func(ctx context.Context, gotRepo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
+		calls++
+		report, records, err := original(ctx, gotRepo)
+		seenReports = append(seenReports, report)
+		seenRecordCounts = append(seenRecordCounts, len(records))
+		return report, records, err
+	}
+
+	ctx := context.Background()
+	if _, err := InspectCompactRecoveryEdges(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "maintainer@example.com", "quarantine forged recovery authorization"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("loadCompactRecoveryRecords calls = %d, want 2 (one per caller, no independent second load path)", calls)
+	}
+	firstJSON, err := json.Marshal(seenReports[0])
+	inspectNoError(t, err)
+	secondJSON, err := json.Marshal(seenReports[1])
+	inspectNoError(t, err)
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatalf("InspectCompactRecoveryEdges and deriveAuthorityDispositionPlanAtRepo saw different report content through the seam:\n%s\n%s", firstJSON, secondJSON)
+	}
+	if seenRecordCounts[0] != seenRecordCounts[1] {
+		t.Fatalf("InspectCompactRecoveryEdges and deriveAuthorityDispositionPlanAtRepo saw different record counts through the seam: %d vs %d", seenRecordCounts[0], seenRecordCounts[1])
+	}
+}
+
+// TestLoadCompactRecoveryRecordsUnderMaintenanceHoldAgreesWithOrdinarySeam
+// pins the agreement loadCompactRecoveryRecordsUnderMaintenanceHold's own doc
+// comment (authority_disposition_execute.go) asserts but nothing tested
+// directly before this: it mirrors loadCompactRecoveryRecords's exact
+// read-and-classify body for a caller that already holds base's exclusive
+// maintenance lock, differing only in the per-entry file read
+// (loadCompactRecordLocked vs Load), never the classification algorithm. The
+// under-lock CAS comparison executeAuthorityDisposition runs
+// (lockedAuthorityDispositionMutation comparing currentPlan.PlanDigest
+// against plan.PlanDigest) rests entirely on this agreement holding: if the
+// two seams ever classified the same authority state differently, a
+// re-derivation under lock could silently diverge from what the read-only
+// plan preview promised.
+func TestLoadCompactRecoveryRecordsUnderMaintenanceHoldAgreesWithOrdinarySeam(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	forgedRecoveryPair(t, repo, "agreement", "agreement target\n")
+	inspectRecoveryPair(t, repo, "agreement-pristine", false, "")
+
+	ctx := context.Background()
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	inspectNoError(t, err)
+
+	ordinaryReport, ordinaryRecords, err := loadCompactRecoveryRecords(ctx, root)
+	inspectNoError(t, err)
+	lockedReport, lockedRecords, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+	inspectNoError(t, err)
+
+	ordinaryJSON, err := json.Marshal(ordinaryReport)
+	inspectNoError(t, err)
+	lockedJSON, err := json.Marshal(lockedReport)
+	inspectNoError(t, err)
+	if string(ordinaryJSON) != string(lockedJSON) {
+		t.Fatalf("loadCompactRecoveryRecordsUnderMaintenanceHold disagrees with loadCompactRecoveryRecords on inspection:\n%s\n%s", ordinaryJSON, lockedJSON)
+	}
+	if len(ordinaryReport.Edges) == 0 {
+		t.Fatal("fixture produced no recovery edges; the agreement this test proves is vacuous")
+	}
+	if len(ordinaryRecords) != len(lockedRecords) {
+		t.Fatalf("record counts disagree: ordinary=%d locked=%d", len(ordinaryRecords), len(lockedRecords))
+	}
+	for lineage, ordinaryRecord := range ordinaryRecords {
+		lockedRecord, found := lockedRecords[lineage]
+		if !found {
+			t.Fatalf("locked-hold read is missing lineage %q the ordinary seam loaded", lineage)
+		}
+		ordinaryRecordJSON, err := json.Marshal(ordinaryRecord)
+		inspectNoError(t, err)
+		lockedRecordJSON, err := json.Marshal(lockedRecord)
+		inspectNoError(t, err)
+		if string(ordinaryRecordJSON) != string(lockedRecordJSON) {
+			t.Fatalf("record %q disagrees between seams:\n%s\n%s", lineage, ordinaryRecordJSON, lockedRecordJSON)
+		}
+	}
+}
+
 func TestCompactRecoveryInspectionCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

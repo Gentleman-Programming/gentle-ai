@@ -77,28 +77,21 @@ func ComputeChecksum(paths []string) (string, error) {
 	return fmt.Sprintf("%x", composite), nil
 }
 
-// IsDuplicate reports whether newChecksum matches the checksum of the most
-// recent backup found in backupDir.
-//
-// Returns false (never skips) when:
-//   - newChecksum is empty
-//   - no prior backups exist in backupDir
-//   - the most recent backup has an empty Checksum (old manifest without dedup)
-//
-// Directories inside backupDir that do not contain a manifest.json are
-// silently skipped.
-func IsDuplicate(backupDir string, newChecksum string) (bool, error) {
+// DuplicateManifest returns the most recent manifest when its checksum matches
+// newChecksum. It reports no match when the checksum is empty, no prior backup
+// exists, or the latest manifest predates checksum-based deduplication.
+// Directories without a manifest.json are silently skipped.
+func DuplicateManifest(backupDir string, newChecksum string) (Manifest, bool, error) {
 	if newChecksum == "" {
-		return false, nil
+		return Manifest{}, false, nil
 	}
 
 	manifests, err := listManifests(backupDir)
 	if err != nil {
-		return false, err
+		return Manifest{}, false, err
 	}
-
 	if len(manifests) == 0 {
-		return false, nil
+		return Manifest{}, false, nil
 	}
 
 	// Find the most recent backup by CreatedAt.
@@ -108,12 +101,10 @@ func IsDuplicate(backupDir string, newChecksum string) (bool, error) {
 			latest = m
 		}
 	}
-
-	if latest.Checksum == "" {
-		return false, nil
+	if latest.Checksum == "" || latest.Checksum != newChecksum {
+		return Manifest{}, false, nil
 	}
-
-	return latest.Checksum == newChecksum, nil
+	return latest, true, nil
 }
 
 // Prune deletes the oldest unpinned backups in backupDir, keeping at most

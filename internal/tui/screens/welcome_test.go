@@ -69,31 +69,23 @@ func TestWelcomeOptions_WithProfiles_CountOne(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 12 options when showProfiles=false
-// and hasEngines=true (agent option visible). Slice 3b adds the
-// "Uninstall OpenCode Plugin" shortcut between "OpenCode Community Plugins"
-// and the OpenCode Profiles entry.
+// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 14 options when showProfiles=false
+// and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
-	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
-	// Configure models, Create your own Agent, OpenCode Community Plugins,
-	// Uninstall OpenCode Plugin, Manage backups, Managed uninstall,
-	// Community Tools/Plugins, Quit = 12
-	want := 12
+	// Includes the Receipt-Driven Development entry.
+	want := 14
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=false, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithProfiles verifies 13 options when showProfiles=true
+// TestWelcomeOptions_OptionCount_WithProfiles verifies 15 options when showProfiles=true
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
-	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
-	// Configure models, Create your own Agent, OpenCode Community Plugins,
-	// Uninstall OpenCode Plugin, OpenCode SDD Profiles (2), Manage backups,
-	// Managed uninstall, Community Tools/Plugins, Quit = 13
-	want := 13
+	// Includes the Receipt-Driven Development entry.
+	want := 15
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}

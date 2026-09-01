@@ -1,0 +1,85 @@
+package sddstatus
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestDisabledReviewAdmitsUnmanagedRemediationForAdmittedFailure reproduces
+// #2182. With receipt-driven review globally disabled, an admitted failed
+// verification could not enter remediation: status refused on "bounded review
+// transaction is missing", a transaction that policy itself prevented from
+// existing, and left remediationState.required false with no correction route
+// at all.
+//
+// A kill switch that a downstream check overrides is not a kill switch. The
+// switch already gates the review authority lookup; it did not gate the
+// classification that consumes the absence of what the lookup would have found.
+func TestDisabledReviewAdmitsUnmanagedRemediationForAdmittedFailure(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 0, 0))
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if strings.Contains(reasons, "bounded review transaction") {
+		t.Fatalf("a disabled switch still demanded review authority: %v", status.BlockedReasons)
+	}
+	if !status.RemediationState.Required {
+		t.Fatalf("admitted failure exposed no correction route under a disabled switch: %#v", status.RemediationState)
+	}
+	if status.RemediationState.FailedEvidenceRevision == "" {
+		t.Fatalf("unmanaged remediation lost the failed evidence it corrects: %#v", status.RemediationState)
+	}
+	if status.NextRecommended != "remediate" {
+		t.Fatalf("nextRecommended = %q, want remediate", status.NextRecommended)
+	}
+	if state := status.RemediationState; state.Complete || state.Reason == "" {
+		t.Fatalf("failed SDD evidence must remain an incomplete, explained remediation: %#v", state)
+	}
+}
+
+// TestEnabledReviewKeepsRemediationIndependent verifies that turning RDD on
+// cannot recreate the retired compact receipt prerequisite. SDD remediation
+// remains governed by failed verification evidence alone in either mode.
+func TestEnabledReviewKeepsRemediationIndependent(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 0, 0))
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reasons := strings.Join(status.BlockedReasons, "\n"); strings.Contains(reasons, "bounded review transaction") {
+		t.Fatalf("enabled review restored a retired receipt prerequisite: %v", status.BlockedReasons)
+	}
+	if !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision == "" || status.NextRecommended != "remediate" {
+		t.Fatalf("enabled review did not preserve independent remediation: state=%#v next=%q", status.RemediationState, status.NextRecommended)
+	}
+}
+
+// TestDisabledStatusWithoutAnUnmanagedCorrectionDoesNotBlockAfterReenable is
+// the scope control: merely having used disabled status does not make a fresh
+// passing verification wait for review authority after the mode changes back.
+func TestDisabledStatusWithoutAnUnmanagedCorrectionDoesNotBlockAfterReenable(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	changeRoot := seedReadyChange(t, repo, "thin", "- [x] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
+
+	if _, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin", ReviewDisabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	reenabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reenabled.Dependencies.Archive != DependencyReady || reenabled.NextRecommended != "archive" {
+		t.Fatalf("re-enabled status without an unmanaged correction = archive %q next %q", reenabled.Dependencies.Archive, reenabled.NextRecommended)
+	}
+}

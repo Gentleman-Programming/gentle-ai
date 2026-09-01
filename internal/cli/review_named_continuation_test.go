@@ -324,7 +324,7 @@ func reviewAppReviewPreDispatchBlock(t *testing.T, source string) string {
 // block newReviewFlagSet renders, which is a VisitAll over the verb's real
 // FlagSet -- so parsing it enumerates exactly the flags that verb defines,
 // with no second source of truth to drift from.
-var reviewNamedContinuationVerbFlagRegexp = regexp.MustCompile(`(?m)^\s+--([a-z][a-z0-9-]*) `)
+var reviewNamedContinuationVerbFlagRegexp = regexp.MustCompile(`(?m)^\s+--([a-z][a-z0-9-]*)(?: <value>)?$`)
 
 // reviewNamedContinuationVerbFlags asks the real command for its own flags by
 // running it with --help through the exact route the CLI dispatches. --help is

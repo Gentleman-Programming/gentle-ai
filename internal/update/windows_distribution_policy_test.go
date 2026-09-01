@@ -107,6 +107,24 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 			},
 		},
 		{
+			name: "missing release provenance archive",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"), "  {\"name\":\"gentle-ai-release-provenance-v1.tar.gz\",\"path\":\"dist/gentle-ai-release-provenance-v1.tar.gz\",\"type\":\"Archive\",\"extra\":{\"Binaries\":[],\"Format\":\"tar.gz\",\"ID\":\"release-provenance\"}},\n", "")
+			},
+		},
+		{
+			name: "extra release provenance archive",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"), "\n]", ",\n  {\"name\":\"gentle-ai-release-provenance-v1-copy.tar.gz\",\"path\":\"dist/gentle-ai-release-provenance-v1-copy.tar.gz\",\"type\":\"Archive\",\"extra\":{\"Binaries\":[],\"Format\":\"tar.gz\",\"ID\":\"release-provenance\"}}\n]")
+			},
+		},
+		{
+			name: "provider contract archive version differs from committed semver",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"), "gentle-ai-review-provider-contract-1.1.0.tar.gz", "gentle-ai-review-provider-contract-2.0.0.tar.gz")
+			},
+		},
+		{
 			name: "alternate publication config",
 			mutate: func(t *testing.T, root string) {
 				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"), "args: release --clean", "args: release --clean --config .goreleaser-alternate.yaml")
@@ -396,8 +414,9 @@ func newReleasePolicyFixture(t *testing.T) string {
 	}
 	files := map[string]string{
 		".goreleaser.yaml": readRepositoryFile(t, ".goreleaser.yaml"),
-		"go.mod":           readRepositoryFile(t, "go.mod"),
-		"go.sum":           readRepositoryFile(t, "go.sum"),
+		filepath.Join("contracts", "review-provider-contract", "CONTRACT_SEMVER"): readRepositoryFile(t, "contracts", "review-provider-contract", "CONTRACT_SEMVER"),
+		"go.mod": readRepositoryFile(t, "go.mod"),
+		"go.sum": readRepositoryFile(t, "go.sum"),
 		filepath.Join(".github", "workflows", "release.yml"):              readRepositoryFile(t, ".github", "workflows", "release.yml"),
 		filepath.Join("internal", "releasepolicy", "policy.go"):           readRepositoryFile(t, "internal", "releasepolicy", "policy.go"),
 		filepath.Join("internal", "releasepolicycmd", "main.go"):          readRepositoryFile(t, "internal", "releasepolicycmd", "main.go"),
@@ -499,6 +518,8 @@ const releasePolicyArtifactsFixture = `[
   {"name":"gentle-ai_0.0.0-SNAPSHOT_linux_arm64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_linux_arm64.tar.gz","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
   {"name":"gentle-ai_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
   {"name":"gentle-ai_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
+  {"name":"gentle-ai-review-provider-contract-1.1.0.tar.gz","path":"dist/gentle-ai-review-provider-contract-1.1.0.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"review-provider-contract"}},
+  {"name":"gentle-ai-release-provenance-v1.tar.gz","path":"dist/gentle-ai-release-provenance-v1.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"release-provenance"}},
   {"name":"checksums.txt","path":"dist/checksums.txt","type":"Checksum","extra":{}},
   {"name":"gentle-ai.rb","path":"dist/homebrew/Formula/gentle-ai.rb","type":"Homebrew Formula","extra":{"BrewConfig":{"name":"gentle-ai","repository":{"owner":"Gentleman-Programming","name":"homebrew-tap","token":"{{ .Env.HOMEBREW_TAP_TOKEN }}"},"directory":"Formula"}}}
 ]`

@@ -27,8 +27,8 @@ func TestReviewCapabilitiesV13AdvertisesProviderAdmissionAndRecovery(t *testing.
 		}
 	}
 	for _, schema := range []string{
-		reviewtransaction.ArtifactSubjectSchema,
-		reviewtransaction.AdmittedReviewerResultSchema,
+		reviewtransaction.ArtifactSubjectSchemaV1,
+		reviewtransaction.AdmittedReviewerResultSchemaV1,
 		reviewtransaction.TargetedValidationRequestSchema,
 	} {
 		if !slices.Contains(surface.Schemas, schema) {

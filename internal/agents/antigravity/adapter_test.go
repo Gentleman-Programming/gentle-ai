@@ -285,14 +285,6 @@ func TestInstallCommand(t *testing.T) {
 	}
 }
 
-func TestSupportsAutoInstall(t *testing.T) {
-	a := NewAdapter()
-
-	if a.SupportsAutoInstall() {
-		t.Fatal("SupportsAutoInstall() = true, want false for Antigravity")
-	}
-}
-
 // --- Capabilities ---
 
 func TestCapabilities(t *testing.T) {

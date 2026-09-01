@@ -41,7 +41,7 @@ func TestDetectFromInputsMarksSupportedMacOS(t *testing.T) {
 
 func TestDetectFromInputsMarksFedoraSupported(t *testing.T) {
 	osRelease := "ID=fedora\nID_LIKE=rhel fedora\n"
-	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("dnf"), nil)
 
 	if !result.System.Supported {
 		t.Fatalf("expected supported system for fedora linux distro")
@@ -58,7 +58,7 @@ func TestDetectFromInputsMarksFedoraSupported(t *testing.T) {
 
 func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 	osRelease := "ID=ubuntu\nID_LIKE=debian\n"
-	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("apt"), nil)
 
 	if !result.System.Supported {
 		t.Fatalf("expected ubuntu linux to be supported")
@@ -75,7 +75,7 @@ func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 
 func TestDetectFromInputsMarksArchSupported(t *testing.T) {
 	osRelease := "ID=arch\nID_LIKE=archlinux\n"
-	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("pacman"), nil)
 
 	if !result.System.Supported {
 		t.Fatalf("expected arch linux to be supported")
@@ -91,119 +91,12 @@ func TestDetectFromInputsMarksArchSupported(t *testing.T) {
 }
 
 // --- Batch E: Comprehensive platform detection matrix ---
-
-func TestDetectLinuxDistroMatrix(t *testing.T) {
-	tests := []struct {
-		name       string
-		osRelease  string
-		wantDistro string
-	}{
-		{
-			name:       "ubuntu 22.04",
-			osRelease:  "ID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"22.04\"\n",
-			wantDistro: LinuxDistroUbuntu,
-		},
-		{
-			name:       "debian 12",
-			osRelease:  "ID=debian\nVERSION_ID=\"12\"\n",
-			wantDistro: LinuxDistroDebian,
-		},
-		{
-			name:       "linux mint derivative of ubuntu",
-			osRelease:  "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=\"21.3\"\n",
-			wantDistro: LinuxDistroUbuntu,
-		},
-		{
-			name:       "pop os derivative of ubuntu",
-			osRelease:  "ID=pop\nID_LIKE=\"ubuntu debian\"\n",
-			wantDistro: LinuxDistroUbuntu,
-		},
-		{
-			name:       "arch linux",
-			osRelease:  "ID=arch\nID_LIKE=archlinux\n",
-			wantDistro: LinuxDistroArch,
-		},
-		{
-			name:       "manjaro derivative of arch",
-			osRelease:  "ID=manjaro\nID_LIKE=arch\n",
-			wantDistro: LinuxDistroArch,
-		},
-		{
-			name:       "endeavouros derivative of arch",
-			osRelease:  "ID=endeavouros\nID_LIKE=arch\n",
-			wantDistro: LinuxDistroArch,
-		},
-		{
-			name:       "fedora",
-			osRelease:  "ID=fedora\nID_LIKE=\"rhel fedora\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "centos stream derivative of rhel/fedora",
-			osRelease:  "ID=centos\nID_LIKE=\"rhel fedora\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "rhel",
-			osRelease:  "ID=rhel\nID_LIKE=\"fedora\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "rocky linux",
-			osRelease:  "ID=rocky\nID_LIKE=\"rhel fedora\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "alma linux",
-			osRelease:  "ID=almalinux\nID_LIKE=\"rhel fedora\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "nobara",
-			osRelease:  "ID=nobara\nID_LIKE=\"fedora\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "nobara via id_like token",
-			osRelease:  "ID=custom-linux\nID_LIKE=\"nobara\"\n",
-			wantDistro: LinuxDistroFedora,
-		},
-		{
-			name:       "empty os-release",
-			osRelease:  "",
-			wantDistro: LinuxDistroUnknown,
-		},
-		{
-			name:       "whitespace-only os-release",
-			osRelease:  "   \n  \n",
-			wantDistro: LinuxDistroUnknown,
-		},
-		{
-			name:       "comment-only os-release",
-			osRelease:  "# This is a comment\n# Another comment\n",
-			wantDistro: LinuxDistroUnknown,
-		},
-		{
-			name:       "malformed lines are ignored",
-			osRelease:  "no-equals-sign\nID=ubuntu\n",
-			wantDistro: LinuxDistroUbuntu,
-		},
-		{
-			name:       "quoted values are handled",
-			osRelease:  "ID=\"ubuntu\"\nID_LIKE=\"debian\"\n",
-			wantDistro: LinuxDistroUbuntu,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := detectLinuxDistro(tc.osRelease)
-			if got != tc.wantDistro {
-				t.Fatalf("detectLinuxDistro() = %q, want %q", got, tc.wantDistro)
-			}
-		})
-	}
-}
+//
+// The distro-family matrix that used to live here (mint => ubuntu,
+// manjaro => arch, rocky => fedora, and so on) is gone with the enum it
+// classified into. Its replacement is behavioural, in
+// detect_linux_probe_test.go: every distribution, named or not, is supported
+// exactly when a package manager answers on PATH.
 
 func TestResolvePlatformProfileMatrix(t *testing.T) {
 	tests := []struct {
@@ -237,6 +130,7 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			name:          "ubuntu profile",
 			goos:          "linux",
 			osRelease:     "ID=ubuntu\nID_LIKE=debian\n",
+			tools:         toolsOnPath("apt"),
 			wantOS:        "linux",
 			wantPM:        "apt",
 			wantDistro:    LinuxDistroUbuntu,
@@ -246,6 +140,7 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			name:          "debian profile",
 			goos:          "linux",
 			osRelease:     "ID=debian\n",
+			tools:         toolsOnPath("apt"),
 			wantOS:        "linux",
 			wantPM:        "apt",
 			wantDistro:    LinuxDistroDebian,
@@ -255,6 +150,7 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			name:          "arch profile",
 			goos:          "linux",
 			osRelease:     "ID=arch\n",
+			tools:         toolsOnPath("pacman"),
 			wantOS:        "linux",
 			wantPM:        "pacman",
 			wantDistro:    LinuxDistroArch,
@@ -264,6 +160,7 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			name:          "fedora profile",
 			goos:          "linux",
 			osRelease:     "ID=fedora\n",
+			tools:         toolsOnPath("dnf"),
 			wantOS:        "linux",
 			wantPM:        "dnf",
 			wantDistro:    LinuxDistroFedora,
@@ -277,7 +174,17 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantSupported: true,
 		},
 		{
-			name:          "linux without os-release is unsupported",
+			name:          "linux with no package manager on PATH is unsupported",
+			goos:          "linux",
+			osRelease:     "ID=ubuntu\n",
+			tools:         toolsOnPath("git", "curl", "node", "go"),
+			wantOS:        "linux",
+			wantPM:        "",
+			wantDistro:    LinuxDistroUbuntu,
+			wantSupported: false,
+		},
+		{
+			name:          "linux without os-release and without a manager is unsupported",
 			goos:          "linux",
 			osRelease:     "",
 			wantOS:        "linux",
@@ -339,7 +246,7 @@ func TestGoAvailableInPlatformProfile(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			profile := resolvePlatformProfile("linux", "ID=ubuntu\nID_LIKE=debian\n", tc.tools)
+			profile := resolvePlatformProfile("linux", "ID=ubuntu\n", tc.tools)
 			if profile.GoAvailable != tc.wantGoAvail {
 				t.Fatalf("GoAvailable = %v, want %v", profile.GoAvailable, tc.wantGoAvail)
 			}
@@ -379,7 +286,7 @@ func TestDetectFromInputsMarksWindowsSupported(t *testing.T) {
 
 func TestDetectFromInputsProfileIsPopulatedInSystem(t *testing.T) {
 	osRelease := "ID=ubuntu\nID_LIKE=debian\n"
-	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, nil, nil)
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("apt"), nil)
 
 	if result.System.Profile.OS != "linux" {
 		t.Fatalf("Profile.OS = %q, want linux", result.System.Profile.OS)

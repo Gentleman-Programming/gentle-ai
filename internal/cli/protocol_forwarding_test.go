@@ -200,6 +200,14 @@ func TestRunInstallSafestWinsAcrossSharedSlug(t *testing.T) {
 		return nil
 	}
 
+	// This test targets protocol-slug forwarding, not agent install behavior,
+	// so simulate Antigravity as already installed (its Detect looks for
+	// ~/.gemini/antigravity) — otherwise gentle-ai correctly refuses to
+	// proceed for an undetected agent.
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gemini/antigravity): %v", err)
+	}
+
 	result, err := RunInstall(
 		[]string{"--agent", "gemini-cli", "--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
 		macOSDetectionResult(),

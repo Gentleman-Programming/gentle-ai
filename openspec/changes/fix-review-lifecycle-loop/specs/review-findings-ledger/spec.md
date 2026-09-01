@@ -22,7 +22,7 @@ Compact-v2 persisted state and receipt fields MUST remain schema-v2 compatible. 
 
 ### Requirement: Terminal receipt
 
-Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, mode-specific counters, judge proof where applicable, and terminal state. For compact v2, `final_candidate_tree` MUST identify the current final snapshot while `paths_digest` MUST preserve the frozen initial/genesis authorized path envelope. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state.
+Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, counters, and terminal state. For compact v2, `final_candidate_tree` MUST identify the current final snapshot while `paths_digest` MUST preserve the frozen initial/genesis authorized path envelope. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state.
 
 (Previously: Receipt identity did not explicitly require final tree and paths digest to come from one final snapshot.)
 

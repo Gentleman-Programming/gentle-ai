@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
@@ -74,6 +76,7 @@ var (
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
 	osExecutableDoctor = os.Executable
+	engramProbeStdioFn = engram.ProbeStdio
 	httpGetFn          = func(url string, timeout time.Duration) (int, error) {
 		resp, err := (&http.Client{Timeout: timeout}).Get(url) //nolint:noctx
 		if err != nil {
@@ -108,7 +111,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	}
 	checks = append(checks,
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
-		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(context.Context) doctor.Result { return checkEngramReachable() }},
+		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
+		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
@@ -275,15 +279,18 @@ func resolveDoctorTool(tool string) (string, string, error) {
 }
 
 func doctorToolCopies(tool string, pathDirs []string) []string {
-	seenDirs := make(map[string]struct{}, len(pathDirs))
+	seenCopies := make(map[string]struct{}, len(pathDirs))
 	copies := make([]string, 0, len(pathDirs))
 	for _, dir := range pathDirs {
-		cleanDir := filepath.Clean(dir)
-		if _, seen := seenDirs[cleanDir]; seen {
-			continue
-		}
 		if p := toolInDir(dir, tool); p != "" {
-			seenDirs[cleanDir] = struct{}{}
+			resolved, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				resolved = filepath.Clean(p)
+			}
+			if _, seen := seenCopies[resolved]; seen {
+				continue
+			}
+			seenCopies[resolved] = struct{}{}
 			copies = append(copies, p)
 		}
 	}
@@ -399,12 +406,53 @@ func checkStateJSON(homeDir string) CheckResult {
 	}
 
 	var missing []string
+	var dangling []string
 	for _, agentID := range s.InstalledAgents {
 		if dir := agentConfigDir(homeDir, agentID); dir != "" {
-			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			info, lstatErr := os.Lstat(dir)
+			if os.IsNotExist(lstatErr) {
+				// A missing final path is only genuinely missing when its
+				// ancestors resolve: a dangling ancestor symlink (e.g.
+				// ~/.config pointing at a removed target) also yields ENOENT
+				// here, and sync cannot restore a path behind a broken link.
+				ancestor, ancestorErr := danglingAncestor(homeDir, dir)
+				if ancestorErr != nil {
+					return CheckResult{
+						Name:   id,
+						Status: CheckStatusWarn,
+						Detail: fmt.Sprintf("managed config path %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, ancestorErr),
+					}
+				}
+				if ancestor != "" {
+					dangling = append(dangling, fmt.Sprintf("%s (dangling ancestor symlink %s)", dir, ancestor))
+					continue
+				}
 				missing = append(missing, agentID)
+				continue
+			}
+			if lstatErr != nil {
+				return CheckResult{
+					Name:   id,
+					Status: CheckStatusWarn,
+					Detail: fmt.Sprintf("managed config path %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, lstatErr),
+				}
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+					dangling = append(dangling, dir)
+				} else if statErr != nil {
+					return CheckResult{Name: id, Status: CheckStatusWarn, Detail: fmt.Sprintf("managed config symlink target %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, statErr)}
+				}
 			}
 		}
+	}
+
+	if len(dangling) > 0 {
+		detail := fmt.Sprintf("state lists %d agent(s) whose managed config paths are dangling symlinks: %s; inspect or repair these paths manually, then re-run 'gentle-ai doctor'", len(dangling), strings.Join(dangling, ", "))
+		if len(missing) > 0 {
+			detail += "; genuinely absent config dirs: " + strings.Join(missing, ", ")
+		}
+		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
 	}
 
 	if len(missing) > 0 {
@@ -421,6 +469,44 @@ func checkStateJSON(homeDir string) CheckResult {
 		Status: CheckStatusPass,
 		Detail: fmt.Sprintf("state file OK — %d agent(s) installed: %s", len(s.InstalledAgents), strings.Join(s.InstalledAgents, ", ")),
 	}
+}
+
+// danglingAncestor reports the nearest existing ancestor of path — walking
+// upward but staying strictly below homeDir — that is a symlink whose target
+// is missing. It returns "" when every existing ancestor resolves (the path is
+// then genuinely missing) and an error when an ancestor exists but cannot be
+// inspected, mirroring the unreadable treatment of the final path. Ancestors
+// at or above homeDir are never inspected: they are not managed by gentle-ai,
+// and a broken home directory would have failed the state read already.
+func danglingAncestor(homeDir, path string) (string, error) {
+	home := filepath.Clean(homeDir)
+	boundary := home + string(filepath.Separator)
+	for ancestor := filepath.Dir(filepath.Clean(path)); ancestor != home && strings.HasPrefix(ancestor, boundary); ancestor = filepath.Dir(ancestor) {
+		info, err := os.Lstat(ancestor)
+		if os.IsNotExist(err) {
+			continue // ancestor missing too; keep walking up
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			if info.IsDir() {
+				return "", nil // nearest existing ancestor is real; path is genuinely missing
+			}
+			// A non-directory ancestor blocks both inspection and restoration:
+			// sync cannot mkdir below a regular file. POSIX surfaces this as
+			// ENOTDIR at the final lstat, but Windows reports it as not-exist,
+			// which is how the walk gets here.
+			return "", fmt.Errorf("ancestor %s is not a directory", ancestor) // refusal:by-design world-action: the caller embeds this cause in a warn that already names the continuation (inspect or repair the path, re-run 'gentle-ai doctor'); the repair itself happens on the filesystem, not through a command
+		}
+		if _, err := os.Stat(ancestor); os.IsNotExist(err) {
+			return ancestor, nil
+		} else if err != nil {
+			return "", err
+		}
+		return "", nil // symlink resolves; path is genuinely missing below it
+	}
+	return "", nil
 }
 
 // agentConfigDir returns the expected config directory for a known agent ID.
@@ -446,14 +532,82 @@ func agentConfigDir(homeDir, agentID string) string {
 	}
 }
 
-// checkEngramReachable checks whether the engram HTTP health endpoint responds.
-func checkEngramReachable() CheckResult {
+// checkEngramReachable probes the configured Engram transport. An explicit
+// ENGRAM_BASE_URL selects HTTP; otherwise the doctor reads the stdio command
+// and arguments persisted in installed agent configurations. It never guesses
+// an HTTP address or replaces a persisted command with its current PATH.
+func checkEngramReachable(ctx context.Context, homeDir string, installedAgents []string) CheckResult {
 	const id = doctor.CheckEngramReachable
 
-	baseURL := os.Getenv(engramHealthEnvVar)
-	if baseURL == "" {
-		baseURL = "http://localhost:7437"
+	if baseURL := strings.TrimSpace(os.Getenv(engramHealthEnvVar)); baseURL != "" {
+		return checkEngramHTTP(id, baseURL)
 	}
+
+	commands, err := engram.ReadPersistedStdioCommands(homeDir, installedAgents)
+	if err != nil {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusFail,
+			Detail: "engram MCP persisted configuration is invalid: " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Repair the persisted Engram MCP configuration, then run 'gentle-ai sync'"),
+		}
+	}
+	if len(commands) == 0 {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "engram MCP not probed: no persisted MCP configuration found for installed agents",
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore the Engram MCP configuration"),
+		}
+	}
+
+	sources := make([]string, 0, len(commands))
+	for _, command := range commands {
+		err := engramProbeStdioFn(ctx, command.Timeout, command.Command, command.Args...)
+		switch {
+		case errors.Is(err, engram.ErrNotInstalled):
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusWarn,
+				Detail: "engram MCP not probed: persisted command in " + command.Source + " is not found on PATH (see the tool:engram check)",
+			}
+		// A deadline that elapsed is not evidence that the transport is
+		// broken, and #3068 showed what the old wording cost: the reporter's
+		// arguments were correct and their store answered in about five
+		// seconds, but they were told the handshake failed and sent to inspect
+		// the command and arguments, which the evidence did not implicate.
+		// Failing stays, because a probe that never answered is not a pass.
+		case errors.Is(err, context.DeadlineExceeded):
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusFail,
+				Detail: "engram MCP (stdio) did not answer within " + engram.StdioProbeDeadline(command.Timeout).String() +
+					" for persisted configuration " + command.Source,
+				Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram,
+					"Raise the Engram MCP server's timeout in "+command.Source+" if the store is simply slow to start, or check whether the process is hanging"),
+			}
+		case err != nil:
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusFail,
+				Detail: "engram MCP (stdio) initialize handshake failed for persisted configuration " + command.Source + ": " + err.Error(),
+				Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Check the Engram MCP command and arguments in "+command.Source),
+			}
+		}
+		sources = append(sources, command.Source)
+	}
+
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: "engram MCP (stdio) answered the initialize handshake for persisted configuration: " + strings.Join(sources, ", "),
+	}
+}
+
+// checkEngramHTTP probes the HTTP deployment the user declared via
+// ENGRAM_BASE_URL. It never invents a URL of its own.
+func checkEngramHTTP(id doctor.CheckID, baseURL string) CheckResult {
+	baseURL = strings.TrimSpace(baseURL)
 	healthURL := strings.TrimRight(baseURL, "/") + "/health"
 
 	statusCode, err := httpGetFn(healthURL, 3*time.Second)
@@ -461,8 +615,8 @@ func checkEngramReachable() CheckResult {
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusFail,
-			Detail: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyStartEngram, "Start engram or check that it is configured as an MCP server"),
+			Detail: "engram health endpoint unreachable at " + healthURL + " (from " + engramHealthEnvVar + "): " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyStartEngram, "Start 'engram serve' or fix "+engramHealthEnvVar),
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
@@ -562,5 +716,31 @@ func statusIcon(s CheckStatus) string {
 		return "[xx]"
 	default:
 		return "[??]"
+	}
+}
+
+func checkInstalledAssetVersion(homeDir string) CheckResult {
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: "no state file found — asset version check skipped",
+		}
+	}
+	if s.InstalledBinaryVersion == "" {
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: "no installed binary version recorded in state file — check skipped",
+		}
+	}
+	if s.InstalledBinaryVersion != AppVersion {
+		return CheckResult{
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+		}
+	}
+	return CheckResult{
+		Status: CheckStatusPass,
+		Detail: fmt.Sprintf("installed assets match running binary version (%s)", AppVersion),
 	}
 }

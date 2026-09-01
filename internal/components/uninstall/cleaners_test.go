@@ -164,7 +164,7 @@ func TestRemoveMarkdownSections_RemovesSlimResidualPersonaViaMarkerNotFingerprin
 
 func TestRemoveJSONPaths_RemovesOnlyManagedKeys(t *testing.T) {
 	input := []byte(`{
-  "theme": "gentleman-kanagawa",
+  "theme": "gentleman",
   "permission": {
     "bash": {
       "*": "allow"

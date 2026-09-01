@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/operation.schema.json",
+  "title": "Gentle AI negotiated review v2 operation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "contract", "operation", "result"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.operation/v2"},
+    "contract": {"const": "gentle-ai.review-integration/v2"},
+    "operation": {"$ref": "../../v1/schemas/operation.schema.json#/properties/operation"},
+    "result": {"$ref": "gate-result.schema.json"}
+  }
+}

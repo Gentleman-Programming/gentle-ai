@@ -33,6 +33,9 @@ go vet ./...
 go test ./...
 ```
 
+The portable core contains every non-axis journey and stays independent of
+product-private test seams.
+
 The measured binary is passed in with `--binary`, so the tool never depends on
 the sources next to it. That is what lets it measure an old release and the
 current build with identical code.
@@ -60,6 +63,18 @@ gentle-ai-bench compare --before results-before.json --after results-after.json
 subset. `run --axis damaged-store` adds an opt-in axis; `--axis all` adds every
 registered one. An unknown axis name is a hard error, never a quiet fall back to
 the core.
+
+Run the portable SDD authority controls against a selected public binary:
+
+```sh
+gentle-ai-bench run --binary /path/to/gentle-ai --only \
+  j52-sdd-stale-authority-does-not-shadow-approved-candidate,\
+  j53-sdd-ambiguous-authorities-fail-closed,\
+  j54-sdd-missing-authority-receipt-fails-closed,\
+  j55-sdd-mismatched-authority-receipt-fails-closed,\
+  j56-sdd-non-allow-post-apply-gate-fails-closed,\
+  j58-sdd-foreign-openspec-path-fails-closed
+```
 
 **`run` fails closed on failed journeys.** A journey that reports `failed`
 produced no numbers — the harness could not build or prove its fixture, or an
@@ -306,10 +321,11 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Forty-three core journeys that run
-   end to end, weighted toward failure paths because that is where friction
-   lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
-   inspection steps rather than review-lifecycle friction and are not modelled.
+7. **The corpus is honest, not exhaustive.** Mandatory portable black-box
+   journeys run end to end, weighted toward failure paths because that is where
+   friction lives. Testing-guide flows 1 (install) and 8 (no phantom SDD
+   artifacts) are inspection steps rather than review-lifecycle friction and are
+   not modelled.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
    instead.** A network mount where advisory locks fail in ways that are
@@ -344,8 +360,8 @@ invents a metric is worse than one that admits a gap.
 10. **The report is not byte-identical between two runs, though every count
     except one is.** Each journey runs under `os.MkdirTemp`, whose random
     suffix varies in length, and several journeys quote that path back in a
-    block message — `j14`, `j17`, `j31`, `j33`, `j34`, `j37`, `j38`, `j39` and
-    `j40` observed so far, and any journey that drives a refusal naming a
+    block message — `j14`, `j17`, `j31`, `j33`, `j34`, and `j40` observed so
+    far, and any journey that drives a refusal naming a
     repository path can join them. Which of them actually moves between a given
     pair of runs is chance: the suffix is 9 or 10 digits. No `damaged-store`
     axis journey has been observed to move: its refusals name lineages,
@@ -388,7 +404,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "43 journeys" a moving claim. Two of its numbers need careful reading.
+    "57 core journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -397,6 +413,14 @@ invents a metric is worse than one that admits a gap.
     product ever *read* the secret file or the ignored binary, only whether it
     quoted them. "The journey passed" means "nothing counted echoed it",
     nothing stronger.
+
+13. **A boundary-specific fix is omitted when this harness cannot cross its real
+    boundary.** Issue #2028 is an OpenCode plugin session-local retry and remains
+    plugin-covered; a CLI journey would never exercise that session boundary.
+    Issue #2074 is a Claude install/registry migration and remains E2E-covered;
+    this isolated review-lifecycle harness does not install or migrate Claude.
+    Issue #910 requires genuine Windows PowerShell host resolution; a Linux
+    fixture pretending to be Windows would be a proxy, not benchmark coverage.
 
 ## Measured: the current build
 
@@ -422,11 +446,11 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 ```
 
 Those numbers are the **14-journey** corpus against the binary named above,
-kept as-is because they belong to that named build. The corpus has since grown
-to 43 journeys; re-run `run` against your own binary rather than reading the
-block above as current totals. The row labels moved too: `by_design` did not
-exist when this was recorded and is now printed as `4d`, next to the number it
-carves out of, with `dead_end` at `4e`.
+kept as-is because they belong to that named build. The portable core has since
+grown; re-run `run` against your own binary rather than reading the block above
+as current totals. The row labels moved too: `by_design` did not exist when this
+was recorded and is now printed as `4d`, next to the number it carves out of,
+with `dead_end` at `4e`.
 
 `results-before.json` is the same corpus against `v2.1.2`, kept as a worked
 example of the cross-version path: 5 journeys completed and 9 recorded
@@ -440,6 +464,30 @@ with `commands_to_completion` unchanged at 16.
 
 Journeys are data — a slice of `Step` in `journeys.go`. Adding one is
 appending to that slice.
+
+### Every journey declares its review precondition
+
+Receipt-driven development is opt-in, and the sandbox `HOME` each journey runs
+under is a fresh install, so a journey gets no review by standing still.
+`Journey.Review` says what the runner does about that, and it is **mandatory** —
+`validateCorpus` fails the whole run on a journey that does not declare one.
+
+- `reviewOptedIn` — before the journey's first step, the runner opts in the way
+  a user does: `gentle-ai review mode enable --scope global`, run from a
+  throwaway checkout of its own, then read back. The journey fails if the
+  product does not report the switch on. It is sandbox setup, not operator work,
+  so it is never counted in `commands_to_completion`. Global is the only scope
+  that can assert "on"; a clone may only ever assert "off".
+- `reviewUntouched` — the runner runs no mode command at all. This is for a
+  journey whose subject IS the switch (`j03-kill-switch` drives it itself,
+  `j31-nonsense-mode-value` authors the record under test) and for one that has
+  nothing to do with reviews (`j2138`, `j3043`, `j97` install agents).
+
+The declaration is mandatory because the alternative already cost us once: the
+corpus measured the review lifecycle only because the product's default happened
+to say yes, and the day that default changed those journeys did not fail — they
+quietly measured a different flow, with the review refused and the gate passing
+under ordinary repository policy.
 
 | ID | Flow | Source |
 |---|---|---|
@@ -502,40 +550,32 @@ number look covered.
 | `j35-correction-budget-exactly-zero` | forecasting a correction against a budget of 0 | 3 + 4 |
 | `j36-contract-right-name-wrong-version` | `--contract` with the right name and a version this build lacks | 2 + 4 |
 
-### The SDD remediation successor cycle (`journeys_sdd.go`)
+### SDD lifecycle journeys (`journeys_sdd.go`)
 
-Journeys 37 to 43 close the corpus's largest blind spot. A community tester
-found a hard deadlock on this path that no internal audit had caught, and two
-of its blocks were fixed by hand with nothing in a loop pinning either one. Up
-to journey 36 the benchmark reported zero `out_of_band` blocks and zero dead
-ends for a surface it had simply never driven.
+The active SDD-focused corpus is non-exhaustive; it includes these lifecycle
+and compatibility journeys:
 
-| ID | Flow | Shape |
+| ID | Flow | Source |
 |---|---|---|
-| `j37-sdd-remediation-self-successor` | a bound passing attempt over a corrected candidate is refused, and the refusal names the finish that IS accepted | 4 |
-| `j38-sdd-remediation-distinct-successor` | with a real recovery successor in the way, the same refusal must route to review and must NOT name a finish | 3 + 4 |
-| `j39-sdd-remediation-stranded-successor` | a successor that can never be finalized: the named route runs and changes nothing | 4 + 2 |
-| `j40-sdd-attempt-reset-after-drift` | terminal attempt plus candidate drift: begin refuses, reset is the only way on | 2 + 4 |
-| `j41-kill-switch-versus-sdd-pre-verify` | reviews off, and SDD still routes to a review the operator may not start | 5 |
-| `j42-kill-switch-versus-sdd-archive` | reviews off at the archive decision: the product defers and never fabricates an approval | 5 |
-| `j43-recovery-guard-rails-as-an-operator-meets-them` | three correct refusals around healthy approved authority, and the exit that is not a command | 4 |
+| `j40-sdd-attempt-reset-after-drift` | terminal attempt, drifted candidate: begin refuses and reset is the only way on | shape 2 (a recoverable objective read as terminal) + shape 4 |
+| `j41-kill-switch-versus-sdd-pre-verify` | pre-verify: RDD supervises nothing, on or off, before verify runs | shape 5 (the kill switch and the pre-verify router) + Wave 4's removal of pre-verify review supervision |
+| `j42-kill-switch-versus-sdd-archive` | the offer is an invitation, never a gate: archive proceeds with reviews on or off | shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1 |
+| `j63-disabled-failed-verification-unmanaged-remediation` | failed verification gets one evidence-bound correction; re-enabled review context remains informational | #3417: failed, unknown, and pending review evidence remains visible but never gates completed SDD archive routing |
+| `j44-sdd-historical-requirement-stale-pass` | historical change-local requirement heading: stale PASS restarts verification instead of failed remediation | issue #2137 (historical OpenSpec requirement compatibility and stale verification routing) |
 
 Two of them measure something no test could: `j41` and `j42` each take one item
 off the documented known-open list and let the number say whether it is still
-open. `j42` is deliberately a journey with **no blocks at all** — the product
-half of that limitation is closed, and the pin is an assertion on the envelope
-rather than a block count, so a regression fails the journey loudly instead of
-passing quietly.
+open. Both came back **closed**, and both are therefore journeys with **no
+blocks at all** — the pin is an assertion on the envelope rather than a block
+count, so a regression fails the journey loudly instead of passing quietly.
 
-The state these journeys need cannot be built with git alone: an attempt
-ordinal, a populated review binding and the leaf/non-leaf topology of a lineage
-all live inside the product. Every fixture and composite here therefore reads
-them back out of the product (`Sandbox.readBack`, uncounted, `GIT_TRACE`
-blanked so its git calls are never charged to the next counted invocation) and
-fails the journey when the state is not what it claims — including the two
-premises that matter most: that the plain passing finish really does block, and
-that the topology really is the leaf or the non-leaf shape the journey says it
-is.
+`j41` is the clearest example of the corpus working as intended: it was written
+to measure a believed-open dead end where the SDD pre-verify router demanded a
+review the kill switch forbade, and it FAILED its own assertions on the run that
+found the behavior fixed. The failure was the finding. It now pins the absence
+of pre-verify review supervision: with the switch on, off, and re-enabled,
+routing remains `verify` with a ready verification dependency and no blocked
+reasons, because either half alone would pass while the other regressed.
 
 **Every fixture proves its own edge case before the journey trusts the result.**
 A fixture that sets its edge case up wrongly and then passes is the failure mode
@@ -547,6 +587,65 @@ mode-only change asserts the index really went `100644` → `100755` with a
 `rebase-merge` / `CHERRY_PICK_HEAD` exist *after* the conflict is resolved, and
 the nonsense mode record asserts that it still parses as JSON so the journey
 cannot silently decay into the already-covered corrupt-record case.
+
+### Wave 1 integration regressions (`journeys_wave1.go`)
+
+Journeys 44 to 51 pin fixes that internal tests already covered below the user
+boundary. All remain core black-box journeys: fixtures create repository inputs,
+and every native authority state is reached through the measured binary.
+
+| ID | Flow | Shape |
+|---|---|---|
+| `j44-corrected-current-changes-delivery` | corrected current-changes receipt in a proven linked worktree, exact one-commit delivery, selector-free pre-push discovery | issue #1819 + 3 |
+| `j45-completed-final-verification-retry` | procedural final-verification failure, status-derived retry successor, successful completion, authoritative inventory and selector-free post-apply | issue #1915 + 3 |
+| `j46-correction-required-staged-recovery` | correction-required base-diff authority, negotiated staged-overlay recovery, fresh successor review, exact pre-commit/pre-push/pre-PR delivery | issue #1921 |
+| `j47-disabled-mode-archives-discovered-invalidated-receipt` | enabled discovered invalidation, disabled/unmanaged archive without allow, explicit invalid receipt control, and re-enabled enforcement | issue #2128 |
+| `j48-recovered-workspace-preserves-full-candidate-scope` | two-path workspace candidate, strict-subset correction, complete terminal and recovered scope, immediate pre-commit allow, byte/path drift controls | issue #2090 |
+| `j49-status-without-cwd-honors-kill-switch` | clone-local mode disabled, explicit-CWD control, omitted-CWD status using the same repository identity, disabled/unmanaged archive without approval | issue #2129 |
+| `j50-candidate-decline-preserves-frozen-delivery-identity` | status-derived v2 consent relay and decline, exact non-authorizing delivery identity, clean authority inventory, release and byte/path drift controls | issue #2045 |
+| `j51-unrelated-noop-authority-keeps-composed-delivery` | two approved delivered segments, recorded composed pre-PR span, unrelated clean approved no-op, identical composed span afterward | issue #2125 |
+
+`j44` proves the linked checkout/common-dir topology and remote baseline before
+review starts, then proves the staged delivery tree equals the corrected receipt
+and `HEAD` is exactly one clean commit above upstream before pre-push runs.
+`j45` constructs the canonical incident and exact maintainer authorization only
+from negotiated status fields, then requires the global inventory to report the
+predecessor as `superseded`, the approved successor as `recovered`, and the
+inventory as complete and authoritative before selector-free post-apply runs.
+`j46` proves the staged overlay is the exact authorized recovery target and
+delivers only through its fresh approved successor. `j47` preserves one native
+authority revision while review mode is toggled, proving that only discovered
+governance steps aside and an explicit invalid receipt remains fail-closed.
+`j48` keeps one-path correction evidence local while corrected and recovered
+authority retain the complete two-path tree and manifest; exact pre-commit
+targets allow, while later byte and path drift still fail closed. `j49` proves
+that explicit and omitted CWD status calls reach the same clone-local switch and
+the same archive-ready change without fabricating review authority. `j50`
+executes only provider-emitted START and decline invocations, then proves the
+unchanged staged candidate retains its base/tree/path identity without review
+authority while release, byte drift, and path drift cannot inherit the decline.
+`j51` records the composed pre-PR span across two delivered segments before an
+unrelated clean no-op authority exists, then approves that no-op on a clean
+worktree and requires the identical selector-free gate to allow the identical
+span. Comparing the span, not just the verdict, is what makes it a regression:
+a graph that admitted the no-op self-loop denied composition for every
+unrelated lineage in the repository.
+
+### SDD authority discovery controls (`journeys_sdd.go`)
+
+Portable journeys 52 to 56 and 58 prove SDD chooses the sole exact approved
+authority over stale history and fails closed for every public authority shape.
+Each uses the public binary through the normal benchmark sandbox, not a
+source-level proxy.
+
+| ID | Flow | Source |
+|---|---|---|
+| `j52-sdd-stale-authority-does-not-shadow-approved-candidate` | newer approved same-path authority wins over stale history | issue #1893 |
+| `j53-sdd-ambiguous-authorities-fail-closed` | multiple eligible authorities block selection | compact authority discovery contract |
+| `j54-sdd-missing-authority-receipt-fails-closed` | a missing published receipt is not approval | compact authority discovery contract |
+| `j55-sdd-mismatched-authority-receipt-fails-closed` | receipt bytes must match approved authority state | compact authority discovery contract |
+| `j56-sdd-non-allow-post-apply-gate-fails-closed` | changed bytes cannot inherit an otherwise valid authority | compact authority discovery contract |
+| `j58-sdd-foreign-openspec-path-fails-closed` | mixed OpenSpec paths cannot govern the selected change | compact authority discovery contract |
 
 ## Opt-in axes
 
@@ -568,8 +667,8 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "43 journeys" and "43 journeys plus an axis" are different measurements and a
-  typo must never silently produce the first.
+  "57 core journeys" and "57 core journeys plus an axis" are different
+  measurements and a typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it
   reported before. That is the test of whether the seam is real, and it is worth
@@ -588,6 +687,11 @@ section — and it does not know what any axis measures.
 ### `damaged-store` (`axis_damaged_store.go`)
 
 Journeys that start from a compact-v2 review store already damaged on disk.
+
+The `ds11` crash-recovery positions require a product binary built with
+`-tags bench_fixture`, which exposes only their deterministic crash hook. The
+`model-picker` axis uses the same tag for `j97`; ordinary binaries report that
+journey unsupported rather than fabricating a pass.
 
 `validateCompactRecoveryEdge` runs at write time on both `review recover` and
 the compact transport import, so **no sequence of CLI commands produces a store
@@ -677,8 +781,8 @@ across days of sessions, and a large gitignored binary inside the tree.
 | ID | Shape | Family |
 |---|---|---|
 | `rw01-nested-worktree-not-ignored` | linked worktree at `.wt/test` INSIDE the tree, untracked, not ignored — #1881 verbatim | A |
-| `rw02-node-modules-scale-untracked-tree` | 3,000 untracked files beside a docs candidate; discovery's cost is the measurement | A |
-| `rw03-untracked-env-with-secrets` | untracked `.env` holding a sentinel secret; no counted command may quote the value | A |
+| `rw02-node-modules-scale-untracked-tree` | 3,000 untracked files beside a docs candidate; STATUS must collect explicit exclusion before START | A |
+| `rw03-untracked-env-with-secrets` | untracked `.env` holding a sentinel secret; explicit exclusion must not quote the value | A |
 | `rw04-mutating-pre-commit-hook` | husky-style hook rewrites a tracked file during commit; bytes proven moved between review and commit | A |
 | `rw05-dirty-submodule-gitlink-bump` | staged gitlink bump while the submodule's working tree holds uncommitted edits | A |
 | `rw06-shallow-clone-depth-1` | `--depth 1` clone proven to hold 1 of 3 commits; pre-push derivation against missing history | A |
@@ -733,25 +837,6 @@ verdict as honesty-contract entry 8 — they need a machine this harness cannot
 build in a Linux temp directory, and naming them is honest where implying
 coverage would not be.
 
-**Measured against commit `745b6064`** (a build with the #1881 fix still in
-flight): all 12 journeys complete, nothing unsupported, nothing failed. The
-axis adds 6 blocks to the corpus — five `in_band` and one `out_of_band`,
-which is `rw01` recording #1881 exactly (`discover intended untracked files:
-logical path is not canonical: ".wt/test/"`, exit 1, nothing runnable named).
-Against the 43-journey core alone, the axis adds +60 commands, +3 model runs,
-+3 human prompts, +2,739 stderr bytes — and **+98,512 git subprocesses,
-96,294 of them in `rw02`**, whose `review start` alone spends 15,089 walking
-3,000 untracked files. The honest reading of the block pattern: untracked
-not-ignored content beside a tier-0 docs change escalates it into a lens
-review and then draws a `scope-changed` pre-commit denial for the untracked
-paths themselves (`rw02`, `rw03`), while the same content gitignored costs
-almost nothing and is cited nowhere (`rw09`, 122 git subprocesses, receipt
-and gate clean); the hook, the rebase and the pull all end at a
-`scope-changed` denial naming a runnable, filled-in `review recover` command
-(`in_band`); and the amend passes pre-push — tree-not-commit identity holds
-where a human actually trips it. Re-run against your own binary rather than
-reading these as current totals; `rw01` in particular exists to change.
-
 ## Layout
 
 ```
@@ -761,8 +846,9 @@ metrics.go     Dimension, BlockCounts, accumulator, aggregate
 runner.go      Sandbox, capability probe, journey engine
 journeys.go    the corpus, as data — guide flows and their failure paths
 journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
-journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
-                  SDD, and the recovery guard rails
+journeys_sdd.go   active SDD attempt flows, the kill switch against SDD, and
+                  the recovery guard rails
+journeys_wave1.go  integrated community fixes exercised at their CLI boundary
 axis.go        the opt-in axis seam: registry, --axis selection, provenance
 axis_damaged_store.go  ONE axis, deletable: journeys starting from a store
                   damaged on disk. Not black-box; declares so itself.

@@ -43,6 +43,10 @@ type Axis struct {
 	// error — an axis exists precisely because it differs from the core, and an
 	// axis that will not say how differs silently.
 	Properties []string
+	// Review explicitly applies to every journey this axis contributes. Axes with
+	// generated journey IDs cannot rely on a runner default, so the declaration
+	// lives at their common source and is copied into each returned Journey.
+	Review ReviewPrecondition
 	// Journeys returns the axis's corpus. It is a function for the same reason
 	// the core's is: the corpus is data, built fresh on each call.
 	Journeys func() []Journey
@@ -55,6 +59,12 @@ var registeredAxes []Axis
 // RegisterAxis makes one axis available to `--axis`. It is called from an axis
 // file's init() and from nowhere else.
 func RegisterAxis(axis Axis) {
+	journeys := axis.Journeys
+	if journeys != nil {
+		axis.Journeys = func() []Journey {
+			return declareAxisJourneyReviewMode(journeys(), axis.Review)
+		}
+	}
 	registeredAxes = append(registeredAxes, axis)
 }
 
@@ -78,7 +88,7 @@ func axisNames() []string {
 // default: a run that says nothing about axes is a core run.
 //
 // An unknown name is a hard error rather than a warning. The whole point of the
-// flag is that "43 journeys" and "43 journeys plus a damaged-store axis" must
+// flag is that "45 journeys" and "45 journeys plus a damaged-store axis" must
 // never look alike, and a typo that silently produced the first while the caller
 // asked for the second would defeat it.
 func selectAxes(value string) ([]Axis, error) {
@@ -132,6 +142,9 @@ func validateAxes(axes []Axis, core []Journey) error {
 		if len(axis.Properties) == 0 {
 			problems = append(problems,
 				axis.Name+": declares no properties; an axis exists because it differs from the black-box core, and one that will not say how differs silently")
+		}
+		if axis.Review != reviewOptedIn && axis.Review != reviewUntouched {
+			problems = append(problems, axis.Name+": declares no review mode; set Review to reviewOptedIn or reviewUntouched")
 		}
 		if axis.Journeys == nil {
 			problems = append(problems, axis.Name+": contributes no journeys")

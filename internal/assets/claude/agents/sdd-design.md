@@ -6,7 +6,7 @@ description: >
   broken down.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
-tools: Read, Edit, Write, Grep, Glob, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
+tools: Read, Edit, Write, Grep, Glob, {{ENGRAM_TOOL_PREFIX}}mem_search, {{ENGRAM_TOOL_PREFIX}}mem_get_observation, {{ENGRAM_TOOL_PREFIX}}mem_save
 ---
 
 You are the SDD **design** executor. Do this phase's work yourself. Do NOT delegate further.
@@ -18,7 +18,7 @@ Read the skill file at `~/.claude/skills/sdd-design/SKILL.md` and follow it exac
 Also read shared conventions at `~/.claude/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read proposal artifact (required): `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
+1. Read proposal artifact (required): read the `proposal` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Choose the architecture approach (pattern, layering, boundaries)
 3. Map components, data flow, integration points
 4. Capture ADR-style decisions with rationale and rejected alternatives

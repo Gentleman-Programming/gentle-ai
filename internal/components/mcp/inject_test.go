@@ -2,8 +2,12 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func cursorAdapter(t *testing.T) agents.Adapter {
@@ -171,7 +176,7 @@ func assertKimiContext7Schema(t *testing.T, path string) {
 func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, opencodeAdapter())
+	first, err := Inject(home, home, opencodeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -179,7 +184,7 @@ func TestInjectOpenCodeMergesContext7AndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	second, err := Inject(home, opencodeAdapter())
+	second, err := Inject(home, home, opencodeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -243,7 +248,7 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 		t.Fatalf("WriteFile(openclaw.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject(openclaw) first error = %v", err)
 	}
@@ -251,7 +256,7 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 		t.Fatalf("Inject(openclaw) first changed = false")
 	}
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject(openclaw) second error = %v", err)
 	}
@@ -324,7 +329,7 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 				t.Fatalf("WriteFile(opencode.json) error = %v", err)
 			}
 
-			first, err := Inject(home, tt.adapter)
+			first, err := Inject(home, home, tt.adapter)
 			if err != nil {
 				t.Fatalf("Inject() first error = %v", err)
 			}
@@ -352,7 +357,7 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 				t.Fatal("opencode.json missing existing mcp.engram entry")
 			}
 
-			second, err := Inject(home, tt.adapter)
+			second, err := Inject(home, home, tt.adapter)
 			if err != nil {
 				t.Fatalf("Inject() second error = %v", err)
 			}
@@ -388,7 +393,7 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 				t.Fatalf("WriteFile(opencode.json) error = %v", err)
 			}
 
-			first, err := Inject(home, tt.adapter)
+			first, err := Inject(home, home, tt.adapter)
 			if err != nil {
 				t.Fatalf("Inject() first error = %v", err)
 			}
@@ -402,7 +407,7 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 				t.Fatalf("mcp.context7.headers = %#v; want invalid headers discarded", context7["headers"])
 			}
 
-			second, err := Inject(home, tt.adapter)
+			second, err := Inject(home, home, tt.adapter)
 			if err != nil {
 				t.Fatalf("Inject() second error = %v", err)
 			}
@@ -441,7 +446,7 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
 
-	_, err := Inject(home, adapter)
+	_, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
@@ -476,17 +481,16 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 	}
 }
 
-func TestInjectClaudeMergesContext7IntoSettingsAndIsIdempotent(t *testing.T) {
+func TestInjectClaudeWritesUserConfigAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(settings dir) error = %v", err)
-	}
-	if err := os.WriteFile(settingsPath, []byte(`{"theme":"dark"}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(settings) error = %v", err)
+	userConfigPath := filepath.Join(home, ".claude.json")
+	userConfig := `{"oauthAccount":{"emailAddress":"user@example.com"},"projects":{"/repo":{"allowedTools":[]}},"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`
+	// Seeded intentionally loose: injection must tighten it to 0600.
+	if err := os.WriteFile(userConfigPath, []byte(userConfig), 0o644); err != nil {
+		t.Fatalf("WriteFile(user config) error = %v", err)
 	}
 
-	first, err := Inject(home, claudeAdapter())
+	first, err := Inject(home, home, claudeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -494,7 +498,18 @@ func TestInjectClaudeMergesContext7IntoSettingsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	second, err := Inject(home, claudeAdapter())
+	afterFirst, err := os.ReadFile(userConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user config after first) error = %v", err)
+	}
+
+	// Loosen the mode: the no-op run must still re-tighten 0600.
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(userConfigPath, 0o644); err != nil {
+			t.Fatalf("Chmod(loosen) error = %v", err)
+		}
+	}
+	second, err := Inject(home, home, claudeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -502,32 +517,314 @@ func TestInjectClaudeMergesContext7IntoSettingsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() second changed = true")
 	}
 
-	context7 := readMCPServersContext7Entry(t, settingsPath)
-	if got := context7["command"]; got != "npx" {
-		t.Fatalf("mcpServers.context7.command = %#v; want npx", got)
+	raw, err := os.ReadFile(userConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user config) error = %v", err)
+	}
+	if string(raw) != string(afterFirst) {
+		t.Fatalf("second Inject() must leave ~/.claude.json byte-identical; got diff")
+	}
+	if info, statErr := os.Stat(userConfigPath); statErr != nil {
+		t.Fatalf("Stat(user config) error = %v", statErr)
+	} else if mode := info.Mode().Perm(); runtime.GOOS != "windows" && mode != 0o600 {
+		t.Fatalf("~/.claude.json mode = %o; want 0600 (holds the OAuth session)", mode)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("Unmarshal(user config) error = %v", err)
+	}
+	if _, ok := root["oauthAccount"].(map[string]any); !ok {
+		t.Fatalf("oauthAccount must be preserved; got %s", raw)
+	}
+	if _, ok := root["projects"].(map[string]any); !ok {
+		t.Fatalf("projects must be preserved; got %s", raw)
+	}
+	servers, _ := root["mcpServers"].(map[string]any)
+	if codegraph, _ := servers["codegraph"].(map[string]any); codegraph["command"] != "codegraph" {
+		t.Fatalf("existing codegraph registration must be preserved; got %#v", servers["codegraph"])
+	}
+	context7, _ := servers["context7"].(map[string]any)
+	if context7["command"] != "npx" {
+		t.Fatalf("mcpServers.context7.command = %#v; want npx", context7["command"])
+	}
+	if args := fmt.Sprintf("%v", context7["args"]); !strings.Contains(args, versions.Context7MCP) {
+		t.Fatalf("context7.args = %s; want pinned version %s", args, versions.Context7MCP)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "mcp", "context7.json")); !os.IsNotExist(err) {
 		t.Fatalf("Claude Context7 must not be written to ~/.claude/mcp/context7.json; stat err = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(home, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("user scope must not create <home>/.mcp.json; stat err = %v", err)
+	}
 }
 
-func TestInjectClaudeLeavesLegacyContext7FileForExplicitUninstallCleanup(t *testing.T) {
-	home := t.TempDir()
-	legacyPath := filepath.Join(home, ".claude", "mcp", "context7.json")
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(legacy dir) error = %v", err)
+// TestInjectClaudeSettingsInertBlockCleanup: the inert settings.json block is
+// removed when it only holds the managed context7 entry, and left untouched
+// when it carries servers gentle-ai does not manage.
+func TestInjectClaudeSettingsInertBlockCleanup(t *testing.T) {
+	cases := []struct {
+		name           string
+		settings       string
+		wantKeyRemoved bool
+	}{
+		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
+		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
+		{"user-authored context7 is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"my-own-proxy"}}}`, false},
+		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
 	}
-	if err := os.WriteFile(legacyPath, DefaultContext7ServerJSON(), 0o644); err != nil {
-		t.Fatalf("WriteFile(legacy context7) error = %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings dir) error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+
+			if _, err := Inject(home, home, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			readMCPServersContext7Entry(t, filepath.Join(home, ".claude.json"))
+
+			settingsRaw, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+			settings := map[string]any{}
+			if err := json.Unmarshal(settingsRaw, &settings); err != nil {
+				t.Fatalf("Unmarshal(settings) error = %v", err)
+			}
+			_, hasKey := settings["mcpServers"]
+			if tc.wantKeyRemoved && hasKey {
+				t.Fatalf("inert mcpServers key must be removed; got %s", settingsRaw)
+			}
+			if !tc.wantKeyRemoved && !hasKey {
+				t.Fatalf("foreign mcpServers block must be left untouched; got %s", settingsRaw)
+			}
+			if settings["theme"] != "dark" {
+				t.Fatalf("settings.theme = %#v; want dark preserved", settings["theme"])
+			}
+		})
+	}
+}
+
+// TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent verifies that workspace
+// scope (home != workspace) writes Context7 into <project-root>/.mcp.json — the
+// file Claude Code loads project-scoped MCP servers from — rather than the
+// inert .claude/settings.json key Claude ignores (issue #2213).
+func TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+
+	first, err := Inject(home, workspace, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false")
 	}
 
-	if _, err := Inject(home, claudeAdapter()); err != nil {
+	context7 := readMCPServersContext7Entry(t, mcpPath)
+	if context7["command"] != "npx" {
+		t.Fatalf(".mcp.json mcpServers.context7.command = %#v; want npx", context7["command"])
+	}
+	if args := fmt.Sprintf("%v", context7["args"]); !strings.Contains(args, versions.Context7MCP) {
+		t.Fatalf(".mcp.json context7.args = %s; want pinned version %s", args, versions.Context7MCP)
+	}
+
+	second, err := Inject(home, workspace, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; want idempotent")
+	}
+
+	// The inert settings.json key must never be (re)written for workspace scope.
+	if _, err := os.Stat(filepath.Join(workspace, ".claude", "settings.json")); err == nil {
+		raw, readErr := os.ReadFile(filepath.Join(workspace, ".claude", "settings.json"))
+		if readErr != nil {
+			t.Fatalf("ReadFile(settings.json) error = %v", readErr)
+		}
+		if strings.Contains(string(raw), `"mcpServers"`) {
+			t.Fatalf("workspace .claude/settings.json must not carry mcpServers; got %s", raw)
+		}
+	}
+}
+
+// TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList proves the
+// project-scope contract through Claude Code itself, without approving the
+// pending project server.
+func TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires the native Claude Code CLI")
+	}
+
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("native Claude Code CLI is not installed")
+		}
+		t.Fatalf("LookPath(claude) error = %v", err)
+	}
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
-	if _, err := os.Stat(legacyPath); err != nil {
-		t.Fatalf("legacy context7 file should be left for explicit uninstall cleanup: %v", err)
+
+	cmd := exec.Command(claudePath, "mcp", "list")
+	cmd.Dir = workspace
+	env := os.Environ()
+	homeReplaced := false
+	for index, value := range env {
+		if strings.HasPrefix(value, "HOME=") {
+			env[index] = "HOME=" + home
+			homeReplaced = true
+			break
+		}
 	}
-	readMCPServersContext7Entry(t, filepath.Join(home, ".claude", "settings.json"))
+	if !homeReplaced {
+		env = append(env, "HOME="+home)
+	}
+	cmd.Env = env
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude mcp list error = %v\noutput:\n%s", err, output)
+	}
+	t.Logf("native Claude project-scope discovery:\n%s", output)
+	lowerOutput := strings.ToLower(string(output))
+	if !strings.Contains(lowerOutput, "context7") {
+		t.Fatalf("claude mcp list did not discover context7 from %q\noutput:\n%s", filepath.Join(workspace, ".mcp.json"), output)
+	}
+	if !strings.Contains(lowerOutput, "pending") && !strings.Contains(lowerOutput, "approval") {
+		t.Fatalf("claude mcp list did not report the unapproved project server\noutput:\n%s", output)
+	}
+}
+
+func TestInjectClaudeWorkspacePreservesMCPReadErrors(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.Mkdir(mcpPath, 0o755); err != nil {
+		t.Fatalf("Mkdir(.mcp.json) error = %v", err)
+	}
+
+	_, err := Inject(home, workspace, claudeAdapter())
+	if err == nil {
+		t.Fatal("Inject() error = nil; want non-not-exist read error")
+	}
+	if !strings.Contains(err.Error(), mcpPath) {
+		t.Fatalf("Inject() error = %v; want path %q", err, mcpPath)
+	}
+}
+
+// TestInjectClaudeWorkspacePreservesUnrelatedServersAndConfig verifies that
+// merging context7 into <project-root>/.mcp.json preserves user-authored
+// servers and top-level config outside the managed entry (issue #2213).
+func TestInjectClaudeWorkspacePreservesUnrelatedServersAndConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "codegraph": {
+      "command": "codegraph",
+      "args": ["serve", "--mcp"]
+    }
+  },
+  "enableAllProjectMcpServers": true
+}`
+	if err := os.WriteFile(mcpPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(.mcp.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(.mcp.json) error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("Unmarshal(.mcp.json) error = %v", err)
+	}
+	servers, _ := parsed["mcpServers"].(map[string]any)
+	if codegraph, _ := servers["codegraph"].(map[string]any); codegraph["command"] != "codegraph" {
+		t.Fatalf("unrelated codegraph server must be preserved; got %#v", servers["codegraph"])
+	}
+	if context7, _ := servers["context7"].(map[string]any); context7["command"] != "npx" {
+		t.Fatalf("context7 must be merged; got %#v", servers["context7"])
+	}
+	if parsed["enableAllProjectMcpServers"] != true {
+		t.Fatalf("unrelated top-level config must be preserved; got %#v", parsed["enableAllProjectMcpServers"])
+	}
+}
+
+// TestInjectClaudeWorkspaceCleansInertSettingsBlock verifies workspace cleanup.
+func TestInjectClaudeWorkspaceCleansInertSettingsBlock(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	settingsPath := filepath.Join(workspace, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	for _, tc := range []struct {
+		name, settings string
+		wantKey        bool
+	}{
+		{"managed-only", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, false},
+		{"foreign", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, true},
+		{"empty", `{"theme":"dark","mcpServers":{}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+			if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			readMCPServersContext7Entry(t, filepath.Join(workspace, ".mcp.json"))
+			raw, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+			if got := strings.Contains(string(raw), `"mcpServers"`); got != tc.wantKey {
+				t.Fatalf("mcpServers presence = %t, want %t; got %s", got, tc.wantKey, raw)
+			}
+		})
+	}
+}
+
+func TestInjectClaudeRefusesCorruptUserConfig(t *testing.T) {
+	home := t.TempDir()
+	userConfigPath := filepath.Join(home, ".claude.json")
+	corrupt := []byte("{ this is not json")
+	if err := os.WriteFile(userConfigPath, corrupt, 0o600); err != nil {
+		t.Fatalf("WriteFile(corrupt user config) error = %v", err)
+	}
+	if _, err := Inject(home, home, claudeAdapter()); err == nil {
+		t.Fatalf("Inject() error = nil; want refusal on corrupt ~/.claude.json")
+	}
+	after, err := os.ReadFile(userConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user config) error = %v", err)
+	}
+	if string(after) != string(corrupt) {
+		t.Fatalf("corrupt ~/.claude.json must be left byte-identical; got %s", after)
+	}
 }
 
 func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
@@ -546,7 +843,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 		t.Fatalf("WriteFile(malformed mcp.json) error = %v", err)
 	}
 
-	result, err := Inject(home, adapter)
+	result, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject(cursor) with malformed mcp.json error = %v; want nil (should recover)", err)
 	}
@@ -573,7 +870,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 func TestInjectCodexContext7TOML(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := Inject(home, codex.NewAdapter())
+	result, err := Inject(home, home, codex.NewAdapter())
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
@@ -611,7 +908,7 @@ func TestInjectCodexContext7TOML(t *testing.T) {
 func TestInjectCodexContext7Idempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, codex.NewAdapter())
+	first, err := Inject(home, home, codex.NewAdapter())
 	if err != nil {
 		t.Fatalf("Inject(codex) first error = %v", err)
 	}
@@ -619,7 +916,7 @@ func TestInjectCodexContext7Idempotent(t *testing.T) {
 		t.Fatal("Inject(codex) first changed = false; want true")
 	}
 
-	second, err := Inject(home, codex.NewAdapter())
+	second, err := Inject(home, home, codex.NewAdapter())
 	if err != nil {
 		t.Fatalf("Inject(codex) second error = %v", err)
 	}
@@ -657,7 +954,7 @@ args = ["mcp", "--tools=agent"]
 		t.Fatalf("WriteFile(config.toml) error = %v", err)
 	}
 
-	_, err := Inject(home, codex.NewAdapter())
+	_, err := Inject(home, home, codex.NewAdapter())
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
@@ -697,7 +994,7 @@ args = ["mcp", "--tools=agent"]
 		t.Fatalf("WriteFile(config.toml) error = %v", err)
 	}
 
-	result, err := Inject(home, codex.NewAdapter())
+	result, err := Inject(home, home, codex.NewAdapter())
 	if err != nil {
 		t.Fatalf("Inject(codex) error = %v", err)
 	}
@@ -731,7 +1028,7 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	adapter := vscode.NewAdapter()
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -739,7 +1036,7 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -786,7 +1083,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("WriteFile(mcp_config.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
@@ -796,7 +1093,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 
 	assertAntigravityContext7Schema(t, configPath)
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -810,7 +1107,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, kimiAdapter())
+	first, err := Inject(home, home, kimiAdapter())
 	if err != nil {
 		t.Fatalf("Inject(kimi) first error = %v", err)
 	}
@@ -818,7 +1115,7 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 		t.Fatalf("Inject(kimi) first changed = false")
 	}
 
-	second, err := Inject(home, kimiAdapter())
+	second, err := Inject(home, home, kimiAdapter())
 	if err != nil {
 		t.Fatalf("Inject(kimi) second error = %v", err)
 	}
@@ -868,7 +1165,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("WriteFile(kimi mcp.json) error = %v", err)
 	}
 
-	first, err := Inject(home, adapter)
+	first, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject(kimi) first error = %v", err)
 	}
@@ -878,7 +1175,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 
 	assertKimiContext7Schema(t, configPath)
 
-	second, err := Inject(home, adapter)
+	second, err := Inject(home, home, adapter)
 	if err != nil {
 		t.Fatalf("Inject(kimi) second error = %v", err)
 	}
@@ -894,7 +1191,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 func TestInjectHermesContext7IntoYAML(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := Inject(home, hermesAdapter())
+	result, err := Inject(home, home, hermesAdapter())
 	if err != nil {
 		t.Fatalf("Inject(hermes) error = %v", err)
 	}
@@ -928,7 +1225,7 @@ func TestInjectHermesContext7IntoYAML(t *testing.T) {
 func TestInjectHermesContext7Idempotent(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := Inject(home, hermesAdapter())
+	first, err := Inject(home, home, hermesAdapter())
 	if err != nil {
 		t.Fatalf("Inject(hermes) first error = %v", err)
 	}
@@ -936,7 +1233,7 @@ func TestInjectHermesContext7Idempotent(t *testing.T) {
 		t.Fatal("Inject(hermes) first changed = false")
 	}
 
-	second, err := Inject(home, hermesAdapter())
+	second, err := Inject(home, home, hermesAdapter())
 	if err != nil {
 		t.Fatalf("Inject(hermes) second error = %v", err)
 	}
@@ -964,7 +1261,7 @@ func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
 	home := t.TempDir()
 
 	// Confirm no error is returned (the old code returned an error for strategy 4).
-	result, err := Inject(home, hermesAdapter())
+	result, err := Inject(home, home, hermesAdapter())
 	if err != nil {
 		t.Fatalf("Inject(hermes) with StrategyMergeIntoYAML returned error = %v (expected nil)", err)
 	}
@@ -992,7 +1289,7 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	result, err := Inject(home, hermesAdapter())
+	result, err := Inject(home, home, hermesAdapter())
 	if err != nil {
 		t.Fatalf("Inject(hermes) error = %v", err)
 	}
@@ -1019,7 +1316,7 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	}
 
 	// Second Inject must be idempotent and still preserve the original key.
-	second, err := Inject(home, hermesAdapter())
+	second, err := Inject(home, home, hermesAdapter())
 	if err != nil {
 		t.Fatalf("Inject(hermes) second error = %v", err)
 	}

@@ -84,7 +84,7 @@ func TestValidateGPT56Runtime(t *testing.T) {
 				t.Fatalf("ValidateGPT56Runtime() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
-				for _, want := range []string{"Codex >=0.144.0", "npm install -g --ignore-scripts @openai/codex@0.144.0"} {
+				for _, want := range []string{"Codex >=0.144.0", "npm install -g --ignore-scripts @openai/codex@latest"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("error %q missing %q", err, want)
 					}

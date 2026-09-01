@@ -2,9 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -39,37 +43,33 @@ func failEnvelopelessCapture(t *testing.T, repo string, started ReviewFacadeStar
 	return err
 }
 
-// preserveEnvelopelessIncident preserves the malformed raw payload as a native
-// incident artifact for the same live lens slot and returns the artifact.
-func preserveEnvelopelessIncident(t *testing.T, repo string, started ReviewFacadeStartResult, record reviewtransaction.CompactRecord) reviewIncidentArtifact {
-	t.Helper()
-	input := filepath.Join(t.TempDir(), "raw.json")
-	if err := os.WriteFile(input, []byte(envelopelessReviewerPayload), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	if err := RunReviewPreserveResult([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
-	}, &output); err != nil {
-		t.Fatalf("preserve incident after rejected admission: %v", err)
-	}
-	var artifact reviewIncidentArtifact
-	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
-	preserved, err := os.ReadFile(artifact.Path)
-	if err != nil || string(preserved) != envelopelessReviewerPayload {
-		t.Fatalf("incident artifact bytes mismatch: %v %q", err, preserved)
-	}
-	return artifact
-}
-
-// TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission reproduces
-// the community-reported dead end (PR #1801): a reviewer payload without the
-// provider-owned envelope is rejected fail-closed and preserved as an incident,
-// and the same lineage/lens must then accept a corrected well-formed capture,
-// because a slot whose admission was REJECTED was never consumed.
+// TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission proves that
+// rejected reviewer output creates no alternate authority. The selected slot stays
+// empty, STATUS reoffers its exact binding, and a corrected result can fill it.
 func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.T) {
-	repo, started, store, record := newArtifactReview(t, false)
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, true)
+	statusArgs := []string{
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"--cwd", repo, "--lineage", started.LineageID,
+	}
+	readStatus := func() ReviewTargetStatusResult {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview(statusArgs, &output); err != nil {
+			t.Fatal(err)
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		return status
+	}
+	initialStatus := readStatus()
+	if initialStatus.NextTransition == nil || initialStatus.NextTransition.Collect == nil ||
+		len(initialStatus.NextTransition.Collect.Inputs) == 0 {
+		t.Fatalf("initial reviewer transition = %#v", initialStatus.NextTransition)
+	}
+	offered := initialStatus.NextTransition.Collect.Inputs[0]
+
 	err := failEnvelopelessCapture(t, repo, started, record)
 	// Discoverability contract: the admission-incomplete rejection must name
 	// the continuation — re-run the lens and capture again with the required
@@ -79,16 +79,41 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 			t.Fatalf("admission-incomplete rejection does not name the continuation %q: %v", continuation, err)
 		}
 	}
-	// The rejection never consumed the immutable slot and never mutated authority.
-	if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected admission consumed the immutable result slot: %v", statErr)
+
+	// A rejected capture leaves no lens, role, incident, or disposition authority.
+	afterRejected, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	assertArtifactRevision(t, store, record.Revision)
+	if afterRejected.Revision != record.Revision || !reflect.DeepEqual(afterRejected.State, record.State) {
+		t.Fatalf("rejected capture mutated reviewing authority: before=%#v after=%#v", record, afterRejected)
+	}
+	if len(afterRejected.State.AdmittedRoleResults) != 0 {
+		t.Fatalf("rejected capture occupied a reviewer slot: %#v", afterRejected.State)
+	}
+	// The only compact authority tree belongs to this isolated test repository.
+	// A rejected provider payload is neither a durable artifact nor an event: its
+	// bytes and raw SHA-256 must be absent from every compact authority file, and
+	// the retired incident sidecar must not exist.
+	authorityRoot := filepath.Dir(filepath.Dir(store.Dir))
+	digest := sha256.Sum256([]byte(envelopelessReviewerPayload))
+	assertCompactAuthorityOmitsRejectedCapture(t, authorityRoot,
+		[]byte(envelopelessReviewerPayload),
+		[]byte(hex.EncodeToString(digest[:])),
+		[]byte("sha256:"+hex.EncodeToString(digest[:])),
+	)
+	incidentPath := filepath.Join(authorityRoot, "incidents", started.LineageID)
+	if _, statErr := os.Lstat(incidentPath); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected capture created retired compact incident ownership at %s: %v", incidentPath, statErr)
+	}
 
-	incident := preserveEnvelopelessIncident(t, repo, started, record)
+	reofferedStatus := readStatus()
+	if reofferedStatus.NextTransition == nil || reofferedStatus.NextTransition.Collect == nil ||
+		len(reofferedStatus.NextTransition.Collect.Inputs) == 0 ||
+		!reflect.DeepEqual(reofferedStatus.NextTransition.Collect.Inputs[0], offered) {
+		t.Fatalf("fresh STATUS did not reoffer the rejected reviewer slot: %#v", reofferedStatus.NextTransition)
+	}
 
-	// The current dead-end probe: a corrected WELL-FORMED capture on the same
-	// lineage/lens must admit normally after the rejected admission.
 	corrected := filepath.Join(t.TempDir(), "corrected.json")
 	if err := os.WriteFile(corrected, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
 		t.Fatal(err)
@@ -99,7 +124,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 	}
 	var captured bytes.Buffer
 	if err := RunReviewCaptureResult(captureArgs, &captured); err != nil {
-		t.Fatalf("corrected capture after rejected admission was refused (same-lineage recapture dead end): %v", err)
+		t.Fatalf("corrected capture after rejected admission was refused: %v", err)
 	}
 	var artifact reviewResultArtifact
 	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
@@ -107,14 +132,8 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 		t.Fatalf("corrected capture admission = %q", artifact.AdmissionDecision)
 	}
 
-	// The incident stays as append-only audit history; a successful recapture
-	// never deletes or replaces it.
-	if preserved, err := os.ReadFile(incident.Path); err != nil || string(preserved) != envelopelessReviewerPayload {
-		t.Fatalf("successful recapture disturbed the incident audit artifact: %v %q", err, preserved)
-	}
-
-	// Single assignment for ADMITTED results still holds: exact replay
-	// converges, and a DIFFERENT well-formed result for the same slot stays refused.
+	// Single assignment for admitted results still holds: exact replay converges,
+	// and a different well-formed result for the same slot stays refused.
 	var replay bytes.Buffer
 	if err := RunReviewCaptureResult(captureArgs, &replay); err != nil || captured.String() != replay.String() {
 		t.Fatalf("exact recapture replay diverged: %v", err)
@@ -128,49 +147,161 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 		t.Fatal("second different capture after a successful admission was accepted; single assignment was weakened")
 	}
 
-	// The recaptured lineage completes normally.
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(captured.String())}, io.Discard); err != nil {
-		t.Fatalf("finalize after same-lineage recapture failed: %v", err)
+	if artifact.Reference == "" || artifact.Path != "" {
+		t.Fatalf("same-lineage recapture did not return the record-backed opaque artifact reference: %#v", artifact)
 	}
 }
 
-// TestReviewAbandonAfterRejectedAdmissionIncidentArtifact answers the open
-// pristineness question from the community report: a quarantined incident
-// artifact records a REJECTED admission — never a capture — so it must not
-// disqualify the reviewing lineage from `review abandon`, which accepts "a
-// reviewing authority that never captured lens results". The incident lives
-// beside the authority root (incidents/<lineage>), not inside the store entry,
-// and it survives the quarantine as audit history.
-func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
-	repo, started, _, record := newArtifactReview(t, false)
-	failEnvelopelessCapture(t, repo, started, record)
-	incident := preserveEnvelopelessIncident(t, repo, started, record)
+func assertCompactAuthorityOmitsRejectedCapture(t *testing.T, authorityRoot string, forbidden ...[]byte) {
+	t.Helper()
+	if err := filepath.Walk(authorityRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, value := range forbidden {
+			if bytes.Contains(payload, value) {
+				t.Fatalf("compact authority retained rejected reviewer capture material in %s", path)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan compact authority for rejected reviewer capture material: %v", err)
+	}
+}
 
-	binding := "gentle-ai.review-abandon-authorization/v1\nlineage=" + started.LineageID +
-		"\nrevision=" + record.Revision +
-		"\nsnapshot_identity=" + record.State.InitialSnapshot.Identity +
-		"\nactor=maintainer@example.com\nreason=abandon after rejected reviewer admission"
-	var output bytes.Buffer
-	err := RunReviewAbandon([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.Revision,
-		"--reason", "abandon after rejected reviewer admission", "--actor", "maintainer@example.com",
-		"--maintainer-authorization", binding,
-	}, &output)
+func TestRetiredReviewResultVerbsAreAbsent(t *testing.T) {
+	for _, verb := range []string{"preserve-result", "dispose-result"} {
+		t.Run(verb, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{verb, "--help"}, &output)
+			if err == nil || !strings.Contains(err.Error(), "unknown review command") {
+				t.Fatalf("retired review verb %q remains callable: %v\n%s", verb, err, output.String())
+			}
+			if strings.Contains(output.String(), verb) {
+				t.Fatalf("retired review verb %q remains in command output: %s", verb, output.String())
+			}
+		})
+	}
+
+	var usage bytes.Buffer
+	if err := RunReview(nil, &usage); err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"preserve-result", "dispose-result"} {
+		if strings.Contains(usage.String(), verb) {
+			t.Fatalf("retired review verb %q remains in usage: %s", verb, usage.String())
+		}
+	}
+}
+
+func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, true)
+	statusArgs := []string{
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"--cwd", repo, "--lineage", started.LineageID,
+	}
+	readStatus := func() ReviewTargetStatusResult {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview(statusArgs, &output); err != nil {
+			t.Fatal(err)
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		return status
+	}
+
+	firstStatus := readStatus()
+	if firstStatus.NextTransition == nil || firstStatus.NextTransition.Kind != reviewNextTransitionCollect ||
+		firstStatus.NextTransition.ReasonCode != "reviewer_results_required" || firstStatus.NextTransition.Collect == nil ||
+		len(firstStatus.NextTransition.Collect.Inputs) == 0 {
+		t.Fatalf("initial reviewer transition = %#v", firstStatus.NextTransition)
+	}
+	offered := firstStatus.NextTransition.Collect.Inputs[0]
+	arguments, err := reviewTransitionArgumentMap(offered.Arguments)
 	if err != nil {
-		t.Fatalf("abandon refused a reviewing lineage whose only artifact is a rejected-admission incident: %v", err)
+		t.Fatal(err)
 	}
-	var result ReviewAbandonResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Record.Status != reviewtransaction.CompactReclaimCommitted ||
-		result.Record.PristineAbandonment == nil ||
-		result.Record.PristineAbandonment.State != reviewtransaction.StateReviewing {
-		t.Fatalf("abandon after incident result = %#v", result)
+	lens := record.State.SelectedLenses[0]
+	for name, want := range map[string]string{
+		"lineage": started.LineageID, "target": record.State.InitialSnapshot.Identity,
+		"expected-revision": record.State.CapturePhaseRevision, "lens": lens, "order": "0",
+	} {
+		if arguments[name] != want {
+			t.Fatalf("initial reviewer argument %q = %q, want %q", name, arguments[name], want)
+		}
 	}
-	if _, statErr := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", started.LineageID)); !os.IsNotExist(statErr) {
-		t.Fatalf("abandoned lineage entry still present: %v", statErr)
+	if offered.ArtifactSubject == nil || offered.ArtifactSubject.LineageID != started.LineageID ||
+		offered.ArtifactSubject.AuthorityRevision != record.State.CapturePhaseRevision ||
+		offered.ArtifactSubject.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		offered.ArtifactSubject.Lens != lens || offered.ArtifactSubject.SelectedOrder != 0 {
+		t.Fatalf("initial reviewer subject = %#v", offered.ArtifactSubject)
 	}
-	// The incident artifact remains as append-only audit history after abandon.
-	if preserved, readErr := os.ReadFile(incident.Path); readErr != nil || string(preserved) != envelopelessReviewerPayload {
-		t.Fatalf("abandon disturbed the incident audit artifact: %v %q", readErr, preserved)
+
+	incomplete := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	incomplete.Inspection.Status = reviewtransaction.ArtifactInspectionStatus("incomplete")
+	incomplete.Inspection.Paths = []string{}
+	incomplete.Evidence = []string{"provider access failed before candidate inspection"}
+	if incomplete.SubjectHash != offered.ArtifactSubject.SubjectHash {
+		t.Fatalf("incomplete result subject = %q, want %q", incomplete.SubjectHash, offered.ArtifactSubject.SubjectHash)
+	}
+	payload, err := json.Marshal(incomplete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := filepath.Join(t.TempDir(), "incomplete.json")
+	if err := os.WriteFile(failed, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureArgs := []string{
+		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.State.CapturePhaseRevision,
+		"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", "0", "--input", failed,
+	}
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "reviewer did not report completed candidate inspection") {
+		t.Fatalf("incomplete inspection capture error = %v", err)
+	}
+	afterFailure, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterFailure.Revision != record.Revision || len(afterFailure.State.AdmittedRoleResults) != 0 {
+		t.Fatalf("incomplete inspection mutated authority = %#v", afterFailure)
+	}
+	if len(afterFailure.State.AdmittedRoleResults) != 0 {
+		t.Fatalf("incomplete inspection consumed canonical role results: %#v", afterFailure.State.AdmittedRoleResults)
+	}
+
+	reofferedStatus := readStatus()
+	if reofferedStatus.NextTransition == nil || reofferedStatus.NextTransition.Collect == nil ||
+		len(reofferedStatus.NextTransition.Collect.Inputs) == 0 ||
+		!reflect.DeepEqual(reofferedStatus.NextTransition.Collect.Inputs[0], offered) {
+		t.Fatalf("fresh STATUS did not reoffer the exact reviewer slot: %#v", reofferedStatus.NextTransition)
+	}
+
+	corrected := filepath.Join(t.TempDir(), "corrected.json")
+	if err := os.WriteFile(corrected, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureArgs[len(captureArgs)-1] = corrected
+	var captured bytes.Buffer
+	if err := RunReviewCaptureResult(captureArgs, &captured); err != nil {
+		t.Fatalf("corrected capture after STATUS reoffer: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
+	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
+		t.Fatalf("corrected capture admission = %q", artifact.AdmissionDecision)
+	}
+	if artifact.Reference == "" || artifact.Path != "" {
+		t.Fatalf("STATUS-mediated recapture did not return the record-backed opaque artifact reference: %#v", artifact)
 	}
 }

@@ -48,15 +48,19 @@ func classifyCompactTargetRelation(frozen, live Snapshot, genesisPaths []string,
 	if paths == compactPathsInvalid || !sameRecoveryProjection(frozen.Projection, live.Projection) {
 		return relation
 	}
+	compatibleAdvance := evidence.CompatibleAdvance != nil && evidence.CompatibleAdvance.valid() &&
+		evidence.CompatibleAdvance.OriginalMergeBaseTree == frozen.BaseTree &&
+		(evidence.CompatibleAdvance.OriginalMergeBaseTree == live.BaseTree || evidence.CompatibleAdvance.NewBaseTree == live.BaseTree) &&
+		(frozen.CandidateTree == live.CandidateTree || evidence.CompatibleAdvance.MergedResultTree == live.CandidateTree) &&
+		evidence.CompatibleAdvance.DeliveredPathsDigest == digestPaths(frozen.Paths)
 	substantiveScopeChange := frozen.CandidateTree != live.CandidateTree || !equalStrings(frozen.Paths, live.Paths)
 	if !compactStartTargetKindsCompatible(frozen.Kind, live.Kind) &&
+		!(compatibleAdvance && frozen.Kind == TargetBaseDiff && live.Kind == TargetBaseWorkspaceOverlay) &&
 		!(evidence.ExplicitScopeChange && substantiveScopeChange) {
 		return relation
 	}
 
-	if proof := evidence.CompatibleAdvance; proof != nil && proof.valid() &&
-		proof.OriginalMergeBaseTree == frozen.BaseTree && proof.NewBaseTree == live.BaseTree &&
-		frozen.CandidateTree == live.CandidateTree && proof.DeliveredPathsDigest == digestPaths(frozen.Paths) {
+	if compatibleAdvance {
 		relation.Kind = compactTargetCompatibleAdvance
 		return relation
 	}

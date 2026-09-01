@@ -237,10 +237,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentPi)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	return [][]string{
 		{"pi", "install", "npm:gentle-pi"},
@@ -256,9 +252,6 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 }
 
 func (a *Adapter) engramInitCommand() []string {
-	if _, err := a.lookPath("pnpm"); err == nil {
-		return []string{"pnpm", "dlx", "gentle-engram@latest", "pi-engram", "init"}
-	}
 	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 }
 

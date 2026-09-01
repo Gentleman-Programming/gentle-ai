@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,31 @@ func TestReviewerResultEnvelopeMatchesAdmission(t *testing.T) {
 	}
 	if len(envelope.LensAgentNames) != len(supportedLenses) {
 		t.Fatalf("lens agent names %v do not match the supported lenses %v", envelope.LensAgentNames, supportedLenses)
+	}
+}
+
+func TestReviewerResultSchemaPublishesBothFindingLensForms(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal([]byte(ReviewerResultSchema), &document); err != nil {
+		t.Fatalf("decode reviewer schema: %v", err)
+	}
+	properties := document["properties"].(map[string]any)
+	want := []string{
+		"risk", "resilience", "readability", "reliability",
+		LensRisk, LensResilience, LensReadability, LensReliability,
+	}
+	for name, raw := range map[string]any{
+		"result":  properties["lens"].(map[string]any)["enum"],
+		"finding": properties["findings"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["lens"].(map[string]any)["enum"],
+	} {
+		payload, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		if err := json.Unmarshal(payload, &got); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s lens enum = %v, want %v (%v)", name, got, want, err)
+		}
 	}
 }
 
@@ -69,19 +95,62 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 	request.Result = LensResult{Lens: LensReliability, Findings: []Finding{}, Evidence: evidence}
 	request.CandidateCausalFindingIDs = nil
 
-	_, admission, err := AdmitArtifact(request)
+	_, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
 		t.Fatalf("AdmitArtifact(schema-shaped result) decision = %q, error = %v; want completed", admission.Decision, err)
 	}
 
 	request.EchoedSubjectHash = ""
-	_, admission, err = AdmitArtifact(request)
+	_, admission, err = AdmitArtifact(t.Context(), request)
 	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
 		t.Fatalf("AdmitArtifact(no subject_hash) decision = %q, error = %v; want incomplete", admission.Decision, err)
 	}
 	for _, want := range []string{"subject_hash", "inspection", "re-run"} {
 		if !strings.Contains(admission.Diagnostic, want) {
 			t.Fatalf("refusal %q does not name %q", admission.Diagnostic, want)
+		}
+	}
+}
+
+// TestFindingIDPrefixForLensPublishesAdmissionMapping pins the exported
+// lens-to-prefix mapping to the exact prefixes admission enforces, so START can
+// publish the same namespace the published regex leaves ambiguous.
+func TestFindingIDPrefixForLensPublishesAdmissionMapping(t *testing.T) {
+	want := map[string]string{
+		LensRisk:        "R1-",
+		LensReadability: "R2-",
+		LensReliability: "R3-",
+		LensResilience:  "R4-",
+	}
+	for _, lens := range supportedLenses {
+		if got := FindingIDPrefixForLens(lens); got != want[lens] {
+			t.Fatalf("FindingIDPrefixForLens(%q) = %q, want %q", lens, got, want[lens])
+		}
+	}
+	if got := FindingIDPrefixForLens("review-unknown"); got != "" {
+		t.Fatalf("FindingIDPrefixForLens(unknown) = %q, want empty", got)
+	}
+
+	var document struct {
+		Properties struct {
+			Findings struct {
+				Items struct {
+					Properties struct {
+						ID struct {
+							Description string `json:"description"`
+						} `json:"id"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"findings"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(ReviewerResultSchema), &document); err != nil {
+		t.Fatal(err)
+	}
+	description := document.Properties.Findings.Items.Properties.ID.Description
+	for lens, prefix := range want {
+		if !strings.Contains(description, lens+"="+prefix) {
+			t.Fatalf("schema finding id description %q does not publish %s=%s", description, lens, prefix)
 		}
 	}
 }

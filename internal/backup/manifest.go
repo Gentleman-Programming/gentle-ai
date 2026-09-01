@@ -154,7 +154,7 @@ var BackupRootFn = backupRoot
 // Symlink note: if the path already exists on disk, EvalSymlinks is used to
 // resolve the real path and re-check against the backup root, preventing symlink escapes.
 // If the path does not exist yet, only filepath.Clean is used — this limitation is accepted
-// and documented here, consistent with isPathUnderHome.
+// and documented here, consistent with isPathUnderRoot.
 func isRootDirUnderBackupRoot(dir string) (bool, error) {
 	root, err := BackupRootFn()
 	if err != nil {

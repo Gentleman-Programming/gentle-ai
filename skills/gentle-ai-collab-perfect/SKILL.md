@@ -27,21 +27,20 @@ The skill assumes the contributor is working from wherever they push — a fork,
 
 ---
 
-## Source of truth — read the repo, don't infer
+## Source of truth — inspect the repo, don't infer
 
-Before recommending any contribution action, read the relevant local file. The repo documents every constraint; pulling rules verbatim beats guessing.
+Before recommending any contribution action, inspect the relevant current source. The repo documents every constraint; pulling rules verbatim beats guessing.
 
-| File | What it tells you |
+| Source | What it tells you |
 |---|---|
 | `CONTRIBUTING.md` | Issue-first workflow, label taxonomy, branch naming regex `^(feat\|fix\|chore\|docs\|style\|refactor\|perf\|test\|build\|ci\|revert)\/[a-z0-9._-]+$`, Conventional Commits format, 400-line review budget |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Required PR body sections (Linked Issue, PR Type, Summary, Changes, Test Plan, Automated Checks, Contributor Checklist, Notes for Reviewers) |
-| `.github/ISSUE_TEMPLATE/bug_report.yml` | Bug report structure + `status:needs-review` auto-label + `status:approved` blocking gate |
-| `.github/ISSUE_TEMPLATE/feature_request.yml` | Feature request structure + same gates |
+| `.github/ISSUE_TEMPLATE` | Current issue templates, forms, and routing policy |
+| Discovered GitHub labels | Current label names and availability; do not infer them from this skill |
 | `.github/workflows/pr-check.yml` | Automated gates: `Check Issue Reference`, `Check Issue Has status:approved`, `Check PR Has type:* Label`, `Check PR Cognitive Load` |
-| `.github/ISSUE_TEMPLATE/config.yml` | Issue-template routing rules; do not bypass |
 | `skills/branch-pr/SKILL.md` | Branch + PR creation mechanics |
 | `skills/chained-pr/SKILL.md` | Chained vs Stacked PR strategy mechanics |
-| `skills/issue-creation/SKILL.md` | Issue creation mechanics |
+| `internal/assets/skills/issue-creation/SKILL.md` | Canonical issue discovery, drafting, privacy review, and publication authority |
 | `skills/cognitive-doc-design/SKILL.md` | Doc-writing principles |
 | `skills/comment-writer/SKILL.md` | Tone for comment replies |
 
@@ -51,15 +50,16 @@ These files evolve. Re-read them at the start of every contribution.
 
 ## Hard rules (do not negotiate)
 
-1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` from a maintainer. Enforced by `pr-check.yml` and CONTRIBUTING.md.
+1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` under the canonical issue-creation workflow contract. Enforced by `pr-check.yml` and CONTRIBUTING.md.
 2. **Use `Closes/Fixes/Resolves #N`** in the PR body. `Refs #N` does NOT satisfy `Check Issue Reference`. Verified empirically on this repo.
-3. **Exactly one `type:*` label per PR.** Two `type:*` labels fail the check. No `type:*` label fails the check.
-4. **400-line budget per PR** (`additions + deletions`). Above that, request `size:exception` from a maintainer with rationale documented in the PR body.
-5. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
-6. **No force-push to `main`.** It is protected.
-7. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — write a `## Pending maintainer actions` section instead.
-8. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
-9. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
+3. **Ordinary `type:*` categorization** — zero or multiple labels fail the check. Route it through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
+4. **Protected policy labels** — adding or removing `status:approved` or `size:exception` requires verified policy authority from a target-host repository maintainer or repository-authorized approver for the exact target/action, plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`. `size:exception` additionally requires documented over-budget rationale.
+5. **400-line budget per PR** (`additions + deletions`). Above that, `size:exception` additionally requires documented over-budget rationale.
+6. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
+7. **No force-push to `main`.** It is protected.
+8. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — record the pending canonical PR-label action instead.
+9. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
+10. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
 
 ---
 
@@ -73,29 +73,23 @@ This split catches external contributors most often. Verify with `gh` before rec
 | Open a PR from a working branch (wherever they push from) | ✅ | — |
 | Edit own PR body | ✅ | — |
 | Push commits to own branches | ✅ | — |
-| Add `status:approved` to an issue | ❌ | ✅ |
-| Apply `type:*` label to a PR | ❌ | ✅ |
-| Apply `size:exception` label | ❌ | ✅ |
+| Apply/remove ordinary existing issue labels | Only under the canonical issue-creation workflow contract and target-host capability grant | Same; verify the target host grants the action |
+| Apply/remove ordinary `type:*` PR categorization | Only under the canonical issue-creation workflow contract: current direct human instruction, exact target/action, target-host capability, one bounded mutation and target-host readback | Same; verify the target host grants the action |
+| Add/remove protected `status:approved` or `size:exception` | Verified policy authority from a repository maintainer or repository-authorized approver plus actor `MAINTAIN`/`ADMIN`; `size:exception` also needs documented rationale | Same verified policy authority, actor capability, and rationale |
 | Approve `action_required` fork-PR workflows (fork approval gate) | ❌ | ✅ |
 | Review a PR (approve / request changes) | ❌ | ✅ |
 | Merge a PR | ❌ | ✅ |
 | Push slice/* branches to upstream so cross-fork base refs work | ❌ | ✅ |
 
-If the contributor's PR is "stuck" on something, the next step is almost always a maintainer action — not the contributor trying it. Trying it surfaces GraphQL 403 (`AddLabelsToLabelable`, `requestReviewsByLogin`, deployment-protection API) and makes the contributor look unaware of the workflow.
-
-**Verified empirically** in this repo (July 2026): `gh pr edit --add-label type:feature` returns **403** `ardelperal does not have the correct permissions to execute AddLabelsToLabelable`. Treat that error as policy, not as a bug.
+If a PR-label action lacks a current direct instruction or verified target-host capability, wait without mutation. Other maintainer-only actions remain maintainer-only.
 
 ---
 
 ## Issue workflow
 
-End-to-end steps to open an issue that becomes a viable PR.
+Use the canonical `issue-creation` skill at `internal/assets/skills/issue-creation/SKILL.md` for duplicate discovery, template handling, privacy review, and publication. Apply Gentle AI's current repository policy from `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE`, and discovered GitHub labels rather than copying form fields, label names, or commands here.
 
-1. **Search first.** Confirm the issue does not already exist (`gh search issues` or the issue list). Avoid duplicates — `CONTRIBUTING.md` says PRs on duplicates will be rejected.
-2. **Pick the template.** `.github/ISSUE_TEMPLATE/bug_report.yml` for bugs, `feature_request.yml` for changes. Each auto-applies `status:needs-review` via the template's `labels:` field.
-3. **Fill every required field.** Don't skip the Pre-flight Checklist. The two self-attestations (not a duplicate; understand `status:approved` is required) are present for a reason.
-4. **After submission, watch for `status:approved`.** Comment clarifications promptly. This is the gate before any PR opens.
-5. **If the maintainer asks for technical sub-slices** (e.g. `slice/journal-cas`, `slice/four-layer-engine`, `slice/tui-cli`), keep them as technical slices of one approved issue. The umbrella issue keeps `status:approved`; the sub-issues should also get approved if you want `Check Issue Has status:approved` to pass per slice.
+After submission, return to this collaboration workflow for the contributor/maintainer boundary and the approved-issue gate before PR work. If a maintainer requests technical sub-slices, keep them within the approved issue structure required by the current repository policy and checks.
 
 ---
 
@@ -142,13 +136,13 @@ Every `[x]` in the Contributor Checklist is a public claim that `pr-check.yml` a
    ```
    If `labels: []`, do not check the "type:* added" box. Instead:
    ```markdown
-   ## Pending maintainer actions
+   ## Pending repository workflow actions
 
-   The following are **maintainer-applied per `pr-check.yml` and CONTRIBUTING.md** in this repo — not within contributor scope:
+   The following remain pending:
 
-   - [ ] `type:feature` label applied to this PR — pending Alan
-   - [ ] `size:exception` consideration — see rationale below
-   - [ ] Fork workflow approval — 4 runs in `action_required` awaiting Alan
+   - [ ] Ordinary `type:feature` categorization requires the canonical issue-creation workflow contract
+   - [ ] Protected `size:exception` requires its documented rationale and verified policy authority from a repository maintainer or repository-authorized approver
+   - [ ] Fork workflow approval — 4 runs in `action_required` awaiting a maintainer
    ```
 
 2. **Numbers and file counts must match the API.** If you can't trust the API, recount locally: `git diff --stat <base>..<head>`.
@@ -158,12 +152,12 @@ Every `[x]` in the Contributor Checklist is a public claim that `pr-check.yml` a
    > **Known pre-existing failures (not blocking this PR):** `internal/components/communitytool/pi_codegraph`, `internal/tui/sync`, `internal/tui/sddmode` clusters present on `main` are not introduced by this slice; verified identical via `git stash` baseline.
    ```
 
-Honest rewrites often look like **adding** content, not removing. Adding `## Pending maintainer actions` and a quoted callout for pre-existing failures is normal and expected.
+Honest rewrites often look like **adding** content, not removing. Adding `## Pending repository workflow actions` and a quoted callout for pre-existing failures is normal and expected.
 
 ### Standard honest-rewrite pattern
 
 When the contributor checks a box that doesn't reflect reality:
-- Move the unfulfillable contributor-side check into `## Pending maintainer actions` with `pending Alan` suffix
+- For a PR label, record its pending canonical workflow action; keep other maintainer-only actions distinct
 - Update diff numbers to match the API exactly; if a qualifier is needed (e.g. "slice-specific commits only"), state it explicitly
 - For test claims, state the exact local commands run and the count of PASS/SKIP observed; don't aggregate to "all pass" if any were skipped on Windows
 - Always name pre-existing repo failures that the contributor observed but did not fix, with the verification method (`git stash` baseline)
@@ -201,12 +195,7 @@ The maintainer is the only one who can make Feature Branch Chain work; the contr
 
 Before recommending any action that touches permissions, label state, or commit history:
 
-1. **Dry-verify with `gh` first.** Attempt the action and surface the error if it fails. Example:
-   ```
-   $ gh pr edit 1132 --add-label type:feature
-   → GraphQL: ardelperal does not have the correct permissions to execute `AddLabelsToLabelable`
-   ```
-   That output IS your answer. Don't try to work around it.
+1. **Verify authority before a PR-label action.** Use the canonical issue-creation workflow contract; do not probe a mutation to discover authority.
 
 2. **Cross-check PR body claims against the GitHub API.**
    ```bash
@@ -241,7 +230,7 @@ Run this in your head (or print and tick) before requesting review:
 - [ ] PR title follows `^(type)(\(single-scope\))?!?: <description>` — no comma in scope
 - [ ] Body uses `Closes/Fixes/Resolves #N`, not `Refs`
 - [ ] Line counts in `## 📂 Changes` match `gh pr view --json additions,deletions,changedFiles`
-- [ ] No `[x]` claims contradict what the API shows; moves maintainer-applied actions to `## Pending maintainer actions`
+- [ ] No `[x]` claims contradict what the API shows; moves pending actions to `## Pending repository workflow actions`
 - [ ] Pre-existing failures named with verification method
 - [ ] Conventional Commits in title and commit messages
 - [ ] No `Co-Authored-By` trailers
@@ -259,12 +248,12 @@ Run this in your head (or print and tick) before requesting review:
 
 | Anti-pattern | Symptom | Fix |
 |---|---|---|
-| "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Move to `## Pending maintainer actions` with `pending Alan` |
+| "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Record the pending canonical PR-label action |
 | `Refs #N` instead of `Closes #N` | `Check Issue Reference` fails; PR auto-rejected | Use `Closes`/`Fixes`/`Resolves` keyword |
-| `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document `size:exception` rationale in Pending maintainer section |
+| `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document the rationale and verified policy authority in Pending repository workflow actions |
 | `feat(tui,cli): wire...` title | Title fails the single-scope regex | Use one of `feat(tui): ...`, `feat(cli): ...`, `feat(tui-cli): ...` (dash, not comma) |
 | Slice branches all base on `main` with stale carry-over commits | Reviewers can't isolate slice-specific changes; `size:exception` needed | Accept Stacked to main (request exception) OR ask maintainer to push slice branches upstream and use Feature Branch Chain |
-| Trying `gh pr edit --add-label` as contributor | GraphQL 403 `AddLabelsToLabelable` | Stop, ask the maintainer via comment on the issue |
+| Mutating a PR label without canonical authority | No current direct instruction or verified capability | Wait without mutation |
 | Burning reviewer attention on smoke-test green | Low-cardinality tests pass without exercising the behavior; reviewer flags in CodeRabbit | Each test asserts specific behavior, not just non-panicking |
 | Pretending local test run = `go test ./...` clean | Repo has pre-existing failures (`pi_codegraph`, `tui/sync`); saying "all tests pass" is dishonest | Run with `git stash` baseline, name pre-existing failures explicitly |
 | Calling a working repo a "fork" in code or docs | Misrepresents the contributor's relationship to the upstream | Use neutral language: "your working branch", "the contributor's push location", not "your fork" |
@@ -276,7 +265,7 @@ Run this in your head (or print and tick) before requesting review:
 When you (the AI assistant) are helping a contributor with anything that touches this repo:
 
 1. **Before recommending any action**, look up the relevant `CONTRIBUTING.md` / template / workflow section and cite it.
-2. **Before any label, status, merge, or fork-workflow approval**, check the contributor-vs-maintainer scope table; if maintainer-only, route to the maintainer with a comment or note — do NOT suggest the contributor try it.
+2. **Before any label, status, merge, or fork-workflow approval**, check the contributor-vs-maintainer scope table. Route PR labels only through the canonical issue-creation workflow contract; route other maintainer-only actions to a maintainer without suggesting an unauthorized attempt.
 3. **Before recommending body rewrites**, fetch the PR's current state and cross-check every claim against the API.
 4. **Before recommending chained-PR structure**, ask the contributor whether each slice can land independently (Stacked) or needs atomic integration (Feature Branch Chain). Be explicit about the cross-fork base-ref limitation.
 5. **Always** use Conventional Commits in title and commit messages.
@@ -289,11 +278,11 @@ When in doubt, the right move is more verification, less action.
 
 - `CONTRIBUTING.md` — full workflow, label taxonomy, branch naming, commit format, review budget.
 - `.github/PULL_REQUEST_TEMPLATE.md` — PR body structure.
-- `.github/ISSUE_TEMPLATE/bug_report.yml`, `feature_request.yml` — issue body structures.
+- `.github/ISSUE_TEMPLATE` — current issue templates, forms, and routing policy.
 - `.github/workflows/pr-check.yml` — automated gates.
 - `skills/branch-pr/SKILL.md` — branch + PR creation mechanics in detail.
 - `skills/chained-pr/SKILL.md` — chained vs stacked PR strategy mechanics in detail.
-- `skills/issue-creation/SKILL.md` — issue creation mechanics in detail.
+- `internal/assets/skills/issue-creation/SKILL.md` — canonical issue-creation authority.
 - `skills/cognitive-doc-design/SKILL.md` — doc-writing principles (low cognitive load).
 - `skills/comment-writer/SKILL.md` — tone and structure for PR comments and issue replies.
 - `skills/work-unit-commits/SKILL.md` — splitting commits for review-friendly PRs.

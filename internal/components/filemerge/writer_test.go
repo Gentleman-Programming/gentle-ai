@@ -369,6 +369,39 @@ func TestWriteFileAtomicRejectsSymlinkEscapes(t *testing.T) {
 	}
 }
 
+func TestWriteFileAtomicRejectsSymlinkEscapeBeforeDotDotNormalization(t *testing.T) {
+	base := t.TempDir()
+	setTestHome(t, base)
+	managed := filepath.Join(base, "managed")
+	outside := t.TempDir()
+	pivotTarget := filepath.Join(outside, "pivot-target")
+	for _, dir := range []string{managed, pivotTarget} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	outsideTarget := filepath.Join(outside, "target.txt")
+	if err := os.WriteFile(outsideTarget, []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside target) error = %v", err)
+	}
+
+	pivot := filepath.Join(managed, "pivot")
+	mustSymlink(t, pivotTarget, pivot)
+	path := filepath.Join(managed, "config.txt")
+	linkTarget := "pivot" + string(filepath.Separator) + ".." + string(filepath.Separator) + "target.txt"
+	mustSymlink(t, linkTarget, path)
+
+	if _, err := WriteFileAtomic(path, []byte("new\n"), 0o644); err == nil || !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("WriteFileAtomic(dot-dot escape) error = %v, want allowed-root rejection", err)
+	}
+	if _, err := os.Lstat(filepath.Join(managed, "target.txt")); !os.IsNotExist(err) {
+		t.Fatalf("normalized in-root target exists, stat error = %v", err)
+	}
+	if got, err := os.ReadFile(outsideTarget); err != nil || string(got) != "outside\n" {
+		t.Fatalf("outside target = %q, read error = %v; want unchanged", got, err)
+	}
+}
+
 func TestWriteFileAtomicRejectsSymlinkLoop(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first")
@@ -519,5 +552,48 @@ func TestWriteFileAtomicPropagatesUnexpectedSyncDirErrorOnWindows(t *testing.T) 
 	}
 	if !errors.Is(err, boom) {
 		t.Fatalf("WriteFileAtomic() error = %v, want wrapped boom", err)
+	}
+}
+
+// TestWriteFileAtomicPreservesOriginalOnRenameFailure proves the atomicity
+// guarantee a reviewer worried about: when the rename step fails, the existing
+// file is left byte-identical, never partially written or corrupted.
+func TestWriteFileAtomicPreservesOriginalOnRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	original := []byte("{\"original\":true}\n")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatalf("seed original file: %v", err)
+	}
+
+	boom := errors.New("rename boom")
+	origRename := renameFn
+	t.Cleanup(func() { renameFn = origRename })
+	renameFn = func(string, string) error { return boom }
+
+	_, err := WriteFileAtomic(path, []byte("{\"new\":true}\n"), 0o644)
+	if err == nil {
+		t.Fatal("WriteFileAtomic() error = nil, want rename failure")
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("WriteFileAtomic() error = %v, want wrapped rename boom", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file after failed rename: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("file after failed rename = %q, want the untouched original %q", got, original)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".gentle-ai-") {
+			t.Fatalf("temp file %q left behind after failed rename", entry.Name())
+		}
 	}
 }

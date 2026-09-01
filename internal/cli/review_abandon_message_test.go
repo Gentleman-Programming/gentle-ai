@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,7 +14,7 @@ import (
 // reviewAbandonAuthorizationLines is the number of lines the abandon
 // authorization binding carries. The refusal prints the binding template as
 // its final lines, so a consumer — human or test — reads them off the end.
-const reviewAbandonAuthorizationLines = 6
+const reviewAbandonAuthorizationLines = 8
 
 // TestReviewAbandonRefusalTerminatesInASuccessfulAbandon consumes the refusal
 // the product actually emits and nothing else. The command the refusal names
@@ -27,11 +29,11 @@ const reviewAbandonAuthorizationLines = 6
 // advertises as still abandonable, and it is the case in which any
 // worktree-derived surface would hand the operator the wrong identity.
 func TestReviewAbandonRefusalTerminatesInASuccessfulAbandon(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	pristineInvalidatedCLIFixture(t, repo)
+	reviewEnabledHome(t)
+	repo, _, _, expectedCapturedLenses, _ := partiallyCapturedReview(t)
 
 	const actor = "maintainer"
-	const reason = "abandon an accidental pristine lineage"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
 
 	var refused bytes.Buffer
 	err := RunReview([]string{"abandon", "--cwd", repo}, &refused)
@@ -41,7 +43,7 @@ func TestReviewAbandonRefusalTerminatesInASuccessfulAbandon(t *testing.T) {
 	message := err.Error()
 
 	lookup := runReviewCommandNamedBy(t, message)
-	values := reviewLookupValues(t, message, lookup)
+	values := reviewLookupValues(t, message, lookup, expectedCapturedLenses)
 	values["--actor"], values["--reason"] = actor, reason
 	authorization := assembleReviewAuthorization(t, message, values)
 
@@ -95,7 +97,7 @@ func runReviewCommandNamedBy(t *testing.T, message string) map[string]any {
 
 // reviewLookupValues reads each "<flag> = entries[].<field>" line the message
 // prints and resolves it against the named command's own envelope.
-func reviewLookupValues(t *testing.T, message string, envelope map[string]any) map[string]string {
+func reviewLookupValues(t *testing.T, message string, envelope map[string]any, expectedCapturedLenses []string) map[string]string {
 	t.Helper()
 	entries, _ := envelope["entries"].([]any)
 	if len(entries) != 1 {
@@ -108,6 +110,29 @@ func reviewLookupValues(t *testing.T, message string, envelope map[string]any) m
 			values["entries[]."+field] = text
 		}
 	}
+	discarded := entry["discarded_work"].(map[string]any)
+	capturedResults := discarded["captured_lens_results"].([]any)
+	if len(capturedResults) == 0 {
+		t.Fatal("refusal fixture did not expose captured lens results")
+	}
+	capturedLenses := make([]string, len(capturedResults))
+	for index, lens := range capturedResults {
+		capturedLenses[index] = lens.(string)
+	}
+	captured := strings.Join(capturedLenses, ",")
+	expectedCapturedResults := make([]string, len(expectedCapturedLenses))
+	for index, lens := range expectedCapturedLenses {
+		expectedCapturedResults[index] = fmt.Sprintf("%02d-%s", index, lens)
+	}
+	if want := strings.Join(expectedCapturedResults, ","); captured != want {
+		t.Fatalf("discarded captured_lens_results = %q, want %q", captured, want)
+	}
+	findingsPresent, ok := discarded["findings_present"].(bool)
+	if !ok || findingsPresent {
+		t.Fatalf("discarded findings_present = %#v, want false", discarded["findings_present"])
+	}
+	values["entries[].discarded_work.captured_lens_results comma-joined with \",\" in listed order"] = captured
+	values["entries[].discarded_work.findings_present"] = strconv.FormatBool(findingsPresent)
 	for _, line := range strings.Split(message, "\n") {
 		flag, path, found := strings.Cut(strings.TrimSpace(line), " = entries[].")
 		if !found || !strings.HasPrefix(flag, "--") {

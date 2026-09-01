@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -110,6 +111,47 @@ func TestNativeReviewAuthorityPathsEmitCanonicalAuthHotPath(t *testing.T) {
 			got, err := ClassifyRisk(RiskInput{Stats: []DiffStat{{Path: tt.path, Additions: 1}}})
 			if err != nil || got != want {
 				t.Fatalf("ClassifyRisk(%q) = %q, %v; want %q", tt.path, got, err, want)
+			}
+		})
+	}
+}
+
+// TestWebhookPathsEmitSecurityHotPath proves a webhook path is security
+// evidence: webhook handlers own signature verification, credential handling,
+// and authorization boundaries, so they must reach focused 4R.
+func TestWebhookPathsEmitSecurityHotPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		path     string
+		security bool
+	}{
+		{path: "backend/app/api/routes/meta_webhook.py", security: true},
+		{path: "internal/webhook/handler.go", security: true},
+		{path: "src/webhook-dispatcher.ts", security: true},
+		{path: "internal/ui/view.go"},
+		{path: "docs/guide.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+			signals := hotPathRiskSignals(tt.path)
+			if got := slices.Contains(signals, SignalSecurity); got != tt.security {
+				t.Fatalf("hotPathRiskSignals(%q) = %v, security = %t", tt.path, signals, tt.security)
+			}
+			if !tt.security {
+				return
+			}
+			want := []RiskReason{{Code: RiskReasonHotPath, Signal: SignalSecurity, Path: tt.path}}
+			if got := deriveSnapshotRiskReasons([]DiffStat{{Path: tt.path, Additions: 1}}, nil); !reflect.DeepEqual(got, want) {
+				t.Fatalf("deriveSnapshotRiskReasons(%q) = %#v, want %#v", tt.path, got, want)
+			}
+			level, err := ClassifyRisk(RiskInput{Stats: []DiffStat{{Path: tt.path, Additions: 1}}})
+			if err != nil || level != RiskHigh {
+				t.Fatalf("ClassifyRisk(%q) = %q, %v; want %q", tt.path, level, err, RiskHigh)
+			}
+			lenses, err := SelectReviewLenses(RiskAssessment{Level: level}, "risk")
+			if err != nil || !reflect.DeepEqual(lenses, supportedLenses) {
+				t.Fatalf("SelectReviewLenses(%q) = %v, %v; want canonical 4R %v", tt.path, lenses, err, supportedLenses)
 			}
 		})
 	}
@@ -699,6 +741,19 @@ func TestPassiveContentReadbackStaysBounded(t *testing.T) {
 	assessment := assessUntrackedCandidate(t, candidateFile{path: "docs/guide.md", content: strings.Repeat("Ordinary prose line.\n", 100)})
 	if assessment.Level == RiskLow {
 		t.Fatalf("oversized passive candidate = %#v, want an escalated tier", assessment)
+	}
+}
+
+func TestPassiveContentReadbackReservesCatFileBatchFraming(t *testing.T) {
+	requireSnapshotGit(t)
+	content := "Ordinary prose.\n"
+	original := processBoundaryScanByteLimit
+	processBoundaryScanByteLimit = int64(len(content) + 1)
+	t.Cleanup(func() { processBoundaryScanByteLimit = original })
+
+	assessment := assessUntrackedCandidate(t, candidateFile{path: "docs/guide.md", content: content})
+	if assessment.Level == RiskLow {
+		t.Fatalf("candidate with %d content bytes under a %d-byte cap = %#v, want an escalated tier because cat-file framing exceeds the cap", len(content), processBoundaryScanByteLimit, assessment)
 	}
 }
 

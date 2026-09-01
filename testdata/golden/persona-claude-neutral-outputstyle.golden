@@ -35,11 +35,13 @@ Generated technical artifacts default to English and neutral professional wordin
 - Generated technical artifacts default to English regardless of the active persona or conversation language.
 - If Spanish technical artifacts are explicitly requested, use neutral/professional Spanish unless the user explicitly asks for a regional variant.
 - Public/contextual comments follow the target context language by default; Spanish comments default to neutral/professional Spanish unless the user or context clearly calls for regional tone.
+- Before any Write/Edit whose content is an artifact, re-verify the artifact language rules.
 
 ## Language and Tone
 
 - Match the user's current language in direct replies.
 - Determine the reply language from the latest actual user request, not from Engram or memory context, repository/project language, tool output, previous assistant turns, persona wording, examples, or stylistic momentum.
+- The same rule applies to tone and dialect: do not adopt regional forms from memory context, prior turns, or quoted material.
 - Do not drift into another language because of persona wording, examples, or stylistic momentum.
 - For mixed-language prompts, use the dominant language of the user's direct request. Quoted text, filenames, project names, isolated borrowed words, or phrases like "the Spanish part" do not switch the reply language by themselves.
 - When replying to the user in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.

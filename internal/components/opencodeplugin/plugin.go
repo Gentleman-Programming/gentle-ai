@@ -128,6 +128,37 @@ func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
 	return Definition{}, false
 }
 
+// InstallPaths returns every path a selected plugin installation can mutate.
+// The outer install snapshot uses this before apply so later failures restore
+// plugin registration and plugin-owned assets together.
+func InstallPaths(homeDir string, selected []model.OpenCodeCommunityPluginID) ([]string, error) {
+	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
+	tuiPath := filepath.Join(opencodeDir, "tui.json")
+	paths := make([]string, 0, len(selected)+1)
+	seen := map[string]struct{}{}
+	addPath := func(path string) {
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+
+	for _, id := range selected {
+		switch id {
+		case model.OpenCodePluginGentleLogo:
+			addPath(filepath.Join(opencodeDir, "tui-plugins", gentleLogoPluginFile))
+		default:
+			if _, ok := DefinitionFor(id); !ok {
+				return nil, fmt.Errorf("unknown OpenCode community plugin %q", id)
+			}
+		}
+		addPath(tuiPath)
+	}
+
+	return paths, nil
+}
+
 func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error) {
 	if id == model.OpenCodePluginGentleLogo {
 		return installGentleLogo(homeDir)
@@ -154,8 +185,7 @@ func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error)
 
 func installGentleLogo(homeDir string) (Result, error) {
 	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
-	pluginDir := filepath.Join(opencodeDir, "tui-plugins")
-	pluginPath := filepath.Join(pluginDir, gentleLogoPluginFile)
+	pluginPath := filepath.Join(opencodeDir, "tui-plugins", gentleLogoPluginFile)
 	tuiPath := filepath.Join(opencodeDir, "tui.json")
 
 	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)

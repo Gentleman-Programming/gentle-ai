@@ -30,11 +30,19 @@ func resolvePathInternal(path, original string, depth int, enforceAllowedRoot bo
 
 	current, parts := pathRootAndParts(path)
 	for i, part := range parts {
-		candidate := filepath.Join(current, part)
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			current = filepath.Dir(current)
+			continue
+		}
+
+		candidate := appendRawPath(current, part)
 		info, err := os.Lstat(candidate)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return filepath.Join(append([]string{candidate}, parts[i+1:]...)...), false, nil
+				return appendRawPathParts(candidate, parts[i+1:]), false, nil
 			}
 			return "", false, fmt.Errorf("stat file %q: %w", candidate, err)
 		}
@@ -54,7 +62,7 @@ func resolvePathInternal(path, original string, depth int, enforceAllowedRoot bo
 				return "", false, err
 			}
 		}
-		resolved, exists, err := resolvePathInternal(filepath.Join(append([]string{target}, parts[i+1:]...)...), original, depth+1, enforceAllowedRoot)
+		resolved, exists, err := resolvePathInternal(appendRawPathParts(target, parts[i+1:]), original, depth+1, enforceAllowedRoot)
 		if err != nil {
 			return "", false, err
 		}
@@ -116,13 +124,27 @@ func DanglingTarget(path string) (string, error) {
 		return "", fmt.Errorf("read symlink %q: %w", path, err)
 	}
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(path), target)
+		target = appendRawPath(filepath.Dir(path), target)
 	}
-	targetAbs, err := filepath.Abs(target)
-	if err != nil {
-		return "", fmt.Errorf("resolve symlink target %q: %w", target, err)
+	return target, nil
+}
+
+func appendRawPath(base, part string) string {
+	if part == "" {
+		return base
 	}
-	return filepath.Clean(targetAbs), nil
+	if base == "" || strings.HasSuffix(base, string(filepath.Separator)) {
+		return base + part
+	}
+	return base + string(filepath.Separator) + part
+}
+
+func appendRawPathParts(base string, parts []string) string {
+	path := base
+	for _, part := range parts {
+		path = appendRawPath(path, part)
+	}
+	return path
 }
 
 func EnsureWithinRoot(path, root, original string) error {
@@ -221,7 +243,7 @@ func canonicalPath(path string) (string, error) {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			for i := len(missing) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, missing[i])
+				resolved = appendRawPath(resolved, missing[i])
 			}
 			return filepath.Clean(resolved), nil
 		}

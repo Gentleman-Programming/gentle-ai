@@ -2,103 +2,146 @@ package sddstatus
 
 import (
 	"context"
-	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-// TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled is the
-// second instance the reporter raised, and it is the same principle as the
-// gate: with review-driven development switched off, review-driven development
-// does not exist, so it must have no implications.
-//
-// The deadlock it removes is real and closed. A clone earns a review binding,
-// the operator switches reviews off, work continues, and the attempt changes
-// the candidate tree. Closing that passing attempt used to demand an atomic
-// approved recovery successor — a successor the operator cannot produce,
-// because `review start` is refused while the switch is off. The only way out
-// was to turn reviews back on for the sole purpose of satisfying a system that
-// was supposed to be inert.
-//
-// Nothing is fabricated here: no binding is advanced, no approval is minted,
-// and the attempt closes as an ordinary finish. Turning reviews back on
-// re-validates from the current state — the binding still refers to the
-// candidate it was approved for, and the next enforcement point rediscovers
-// that on its own.
-func TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	request := fixture.finishRequest("finish-while-review-disabled")
-	request.ExpectedBindingRevision = ""
-	request.SuccessorLineageID = ""
-	request.RemediatesEvidenceRevision = ""
-
-	store := fixture.store
+func TestRuntimeReviewDisabledRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "review-disabled-remediation")
 	store.ReviewDisabled = true
-	before := countRuntimeRecords(t, store.Dir)
-
-	status, err := store.Finish(context.Background(), request)
-	if err != nil {
-		t.Fatalf("closing a passing attempt while reviews are off demanded a review obligation: %T %v", err, err)
-	}
-	if status.ActiveAttempt != nil {
-		t.Fatalf("attempt did not close while reviews are off: %#v", status.ActiveAttempt)
-	}
-	if countRuntimeRecords(t, store.Dir) != before+1 {
-		t.Fatalf("disabled finish records = %d, want %d", countRuntimeRecords(t, store.Dir), before+1)
-	}
-
-	// It closed as an ORDINARY finish: no remediation record, and the binding
-	// is exactly the one that already existed. A disabled switch never advances
-	// review authority any more than it approves.
-	record, err := store.loadRecord(status.Revision)
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "review-disabled-begin-verification", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Operation != runtimeOperationFinish || record.Binding != nil {
-		t.Fatalf("disabled finish record = %#v", record)
+	failedEvidence := runtimeTestHash('a')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "review-disabled-finish-verification", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "independent verification found a correctable defect",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if status.Binding == nil || status.Binding.Revision != fixture.predecessorBinding.Revision {
-		t.Fatalf("disabled finish mutated the review binding: %#v", status.Binding)
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failed.Revision, RequestID: "review-disabled-begin-correction", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// TestRuntimeFinishStillDemandsAReviewSuccessorWhileReviewIsEnabled is the
-// regression that matters most: with the switch on, the identical attempt still
-// refuses to close without an approved recovery successor.
-func TestRuntimeFinishStillDemandsAReviewSuccessorWhileReviewIsEnabled(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	request := fixture.finishRequest("finish-while-review-enabled")
-	request.ExpectedBindingRevision = ""
-	request.SuccessorLineageID = ""
-	request.RemediatesEvidenceRevision = ""
-
-	if fixture.store.ReviewDisabled {
-		t.Fatal("the default RuntimeStore must enforce review obligations")
+	request := FinishAttemptRequest{
+		ExpectedRevision: active.Revision, RequestID: "review-disabled-finish-correction", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "bounded correction passed focused checks",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
+		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	}
-	before := countRuntimeRecords(t, fixture.store.Dir)
-	if _, err := fixture.store.Finish(context.Background(), request); !errors.Is(err, ErrRuntimeRemediationSuccessorRequired) {
-		t.Fatalf("enabled finish without a successor = %T %v", err, err)
-	}
-	assertRuntimeRemediationUnchanged(t, fixture, before)
-}
-
-// TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled holds
-// the other edge: the switch removes the IMPLICIT demand, never the checks on
-// an explicit request. An operator who deliberately passes a remediation
-// successor while reviews are off asked for review-driven development to act,
-// so it still validates that successor rather than trusting it.
-func TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	request := fixture.finishRequest("finish-explicit-stale-successor-while-disabled")
-	request.ExpectedBindingRevision = runtimeTestHash('9')
-
-	store := fixture.store
-	store.ReviewDisabled = true
 	before := countRuntimeRecords(t, store.Dir)
-
-	_, err := store.Finish(context.Background(), request)
-	var conflict *BindingRevisionConflictError
-	if !errors.As(err, &conflict) || conflict.Current != fixture.predecessorBinding.Revision {
-		t.Fatalf("explicit stale successor while disabled = %T %#v", err, err)
+	if _, err := store.Finish(context.Background(), request); err == nil {
+		t.Fatal("unchanged candidate satisfied review-disabled remediation")
 	}
-	assertRuntimeRemediationUnchanged(t, fixture, before)
+	if status, err := store.Status(); err != nil || status.Revision != active.Revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != before {
+		t.Fatalf("unchanged remediation refusal mutated runtime: status=%#v err=%v records=%d", status, err, countRuntimeRecords(t, store.Dir))
+	}
+	appendRuntimeLedgerFile(t, repo, "bounded review-disabled correction\n")
+	missingEvidence := request
+	missingEvidence.RequestID = "review-disabled-finish-missing-evidence"
+	missingEvidence.RemediatesEvidenceRevision = ""
+	if _, err := store.Finish(context.Background(), missingEvidence); err == nil {
+		t.Fatal("generic passing finish satisfied disabled remediation")
+	}
+	wrongEvidence := request
+	wrongEvidence.RequestID = "review-disabled-finish-wrong-evidence"
+	wrongEvidence.RemediatesEvidenceRevision = runtimeTestHash('c')
+	if _, err := store.Finish(context.Background(), wrongEvidence); err == nil {
+		t.Fatal("wrong failed evidence satisfied review-disabled remediation")
+	}
+	completed, err := store.Finish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.Complete || completed.ActiveAttempt != nil || len(completed.Attempts) != 2 {
+		t.Fatalf("review-disabled remediation completion = %#v", completed)
+	}
+	last := completed.Attempts[len(completed.Attempts)-1]
+	if last.RemediatesEvidenceRevision != failedEvidence || last.FinishCandidateIdentity == last.BeginCandidateIdentity || last.FinishCandidateTree == last.BeginCandidateTree {
+		t.Fatalf("review-disabled remediation did not link failed evidence to a changed candidate: %#v", last)
+	}
+	if replay, err := store.Finish(context.Background(), request); err != nil || replay.Revision != completed.Revision {
+		t.Fatalf("exact remediation replay = %#v err=%v", replay, err)
+	}
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
+		RequestID: "review-disabled-replay-correction", WorkUnit: "verify", EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	}})
+	if err != nil || result.State != CompactStateComplete {
+		t.Fatalf("subsequent correction = %#v err=%v", result, err)
+	}
+}
+
+func TestRuntimeReviewDisabledEngramRemediationNeedsNoOpenSpecRoot(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("pure Engram fixture unexpectedly has an OpenSpec root: %v", err)
+	}
+	store := mustRuntimeStore(t, repo, "engram-remediation")
+	store.ReviewDisabled = true
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "engram-begin-failed-verification", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('d')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "engram-finish-failed-verification", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "independent verification found a correctable defect",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failed.Revision, RequestID: "engram-begin-correction", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "bounded Engram correction\n")
+	request := FinishAttemptRequest{
+		ExpectedRevision: active.Revision, RequestID: "engram-finish-correction", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "corrected candidate passed focused checks",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
+		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
+	}
+	completed, err := store.Finish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.Complete || completed.ActiveAttempt != nil || len(completed.Attempts) != 2 {
+		t.Fatalf("pure Engram remediation completion = %#v", completed)
+	}
+	last := completed.Attempts[len(completed.Attempts)-1]
+	if last.RemediatesEvidenceRevision != failedEvidence || last.FinishCandidateTree == completed.Attempts[0].FinishCandidateTree {
+		t.Fatalf("pure Engram remediation did not bind failed evidence to changed candidate: %#v", last)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("runtime remediation created or required an OpenSpec root: %v", err)
+	}
+	replayed, err := store.Finish(context.Background(), request)
+	if err != nil || replayed.Revision != completed.Revision {
+		t.Fatalf("exact pure Engram remediation replay = %#v err=%v", replayed, err)
+	}
+	reopened := mustRuntimeStore(t, repo, "engram-remediation")
+	status, err := reopened.Status()
+	if err != nil || status.Revision != completed.Revision || !status.Complete {
+		t.Fatalf("pure Engram remediation chain replay = %#v err=%v", status, err)
+	}
 }

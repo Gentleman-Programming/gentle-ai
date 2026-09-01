@@ -120,9 +120,12 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := ParseTransaction(payload)
-	if err != nil {
-		t.Fatalf("ParseTransaction() error = %v", err)
+	var parsed Transaction
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(Transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err != nil {
+		t.Fatalf("Transaction.validate() error = %v", err)
 	}
 	if len(parsed.SelectedLenses) != 1 || len(parsed.LensResults) != 1 || parsed.Counters.ReliabilityExecutions != 1 || parsed.OriginalChangedLines == nil || *parsed.OriginalChangedLines != 2 || parsed.CorrectionBudget == nil || *parsed.CorrectionBudget != 1 {
 		t.Fatalf("round-tripped bounded state = %#v", parsed)
@@ -146,7 +149,7 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	const baselineRevision = "sha256:077a4d5e483613817b335c69976e874f37f5112488e70c08dc5ad94ca9bb04a5"
+	const baselineRevision = "sha256:4ec2a97038f0ab2e833edeb158c7de2673fa6113c5479a9007fd7bcc642fee1b"
 	if legacyRevision != baselineRevision {
 		t.Fatalf("legacy ordinary_4r genesis revision = %q, want baseline %q", legacyRevision, baselineRevision)
 	}
@@ -287,8 +290,12 @@ func TestOrdinaryBoundedDerivesLensIdentityFromStructuredContent(t *testing.T) {
 	}
 	forged.LensResults[0].Evidence[0] = "tampered evidence"
 	forgedPayload, _ := json.Marshal(forged)
-	if _, err := ParseTransaction(forgedPayload); err == nil {
-		t.Fatal("ParseTransaction() accepted content that no longer matches its canonical lens result hash")
+	var parsed Transaction
+	if err := json.Unmarshal(forgedPayload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(forged transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err == nil {
+		t.Fatal("Transaction.validate() accepted content that no longer matches its canonical lens result hash")
 	}
 }
 

@@ -87,6 +87,71 @@ func TestInjectMarkdownSection_UpdateExistingSection(t *testing.T) {
 	}
 }
 
+func TestInjectMarkdownSection_CollapsesDuplicateTargetSections(t *testing.T) {
+	const (
+		open  = "<!-- gentle-ai:persona -->"
+		close = "<!-- /gentle-ai:persona -->"
+	)
+
+	first := open + "\nfirst\n" + close
+	second := open + "\nsecond\n" + close
+	third := open + "\nthird\n" + close
+	canonical := open + "\ncurrent\n" + close
+	sdd := "<!-- gentle-ai:sdd -->\nkeep sdd\n<!-- /gentle-ai:sdd -->"
+
+	tests := []struct {
+		name        string
+		existing    string
+		replacement string
+		want        string
+	}{
+		{
+			name:        "adjacent duplicate blocks",
+			existing:    first + second,
+			replacement: "current\n",
+			want:        canonical,
+		},
+		{
+			name:        "user content between duplicate blocks",
+			existing:    "# Before\n\n" + first + "\nUser middle.\n\n" + second + "\n# After\n",
+			replacement: "current\n",
+			want:        "# Before\n\n" + canonical + "\nUser middle.\n\n\n# After\n",
+		},
+		{
+			name:        "three duplicate blocks collapse in one call",
+			existing:    first + "\n" + second + "\n" + third,
+			replacement: "current\n",
+			want:        canonical + "\n\n",
+		},
+		{
+			name:        "unrelated managed section remains unchanged",
+			existing:    first + "\n" + sdd + "\n" + second,
+			replacement: "current\n",
+			want:        canonical + "\n" + sdd + "\n",
+		},
+		{
+			name:        "empty replacement removes every target block",
+			existing:    "# Before\n\n" + first + "\nUser middle.\n\n" + second + "\n# After\n",
+			replacement: "",
+			want:        "# Before\nUser middle.\n\n\n# After\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := InjectMarkdownSection(tt.existing, "persona", tt.replacement)
+			if got != tt.want {
+				t.Fatalf("InjectMarkdownSection() = %q, want %q", got, tt.want)
+			}
+
+			secondRun := InjectMarkdownSection(got, "persona", tt.replacement)
+			if secondRun != got {
+				t.Fatalf("second injection changed result:\nfirst:  %q\nsecond: %q", got, secondRun)
+			}
+		})
+	}
+}
+
 func TestInjectMarkdownSection_MultipleSectionsOnlyTargetedOneUpdated(t *testing.T) {
 	existing := "# Config\n\n<!-- gentle-ai:persona -->\nPersona content.\n<!-- /gentle-ai:persona -->\n\n<!-- gentle-ai:sdd -->\nOld SDD.\n<!-- /gentle-ai:sdd -->\n\n<!-- gentle-ai:skills -->\nSkills content.\n<!-- /gentle-ai:skills -->\n"
 

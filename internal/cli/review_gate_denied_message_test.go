@@ -29,6 +29,8 @@ func assertNamesNoDottedOperation(t *testing.T, message string) {
 // "requires explicit maintainer action" placeholder for a reason the envelope
 // already carries.
 func TestReviewGateDeniedErrorNamesItsContinuation(t *testing.T) {
+	t.Parallel()
+
 	bareMessage := func(result reviewtransaction.GateResult) string {
 		return fmt.Sprintf("review lifecycle gate denied: %s", result)
 	}
@@ -168,6 +170,8 @@ func TestReviewGateDeniedErrorNamesItsContinuation(t *testing.T) {
 // Error() string must never change the negotiated JSON failure envelope
 // fields that already carry the routing knowledge.
 func TestReviewGateDeniedNegotiatedEnvelopeUnchangedByHumanMessage(t *testing.T) {
+	t.Parallel()
+
 	tree := strings.Repeat("a", 40)
 	sha := "sha256:" + strings.Repeat("b", 64)
 	denied := ReviewGateDeniedError{

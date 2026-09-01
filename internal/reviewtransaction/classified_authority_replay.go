@@ -228,7 +228,7 @@ func validateClassifiedAuthorityRepairRecordShape(record CompactReclaimRecord, q
 		(record.Status != CompactReclaimPrepared && record.Status != CompactReclaimCommitted) ||
 		record.LineageID != request.LineageID || record.ReclaimedAt.IsZero() || proof == nil ||
 		record.InvalidRecoveryEdge != nil || record.MalformedRecoveryAuthorization != nil || record.PristineAbandonment != nil ||
-		record.MalformedLegacyFreeze != nil || record.LegacyFixScopeQuarantine != nil {
+		record.IncompleteAbandonment != nil || record.MalformedLegacyFreeze != nil || record.LegacyFixScopeQuarantine != nil {
 		return errors.New("classified authority repair refused incomplete replay record")
 	}
 	if record.SourcePath != filepath.Join(base, "v1", request.LineageID) || record.QuarantinePath != quarantinePath ||

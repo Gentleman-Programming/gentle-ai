@@ -27,17 +27,12 @@ func TestReceiptDiscoveryFailuresNameTheWayIn(t *testing.T) {
 	}
 }
 
-// TestGateEscalatedDenialAndFinalVerificationRetryDenialNameStatus is task
-// 3b.3: STATUS already re-derives escalated-gate and retry eligibility, but
-// neither denial told the caller so.
-func TestGateEscalatedDenialAndFinalVerificationRetryDenialNameStatus(t *testing.T) {
+// TestGateEscalatedDenialNamesStatus is task 3b.3: STATUS re-derives
+// escalated-gate recovery eligibility and the denial names that route.
+func TestGateEscalatedDenialNamesStatus(t *testing.T) {
 	escalated := newReviewIntegrationFailure("review.validate", nil, ReviewGateDeniedError{Result: reviewtransaction.GateEscalated})
 	if escalated.Code != "gate_escalated" || escalated.NextAction != "review.status" {
 		t.Fatalf("escalated gate denial failure = %#v, want next_action %q", escalated, "review.status")
-	}
-	retryDenied := newReviewIntegrationFailure(ReviewIntegrationOperationRetryFinalVerification, nil, &reviewtransaction.FinalVerificationRetryDeniedError{Code: "ineligible", Why: "no matching leaf"})
-	if retryDenied.Code != "final_verification_retry_denied" || retryDenied.NextAction != "review.status" {
-		t.Fatalf("final_verification_retry_denied failure = %#v, want next_action %q", retryDenied, "review.status")
 	}
 }
 
@@ -88,36 +83,5 @@ func TestNegotiatedDeclineAndDisabledKillSwitchAreTypedNotStarted(t *testing.T) 
 	}
 	if disabled.Code != "rdd_disabled" {
 		t.Fatalf("rdd-disabled failure code = %q, want a typed %q code", disabled.Code, "rdd_disabled")
-	}
-}
-
-// TestReviewerResultAndDigestByteConflictsNameTheDecidingOperations is task
-// 3b.7: a human decision stays human (dispose-result vs preserve-result), but
-// today's block names neither.
-func TestReviewerResultAndDigestByteConflictsNameTheDecidingOperations(t *testing.T) {
-	dir := t.TempDir()
-	state := reviewerArtifactConflictFixtureState()
-	payload := []byte(`{"schema":"x"}`)
-	if _, err := captureReviewerArtifact(dir, state, 0, payload); err != nil {
-		t.Fatalf("seed capture: %v", err)
-	}
-	_, err := captureReviewerArtifact(dir, state, 0, []byte(`{"schema":"y"}`))
-	if err == nil {
-		t.Fatal("conflicting reviewer result bytes accepted")
-	}
-	for _, want := range []string{"review dispose-result", "review preserve-result"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("reviewer result byte-conflict = %q, want it to name %q", err.Error(), want)
-		}
-	}
-}
-
-func reviewerArtifactConflictFixtureState() reviewtransaction.CompactState {
-	return reviewtransaction.CompactState{
-		LineageID:      "artifact-conflict",
-		SelectedLenses: []string{"risk"},
-		InitialSnapshot: reviewtransaction.Snapshot{
-			Identity: "sha256:" + strings.Repeat("a", 64),
-		},
 	}
 }

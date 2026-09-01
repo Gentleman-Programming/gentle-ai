@@ -98,6 +98,10 @@ func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string,
 		// that don't yet have conditional sections).
 		content := extractModelSection(skillContent, capability)
 		content = injectCodeGraphGuidanceIntoPrompt(content, guidance)
+		// OpenCode phases reference these shared files via {file:...}
+		// indirection, which the in-settings injection deliberately skips —
+		// the contract must land here or those executors would miss it.
+		content = injectLanguageContractIntoPrompt(content)
 
 		path := filepath.Join(promptDir, phase+".md")
 		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
@@ -118,6 +122,21 @@ func injectCodeGraphGuidanceIntoPrompt(prompt, guidance string) string {
 		return prompt
 	}
 	return filemerge.InjectMarkdownSection(prompt, "codegraph-guidance", guidance)
+}
+
+// agentLanguageContract returns the canonical executor language contract
+// (issue #1702 defect 4). Single source of truth: injected into every
+// rendered sub-agent prompt so executors spawned inside a non-English
+// conversation never mimic its dialect when writing artifacts.
+func agentLanguageContract() string {
+	return assets.MustRead("generic/agent-language-contract.md")
+}
+
+// injectLanguageContractIntoPrompt appends the canonical language contract
+// as a managed markdown section. Marker-bound, so re-rendering an already
+// injected prompt is a no-op (same mechanism as the CodeGraph guidance).
+func injectLanguageContractIntoPrompt(prompt string) string {
+	return filemerge.InjectMarkdownSection(prompt, "agent-language-contract", strings.TrimSpace(agentLanguageContract()))
 }
 
 func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, guidance string) string {
@@ -145,6 +164,12 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 			continue
 		}
 		if strings.Contains(line, grant) {
+			return prompt
+		}
+		// A deliberately empty tools contract (tool-free reviewers, issue
+		// #3168/#3648) must stay empty: appending the grant would produce
+		// unparseable frontmatter and contradict the agent's own contract.
+		if value := strings.TrimSpace(strings.TrimPrefix(line, "tools:")); value == "" || value == "[]" {
 			return prompt
 		}
 		if agentID == model.AgentClaudeCode {
@@ -178,8 +203,8 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 		if mode, _ := agent["mode"].(string); mode == "primary" {
 			continue
 		}
-		tools, _ := agent["tools"].(map[string]any)
-		if bash, explicitlySet := tools["bash"].(bool); explicitlySet && !bash {
+		permission, _ := agent["permission"].(map[string]any)
+		if permission["bash"] == "deny" {
 			continue
 		}
 		prompt, ok := agent["prompt"].(string)
@@ -187,5 +212,26 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 			continue
 		}
 		agent["prompt"] = injectCodeGraphGuidanceIntoPrompt(prompt, guidance)
+	}
+}
+
+// injectLanguageContractIntoOpenCodeSubagentPrompts applies the canonical
+// executor language contract to OpenCode's JSON-embedded sub-agent prompts.
+// Primary-mode agents keep the persona channel's own rules; {file:...}
+// indirections are resolved elsewhere and stay untouched.
+func injectLanguageContractIntoOpenCodeSubagentPrompts(agentMap map[string]any) {
+	for _, agentRaw := range agentMap {
+		agent, ok := agentRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mode, _ := agent["mode"].(string); mode == "primary" {
+			continue
+		}
+		prompt, ok := agent["prompt"].(string)
+		if !ok || strings.HasPrefix(prompt, "{file:") {
+			continue
+		}
+		agent["prompt"] = injectLanguageContractIntoPrompt(prompt)
 	}
 }

@@ -48,4 +48,16 @@ func TestSnapshotBuilderDiscoversTrackedAndUnignoredPathsInLinkedWorktree(t *tes
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DiscoverTrackedAndUnignoredPaths() = %v, want %v", got, want)
 	}
+	snapshot, err := (SnapshotBuilder{Repo: linked}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"untracked.txt"},
+	})
+	if err != nil {
+		t.Fatalf("Build() in linked worktree: %v", err)
+	}
+	if !reflect.DeepEqual(snapshot.Paths, []string{"untracked.txt"}) {
+		t.Fatalf("linked-worktree snapshot paths = %v, want [untracked.txt]", snapshot.Paths)
+	}
+	if err := (SnapshotBuilder{Repo: linked}).ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatalf("ValidateEvidence() in linked worktree: %v", err)
+	}
 }

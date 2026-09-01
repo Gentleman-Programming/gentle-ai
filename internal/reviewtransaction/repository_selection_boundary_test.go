@@ -29,10 +29,7 @@ func TestRepositorySelectionAcceptsEveryCwdAliasOfTheSameRepository(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	relative, err := filepath.Rel(workingDirectory, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	relative, relativeErr := filepath.Rel(workingDirectory, repo)
 	// The symlink alias lives outside the repository so the alias itself can
 	// never be mistaken for repository content.
 	symlink := filepath.Join(t.TempDir(), "alias")
@@ -49,7 +46,7 @@ func TestRepositorySelectionAcceptsEveryCwdAliasOfTheSameRepository(t *testing.T
 		skip  bool
 	}{
 		{name: "absolute path", alias: repo},
-		{name: "relative path", alias: relative},
+		{name: "relative path", alias: relative, skip: relativeErr != nil},
 		{name: "trailing separator", alias: repo + string(filepath.Separator)},
 		{name: "dot segment", alias: filepath.Join(repo, "nested", "..", ".")},
 		{name: "subdirectory", alias: nested},
@@ -59,7 +56,7 @@ func TestRepositorySelectionAcceptsEveryCwdAliasOfTheSameRepository(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if tt.skip {
-				t.Skip("symlinks are unavailable on this platform")
+				t.Skip("alias form is unavailable on this platform")
 			}
 			root, err := (SnapshotBuilder{Repo: tt.alias}).ResolveRepositoryRoot(context.Background())
 			if err != nil {

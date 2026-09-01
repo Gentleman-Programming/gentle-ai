@@ -231,6 +231,16 @@ func TestRunArgsSyncUnknownFlagReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunArgsSyncHelpIncludesBackgroundFlag(t *testing.T) {
+	var buf bytes.Buffer
+	if err := RunArgs([]string{"sync", "--help"}, &buf); err != nil {
+		t.Fatalf("RunArgs(sync --help) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "--opencode-background-subagents=auto|on|off") || !strings.Contains(buf.String(), cli.OpenCodeBackgroundSubagentsEnv) {
+		t.Fatalf("sync help omits background contract: %s", buf.String())
+	}
+}
+
 // TestRunArgsSyncNoAgentsIsNoOp verifies that `gentle-ai sync` with no
 // agents flag and an empty home dir (no config dirs) completes as a no-op
 // and does NOT return an error.

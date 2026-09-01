@@ -13,7 +13,15 @@ import (
 // npm preflight (scoop is the package manager reported by Windows scoop users).
 var windowsProfile = system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
 
-func TestCheckDependenciesStepFailsWhenKimiUVMissing(t *testing.T) {
+// checkDependenciesStep only preflights Pi now: Pi is the sole agent that
+// still executes anything on the user's behalf (its own already-present `pi`
+// subcommands, which need npm/pnpm — see agentInstallStep in run.go). Every
+// other agent's "not installed" outcome is a printed refusal that needs no
+// local dependency at all, so this step no longer blocks the pipeline for
+// their missing npm/uv — see agentInstallStepRefusesMissingRuntime tests in
+// run_integration_test.go for the refusal itself.
+
+func TestCheckDependenciesStepDoesNotBlockKimiOnMissingUV(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		if file == "uv" {
 			return "", errNotFound{}
@@ -30,19 +38,15 @@ func TestCheckDependenciesStepFailsWhenKimiUVMissing(t *testing.T) {
 		},
 	}
 
-	err := step.Run()
-	if err == nil {
-		t.Fatal("checkDependenciesStep.Run() expected error for missing uv when Kimi is selected")
-	}
-
-	if !strings.Contains(err.Error(), "Kimi") || !strings.Contains(err.Error(), "uv") {
-		t.Fatalf("checkDependenciesStep.Run() error = %q, expected Kimi uv remediation", err.Error())
+	if err := step.Run(); err != nil {
+		t.Fatalf("checkDependenciesStep.Run() unexpected error = %v — Kimi is not Pi, so a missing uv is not this step's concern anymore", err)
 	}
 }
 
 func TestCheckDependenciesStepDoesNotRequireUVForOtherAgents(t *testing.T) {
-	// Claude Code requires npm (not uv). Verify that when npm is present but
-	// uv is absent, the step passes — proving uv is not required for npm agents.
+	// Claude Code requires npm (not uv), and Claude Code is not Pi, so this
+	// step never even reaches a preflight check for it — proving uv is not
+	// required for npm agents this step no longer preflights at all.
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		if file == "npm" {
 			return "/usr/local/bin/npm", nil
@@ -69,12 +73,17 @@ type errNotFound struct{}
 func (errNotFound) Error() string { return "not found" }
 
 // --- npm preflight tests (Bug A: node/npm missing gate) ---
+//
+// These four tests used to prove that a missing npm blocked the pipeline
+// with a clear, actionable error before `npm install -g …` ran and surfaced
+// a cryptic "exec: npm: executable file not found" (the Windows regression
+// this file was originally written for). gentle-ai no longer runs that
+// command at all for non-Pi agents — the refusal in agentInstallStep prints
+// it instead — so there is nothing left to preflight here, and no exec to
+// crash: the cryptic-error scenario these guarded against cannot happen
+// anymore, for a stronger reason than a nicer error message.
 
-// TestCheckDependenciesStepFailsWhenNpmMissingForClaudeCode verifies that a missing
-// npm blocks the pipeline with a clear, actionable error before any npm command runs.
-// This is the regression test for the Windows issue where the pipeline proceeded to
-// `npm install -g …` and surfaced a cryptic "exec: npm: executable file not found".
-func TestCheckDependenciesStepFailsWhenNpmMissingForClaudeCode(t *testing.T) {
+func TestCheckDependenciesStepDoesNotBlockClaudeCodeOnMissingNpm(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		if file == "npm" {
 			return "", errNotFound{}
@@ -91,21 +100,12 @@ func TestCheckDependenciesStepFailsWhenNpmMissingForClaudeCode(t *testing.T) {
 		},
 	}
 
-	err := step.Run()
-	if err == nil {
-		t.Fatal("checkDependenciesStep.Run() expected error for missing npm when claude-code is selected")
-	}
-	if !strings.Contains(err.Error(), "npm") {
-		t.Fatalf("checkDependenciesStep.Run() error = %q, want npm remediation hint", err.Error())
-	}
-	if !strings.Contains(err.Error(), "Node.js") {
-		t.Fatalf("checkDependenciesStep.Run() error = %q, want Node.js remediation hint", err.Error())
+	if err := step.Run(); err != nil {
+		t.Fatalf("checkDependenciesStep.Run() unexpected error = %v — Claude Code is not Pi, so a missing npm is not this step's concern anymore", err)
 	}
 }
 
-// TestCheckDependenciesStepFailsWhenNpmMissingForOpenCode verifies the same gate for
-// OpenCode, which also uses npm on Windows.
-func TestCheckDependenciesStepFailsWhenNpmMissingForOpenCode(t *testing.T) {
+func TestCheckDependenciesStepDoesNotBlockOpenCodeOnMissingNpm(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		if file == "npm" {
 			return "", errNotFound{}
@@ -122,45 +122,11 @@ func TestCheckDependenciesStepFailsWhenNpmMissingForOpenCode(t *testing.T) {
 		},
 	}
 
-	err := step.Run()
-	if err == nil {
-		t.Fatal("checkDependenciesStep.Run() expected error for missing npm when opencode is selected")
-	}
-	if !strings.Contains(err.Error(), "npm") {
-		t.Fatalf("checkDependenciesStep.Run() error = %q, want npm remediation hint", err.Error())
+	if err := step.Run(); err != nil {
+		t.Fatalf("checkDependenciesStep.Run() unexpected error = %v — OpenCode is not Pi, so a missing npm is not this step's concern anymore", err)
 	}
 }
 
-// TestCheckDependenciesStepNpmHintContainsWingetOnWindows verifies that the install
-// hint on Windows points the user to the `winget install OpenJS.NodeJS.LTS` command.
-func TestCheckDependenciesStepNpmHintContainsWingetOnWindows(t *testing.T) {
-	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
-		if file == "npm" {
-			return "", errNotFound{}
-		}
-		return "/usr/bin/" + file, nil
-	})
-	t.Cleanup(restore)
-
-	step := checkDependenciesStep{
-		id:      "prepare:check-dependencies",
-		profile: windowsProfile,
-		selection: model.Selection{
-			Agents: []model.AgentID{model.AgentClaudeCode},
-		},
-	}
-
-	err := step.Run()
-	if err == nil {
-		t.Fatal("checkDependenciesStep.Run() expected error for missing npm on Windows")
-	}
-	if !strings.Contains(err.Error(), "winget") {
-		t.Fatalf("checkDependenciesStep.Run() error = %q, want winget install hint for Windows", err.Error())
-	}
-}
-
-// TestCheckDependenciesStepPassesWhenNpmPresent verifies that npm-based agents do not
-// fail the preflight when npm is found on PATH.
 func TestCheckDependenciesStepPassesWhenNpmPresent(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		// npm is present, everything else is too
@@ -192,7 +158,8 @@ func TestCheckDependenciesStepPassesWhenNpmPresent(t *testing.T) {
 // TestCheckDependenciesStepFailsWhenNpmMissingForPi verifies that selecting Pi with
 // npm absent produces a clear, actionable Node.js / npm error before any npm command
 // runs. Pi's install always runs engramInitCommand(), which falls through to
-// `npm exec` when pnpm is absent — so npm (and Node.js) is an unconditional requirement.
+// `npm exec` when pnpm is absent — so npm (and Node.js) is an unconditional
+// requirement, and Pi is the one agent this step still preflights.
 func TestCheckDependenciesStepFailsWhenNpmMissingForPi(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		// pi binary is present, but npm (and pnpm) are absent.
@@ -223,9 +190,6 @@ func TestCheckDependenciesStepFailsWhenNpmMissingForPi(t *testing.T) {
 	}
 }
 
-// TestCheckDependenciesStepKimiStillFailsForMissingUVEvenWhenNpmAbsent verifies that
-// Kimi's uv preflight is independent of the npm preflight — both can fail, and the
-// first failure encountered (npm, since Kimi is not in npmBasedAgents) wins.
 func TestCheckDependenciesStepKimiNotBlockedByNpmPreflight(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
 		// npm is missing, uv is also missing
@@ -241,12 +205,9 @@ func TestCheckDependenciesStepKimiNotBlockedByNpmPreflight(t *testing.T) {
 		},
 	}
 
-	err := step.Run()
-	if err == nil {
-		t.Fatal("checkDependenciesStep.Run() expected error for missing uv when kimi is selected")
-	}
-	// Kimi is NOT in npmBasedAgents, so the error must be about uv, not npm.
-	if !strings.Contains(err.Error(), "uv") {
-		t.Fatalf("checkDependenciesStep.Run() error = %q, want uv remediation hint for Kimi", err.Error())
+	// Kimi is not Pi, so this step no longer preflights it at all — neither
+	// its absent npm nor its absent uv block the pipeline here anymore.
+	if err := step.Run(); err != nil {
+		t.Fatalf("checkDependenciesStep.Run() unexpected error = %v", err)
 	}
 }

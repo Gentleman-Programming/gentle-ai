@@ -82,7 +82,15 @@ func RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir string, agentIDs
 func RenderUninstallReport(result componentuninstall.Result) string {
 	var b strings.Builder
 
-	_, _ = fmt.Fprintln(&b, "Managed uninstall complete")
+	// The header states what actually happened. A batch that failed for one
+	// agent still commits the agents that succeeded (see Result.FailedAgents),
+	// so "complete" would be a lie the user reads before the failure detail
+	// printed further down under manual cleanup.
+	if len(result.FailedAgents) > 0 {
+		_, _ = fmt.Fprintf(&b, "Managed uninstall partially complete: %s failed\n", strings.Join(agentLabels(result.FailedAgents), ", "))
+	} else {
+		_, _ = fmt.Fprintln(&b, "Managed uninstall complete")
+	}
 	if result.Manifest.ID != "" {
 		_, _ = fmt.Fprintf(&b, "Backup: %s (%s)\n", result.Manifest.ID, result.Manifest.DisplayLabel())
 		_, _ = fmt.Fprintf(&b, "Backup path: %s\n", result.BackupPath)

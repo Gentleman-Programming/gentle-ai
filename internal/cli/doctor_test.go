@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 )
 
@@ -72,6 +75,35 @@ func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 	}
 	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
+	}
+}
+
+func TestDoctorToolCopies_DeduplicatesSymlinkedPathDirectories(t *testing.T) {
+	origExts := executableExtsFn
+	defer func() { executableExtsFn = origExts }()
+	executableExtsFn = func() []string { return []string{""} }
+
+	root := t.TempDir()
+	usrBin := filepath.Join(root, "usr", "bin")
+	if err := os.MkdirAll(usrBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code := filepath.Join(usrBin, "code")
+	if err := os.WriteFile(code, []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(root, "bin")
+	if err := os.Symlink(usrBin, bin); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+
+	got := doctorToolCopies("code", []string{bin, usrBin})
+	if len(got) != 1 {
+		t.Fatalf("copies = %v, want one copy", got)
+	}
+	if want := filepath.Join(bin, "code"); got[0] != want {
+		t.Fatalf("copies[0] = %q, want first PATH entry %q", got[0], want)
 	}
 }
 
@@ -307,7 +339,6 @@ func TestCheckStateJSON_AgentConfigDirMissing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
 	got := checkStateJSON(homeDir)
 
 	if got.Status != CheckStatusWarn {
@@ -315,6 +346,232 @@ func TestCheckStateJSON_AgentConfigDirMissing(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, "config dirs are missing") {
 		t.Errorf("unexpected detail: %s", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("absent config dir must retain sync remedy, got %+v", got.Remedy)
+	}
+}
+
+func TestCheckStateJSON_ManagedConfigPathUnreadable(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configRoot := filepath.Join(homeDir, ".config")
+	if err := os.WriteFile(configRoot, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configRoot, "opencode")
+	_, statErr := os.Lstat(configPath)
+	if statErr == nil {
+		t.Fatal("unreadable managed config path unexpectedly exists")
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for unreadable managed config path, got %s: %s", got.Status, got.Detail)
+	}
+	wants := []string{configPath, "inspect or repair", "gentle-ai doctor"}
+	if runtime.GOOS == "windows" {
+		// Windows reports a file-blocked path as not-exist, so the warn is
+		// produced by the ancestor walk naming the blocking file rather than
+		// by forwarding the final lstat error.
+		wants = append(wants, configRoot)
+	} else {
+		wants = append(wants, statErr.Error())
+	}
+	for _, want := range wants {
+		if !strings.Contains(got.Detail, want) {
+			t.Fatalf("unreadable path result missing %q: %s", want, got.Detail)
+		}
+	}
+	if got.Remedy != nil && got.Remedy.ID == doctor.RemedySync {
+		t.Fatalf("unreadable managed config path must not recommend sync: %+v", got.Remedy)
+	}
+}
+
+func setupDanglingOpenCodeFixture(t *testing.T, statePayload, symlinkTarget string) (homeDir, configDir, targetPath string) {
+	t.Helper()
+	homeDir = t.TempDir()
+	configDir = filepath.Join(homeDir, ".config", "opencode")
+	if err := os.MkdirAll(filepath.Dir(configDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if symlinkTarget == "" {
+		symlinkTarget = filepath.Join(t.TempDir(), "missing-opencode-config")
+	}
+	targetPath = symlinkTarget
+	if err := os.Symlink(targetPath, configDir); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(statePayload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return homeDir, configDir, targetPath
+}
+
+func TestCheckStateJSON_AgentConfigDirDanglingSymlink(t *testing.T) {
+	homeDir, configDir, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "")
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for dangling config symlink, got %s: %s", got.Status, got.Detail)
+	}
+	if got.Remedy != nil && got.Remedy.ID == doctor.RemedySync {
+		t.Fatalf("dangling config symlink must not recommend sync: %+v", got.Remedy)
+	}
+	if !strings.Contains(got.Detail, configDir) {
+		t.Fatalf("detail must identify dangling managed path %q, got %q", configDir, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "inspect") || !strings.Contains(got.Detail, "gentle-ai doctor") {
+		t.Fatalf("detail must provide manual inspection and doctor rerun guidance, got %q", got.Detail)
+	}
+	if strings.Contains(got.Detail, "gentle-ai sync") {
+		t.Fatalf("dangling config symlink must not recommend sync, got %q", got.Detail)
+	}
+	info, err := os.Lstat(configDir)
+	if err != nil {
+		t.Fatalf("Lstat dangling config symlink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("doctor changed dangling config path into non-symlink: mode %v", info.Mode())
+	}
+}
+
+func TestCheckStateJSON_AgentConfigDirSymlinkLoop(t *testing.T) {
+	homeDir, _, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "opencode")
+	if got := checkStateJSON(homeDir); got.Status != CheckStatusWarn || !strings.Contains(got.Detail, "could not be inspected") || strings.Contains(got.Detail, "dangling symlinks") {
+		t.Fatalf("expected inspection warning for config symlink loop, got %s: %s", got.Status, got.Detail)
+	}
+}
+
+func TestCheckStateJSON_DanglingAndAbsentConfigDirsSuppressSync(t *testing.T) {
+	homeDir, configDir, _ := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode","claude-code"]}`, "")
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for mixed dangling/absent config dirs, got %s: %s", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("mixed dangling/absent config dirs must suppress sync, got %+v", got.Remedy)
+	}
+	for _, want := range []string{configDir, "genuinely absent config dirs: claude-code", "inspect or repair", "gentle-ai doctor"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Fatalf("mixed result missing %q: %s", want, got.Detail)
+		}
+	}
+	if strings.Contains(got.Detail, "gentle-ai sync") {
+		t.Fatalf("mixed dangling/absent result must not recommend sync: %s", got.Detail)
+	}
+}
+
+func TestCheckStateJSON_DanglingAncestorSymlinkSuppressesSync(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancestor := filepath.Join(homeDir, ".config")
+	missingTarget := filepath.Join(t.TempDir(), "missing-config-root")
+	if err := os.Symlink(missingTarget, ancestor); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(ancestor, "opencode")
+	if _, err := os.Lstat(configDir); !os.IsNotExist(err) {
+		t.Fatalf("managed path under dangling ancestor: lstat err = %v, want not-exist", err)
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for dangling ancestor symlink, got %s: %s", got.Status, got.Detail)
+	}
+	if got.Remedy != nil && got.Remedy.ID == doctor.RemedySync {
+		t.Fatalf("dangling ancestor symlink must not recommend sync: %+v", got.Remedy)
+	}
+	for _, want := range []string{configDir, "dangling ancestor symlink " + ancestor, "inspect", "gentle-ai doctor"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Fatalf("dangling ancestor result missing %q: %s", want, got.Detail)
+		}
+	}
+	if strings.Contains(got.Detail, "gentle-ai sync") || strings.Contains(got.Detail, "config dirs are missing") {
+		t.Fatalf("dangling ancestor must not be classified as missing: %s", got.Detail)
+	}
+	info, err := os.Lstat(ancestor)
+	if err != nil {
+		t.Fatalf("Lstat dangling ancestor symlink after doctor: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("doctor changed dangling ancestor into non-symlink: mode %v", info.Mode())
+	}
+	if _, err := os.Lstat(missingTarget); !os.IsNotExist(err) {
+		t.Fatalf("doctor touched the missing ancestor target %q: err = %v", missingTarget, err)
+	}
+}
+
+func TestCheckStateJSON_AbsentAncestorChainKeepsSyncRemedy(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// windsurf lives two levels below home (~/.codeium/windsurf); neither
+	// level exists, so the path is genuinely missing and sync must stay.
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["windsurf"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for absent config dir, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "config dirs are missing") {
+		t.Fatalf("absent ancestor chain must classify as missing, got %s", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("absent ancestor chain must retain sync remedy, got %+v", got.Remedy)
+	}
+}
+
+func TestCheckStateJSON_HealthySymlinkAncestorKeepsSyncRemedy(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realConfigRoot := filepath.Join(t.TempDir(), "real-config-root")
+	if err := os.MkdirAll(realConfigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realConfigRoot, filepath.Join(homeDir, ".config")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	// ~/.config resolves fine; only the opencode dir underneath is absent.
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkStateJSON(homeDir)
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for absent config dir, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "config dirs are missing") {
+		t.Fatalf("healthy symlink ancestor must classify as missing, got %s", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("healthy symlink ancestor must retain sync remedy, got %+v", got.Remedy)
 	}
 }
 
@@ -339,18 +596,132 @@ func TestCheckStateJSON_OK(t *testing.T) {
 	if got.Status != CheckStatusPass {
 		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
+	if got.Remedy != nil {
+		t.Fatalf("real config directory must not have a remedy, got %+v", got.Remedy)
+	}
+}
+
+func TestCheckInstalledAssetVersion_MatchingPass(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"installed_binary_version":%q}`, AppVersion)
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkInstalledAssetVersion(homeDir)
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+}
+
+func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"installed_binary_version":"v0.9.0"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkInstalledAssetVersion(homeDir)
+	if got.Status != CheckStatusWarn {
+		t.Errorf("expected warn for version skew, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "gentle-ai sync") {
+		t.Errorf("unexpected detail: %s", got.Detail)
+	}
 }
 
 // --- checkEngramReachable ---
 
-func TestCheckEngramReachable_ConnectionRefused(t *testing.T) {
-	orig := httpGetFn
-	defer func() { httpGetFn = orig }()
-	httpGetFn = func(url string, _ time.Duration) (int, error) {
-		return 0, errors.New("connection refused")
-	}
+// setStdioProbeForTest pins the stdio MCP probe outcome for one test.
+func setStdioProbeForTest(t *testing.T, err error) {
+	t.Helper()
+	orig := engramProbeStdioFn
+	engramProbeStdioFn = func(context.Context, time.Duration, string, ...string) error { return err }
+	t.Cleanup(func() { engramProbeStdioFn = orig })
+}
 
-	got := checkEngramReachable()
+func writeDoctorEngramConfig(t *testing.T, homeDir, command string, args []string) string {
+	t.Helper()
+	path := filepath.Join(homeDir, ".claude.json")
+	content := fmt.Sprintf(`{"mcpServers":{"engram":{"command":%q,"args":[`, command)
+	for i, arg := range args {
+		if i > 0 {
+			content += ","
+		}
+		content += fmt.Sprintf("%q", arg)
+	}
+	content += `]}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func doctorStdioConfig(t *testing.T) (string, []string) {
+	t.Helper()
+	homeDir := t.TempDir()
+	writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
+	return homeDir, []string{"claude-code"}
+}
+
+// TestCheckEngramReachable_ExplicitHTTP_OK is matrix cell (c) of #2078: the
+// user declared an HTTP deployment via ENGRAM_BASE_URL, so the check probes
+// exactly that URL. Uses a real listener, not a stubbed httpGetFn, to prove
+// the HTTP path by execution.
+func TestCheckEngramReachable_ExplicitHTTP_OK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(engramHealthEnvVar, server.URL)
+
+	got := checkEngramReachable(context.Background(), "", nil)
+
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, server.URL) {
+		t.Errorf("detail should name the probed URL %s, got %q", server.URL, got.Detail)
+	}
+}
+
+func TestCheckEngramReachable_ExplicitHTTP_NonSuccessStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	t.Setenv(engramHealthEnvVar, server.URL)
+
+	got := checkEngramReachable(context.Background(), "", nil)
+
+	if got.Status != CheckStatusWarn {
+		t.Errorf("expected warn for 503, got %s", got.Status)
+	}
+}
+
+func TestCheckEngramReachable_ExplicitHTTP_ConnectionRefused(t *testing.T) {
+	// Bind a real listener, capture its address, then close it so the port is
+	// known-dead.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	deadURL := server.URL
+	server.Close()
+	t.Setenv(engramHealthEnvVar, deadURL)
+
+	got := checkEngramReachable(context.Background(), "", nil)
 
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
@@ -358,33 +729,163 @@ func TestCheckEngramReachable_ConnectionRefused(t *testing.T) {
 	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
 	}
-}
-
-func TestCheckEngramReachable_OK(t *testing.T) {
-	orig := httpGetFn
-	defer func() { httpGetFn = orig }()
-	httpGetFn = func(url string, _ time.Duration) (int, error) {
-		return 200, nil
-	}
-
-	got := checkEngramReachable()
-
-	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	if !strings.Contains(got.Detail, engramHealthEnvVar) {
+		t.Errorf("detail should attribute the URL to %s, got %q", engramHealthEnvVar, got.Detail)
 	}
 }
 
-func TestCheckEngramReachable_NonSuccessStatus(t *testing.T) {
-	orig := httpGetFn
-	defer func() { httpGetFn = orig }()
-	httpGetFn = func(url string, _ time.Duration) (int, error) {
-		return 503, nil
-	}
+// TestCheckEngramReachable_StdioFailure verifies that a stdio transport that
+// cannot complete the initialize handshake is a genuine failure with an
+// actionable remedy.
+func TestCheckEngramReachable_StdioFailure(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, errors.New("engram mcp exited without answering initialize"))
+	homeDir, installedAgents := doctorStdioConfig(t)
 
-	got := checkEngramReachable()
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
+
+	if got.Status != CheckStatusFail {
+		t.Errorf("expected fail, got %s: %s", got.Status, got.Detail)
+	}
+	if got.Remedy == nil {
+		t.Error("expected non-empty remedy")
+	}
+}
+
+// TestCheckEngramReachable_BinaryAbsent_Warns verifies that the doctor's
+// ErrNotInstalled mapping remains a warning because tool:engram owns the
+// binary-presence check.
+func TestCheckEngramReachable_BinaryAbsent_Warns(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, engram.ErrNotInstalled)
+	homeDir, installedAgents := doctorStdioConfig(t)
+
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
 
 	if got.Status != CheckStatusWarn {
-		t.Errorf("expected warn for 503, got %s", got.Status)
+		t.Errorf("expected warn, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not probed") {
+		t.Errorf("detail should say not probed, got %q", got.Detail)
+	}
+}
+
+// TestCheckEngramReachable_MissingRelativeWindowsExecutableWarns proves the
+// persisted Windows executable spelling remains advisory when ProbeStdio maps
+// its missing-path error to ErrNotInstalled.
+func TestCheckEngramReachable_MissingRelativeWindowsExecutableWarns(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, engram.ErrNotInstalled)
+	homeDir := t.TempDir()
+	configPath := writeDoctorEngramConfig(t, homeDir, "engram.exe", []string{"mcp", "--tools=agent"})
+
+	got := checkEngramReachable(context.Background(), homeDir, []string{"claude-code"})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("engram:reachable status = %q, detail = %q; want not-probed warning for missing relative engram.exe", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not probed") || !strings.Contains(got.Detail, configPath) {
+		t.Fatalf("engram:reachable detail = %q, want documented not-probed warning for %q", got.Detail, configPath)
+	}
+}
+
+// TestCheckEngramReachable_StdioDefault_NoHTTPListener is matrix cell (a) of
+// #2078: a default install. gentle-ai only ever configures Engram as a stdio
+// MCP server (engram mcp --tools=agent, written by
+// internal/components/engram/inject.go); it never configures an HTTP
+// transport. With the stdio transport healthy and no HTTP listener anywhere,
+// the reachability check must pass instead of guessing an HTTP address and
+// reporting a false unhealthy.
+func TestCheckEngramReachable_StdioDefault_NoHTTPListener(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+	homeDir, installedAgents := doctorStdioConfig(t)
+
+	httpCalls := 0
+	orig := httpGetFn
+	defer func() { httpGetFn = orig }()
+	httpGetFn = func(url string, _ time.Duration) (int, error) {
+		httpCalls++
+		return 0, fmt.Errorf("Get %q: dial tcp: connect: connection refused", url)
+	}
+
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("engram:reachable status = %q, detail = %q; want pass: stdio MCP is configured and healthy, no HTTP listener exists", got.Status, got.Detail)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("check attempted %d HTTP request(s) without ENGRAM_BASE_URL set; want 0 (no guessed URL)", httpCalls)
+	}
+}
+
+func TestCheckEngramReachable_StdioUsesPersistedConfiguration(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	homeDir := t.TempDir()
+	configPath := writeDoctorEngramConfig(t, homeDir, "/configured/engram", []string{"mcp", "--tools=custom"})
+
+	var gotCommand string
+	var gotArgs []string
+	orig := engramProbeStdioFn
+	engramProbeStdioFn = func(_ context.Context, _ time.Duration, command string, args ...string) error {
+		gotCommand = command
+		gotArgs = args
+		return nil
+	}
+	t.Cleanup(func() { engramProbeStdioFn = orig })
+
+	got := checkEngramReachable(context.Background(), homeDir, []string{"claude-code"})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+	if gotCommand != "/configured/engram" || strings.Join(gotArgs, "\x00") != "mcp\x00--tools=custom" {
+		t.Fatalf("probe = %q %v, want persisted command and args", gotCommand, gotArgs)
+	}
+	if !strings.Contains(got.Detail, configPath) {
+		t.Fatalf("detail = %q, want persisted configuration path %q", got.Detail, configPath)
+	}
+}
+
+func TestCheckEngramReachable_WhitespaceBaseURLUsesStdio(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, " \t\n ")
+	setStdioProbeForTest(t, nil)
+	homeDir, installedAgents := doctorStdioConfig(t)
+
+	httpCalls := 0
+	orig := httpGetFn
+	t.Cleanup(func() { httpGetFn = orig })
+	httpGetFn = func(string, time.Duration) (int, error) {
+		httpCalls++
+		return 0, errors.New("HTTP must not be selected for whitespace")
+	}
+
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
+	if got.Status != CheckStatusPass {
+		t.Fatalf("expected stdio pass for whitespace-only %s, got %s: %s", engramHealthEnvVar, got.Status, got.Detail)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0 for whitespace-only %s", httpCalls, engramHealthEnvVar)
+	}
+}
+
+func TestCheckEngramReachable_ExplicitHTTPSurroundingWhitespace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(engramHealthEnvVar, " \t"+server.URL+"\n")
+
+	got := checkEngramReachable(context.Background(), "", nil)
+	if got.Status != CheckStatusPass {
+		t.Fatalf("expected pass for surrounding whitespace, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, server.URL) {
+		t.Fatalf("detail = %q, want trimmed URL %q", got.Detail, server.URL)
 	}
 }
 
@@ -474,12 +975,15 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	configPath := writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
 
 	lookPathFn = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
 	}
 	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil } // 1 GB
 	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
 	pathSnapshots := 0
 	pathDirsFn = func() []string { pathSnapshots++; return []string{"/usr/local/bin"} }
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
@@ -504,17 +1008,147 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
-  [ok]  engram:reachable               engram health endpoint OK at http://localhost:7437/health (HTTP 200)
+  [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
+  [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
 
-Summary: 7 passed, 0 failed, 0 warnings
+Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
-`, filepath.Join(homeDir, ".gentle-ai"))
+`, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	if pathSnapshots != 1 {
 		t.Fatalf("PATH snapshots = %d, want 1", pathSnapshots)
+	}
+}
+
+func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
+	origLookPath := lookPathFn
+	origAvail := availableBytesFn
+	origHTTP := httpGetFn
+	origPathDirs := pathDirsFn
+	origHomeDir := osUserHomeDirDoctor
+	origExecutable := osExecutableDoctor
+	defer func() {
+		lookPathFn = origLookPath
+		availableBytesFn = origAvail
+		httpGetFn = origHTTP
+		pathDirsFn = origPathDirs
+		osUserHomeDirDoctor = origHomeDir
+		osExecutableDoctor = origExecutable
+	}()
+
+	homeDir, configDir, missingTarget := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "")
+	statePath := filepath.Join(homeDir, ".gentle-ai", "state.json")
+	stateDir := filepath.Dir(statePath)
+	stateBefore, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetBefore, err := os.Readlink(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lookPathFn = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil }
+	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	osExecutableDoctor = func() (string, error) { return "/usr/local/bin/gentle-ai", nil }
+	t.Setenv(engramHealthEnvVar, "https://engram.example.test")
+
+	var output bytes.Buffer
+	if err := RunDoctor(context.Background(), &output); err != nil {
+		t.Fatalf("RunDoctor returned error: %v", err)
+	}
+	if strings.Contains(output.String(), "gentle-ai sync") {
+		t.Fatalf("Doctor must not recommend sync for a dangling config symlink, got:\n%s", output.String())
+	}
+	for _, want := range []string{configDir, "inspect", "gentle-ai doctor"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("Doctor output missing %q:\n%s", want, output.String())
+		}
+	}
+
+	stateAfter, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateAfter, stateBefore) {
+		t.Fatalf("Doctor changed state.json")
+	}
+	targetAfter, err := os.Readlink(configDir)
+	if err != nil {
+		t.Fatalf("read dangling config symlink after Doctor: %v", err)
+	}
+	if targetAfter != targetBefore {
+		t.Fatalf("Doctor changed dangling symlink target from %q to %q", targetBefore, targetAfter)
+	}
+	if _, err := os.Lstat(missingTarget); !os.IsNotExist(err) {
+		t.Fatalf("Doctor changed external target %q: err=%v", missingTarget, err)
+	}
+	if _, err := os.Lstat(filepath.Join(stateDir, "backups")); !os.IsNotExist(err) {
+		t.Fatalf("Doctor created backup metadata: err=%v", err)
+	}
+}
+
+func TestDoctorSyncDisagreement_RealCLIBoundary(t *testing.T) {
+	homeDir, configDir, missingTarget := setupDanglingOpenCodeFixture(t, `{"installed_agents":["opencode"]}`, "")
+	statePath := filepath.Join(homeDir, ".gentle-ai", "state.json")
+	stateBefore, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkTargetBefore, err := os.Readlink(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(configDir); !os.IsNotExist(err) {
+		t.Fatalf("dangling managed path stat error = %v, want not-exist", err)
+	}
+	doctorResult := checkStateJSON(homeDir)
+	if doctorResult.Status != CheckStatusWarn {
+		t.Fatalf("Doctor result = %s, want warn: %s", doctorResult.Status, doctorResult.Detail)
+	}
+	if doctorResult.Remedy != nil {
+		t.Fatalf("fixed Doctor must suppress sync for the dangling path, got %+v", doctorResult.Remedy)
+	}
+
+	setSyncTestHome(t, homeDir)
+	syncResult, syncErr := RunSync([]string{"--agents", "opencode"})
+	if syncErr == nil {
+		t.Fatalf("current sync unexpectedly accepted the dangling managed path: result=%+v", syncResult)
+	}
+	if syncResult.FilesChanged != 0 || len(syncResult.ChangedFiles) != 0 {
+		t.Fatalf("rejected sync reported managed changes: FilesChanged=%d ChangedFiles=%v", syncResult.FilesChanged, syncResult.ChangedFiles)
+	}
+
+	stateAfter, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateAfter, stateBefore) {
+		t.Fatal("sync changed state.json after rejecting the dangling managed path")
+	}
+	info, err := os.Lstat(configDir)
+	if err != nil {
+		t.Fatalf("Lstat managed path after sync: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("sync replaced managed symlink with %s", info.Mode())
+	}
+	linkTargetAfter, err := os.Readlink(configDir)
+	if err != nil {
+		t.Fatalf("Readlink managed path after sync: %v", err)
+	}
+	if linkTargetAfter != linkTargetBefore {
+		t.Fatalf("sync changed symlink target from %q to %q", linkTargetBefore, linkTargetAfter)
+	}
+	if _, err := os.Lstat(missingTarget); !os.IsNotExist(err) {
+		t.Fatalf("sync changed missing symlink target: %v", err)
 	}
 }
 
@@ -748,6 +1382,13 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	if err := os.MkdirAll(piDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	piMCPPath := filepath.Join(homeDir, ".pi", "agent", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(piMCPPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(piMCPPath, []byte(`{"mcpServers":{"engram":{"command":"engram","args":["mcp","--tools=agent"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	payload := `{"installed_agents":["pi"]}`
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
@@ -765,6 +1406,8 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
 	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
 
 	var buf bytes.Buffer
 	if err := RunDoctor(context.Background(), &buf); err != nil {

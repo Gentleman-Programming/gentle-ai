@@ -23,7 +23,7 @@ Also read shared conventions from the same skills root:
 - Windows: `%USERPROFILE%\\.kiro\\skills\\_shared\\sdd-phase-common.md`
 
 Execute all steps from the skill directly in this context window:
-1. Read proposal artifact (required): `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
+1. Read proposal artifact (required): read the `proposal` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Read existing code architecture to understand current patterns
 3. Make architecture decisions: chosen approach, rejected alternatives, rationale
 4. Produce file-change table: each file that will be created, modified, or deleted
@@ -48,3 +48,11 @@ Return a structured result with these fields:
 - `next_recommended`: `sdd-tasks` (once spec is also done)
 - `risks`: architectural risks, open decisions, or patterns that deviate from existing codebase
 - `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+
+<!-- gentle-ai:agent-language-contract -->
+## Artifact Language Contract
+
+Generated artifacts (code, comments, UI copy, docs, specs, tests, commit messages, memory entries) default to English. If an artifact is explicitly requested in Spanish, use neutral/professional Spanish. Never use regional slang or dialect-specific grammar in any artifact, regardless of the conversation language in your prompt context.
+
+Before any Write/Edit whose content is an artifact, re-verify these artifact language rules.
+<!-- /gentle-ai:agent-language-contract -->

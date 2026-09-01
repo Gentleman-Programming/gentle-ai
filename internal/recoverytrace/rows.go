@@ -727,7 +727,7 @@ func alreadyImplementedDeletionRows() []Row {
 		},
 		// snapshot.go runGitCaptured scrubs the unsafe GIT_* variables, forces
 		// LC_ALL=C, pins LANG=C for the frozen candidate, bounds every launch with
-		// localGitCommandTimeout/remoteGitCommandTimeout, and caps output through
+		// LocalGitCommandTimeout/RemoteGitCommandTimeout, and caps output through
 		// boundedGitOutput/GitOutputLimitError. Full-OID-only results come from
 		// gate.go resolving revisions with rev-parse --verify <rev>^{commit} against
 		// the object format frozen_candidate_context.go validated. Process-tree kill
@@ -907,7 +907,7 @@ func retiredPackageRows() []Row {
 		//   - Bounded execution with process-tree kill on both platforms:
 		//     git_process_unix.go and git_process_windows.go (startGitProcessTree),
 		//     driven by snapshot.go runGitCaptured, which binds one request to one
-		//     launched argv under localGitCommandTimeout/remoteGitCommandTimeout and
+		//     launched argv under LocalGitCommandTimeout/RemoteGitCommandTimeout and
 		//     caps output through boundedGitOutput.
 		//
 		// The generic host executor's remaining pieces — request-to-launch evidence

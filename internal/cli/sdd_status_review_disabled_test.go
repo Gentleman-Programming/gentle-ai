@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io/fs"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,11 +54,11 @@ func seedArchiveGatedSDDChange(t *testing.T, root string) {
 	runReviewCLIGit(t, root, "commit", "-qm", "base")
 }
 
-func resolveSDDStatusJSON(t *testing.T, root string) sddstatus.Status {
+func runSDDCommandJSON(t *testing.T, run func([]string, io.Writer) error, args ...string) sddstatus.Status {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := RunSDDStatus([]string{"thin", "--cwd", root, "--json"}, &stdout); err != nil {
-		t.Fatalf("RunSDDStatus() error = %v\n%s", err, stdout.String())
+	if err := run(args, &stdout); err != nil {
+		t.Fatalf("SDD command error = %v\n%s", err, stdout.String())
 	}
 	var status sddstatus.Status
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
@@ -66,55 +67,77 @@ func resolveSDDStatusJSON(t *testing.T, root string) sddstatus.Status {
 	return status
 }
 
-// corruptCloneLocalReviewMode damages the clone-local override head record.
-// The switch becomes unreadable, which is not the same as being off.
-func corruptCloneLocalReviewMode(t *testing.T, repo string) {
+func resolveSDDStatusJSON(t *testing.T, root string) sddstatus.Status {
 	t.Helper()
-	root := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
-	corrupted := 0
-	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || filepath.Base(filepath.Dir(path)) != "rdd-mode" {
-			return nil
-		}
-		if !strings.HasPrefix(entry.Name(), "gen-") {
-			return nil
-		}
-		if writeErr := os.WriteFile(path, []byte("{\n"), 0o644); writeErr != nil {
-			return writeErr
-		}
-		corrupted++
-		return nil
-	}); err != nil {
-		t.Fatalf("walk clone-local review mode records: %v", err)
+	return runSDDCommandJSON(t, RunSDDStatus, "thin", "--cwd", root, "--json")
+}
+
+// requireDisabledUnmanagedSDDStatus asserts the corrective verify cycle's
+// CRITICAL-1 fix (rdd-post-verify-review-offer's "Kill-Switch-Off Is
+// Structural Absence" requirement): while the switch is off, archive is
+// never review-blocked AND the reviewGate field itself is structurally
+// absent — not populated with a disabled/unmanaged disposition, which is
+// the ceremony the ratified requirement forbids ("no disabled/unmanaged
+// ceremony capable of failing or blocking").
+func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
+	t.Helper()
+	if status.Dependencies.Archive == sddstatus.DependencyBlocked || status.NextRecommended == "resolve-review" {
+		t.Fatalf("disabled archive=%q next=%q blocked=%v, want an unmanaged route to archive",
+			status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
 	}
-	if corrupted == 0 {
-		t.Fatal("no clone-local review mode record to corrupt; the fixture never wrote one")
+	if status.ReviewOffer != nil {
+		t.Fatalf("disabled reviewOffer = %#v, want structural absence", status.ReviewOffer)
 	}
 }
 
-// TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled pins today's behaviour for
-// the exact fixture the disabled test relaxes. The enabled path must not move.
-func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
-	reviewModeHome(t)
-	root := t.TempDir()
-	seedArchiveGatedSDDChange(t, root)
+// corruptCloneLocalReviewMode damages the authoritative clone-local head.
+// The fixture creates exactly generation 1, so corrupting that exact path
+// proves status does not confuse a mode-resolution failure with a gate result.
+func corruptCloneLocalReviewMode(t *testing.T, repo string) {
+	t.Helper()
+	path, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("locate clone-local review mode head: %v", err)
+	}
+	if path == "" {
+		t.Fatal("no clone-local review mode head to corrupt; the fixture never wrote one")
+	}
+	if err := os.WriteFile(path, []byte("{\n"), 0o600); err != nil {
+		t.Fatalf("corrupt clone-local review mode head: %v", err)
+	}
+}
 
-	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("fixture is wrong: review-driven development is not enabled")
+// seedScopeChangedApprovedSDDChange leaves a historical scope change behind
+// after terminal closure burns its baseline authority. The historical review is not a
+// governing receipt and must not become an SDD archive blocker.
+func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
+	t.Helper()
+	seedArchiveGatedSDDChange(t, root)
+	writeSDDStatusFile(t, root+"/docs/baseline.md", "# baseline\n\nplain prose, no executable content.\n")
+	runReviewCLIGit(t, root, "add", "-A")
+	started := startFacadeReviewResult(t, root, "scope-changed-baseline")
+	if started.State != "approved" || started.Action != "closed" {
+		t.Fatalf("baseline zero-lens START = %#v", started)
+	}
+	commitAllSDDStatus(t, root, "baseline reviewed delivery")
+	writeSDDStatusFile(t, root+"/docs/scope-changed.md", "# scope changed\n\nplain prose, delivered after approval.\n")
+	commitAllSDDStatus(t, root, "scope changed after approval")
+}
+
+// TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled retains its stable fixture
+// name while pinning #3417's replacement behavior: terminal closure burned the old
+// approval, so a historical scope change has no deciding gate. Enabled status
+// offers a new review but archive proceeds under ordinary repository policy.
+func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
+	reviewEnabledHome(t)
+	root := t.TempDir()
+	seedScopeChangedApprovedSDDChange(t, root)
+
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("fixture must enable receipt-driven development: disabled=%t err=%v", disabled, err)
 	}
 	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated {
-		t.Fatalf("enabled reviewGate = %#v, want invalidated", status.ReviewGate)
-	}
-	if status.ReviewGate.Delivery != "" {
-		t.Fatalf("enabled reviewGate.delivery = %q, want absent from the enabled wire shape", status.ReviewGate.Delivery)
-	}
-	if status.Dependencies.Archive != sddstatus.DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("enabled archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
-	}
+	requireEnabledOrdinaryArchive(t, status, "enabled archive after burned scope-changed review")
 }
 
 // TestSDDStatusArchiveGateCarriesOnWhileReviewIsDisabled is the seam under
@@ -126,42 +149,85 @@ func TestSDDStatusArchiveGateCarriesOnWhileReviewIsDisabled(t *testing.T) {
 	disableReviewForClone(t, root)
 
 	status := resolveSDDStatusJSON(t, root)
-	if status.Dependencies.Archive == sddstatus.DependencyBlocked {
-		t.Fatalf("disabled archive = %q, want unblocked; blocked reasons = %v", status.Dependencies.Archive, status.BlockedReasons)
+	requireDisabledUnmanagedSDDStatus(t, status)
+}
+
+func TestSDDCommandsWithoutCWDHonorDisabledReviewMode(t *testing.T) {
+	reviewModeHome(t)
+	root := t.TempDir()
+	seedArchiveGatedSDDChange(t, root)
+	disableReviewForClone(t, root)
+	t.Chdir(root)
+
+	commands := []struct {
+		name string
+		run  func([]string, io.Writer) error
+	}{
+		{name: "status", run: RunSDDStatus},
+		{name: "continue", run: RunSDDContinue},
 	}
-	if status.NextRecommended == "resolve-review" {
-		t.Fatalf("disabled next = %q, want a route out of the resolve-review loop", status.NextRecommended)
-	}
-	if status.ReviewGate == nil || status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled reviewGate = %#v, want the disabled/unmanaged disposition on the wire", status.ReviewGate)
-	}
-	// A disabled run declines to manage. It never approves.
-	if status.ReviewGate.Result == reviewtransaction.GateAllow {
-		t.Fatalf("disabled reviewGate fabricated an approval: %#v", status.ReviewGate)
-	}
-	if status.ReviewTransaction != nil {
-		t.Fatalf("disabled run invented review authority: %#v", status.ReviewTransaction)
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			status := runSDDCommandJSON(t, command.run, "thin", "--json")
+			requireDisabledUnmanagedSDDStatus(t, status)
+			if status.ActionContext.WorkspaceRoot != root {
+				t.Fatalf("workspace root = %q, want %q", status.ActionContext.WorkspaceRoot, root)
+			}
+		})
 	}
 }
 
-// TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable holds the last
-// property: a broken or tampered mode record must never be able to relax the
-// archive gate, so an unreadable switch behaves exactly like an enabled one.
-func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
+func TestSDDStatusWithoutCWDUsesLinkedWorktreeCommonDirMode(t *testing.T) {
 	reviewModeHome(t)
+	root := t.TempDir()
+	seedArchiveGatedSDDChange(t, root)
+	disableReviewForClone(t, root)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, root, "worktree", "add", "-q", "-b", "linked-status", linked)
+	t.Chdir(linked)
+
+	status := runSDDCommandJSON(t, RunSDDStatus, "thin", "--json")
+	requireDisabledUnmanagedSDDStatus(t, status)
+	if status.ActionContext.WorkspaceRoot != linked {
+		t.Fatalf("workspace root = %q, want linked worktree %q", status.ActionContext.WorkspaceRoot, linked)
+	}
+}
+
+// TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable keeps the two
+// decisions separate. The mode reader still reports malformed persisted state
+// as a real error, but SDD status fails closed to enabled and has no governing
+// receipt to enforce. It must therefore proceed under ordinary policy without
+// fabricating a reviewGate from the mode error.
+func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedArchiveGatedSDDChange(t, root)
 	disableReviewForClone(t, root)
 	corruptCloneLocalReviewMode(t, root)
 
-	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("an unreadable switch resolved to disabled; it must fail closed to enabled")
+	mode, modeErr := reviewModeStatus(context.Background(), root)
+	if modeErr == nil || mode.Enabled() {
+		t.Fatalf("unreadable switch must remain a failed-closed mode resolution: mode=%#v err=%v", mode, modeErr)
 	}
-	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate == nil || status.ReviewGate.Delivery != "" {
-		t.Fatalf("unreadable-switch reviewGate = %#v, want the enforcing shape", status.ReviewGate)
+	var unreadable *ReviewModeUnreadableError
+	if !errors.As(modeErr, &unreadable) {
+		t.Fatalf("mode-resolution error = %T %v, want ReviewModeUnreadableError", modeErr, modeErr)
 	}
-	if status.Dependencies.Archive != sddstatus.DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("unreadable-switch archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("SDD mode projection = disabled=%t err=%v, want enabled fallback for the non-deciding archive path", disabled, err)
+	}
+
+	t.Chdir(root)
+	for _, args := range [][]string{
+		{"thin", "--cwd", root, "--json"},
+		{"thin", "--json"},
+	} {
+		status := runSDDCommandJSON(t, RunSDDStatus, args...)
+		if status.ReviewOffer != nil {
+			t.Fatalf("unreadable mode fabricated review offer: %#v", status.ReviewOffer)
+		}
+		if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
+			t.Fatalf("unreadable mode archive=%q next=%q, want ordinary ready/archive", status.Dependencies.Archive, status.NextRecommended)
+		}
 	}
 }
