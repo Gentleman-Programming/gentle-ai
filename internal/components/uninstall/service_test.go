@@ -19,6 +19,111 @@ import (
 
 type stubSnapshotter struct{}
 
+func TestProtectRemovalOperationAllowsInRootSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(realDir): %v", err)
+	}
+	linkDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	path := filepath.Join(linkDir, "config.json")
+	if err := os.WriteFile(filepath.Join(realDir, "config.json"), []byte("managed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(): %v", err)
+	}
+
+	op := protectRemovalOperation(removeFile(path), root)
+	changed, removed, err := op.apply(path)
+	if err != nil {
+		t.Fatalf("protected removeFile() error = %v", err)
+	}
+	if !changed || !removed {
+		t.Fatalf("protected removeFile() = (%t, %t), want (true, true)", changed, removed)
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "config.json")); !os.IsNotExist(err) {
+		t.Fatalf("resolved target still exists, stat error = %v", err)
+	}
+}
+
+func TestProtectRemovalOperationRemovesTreeThroughInRootSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	targetDir := filepath.Join(realDir, "managed")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(targetDir): %v", err)
+	}
+	linkDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "config.json"), []byte("managed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(): %v", err)
+	}
+
+	path := filepath.Join(linkDir, "managed")
+	op := protectRemovalOperation(removeTree(path), root)
+	changed, removed, err := op.apply(path)
+	if err != nil {
+		t.Fatalf("protected removeTree() error = %v", err)
+	}
+	if !changed || !removed {
+		t.Fatalf("protected removeTree() = (%t, %t), want (true, true)", changed, removed)
+	}
+	if _, err := os.Stat(targetDir); !os.IsNotExist(err) {
+		t.Fatalf("resolved target directory still exists, stat error = %v", err)
+	}
+}
+
+func TestProtectRemovalOperationRemovesFinalSymlinkOnly(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.json")
+	link := filepath.Join(root, "config.json")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target): %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	op := protectRemovalOperation(removeFile(link), root)
+	if _, _, err := op.apply(link); err != nil {
+		t.Fatalf("protected removeFile() error = %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("final symlink still exists, stat error = %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "keep\n" {
+		t.Fatalf("symlink target = %q, read error = %v; want preserved target", got, err)
+	}
+}
+
+func TestProtectRemovalOperationRejectsExternalSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	linkDir := filepath.Join(root, "linked")
+	if err := os.Symlink(outside, linkDir); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	outsideFile := filepath.Join(outside, "config.json")
+	if err := os.WriteFile(outsideFile, []byte("do not delete\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outsideFile): %v", err)
+	}
+	path := filepath.Join(linkDir, "config.json")
+	op := protectRemovalOperation(removeFile(path), root)
+	if _, _, err := op.apply(path); err == nil {
+		t.Fatal("protected removeFile() error = nil, want allowed-root rejection")
+	} else if !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("protected removeFile() error = %v, want allowed-root rejection", err)
+	}
+	if _, err := os.Stat(outsideFile); err != nil {
+		t.Fatalf("outside file was removed or became inaccessible: %v", err)
+	}
+}
+
 func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 	homeDir := t.TempDir()
 	svc, err := NewService(homeDir, t.TempDir(), "dev")
