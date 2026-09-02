@@ -43,6 +43,8 @@ const (
 // CatalogError intentionally exposes a category, never command output.
 type CatalogError struct{ Kind CatalogErrorKind }
 
+// Error returns the catalog error kind string as the error message. The error
+// intentionally exposes only the category, never command output.
 func (e *CatalogError) Error() string { return string(e.Kind) }
 
 // DiscoverCatalog reads OpenCode's effective provider catalog for projectDir.
@@ -70,6 +72,10 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 	return providers, nil
 }
 
+// catalogCommandError maps a raw discovery failure to the typed CatalogError
+// taxonomy. A CatalogError passes through unchanged; deadline or context
+// expiry becomes CatalogErrorTimeout; a missing or unresolvable binary becomes
+// CatalogErrorMissingBinary; anything else becomes CatalogErrorCommandFailed.
 func catalogCommandError(ctx context.Context, err error) error {
 	var catalogErr *CatalogError
 	if errors.As(err, &catalogErr) {
@@ -85,6 +91,12 @@ func catalogCommandError(ctx context.Context, err error) error {
 	return &CatalogError{Kind: CatalogErrorCommandFailed}
 }
 
+// parseVerboseCatalog parses the streamed `opencode models --verbose` output.
+// It reads one catalog record at a time: a `provider/model` header line
+// followed by a JSON object. Header-shaped log lines (plugin and hook output)
+// are tolerated as noise, but if the stream contains only noise the parse
+// fails closed with CatalogErrorUnsupportedSchema. A stream that exceeds the
+// defensive byte ceiling fails with CatalogErrorOutputTooLarge.
 func parseVerboseCatalog(r io.Reader) (map[string]Provider, error) {
 	providers := map[string]Provider{}
 	sawNoise := false
@@ -181,16 +193,24 @@ func parseVerboseCatalog(r io.Reader) (map[string]Provider, error) {
 	return providers, nil
 }
 
+// streamBuffer is an incremental line-oriented reader over the command's
+// stdout. It buffers small chunks, serves line reads, and lets a json.Decoder
+// consume the remainder of a record through Read while recovering any
+// read-ahead bytes so subsequent header lines are never dropped.
 type streamBuffer struct {
 	r   io.Reader
 	buf []byte
 	eof bool
 }
 
+// newStreamBuffer wraps r in an incremental catalog stream reader.
 func newStreamBuffer(r io.Reader) *streamBuffer {
 	return &streamBuffer{r: r}
 }
 
+// fill pulls one chunk from the underlying reader into the buffer. It returns
+// io.EOF only when the stream is exhausted and no buffered bytes remain;
+// trailing bytes received alongside EOF stay available for subsequent reads.
 func (s *streamBuffer) fill() error {
 	if s.eof {
 		return io.EOF
@@ -213,6 +233,9 @@ func (s *streamBuffer) fill() error {
 	return nil
 }
 
+// readLine returns the next newline-terminated line, tolerating a final line
+// without a trailing newline. Buffered bytes are consumed before pulling more
+// data from the underlying stream.
 func (s *streamBuffer) readLine() (string, error) {
 	for {
 		if idx := bytes.IndexByte(s.buf, '\n'); idx >= 0 {
@@ -234,6 +257,10 @@ func (s *streamBuffer) readLine() (string, error) {
 	}
 }
 
+// peekNonWhitespace discards buffered whitespace and returns the next
+// non-whitespace byte, blocking on the underlying stream when needed. It
+// distinguishes a real catalog header (followed by `{`) from a header-shaped
+// log line without breaking incremental streaming.
 func (s *streamBuffer) peekNonWhitespace() (byte, error) {
 	for {
 		for i, b := range s.buf {
@@ -249,6 +276,9 @@ func (s *streamBuffer) peekNonWhitespace() (byte, error) {
 	}
 }
 
+// Read satisfies io.Reader so a json.Decoder can consume a record body
+// directly from the buffer, serving buffered read-ahead first and delegating
+// to the underlying stream only when the buffer is empty.
 func (s *streamBuffer) Read(p []byte) (int, error) {
 	if len(s.buf) > 0 {
 		n := copy(p, s.buf)
@@ -261,6 +291,9 @@ func (s *streamBuffer) Read(p []byte) (int, error) {
 	return s.r.Read(p)
 }
 
+// decodeJSON decodes one catalog record from the stream. The decoder's
+// read-ahead bytes are recovered back into the buffer so the next header line
+// — even on the same chunk — is never dropped between records.
 func (s *streamBuffer) decodeJSON(v interface{}) error {
 	dec := json.NewDecoder(s)
 	if err := dec.Decode(v); err != nil {
@@ -296,6 +329,10 @@ func sortVariants(variants []string) {
 	sort.Slice(variants, func(i, j int) bool { return effortRank[variants[i]] < effortRank[variants[j]] })
 }
 
+// runCatalogCommand starts `opencode models --verbose` and returns a reader
+// over its stdout instead of buffering the whole output in memory. Stderr is
+// drained concurrently to prevent pipe deadlocks, and the returned reader
+// must be Closed to cancel the process and reap the child.
 func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
@@ -340,6 +377,9 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 	}, nil
 }
 
+// processStreamReader owns the started child process: it exposes stdout as an
+// io.Reader, drains stderr on a background goroutine, and on Close cancels the
+// process and waits for both the stderr drain and the child to be reaped.
 type processStreamReader struct {
 	cmd        *exec.Cmd
 	stdout     io.ReadCloser
@@ -350,6 +390,8 @@ type processStreamReader struct {
 	eof        bool
 }
 
+// Read serves stdout bytes; the first terminal read triggers process cleanup
+// and reaping, surfacing the child's exit error (if any) after EOF.
 func (p *processStreamReader) Read(buf []byte) (int, error) {
 	if p.eof {
 		if p.waitErr != nil {
@@ -371,12 +413,18 @@ func (p *processStreamReader) Read(buf []byte) (int, error) {
 	return n, err
 }
 
+// Close cancels the underlying command and reaps the child process exactly
+// once. It is safe to call multiple times and never blocks indefinitely: the
+// concurrent stderr drain is awaited before the child is waited on.
 func (p *processStreamReader) Close() error {
 	p.cancel()
 	p.closeAndReap()
 	return nil
 }
 
+// closeAndReap performs the idempotent shutdown sequence: close stdout, wait
+// for the stderr drain to finish, then reap the child and retain its exit
+// error for the next Read.
 func (p *processStreamReader) closeAndReap() {
 	if p.closed {
 		return
@@ -387,6 +435,11 @@ func (p *processStreamReader) closeAndReap() {
 	p.waitErr = p.cmd.Wait()
 }
 
+// countingLimitReader enforces the defensive stdout ceiling: a stream of at
+// most `limit` bytes parses normally, while any additional byte trips
+// CatalogErrorOutputTooLarge and cancels the underlying command. A stream that
+// ends exactly at the limit is valid, so once the counter reaches the limit a
+// single probe read distinguishes a clean EOF from a true overflow.
 type countingLimitReader struct {
 	r      io.Reader
 	limit  int64
@@ -394,24 +447,28 @@ type countingLimitReader struct {
 	cancel context.CancelFunc
 }
 
+// Read serves the next bytes while enforcing the ceiling: reads are clamped
+// to the remaining allowance, and once the counter reaches the limit a single
+// extra probe byte distinguishes a clean end-of-stream from a true overflow.
+// Overflow cancels the underlying command immediately.
 func (c *countingLimitReader) Read(p []byte) (int, error) {
-	if c.read >= c.limit {
-		if c.cancel != nil {
-			c.cancel()
-		}
-		return 0, &CatalogError{Kind: CatalogErrorOutputTooLarge}
-	}
 	maxToRead := int64(len(p))
 	if remaining := c.limit - c.read; maxToRead > remaining {
 		maxToRead = remaining
 	}
+	if maxToRead <= 0 {
+		var probe [1]byte
+		n, err := c.r.Read(probe[:])
+		c.read += int64(n)
+		if n > 0 {
+			if c.cancel != nil {
+				c.cancel()
+			}
+			return 0, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+		}
+		return 0, err
+	}
 	n, err := c.r.Read(p[:maxToRead])
 	c.read += int64(n)
-	if c.read >= c.limit {
-		if c.cancel != nil {
-			c.cancel()
-		}
-		return n, &CatalogError{Kind: CatalogErrorOutputTooLarge}
-	}
 	return n, err
 }
