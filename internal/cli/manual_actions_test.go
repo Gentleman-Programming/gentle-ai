@@ -55,6 +55,31 @@ func TestRenderInstallManualActions(t *testing.T) {
 	}
 }
 
+// TestRenderInstallManualActionsOrdersPiCodeGraphFirst pins the order the two
+// sources are merged in. Pi CodeGraph's actions were the only ones this
+// renderer emitted before, so they keep the lead and an existing install's
+// output stays byte-identical; the actions apply steps raise are appended
+// after. The sibling table above asserts occurrence counts, which a reordered
+// append leaves untouched, so without this the order is unpinned.
+func TestRenderInstallManualActionsOrdersPiCodeGraphFirst(t *testing.T) {
+	piAction := "Pi CodeGraph runtime verification is pending."
+	stepAction := "Something optional was skipped; here is how to finish it."
+
+	out := RenderInstallManualActions(InstallResult{
+		PiCodeGraph: &communitytool.PiCodeGraphResult{ManualActions: []string{piAction}},
+		Execution:   pipeline.ExecutionResult{ManualActions: []string{stepAction}},
+	})
+
+	pi := strings.Index(out, piAction)
+	step := strings.Index(out, stepAction)
+	if pi < 0 || step < 0 {
+		t.Fatalf("both actions must render, got %q", out)
+	}
+	if pi > step {
+		t.Fatalf("Pi CodeGraph action must render before pipeline actions, got %q", out)
+	}
+}
+
 // TestRenderInstallManualActionsEmptyRendersNothing keeps the renderer silent
 // when there is nothing to say, so an ordinary run gains no trailing section.
 func TestRenderInstallManualActionsEmptyRendersNothing(t *testing.T) {
