@@ -8,6 +8,7 @@ import (
 
 func TestResolveEffectiveConfigReadsJSONCAndAssignments(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
 	projectDir := t.TempDir()
 	configPath := filepath.Join(projectDir, "opencode.jsonc")
 	if err := os.WriteFile(configPath, []byte(`{
@@ -58,6 +59,7 @@ func TestResolveEffectiveConfigReadsJSONCAndAssignments(t *testing.T) {
 func TestResolveEffectiveConfigPrecedenceAndDefaultWriteTarget(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
 	projectDir := t.TempDir()
 	parentDir := filepath.Dir(projectDir)
 	parentConfig := filepath.Join(parentDir, "opencode.json")
@@ -100,6 +102,68 @@ func TestResolveEffectiveConfigPrecedenceAndDefaultWriteTarget(t *testing.T) {
 	wantDefault := DefaultSettingsPath()
 	if missing.Path != "" || missing.WritePath != wantDefault {
 		t.Fatalf("missing paths = (%q, %q), want empty read path and default write target %q", missing.Path, missing.WritePath, wantDefault)
+	}
+}
+
+func TestResolveEffectiveConfigStopsProjectSearchAtGitRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	parent := t.TempDir()
+	project := filepath.Join(parent, "repo")
+	nested := filepath.Join(project, "packages", "app")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o700); err != nil {
+		t.Fatalf("mkdir git root: %v", err)
+	}
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir nested project: %v", err)
+	}
+	parentConfig := filepath.Join(parent, "opencode.jsonc")
+	if err := os.WriteFile(parentConfig, []byte(`{"provider":{"outside":{"models":{"m":{}}}}}`), 0o600); err != nil {
+		t.Fatalf("write parent config: %v", err)
+	}
+	globalConfig := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.MkdirAll(filepath.Dir(globalConfig), 0o700); err != nil {
+		t.Fatalf("mkdir global config: %v", err)
+	}
+	if err := os.WriteFile(globalConfig, []byte(`{"provider":{"global":{"models":{"m":{}}}}}`), 0o600); err != nil {
+		t.Fatalf("write global config: %v", err)
+	}
+
+	snapshot, err := ResolveEffectiveConfigForHome(home, nested)
+	if err != nil {
+		t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+	}
+	if snapshot.Path != globalConfig {
+		t.Fatalf("effective path = %q, want global config %q without crossing git root to %q", snapshot.Path, globalConfig, parentConfig)
+	}
+}
+
+func TestResolveEffectiveConfigMalformedModelIsPresentButNotCleared(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+	configPath := filepath.Join(projectDir, "opencode.jsonc")
+	if err := os.WriteFile(configPath, []byte(`{
+		"agent": {
+			"sdd-apply": {"model": "typo-without-provider"},
+			"sdd-spec": {"model": ""}
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+	if err != nil {
+		t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+	}
+	apply := snapshot.Assignments["sdd-apply"]
+	if !apply.Present || apply.Cleared {
+		t.Fatalf("malformed model assignment = %+v, want present but not cleared", apply)
+	}
+	spec := snapshot.Assignments["sdd-spec"]
+	if !spec.Present || !spec.Cleared {
+		t.Fatalf("empty model assignment = %+v, want explicit clear", spec)
 	}
 }
 

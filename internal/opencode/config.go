@@ -26,15 +26,35 @@ type ConfigSnapshot struct {
 type AssignmentPresence struct {
 	Present    bool
 	Cleared    bool
+	Managed    bool
 	Assignment model.ModelAssignment
 }
 
 // ResolveEffectiveConfig locates and parses the effective OpenCode config for
 // projectDir. Existing project configs win over global configs; within the same
-// directory, JSONC wins over JSON. When no config exists, WritePath points at
+// directory, JSONC wins over JSON. Ancestor lookup stops at the nearest Git root;
+// this snapshot does not implement OpenCode's full multi-file merge semantics or
+// OPENCODE_CONFIG overrides. When no config exists, WritePath points at
 // OpenCode's default settings path.
 func ResolveEffectiveConfig(projectDir string) (ConfigSnapshot, error) {
-	path := findEffectiveConfigPath(projectDir)
+	home, _ := os.UserHomeDir()
+	return ResolveEffectiveConfigForHome(home, projectDir)
+}
+
+// EffectiveSettingsPath returns the shared OpenCode settings write path. Existing
+// JSONC wins over JSON so user-owned comments are not silently flattened.
+func EffectiveSettingsPath(homeDir, projectDir string) string {
+	snapshot, err := ResolveEffectiveConfigForHome(homeDir, projectDir)
+	if err != nil || snapshot.WritePath == "" {
+		return DefaultSettingsPathForHome(homeDir)
+	}
+	return snapshot.WritePath
+}
+
+// ResolveEffectiveConfigForHome is ResolveEffectiveConfig with an explicit home
+// directory for callers that already operate on a test or installation root.
+func ResolveEffectiveConfigForHome(homeDir, projectDir string) (ConfigSnapshot, error) {
+	path := findEffectiveConfigPath(homeDir, projectDir)
 	snapshot := ConfigSnapshot{
 		Path:        path,
 		WritePath:   path,
@@ -42,7 +62,7 @@ func ResolveEffectiveConfig(projectDir string) (ConfigSnapshot, error) {
 		Assignments: map[string]AssignmentPresence{},
 	}
 	if snapshot.WritePath == "" {
-		snapshot.WritePath = DefaultSettingsPath()
+		snapshot.WritePath = DefaultSettingsPathForHome(homeDir)
 		return snapshot, nil
 	}
 
@@ -59,8 +79,8 @@ func ResolveEffectiveConfig(projectDir string) (ConfigSnapshot, error) {
 	return snapshot, nil
 }
 
-func findEffectiveConfigPath(projectDir string) string {
-	for _, dir := range candidateConfigDirs(projectDir) {
+func findEffectiveConfigPath(homeDir, projectDir string) string {
+	for _, dir := range candidateConfigDirs(homeDir, projectDir) {
 		for _, name := range supportedConfigNames {
 			path := filepath.Join(dir, name)
 			if fileExists(path) {
@@ -71,12 +91,15 @@ func findEffectiveConfigPath(projectDir string) string {
 	return ""
 }
 
-func candidateConfigDirs(projectDir string) []string {
+func candidateConfigDirs(homeDir, projectDir string) []string {
 	var dirs []string
 	if projectDir != "" {
 		if abs, err := filepath.Abs(projectDir); err == nil {
 			for {
 				dirs = append(dirs, abs)
+				if fileExists(filepath.Join(abs, ".git")) || dirExists(filepath.Join(abs, ".git")) {
+					break
+				}
 				parent := filepath.Dir(abs)
 				if parent == abs {
 					break
@@ -85,8 +108,8 @@ func candidateConfigDirs(projectDir string) []string {
 			}
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		dirs = append(dirs, filepath.Join(home, ".config", "opencode"))
+	if homeDir != "" {
+		dirs = append(dirs, filepath.Dir(DefaultSettingsPathForHome(homeDir)))
 	}
 	return dirs
 }
@@ -94,6 +117,11 @@ func candidateConfigDirs(projectDir string) []string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func configuredProviders(root map[string]any) map[string]Provider {
@@ -152,19 +180,37 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 		}
 		def, ok := raw.(map[string]any)
 		if !ok {
-			assignments[key] = AssignmentPresence{Present: true, Cleared: true}
+			assignments[key] = AssignmentPresence{Present: true}
 			continue
 		}
-		modelSpec, _ := def["model"].(string)
+		modelValue, hasModel := def["model"]
+		modelSpec, _ := modelValue.(string)
+		if !hasModel || strings.TrimSpace(modelSpec) == "" {
+			managed := looksLikeManagedOpenCodeAgent(def)
+			assignments[key] = AssignmentPresence{Present: true, Cleared: !managed, Managed: managed}
+			continue
+		}
 		providerID, modelID, ok := model.SplitModelSpec(strings.TrimSpace(modelSpec))
 		if !ok {
-			assignments[key] = AssignmentPresence{Present: true, Cleared: true}
+			assignments[key] = AssignmentPresence{Present: true}
 			continue
 		}
 		effort, _ := def["variant"].(string)
 		assignments[key] = AssignmentPresence{Present: true, Assignment: model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}}
 	}
 	return assignments
+}
+
+func looksLikeManagedOpenCodeAgent(def map[string]any) bool {
+	hidden, _ := def["hidden"].(bool)
+	if !hidden {
+		return false
+	}
+	if _, ok := def["prompt"].(string); !ok {
+		return false
+	}
+	_, ok := def["permission"].(map[string]any)
+	return ok
 }
 
 func stringValue(value any, fallback string) string {

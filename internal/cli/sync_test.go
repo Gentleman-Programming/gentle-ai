@@ -923,7 +923,7 @@ func TestRunSyncPreservesCurrentOpenCodeAssignmentOverStaleState(t *testing.T) {
 		agents:    []model.AgentID{model.AgentOpenCode},
 		selection: model.Selection{
 			SDDMode:          model.SDDModeMulti,
-				ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
+			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
 		},
 		changedFiles: &changedFiles,
 	}
@@ -983,7 +983,7 @@ func TestRunSyncPreservesClearedOpenCodeAssignmentOverStaleState(t *testing.T) {
 		agents:    []model.AgentID{model.AgentOpenCode},
 		selection: model.Selection{
 			SDDMode:          model.SDDModeMulti,
-				ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
+			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
 		},
 		changedFiles: &changedFiles,
 	}
@@ -1001,14 +1001,56 @@ func TestRunSyncPreservesClearedOpenCodeAssignmentOverStaleState(t *testing.T) {
 	}
 }
 
+func TestRestoreOpenCodeModelAssignmentsSkipsClearedAssignmentInSingleMode(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`{
+	  "agent": {
+	    "sdd-apply": {"mode": "subagent"}
+	  }
+	}`))
+	persisted := state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+	}}
+
+	restored := restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeSingle)
+	if _, exists := restored["sdd-apply"]; exists {
+		t.Fatalf("single-mode cleared assignment restored stale state: %#v", restored)
+	}
+}
+
+func TestRestoreOpenCodeModelAssignmentsRestoresMalformedAssignmentSpec(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp home) error = %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(`{
+	  "agent": {
+	    "sdd-apply": {"mode": "subagent", "model": "not-provider-qualified"}
+	  }
+	}`))
+	persisted := state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+	}}
+
+	restored := restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti)
+	if got := restored["sdd-apply"]; got.ProviderID != "openai" || got.ModelID != "gpt-stale" || got.Effort != "low" {
+		t.Fatalf("malformed assignment spec was not restored from state: %#v", restored)
+	}
+}
+
 func readOpenCodeAgentMap(t *testing.T, path string) map[string]any {
 	t.Helper()
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
-	root := map[string]any{}
-	if err := json.Unmarshal(content, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
 		t.Fatalf("Unmarshal(%q) error = %v\n%s", path, err, content)
 	}
 	agents, ok := root["agent"].(map[string]any)

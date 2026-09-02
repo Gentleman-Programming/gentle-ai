@@ -187,7 +187,7 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 	repo, store, record, handle := piRefuterReview(t)
 	previous := reviewProviderRoleCaptureTimeout
 	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
-	reviewProviderRoleCaptureTimeout = time.Second
+	reviewProviderRoleCaptureTimeout = 100 * time.Millisecond
 	stalled := filepath.Join(t.TempDir(), "stalled-pi")
 	if err := os.WriteFile(stalled, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)

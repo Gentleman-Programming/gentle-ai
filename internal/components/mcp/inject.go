@@ -180,7 +180,7 @@ func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, erro
 		}
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := mergeSettingsJSON(settingsPath, baseJSON, overlay)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -191,6 +191,13 @@ func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, erro
 	}
 
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
+}
+
+func mergeSettingsJSON(path string, baseJSON, overlay []byte) ([]byte, error) {
+	if strings.HasSuffix(path, ".jsonc") {
+		return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
+	}
+	return filemerge.MergeJSONObjects(baseJSON, overlay)
 }
 
 func injectOpenClawMergeIntoSettings(settingsPath string) (InjectionResult, error) {

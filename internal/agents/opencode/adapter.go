@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodesettings "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -98,7 +99,7 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	return opencodesettings.EffectiveSettingsPath(homeDir, "")
 }
 
 // --- Config strategies ---
@@ -116,7 +117,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 	// OpenCode merges into opencode.json, but this provides the path
 	// for components that use the separate-file strategy fallback.
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	return a.SettingsPath(homeDir)
 }
 
 // EffectiveCodeGraphWiring validates OpenCode's effective MCP entry while

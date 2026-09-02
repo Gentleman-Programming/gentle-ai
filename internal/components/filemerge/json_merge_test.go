@@ -2,6 +2,7 @@ package filemerge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,42 @@ func TestMergeJSONObjectsSupportsJSONCBase(t *testing.T) {
 
 	if got["editor.fontSize"] != float64(14) {
 		t.Fatalf("editor.fontSize = %v", got["editor.fontSize"])
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.T) {
+	base := []byte(`{
+  // user provider note
+  "provider": {
+    "local": {"models": {"m": {},},},
+  },
+  // managed server note
+  "mcp": {
+    "engram": {"command": ["engram", "mcp"],},
+  },
+}`)
+	overlay := []byte(`{"mcp":{"context7":{"type":"remote","enabled":true}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	text := string(merged)
+	for _, want := range []string{"// user provider note", `"m": {},`, "// managed server note"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("merged JSONC missing preserved text %q:\n%s", want, text)
+		}
+	}
+	parsed, err := UnmarshalJSONObject(merged)
+	if err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, text)
+	}
+	mcp := parsed["mcp"].(map[string]any)
+	if _, ok := mcp["engram"]; !ok {
+		t.Fatalf("existing MCP entry was lost: %#v", mcp)
+	}
+	if _, ok := mcp["context7"]; !ok {
+		t.Fatalf("overlay MCP entry was not added: %#v", mcp)
 	}
 }
 

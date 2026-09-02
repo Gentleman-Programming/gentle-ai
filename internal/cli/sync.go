@@ -1906,8 +1906,10 @@ func restoreOpenCodeModelAssignmentsFromState(homeDir string, persistedState sta
 
 	assignments := make(map[string]model.ModelAssignment, len(persistedState.ModelAssignments))
 	for k, v := range persistedState.ModelAssignments {
-		if current, exists := presence[k]; exists && current.Present && (!current.Cleared || sddMode == model.SDDModeMulti) {
-			continue
+		if current, exists := presence[k]; exists && current.Present {
+			if current.Cleared || current.Assignment.ProviderID != "" || current.Assignment.ModelID != "" {
+				continue
+			}
 		}
 		assignments[k] = model.ModelAssignment{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
 	}

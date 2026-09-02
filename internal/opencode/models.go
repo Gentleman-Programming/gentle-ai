@@ -12,7 +12,16 @@ func DefaultSettingsPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "opencode", "opencode.json")
+	return DefaultSettingsPathForHome(home)
+
+}
+
+// DefaultSettingsPathForHome returns the XDG-compatible default OpenCode settings path.
+func DefaultSettingsPathForHome(homeDir string) string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && homeDir == os.Getenv("HOME") {
+		return filepath.Join(xdg, "opencode", "opencode.json")
+	}
+	return filepath.Join(homeDir, ".config", "opencode", "opencode.json")
 }
 
 // ModelCost holds the per-million-token pricing.

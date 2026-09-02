@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
@@ -28,6 +29,47 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	}
 
 	return append(encoded, '\n'), nil
+}
+
+// MergeJSONObjectsPreserveJSONC merges JSON object overlays while preserving the
+// surrounding JSONC document text. It rewrites only top-level values touched by
+// the overlay, keeping unrelated comments and trailing commas intact.
+func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(baseJSON)) == 0 {
+		return MergeJSONObjects(baseJSON, overlayJSON)
+	}
+	base, err := unmarshalJSONObject(baseJSON)
+	if err != nil {
+		return MergeJSONObjects(baseJSON, overlayJSON)
+	}
+	overlay, err := unmarshalJSONObject(overlayJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
+	}
+
+	updated := string(baseJSON)
+	for key, overlayValue := range overlay {
+		value := overlayValue
+		if baseValue, ok := base[key]; ok {
+			if replacement, isSentinel := asSentinel(overlayValue); isSentinel {
+				value = replacement
+			} else if baseMap, baseIsMap := baseValue.(map[string]any); baseIsMap {
+				if overlayMap, overlayIsMap := overlayValue.(map[string]any); overlayIsMap {
+					value = mergeObjects(baseMap, overlayMap)
+				}
+			}
+		}
+		encoded, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshal merged jsonc value %q: %w", key, err)
+		}
+		updated = upsertTopLevelJSONCValue(updated, key, string(encoded))
+		base[key] = value
+	}
+	if !strings.HasSuffix(updated, "\n") {
+		updated += "\n"
+	}
+	return []byte(updated), nil
 }
 
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {
@@ -204,6 +246,187 @@ func stripTrailingCommas(raw []byte) []byte {
 	}
 
 	return out
+}
+
+func upsertTopLevelJSONCValue(content, key, encodedValue string) string {
+	if start, end, ok := topLevelJSONCValueRange(content, key); ok {
+		return content[:start] + indentJSONCValue(encodedValue, valueIndent(content, start)) + content[end:]
+	}
+	insert := strings.LastIndex(content, "}")
+	if insert < 0 {
+		return content
+	}
+	prefix := content[:insert]
+	suffix := content[insert:]
+	trimmedPrefix := strings.TrimRight(prefix, " \t\r\n")
+	needsComma := strings.TrimSpace(trimmedPrefix) != "{" && !strings.HasSuffix(trimmedPrefix, ",")
+	var b strings.Builder
+	b.WriteString(trimmedPrefix)
+	if needsComma {
+		b.WriteString(",")
+	}
+	b.WriteString("\n  ")
+	b.WriteString(strconvQuote(key))
+	b.WriteString(": ")
+	b.WriteString(indentJSONCValue(encodedValue, "  "))
+	b.WriteString("\n")
+	b.WriteString(suffix)
+	return b.String()
+}
+
+func topLevelJSONCValueRange(content, key string) (int, int, bool) {
+	target := strconvQuote(key)
+	inString, escaped, lineComment, blockComment := false, false, false, false
+	depth := 0
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && i+1 < len(content) && content[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '/' && i+1 < len(content) {
+			if content[i+1] == '/' {
+				lineComment = true
+				i++
+				continue
+			}
+			if content[i+1] == '*' {
+				blockComment = true
+				i++
+				continue
+			}
+		}
+		if ch == '"' {
+			if depth == 1 && strings.HasPrefix(content[i:], target) {
+				j := i + len(target)
+				for j < len(content) && isJSONWhitespace(content[j]) {
+					j++
+				}
+				if j < len(content) && content[j] == ':' {
+					start := j + 1
+					for start < len(content) && isJSONWhitespace(content[start]) {
+						start++
+					}
+					end := scanJSONCValueEnd(content, start)
+					return start, end, true
+				}
+			}
+			inString = true
+			continue
+		}
+		if ch == '{' || ch == '[' {
+			depth++
+		} else if ch == '}' || ch == ']' {
+			depth--
+		}
+	}
+	return 0, 0, false
+}
+
+func scanJSONCValueEnd(content string, start int) int {
+	inString, escaped, lineComment, blockComment := false, false, false, false
+	depth := 0
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && i+1 < len(content) && content[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '/' && i+1 < len(content) {
+			if content[i+1] == '/' {
+				lineComment = true
+				i++
+				continue
+			}
+			if content[i+1] == '*' {
+				blockComment = true
+				i++
+				continue
+			}
+		}
+		if ch == '"' {
+			inString = true
+			continue
+		}
+		if ch == '{' || ch == '[' {
+			depth++
+			continue
+		}
+		if ch == '}' || ch == ']' {
+			if depth == 0 {
+				return i
+			}
+			depth--
+			continue
+		}
+		if depth == 0 && ch == ',' {
+			return i
+		}
+	}
+	return len(content)
+}
+
+func valueIndent(content string, start int) string {
+	lineStart := strings.LastIndex(content[:start], "\n") + 1
+	indent := content[lineStart:start]
+	return indent[:len(indent)-len(strings.TrimLeft(indent, " \t"))]
+}
+
+func indentJSONCValue(value, indent string) string {
+	return strings.ReplaceAll(value, "\n", "\n"+indent)
+}
+
+func isJSONWhitespace(ch byte) bool { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' }
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // replacesentinel is the key used in an overlay map to signal that the parent

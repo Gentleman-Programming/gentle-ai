@@ -935,13 +935,7 @@ func openCodeSettingsPath(homeDir string, adapter agents.Adapter) string {
 	if adapter.Agent() != model.AgentOpenCode || settingsPath == "" {
 		return settingsPath
 	}
-	for _, name := range []string{"opencode.jsonc", "opencode.json"} {
-		candidate := filepath.Join(filepath.Dir(settingsPath), name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return settingsPath
+	return opencode.EffectiveSettingsPath(homeDir, "")
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -2211,7 +2205,13 @@ func readAndMigrateOpenCodeCompatibleJSON(path string) ([]byte, error) {
 }
 
 func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResult, error) {
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	var merged []byte
+	var err error
+	if strings.HasSuffix(path, ".jsonc") {
+		merged, err = filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
+	} else {
+		merged, err = filemerge.MergeJSONObjects(baseJSON, overlay)
+	}
 	if err != nil {
 		return mergeJSONResult{}, err
 	}

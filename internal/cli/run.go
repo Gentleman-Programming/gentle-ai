@@ -2377,13 +2377,7 @@ func effectiveOpenCodeSettingsPath(targetDir string, adapter agents.Adapter) str
 	if adapter.Agent() != model.AgentOpenCode || settingsPath == "" {
 		return settingsPath
 	}
-	for _, name := range []string{"opencode.jsonc", "opencode.json"} {
-		candidate := filepath.Join(filepath.Dir(settingsPath), name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return settingsPath
+	return opencodeactivation.EffectiveSettingsPath(targetDir, "")
 }
 
 func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {
