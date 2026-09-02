@@ -16,7 +16,7 @@ func installHintGit(profile PlatformProfile) string {
 	case profile.PackageManager == "dnf":
 		return "sudo dnf install -y git"
 	case profile.PackageManager == "rpm-ostree":
-		return "rpm-ostree install git"
+		return "rpm-ostree install -y --apply-live git"
 	default:
 		return "install git from https://git-scm.com/"
 	}
@@ -36,7 +36,7 @@ func installHintCurl(profile PlatformProfile) string {
 	case profile.PackageManager == "dnf":
 		return "sudo dnf install -y curl"
 	case profile.PackageManager == "rpm-ostree":
-		return "rpm-ostree install curl"
+		return "rpm-ostree install -y --apply-live curl"
 	default:
 		return "install curl from https://curl.se/"
 	}
@@ -56,7 +56,7 @@ func installHintNode(profile PlatformProfile) string {
 	case profile.PackageManager == "dnf":
 		return "curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash - && sudo dnf install -y nodejs"
 	case profile.PackageManager == "rpm-ostree":
-		return "rpm-ostree install nodejs npm"
+		return "rpm-ostree install -y --apply-live nodejs npm"
 	default:
 		return "install node from https://nodejs.org/"
 	}
@@ -87,7 +87,7 @@ func installHintGo(profile PlatformProfile) string {
 	case profile.PackageManager == "dnf":
 		return "sudo dnf install -y golang"
 	case profile.PackageManager == "rpm-ostree":
-		return "rpm-ostree install golang"
+		return "rpm-ostree install -y --apply-live golang"
 	default:
 		return "install go from https://go.dev/dl/"
 	}

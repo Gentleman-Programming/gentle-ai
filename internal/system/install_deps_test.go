@@ -33,8 +33,8 @@ func TestInstallHintGitArch(t *testing.T) {
 func TestInstallHintGitSilverblue(t *testing.T) {
 	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
 	hint := installHintGit(profile)
-	if hint != "rpm-ostree install git" {
-		t.Fatalf("installHintGit(silverblue) = %q, want %q", hint, "rpm-ostree install git")
+	if hint != "rpm-ostree install -y --apply-live git" {
+		t.Fatalf("installHintGit(silverblue) = %q, want %q", hint, "rpm-ostree install -y --apply-live git")
 	}
 }
 
@@ -73,8 +73,30 @@ func TestInstallHintNodeFedora(t *testing.T) {
 func TestInstallHintNodeSilverblue(t *testing.T) {
 	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
 	hint := installHintNode(profile)
-	if hint != "rpm-ostree install nodejs npm" {
-		t.Fatalf("installHintNode(silverblue) = %q, want %q", hint, "rpm-ostree install nodejs npm")
+	if hint != "rpm-ostree install -y --apply-live nodejs npm" {
+		t.Fatalf("installHintNode(silverblue) = %q, want %q", hint, "rpm-ostree install -y --apply-live nodejs npm")
+	}
+}
+
+func TestInstallHintsSilverblueAllDeps(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	tests := []struct {
+		dep  string
+		want string
+	}{
+		{dep: "git", want: "rpm-ostree install -y --apply-live git"},
+		{dep: "curl", want: "rpm-ostree install -y --apply-live curl"},
+		{dep: "node", want: "rpm-ostree install -y --apply-live nodejs npm"},
+		{dep: "go", want: "rpm-ostree install -y --apply-live golang"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.dep, func(t *testing.T) {
+			got := InstallHintForDep(tt.dep, profile)
+			if got != tt.want {
+				t.Fatalf("InstallHintForDep(%q) = %q, want %q", tt.dep, got, tt.want)
+			}
+		})
 	}
 }
 
