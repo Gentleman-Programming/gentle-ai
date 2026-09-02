@@ -31,6 +31,7 @@ func journeySources() []journeySource {
 		{"journeys_issue3094.go", issue3094Journeys()},
 		{"journeys_issue_3065.go", issue3065Journeys()},
 		{"journeys_handoff.go", handoffJourneys()},
+		{"journeys_stop_hook.go", stopHookJourneys()},
 		{"journeys_sdd_untracked.go", selectedUntrackedSDDJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
 		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
