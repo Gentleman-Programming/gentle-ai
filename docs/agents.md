@@ -25,7 +25,7 @@
 | Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
 | Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | `~/.hermes`                         |
 
-Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
+Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI™ installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
 `gentle-ai install --scope=workspace` is supported across selected agents for agent-scoped files, not only Claude Code. In workspace scope, Gentle AI writes system prompts, skills, SDD agents, and persona files into the current project root when the agent supports project-local configuration. Global-only integrations, such as package installs or settings that the agent only reads from its global config, remain global by design.
 
@@ -40,7 +40,7 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 | **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
 | **Full (delegate_task)** | The orchestrator uses Hermes's native `delegate_task` primitive to spawn ephemeral workers in fresh context windows. Workers receive only a self-contained mission; the parent receives only their final summary. Toolsets, MCP, and skills must be passed explicitly (not inherited by default). | Hermes |
 | **Native multi-agent** | The orchestrator delegates through the agent's native collaboration tools when configured and available, with inline execution as a graceful fallback. | Codex |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Windsurf, Antigravity, OpenClaw, Trae                                                                     |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram™ provides cross-phase persistence.                                                                     | Windsurf, Antigravity, OpenClaw, Trae                                                                     |
 
 ### Cursor Native Subagents
 

@@ -45,7 +45,7 @@ The orchestrator stays in the steering file and coordinates phase execution, whi
 sdd-init → sdd-explore → sdd-propose → sdd-spec → sdd-design → sdd-tasks → sdd-apply → sdd-verify → sdd-archive (+ sdd-onboard)
 ```
 
-This follows the same SDD architecture used in gentle-ai: orchestrator coordinates, phase agents execute, Engram persists artifacts across phases.
+This follows the same SDD architecture used in gentle-ai: orchestrator coordinates, phase agents execute, Engram™ persists artifacts across phases.
 
 **Approval gates** remain required before `apply` and `archive`.
 

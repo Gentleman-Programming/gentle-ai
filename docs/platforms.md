@@ -18,7 +18,7 @@ Release archives are currently produced for macOS and Linux only. Windows source
 
 ## OpenCode Managed Launcher
 
-When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
+When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI™ writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
 
 Deactivation removes managed launcher files but may leave `~/.gentle-ai/bin/` in `PATH`; Gentle AI does not clean up shell profiles.
 
@@ -41,7 +41,7 @@ Restart OpenCode after enabling managed activation. Restart the shell if the lau
 - **PowerShell** is the default shell when `$SHELL` is not set.
 - **GGA on Windows** works from both Git Bash and PowerShell. gentle-ai installs a `gga.ps1` shim that automatically delegates to Git Bash, so no manual shell switching is required.
 - **PowerShell source-installer output** is forced to UTF-8 and installs through Go's configured `GOBIN`/`GOPATH`.
-- **Fresh install detection** falls back to known Engram/GGA install locations when the running process has a stale `PATH`.
+- **Fresh install detection** falls back to known Engram™/GGA install locations when the running process has a stale `PATH`.
 
 ---
 

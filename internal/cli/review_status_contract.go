@@ -25,6 +25,8 @@ const ReviewIntegrationStatusSchemaV4 = "gentle-ai.review-integration.status/v4"
 const ReviewIntegrationStatusSchemaIDV4 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v4.schema.json"
 const ReviewIntegrationStatusSchemaV5 = "gentle-ai.review-integration.status/v5"
 const ReviewIntegrationStatusSchemaIDV5 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v5.schema.json"
+const ReviewIntegrationStatusSchemaV6 = "gentle-ai.review-integration.status/v6"
+const ReviewIntegrationStatusSchemaIDV6 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v6.schema.json"
 const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV5
 const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV5
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
@@ -294,7 +296,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 
 func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -521,7 +523,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	for _, input := range transition.Collect.Inputs {
@@ -531,7 +533,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			}
 			continue
 		}
-		if result.Schema != ReviewIntegrationStatusSchemaV5 {
+		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 {
 			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
 		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
@@ -596,6 +598,8 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return nil
 		}
 		return errors.New("targeted validation collection has no Go-owned capture operation") // refusal:by-design world-action: only a provider code fix can bind the validator to its frozen correction authority
+	case "intended_untracked_selection_required":
+		return result.validateIntendedUntrackedSelectionTransition()
 	case "reviewer_results_required", "provider_refuter_required":
 		// Only the pi host-relay capture input carries a submission: its
 		// materialize arguments are a non-advancing prelude, so the --input
@@ -649,7 +653,7 @@ func validateReviewProviderTaskInput(input ReviewTransitionInput, arguments map[
 }
 
 func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
-	if result.Schema != ReviewIntegrationStatusSchemaV5 || result.Authority == nil || result.ValidationRequest == nil ||
+	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6) || result.Authority == nil || result.ValidationRequest == nil ||
 		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
 		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
@@ -777,7 +781,9 @@ func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransit
 	}
 	input := result.NextTransition.Collect.Inputs[0]
 	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema ||
-		input.CaptureOperation != "external.select_intended_untracked" || input.Submission != nil || len(input.Arguments) != 6 {
+		input.CaptureOperation != "external.select_intended_untracked" || len(input.Arguments) != 6 ||
+		(result.Schema == ReviewIntegrationStatusSchemaV5) != (input.Submission == nil) ||
+		(result.Schema == ReviewIntegrationStatusSchemaV6 && (input.Submission == nil || input.Submission.Validate() != nil)) {
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||
@@ -1038,7 +1044,7 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result"
+			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result" || input.CaptureOperation == "external.select_intended_untracked"
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1214,7 +1220,28 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	if submission.OperationToken == "capture-correction-plan" {
 		return submission.validateCorrectionPlan()
 	}
+	if submission.OperationToken == "status" {
+		return submission.validateIntendedUntrackedSelection()
+	}
 	return errors.New("submission descriptor operation is unsupported") // refusal:by-design world-action: only result capture and correction-plan capture remain public submissions
+}
+
+func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
+	value, tokens := submission.Value, submission.ArgumentTokens
+	agent, hasAgent := "", false
+	if len(tokens) == 5 {
+		agent, hasAgent = strings.CutPrefix(tokens[2], "--agent=")
+	}
+	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != 4 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
+		len(tokens) != 5 || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[3] != "--projection=workspace" || tokens[4] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
+		return errors.New("intended-untracked submission descriptor is invalid")
+	}
+	if _, err := reviewRuntimeWithImmutableTransport(agent); err != nil {
+		// refusal:by-design world-action: the provider-generated intended-untracked submission runtime requires a provider code fix.
+		return errors.New("intended-untracked submission runtime is unsupported")
+	}
+	return nil
 }
 
 // validateCaptureResult is the pi host-relay reviewer-result submission: the

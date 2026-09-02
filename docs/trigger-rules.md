@@ -2,7 +2,7 @@
 
 <- [Back to README](../README.md)
 
-Ask for the outcome. Gentle AI keeps already-understood work inline, delegates only
+Ask for the outcome. Gentle AI™ keeps already-understood work inline, delegates only
 the actions that benefit from fresh context, and offers SDD only when durable
 planning would materially reduce uncertainty. Native providers own verification,
 review mechanics, and lifecycle authority; ordinary repository policy owns delivery.

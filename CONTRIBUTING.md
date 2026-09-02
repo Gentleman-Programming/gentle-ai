@@ -1,4 +1,4 @@
-# Contributing to Gentle AI
+# Contributing to Gentle AI™
 
 Thank you for your interest in contributing to **Gentle AI** (`gentle-ai`) — a Go CLI/TUI ecosystem configurator for AI coding agents.
 

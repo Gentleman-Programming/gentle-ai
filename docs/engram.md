@@ -1,4 +1,4 @@
-# Engram Command Reference
+# Engram™ Command Reference
 
 <- [Back to README](../README.md)
 

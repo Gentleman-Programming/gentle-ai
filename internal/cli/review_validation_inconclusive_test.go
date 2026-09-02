@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -47,6 +48,66 @@ func TestFacadeValidationRejectsInconclusiveEvidence(t *testing.T) {
 
 // A genuinely failed check with observed evidence is a real verdict and must
 // keep flowing into escalation unchanged.
+func targetedValidatorAdmissionRequest(t *testing.T) reviewProviderTargetedValidatorRequest {
+	t.Helper()
+	reviewEnabledHome(t)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	correction, err := reviewProviderTargetedValidatorCorrection(context.Background(), repo, record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewProviderNewTargetedValidatorRequest(context.Background(), repo, record.State, record.State.CapturePhaseRevision, correction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func TestTargetedValidatorRawAdmissionAllowsAdditiveTopLevelFields(t *testing.T) {
+	request := targetedValidatorAdmissionRequest(t)
+	valid := providerTargetedValidationPayload(t, request.ValidationRequest)
+	payload := append(append([]byte(nil), valid[:len(valid)-1]...), []byte(`,"passed_note_unused":"provider diagnostic"}`)...)
+
+	result, native, err := reviewProviderAdmitTargetedValidatorRaw(request, payload)
+	if err != nil {
+		t.Fatalf("admit targeted validator result with an additive top-level field: %v", err)
+	}
+	if !result.OriginalCriteria.Passed || !result.CorrectionRegression.Passed ||
+		!native.OriginalCriteria.Passed || !native.CorrectionRegression.Passed {
+		t.Fatalf("admitted targeted validator verdict = result=%#v native=%#v, want both checks passed", result, native)
+	}
+}
+
+func TestTargetedValidatorRawAdmissionRejectsOmittedPassed(t *testing.T) {
+	request := targetedValidatorAdmissionRequest(t)
+	payload := []byte(strings.Replace(string(providerTargetedValidationPayload(t, request.ValidationRequest)), `"passed":true,`, "", 1))
+
+	if _, _, err := reviewProviderAdmitTargetedValidatorRaw(request, payload); err == nil || !strings.Contains(err.Error(), "requires passed checks") {
+		t.Fatalf("admit targeted validator result without required passed = %v, want rejection", err)
+	}
+}
+
+func TestTargetedValidatorRawAdmissionRejectsUnknownNestedFields(t *testing.T) {
+	request := targetedValidatorAdmissionRequest(t)
+	valid := string(providerTargetedValidationPayload(t, request.ValidationRequest))
+	payload := strings.Replace(valid, `"original_criteria":{"passed":true,`, `"original_criteria":{"passed":true,"passed_note_unused":"nested",`, 1)
+	if payload == valid {
+		t.Fatal("could not add an unknown nested field to the targeted validator result")
+	}
+
+	if _, _, err := reviewProviderAdmitTargetedValidatorRaw(request, []byte(payload)); err == nil || !strings.Contains(err.Error(), `unknown field "passed_note_unused"`) {
+		t.Fatalf("admit targeted validator result with an unknown nested field = %v, want rejection", err)
+	}
+}
+
 func TestTargetedValidatorEvidenceRejectsDigestAndBindingMismatch(t *testing.T) {
 	request := reviewtransaction.TargetedValidationRequest{
 		RequestHash:              "sha256:" + strings.Repeat("1", 64),

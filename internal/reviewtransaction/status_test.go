@@ -3,6 +3,7 @@ package reviewtransaction
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -133,6 +134,7 @@ func TestInventoryAuthorityDistinguishesReleasedBusyAndMalformedLockTruth(t *tes
 				t.Fatal(err)
 			}
 			var release func() error
+			readLock := func() ([]byte, error) { return os.ReadFile(lockPath) }
 			if tt.hold {
 				if runtime.GOOS == "windows" {
 					file, openErr := os.OpenFile(lockPath, os.O_RDWR, 0o600)
@@ -144,6 +146,15 @@ func TestInventoryAuthorityDistinguishesReleasedBusyAndMalformedLockTruth(t *tes
 						t.Fatalf("hold advisory lock = %t, %v", locked, lockErr)
 					}
 					release = func() error { return errors.Join(unlockFile(file), file.Close()) }
+					// Windows byte-range locks are mandatory: the held coordination
+					// byte is unreadable from any other handle, so the held LOCK is
+					// read through the holder's own handle.
+					readLock = func() ([]byte, error) {
+						if _, err := file.Seek(0, io.SeekStart); err != nil {
+							return nil, err
+						}
+						return io.ReadAll(file)
+					}
 				} else {
 					held, lockErr := acquireStoreLock(lockPath)
 					if lockErr != nil {
@@ -170,7 +181,7 @@ func TestInventoryAuthorityDistinguishesReleasedBusyAndMalformedLockTruth(t *tes
 				t.Fatalf("lock report = %#v", report)
 			}
 			// Read before release: release itself clears the owner payload (#2504).
-			after, err := os.ReadFile(lockPath)
+			after, err := readLock()
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -713,6 +713,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
+	intendedUntrackedSelection := flags.String("intended-untracked-selection", "", "provider-bound intended-untracked selection JSON")
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
@@ -724,6 +725,17 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if flags.NArg() != 0 {
 		return reviewPreflightError(fmt.Errorf("unexpected review status argument %q", flags.Arg(0)))
+	}
+	if reviewFlagWasProvided(flags, "intended-untracked-selection") {
+		if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+			// refusal:by-design operator-knowledge: only the caller can supply one intended-untracked selection representation.
+			return reviewPreflightError(errors.New("--intended-untracked-selection is mutually exclusive with legacy untracked selection flags"))
+		}
+		var err error
+		untrackedScope, intendedUntracked, expectedUntrackedInventory, err = decodeReviewIntendedUntrackedSelection(*intendedUntrackedSelection)
+		if err != nil {
+			return reviewPreflightError(err)
+		}
 	}
 	committedOnlyProvided := reviewFlagWasProvided(flags, "committed-only")
 	if *contract != "" {
@@ -1168,9 +1180,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// allowlisted downstream. The registered Tier C statements remain
 			// in review_narration.go as the human-surface vocabulary source.
 		}
+		if runtime != "" && (intendedScope.NeedsSelection || reviewFlagWasProvided(flags, "intended-untracked-selection")) {
+			result.Schema = ReviewIntegrationStatusSchemaV6
+		}
 		if intendedScope.NeedsSelection &&
 			(result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
-			transition := reviewIntendedUntrackedCollection(result, intendedScope)
+			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime)
 			result.NextTransition = &transition
 		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
@@ -2103,6 +2118,7 @@ func validateReviewTransitionSelectorFlagCounts(args []string, operation string)
 			"base-ref":                      reviewIntegrationValueFlag,
 			"untracked-scope":               reviewIntegrationValueFlag,
 			"intended-untracked":            reviewIntegrationValueFlag,
+			"intended-untracked-selection":  reviewIntegrationValueFlag,
 			"expected-untracked-inventory":  reviewIntegrationValueFlag,
 			"committed-only":                reviewIntegrationBoolFlag,
 			"workspace-overlay":             reviewIntegrationBoolFlag,

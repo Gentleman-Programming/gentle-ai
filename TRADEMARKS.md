@@ -1,12 +1,30 @@
 # Trademark Policy
 
-The Gentle AI names and logos identify the official project and its maintainers. This policy explains their permitted use; it does not change the MIT license for the software.
+The Gentle AI™ and Engram™ names and logos identify the official projects and their maintainers. This policy explains their permitted use; it does not change the MIT license for the software.
 
 ## Covered marks
 
 **Alan Buscaglia** owns the trademarks **Gentle AI** (the preferred prose brand), **Gentle-AI**, and **gentle-ai** when they are used as project or CLI identifiers, together with the associated Gentle AI logos.
 
+**Alan Buscaglia** also owns the trademark **Engram** when it is used as the project or CLI identifier for the persistent-memory project distributed with Gentle AI, together with the associated Engram logos.
+
 This policy recognizes historical and current identifiers without requiring any existing artifact to be renamed.
+
+## Marking convention
+
+Written material in this repository marks the first prominent prose mention of a covered mark in each document with **™**, and relies on the trademark notice in that document (or in this policy) to cover its remaining mentions. This follows ordinary trademark-marking practice: repeating the symbol on every occurrence is not required to preserve rights and harms readability.
+
+The symbol is **™**, not **®**, because this policy makes no claim that any mark is registered.
+
+The symbol is deliberately **not** applied to technical identifiers, because those are not brand usage and altering them would break the thing they name:
+
+- shell commands, flags, and their output — for example `gentle-ai install`, `engram search`
+- Go module and import paths, package names, and the repository name — for example `github.com/gentleman-programming/gentle-ai/v2`
+- file and directory paths, configuration keys, and environment variables
+- URLs, link targets, and HTML attributes
+- content inside code blocks and inline code spans
+
+It is also not applied to archived historical artifacts, or to agent-facing asset files that are embedded in the binary and installed into a user's agent configuration, because those are operational instructions rather than published brand material.
 
 ## Software license
 

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -49,6 +51,24 @@ type reviewIntendedUntrackedScope struct {
 
 func reviewIntendedUntrackedDeclared(mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, digest reviewSingleValueFlag) bool {
 	return mode.set || len(selected) != 0 || digest.set
+}
+
+type reviewIntendedUntrackedSelection struct {
+	Schema            string   `json:"schema"`
+	UntrackedScope    string   `json:"untracked_scope"`
+	ExpectedInventory string   `json:"expected_untracked_inventory"`
+	Intended          []string `json:"intended_untracked"`
+}
+
+func decodeReviewIntendedUntrackedSelection(raw string) (reviewSingleValueFlag, reviewRepeatedPathFlag, reviewSingleValueFlag, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var value reviewIntendedUntrackedSelection
+	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF || value.Schema != reviewIntendedUntrackedSelectionSchema || value.Intended == nil {
+		// refusal:by-design operator-knowledge: only the caller can supply the exact provider-owned intended-untracked selection JSON.
+		return reviewSingleValueFlag{}, nil, reviewSingleValueFlag{}, errors.New("--intended-untracked-selection must be exact gentle-ai.review-intended-untracked-selection/v1 JSON")
+	}
+	return reviewSingleValueFlag{value: value.UntrackedScope, set: true}, reviewRepeatedPathFlag(value.Intended), reviewSingleValueFlag{value: value.ExpectedInventory, set: true}, nil
 }
 
 func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag) (reviewIntendedUntrackedScope, error) {
@@ -104,15 +124,14 @@ func intendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope, inve
 	return fmt.Errorf("untracked files require an explicit declaration; run `%s` to obtain the canonical inventory, then rerun `%s` with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", inventoryCommand, selectionCommand, scope.Digest, scope.Digest)
 }
 
-func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope) ReviewNextTransition {
+func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope, agent model.AgentID) ReviewNextTransition {
 	paths, _ := json.Marshal(scope.Inventory)
-	return reviewCollectTransition("intended_untracked_selection_required", ReviewTransitionInput{
-		Name: "intended_untracked_selection", Schema: reviewIntendedUntrackedSelectionSchema,
-		CaptureOperation: "external.select_intended_untracked",
-		Arguments: append(reviewTargetArguments(status),
-			ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)},
-			ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest}),
-	})
+	input := ReviewTransitionInput{Name: "intended_untracked_selection", Schema: reviewIntendedUntrackedSelectionSchema, CaptureOperation: "external.select_intended_untracked", Arguments: append(reviewTargetArguments(status), ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)}, ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest})}
+	if agent != "" {
+		tokens := []string{"--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=" + string(agent), "--projection=workspace", "--intended-untracked-selection=" + reviewSubmissionValuePlaceholder}
+		input.Submission = &ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: 4}}
+	}
+	return reviewCollectTransition("intended_untracked_selection_required", input)
 }
 
 func reviewStartIntendedUntrackedArguments(scope reviewIntendedUntrackedScope) []ReviewTransitionArgument {

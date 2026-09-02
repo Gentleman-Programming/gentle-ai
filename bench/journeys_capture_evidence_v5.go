@@ -11,7 +11,7 @@ const (
 	captureEvidenceDescriptorNormalLineage     = "capture-evidence-v5-normal"
 	captureEvidenceDescriptorCorrectionLineage = "capture-evidence-v5-correction"
 	targetedInspectionLineage                  = "targeted-validator-inspection"
-	statusSchemaV5                             = "gentle-ai.review-integration.status/v5"
+	statusSchemaV6                             = "gentle-ai.review-integration.status/v6"
 	verificationEvidenceSchemaV1               = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
 	verificationEvidenceRecordSchemaV2         = "gentle-ai.review-verification-evidence/v2"
 )
@@ -157,7 +157,7 @@ func executeV5CaptureEvidenceDescriptor(r *journeyRun, lineage, evidenceName str
 	if err != nil {
 		return waveCorrectionStatus{}, err
 	}
-	if status.Schema != statusSchemaV5 || status.Authority == nil || status.NextTransition == nil ||
+	if status.Schema != statusSchemaV6 || status.Authority == nil || status.NextTransition == nil ||
 		status.NextTransition.Kind != "collect" || status.NextTransition.Collect == nil ||
 		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-evidence" {
 		return waveCorrectionStatus{}, fmt.Errorf("v5 status did not publish capture-evidence: %+v", status)

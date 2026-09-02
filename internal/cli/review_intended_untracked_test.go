@@ -125,6 +125,56 @@ func TestNegotiatedStatusUnbornUntrackedRequiresSelectionBeforeSnapshot(t *testi
 	assertNoUntrackedSelectionAuthority(t, repo)
 }
 
+func TestIntendedUntrackedSelectionSubmissionExecutesSelectedStatusThenPrintedStart(t *testing.T) {
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "docs/chosen, file.md", "# Chosen\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "docs/second file,with comma.md", "# Second\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, unrelatedCredentialPath, unrelatedCredentialContents, 0o600)
+	writeUndeclaredWorkspaceFile(t, repo, "ignored.txt", "ignored\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, ".gitignore", "ignored.txt\n", 0o644)
+	writeReviewStartCandidate(t, repo, "docs/tracked.md", "# Tracked\n", 0o644)
+
+	status := intendedUntrackedStatus(t, repo, "--agent", "pi")
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("selection transition = %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema || input.CaptureOperation != "external.select_intended_untracked" {
+		t.Fatalf("selection input = %#v", input)
+	}
+	if input.Submission == nil {
+		t.Fatal("initial intended-untracked selection lacks its provider-owned selected-STATUS submission")
+	}
+	submission := input.Submission
+	if submission.OperationToken != "status" || submission.Value == nil || submission.Value.Schema != reviewIntendedUntrackedSelectionSchema || submission.Value.SubstitutionLocation != 4 || submission.ArgumentTokens[2] != "--agent=pi" {
+		t.Fatalf("selection submission = %#v", submission)
+	}
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, _ := json.Marshal(reviewIntendedUntrackedSelection{Schema: reviewIntendedUntrackedSelectionSchema, UntrackedScope: "select", ExpectedInventory: arguments["expected_untracked_inventory"], Intended: []string{"docs/chosen, file.md"}})
+	tokens := append([]string{submission.OperationToken, "--cwd", repo}, submission.ArgumentTokens...)
+	for index := range tokens {
+		tokens[index] = strings.ReplaceAll(tokens[index], reviewSubmissionValuePlaceholder, string(answer))
+	}
+	var output bytes.Buffer
+	if err := RunReview(tokens, &output); err != nil {
+		t.Fatal(err)
+	}
+	var selected ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &selected)
+	if selected.Schema != ReviewIntegrationStatusSchemaV6 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("selected STATUS = %#v", selected)
+	}
+	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command))
+	if started.State != reviewtransaction.StateApproved || started.Action != "closed" {
+		t.Fatalf("printed START = %#v", started)
+	}
+}
+
 func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)

@@ -181,10 +181,15 @@ type Status struct {
 	// granted choice names the exact runnable grant invocation. Structural
 	// absence (nil, omitempty) everywhere else — the same optional-block
 	// discipline ReviewOffer established.
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *PhaseInstructions           `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
+	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	// Archived is #4002's positive terminal projection: present exactly when
+	// the named change is already archived, so closure stops answering through
+	// the blocked channel. Structural absence (nil, omitempty) everywhere else
+	// — the same optional-block discipline ReviewOffer established.
+	Archived          *ArchivedProjection `json:"archived,omitempty"`
+	PhaseInstructions *PhaseInstructions  `json:"phaseInstructions,omitempty"`
+	NextRecommended   string              `json:"nextRecommended"`
+	BlockedReasons    []string            `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -201,6 +206,17 @@ type Status struct {
 type ReviewOfferBlock struct {
 	Available  bool   `json:"available"`
 	Invocation string `json:"invocation"`
+}
+
+// ArchivedProjection is the positive terminal projection for a change that is
+// already archived. Path names the location fact the resolving store can
+// expose: the repo-relative archive folder for OpenSpec
+// (openspec/changes/archive/YYYY-MM-DD-<change>), the archive report topic key
+// for Engram (sdd/<change>/archive-report). When present, NextRecommended is
+// "archived", no phase remains, and nothing is blocked (#4002; gentle-pi#538
+// ships the same contract).
+type ArchivedProjection struct {
+	Path string `json:"path"`
 }
 
 // applyReviewOfferRouting is status's one review edge. It runs only after strict
@@ -324,6 +340,64 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 	}
 	sort.Strings(changes)
 	return changes, nil
+}
+
+// archiveDatePrefixPattern matches the 11-character YYYY-MM-DD- prefix the
+// archive phase stamps on every openspec/changes/archive/ entry.
+var archiveDatePrefixPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}-$`)
+
+// newestArchivedOpenSpecEntry returns the newest archive entry for a change.
+// Archive folders are named YYYY-MM-DD-<change>; only an exact <change> suffix
+// after a full date prefix matches (change "foo-bar" never matches
+// "2026-01-01-foo-bar-baz"). Date prefixes sort lexicographically, so the
+// greatest match is the newest one.
+func newestArchivedOpenSpecEntry(workspaceRoot, changeName string) (string, bool) {
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, "openspec", "changes", "archive"))
+	if err != nil {
+		return "", false
+	}
+	newest := ""
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || len(name) != 11+len(changeName) ||
+			!archiveDatePrefixPattern.MatchString(name[:11]) || name[11:] != changeName {
+			continue
+		}
+		if name > newest {
+			newest = name
+		}
+	}
+	return newest, newest != ""
+}
+
+// archivedOpenSpecStatus is the positive terminal projection for a change
+// whose folder moved into openspec/changes/archive/ (#4002): every phase is
+// all_done, nothing is blocked, and the repo-relative archive folder is the
+// location fact on the wire.
+func archivedOpenSpecStatus(workspaceRoot, changeName, archiveEntry string, includeInstructions bool) Status {
+	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, &changeName, nil, "archived", nil)
+	status.Dependencies = allDoneDependencies()
+	status.ApplyState = ApplyAllDone
+	status.Archived = &ArchivedProjection{Path: filepath.Join("openspec", "changes", "archive", archiveEntry)}
+	if includeInstructions {
+		instructions := renderPhaseInstructions(status)
+		status.PhaseInstructions = &instructions
+	}
+	return status
+}
+
+// allDoneDependencies is the terminal dependency vector an archived change
+// reports: no phase remains, so every phase answers all_done.
+func allDoneDependencies() Dependencies {
+	return Dependencies{
+		Proposal: DependencyAllDone,
+		Specs:    DependencyAllDone,
+		Design:   DependencyAllDone,
+		Tasks:    DependencyAllDone,
+		Apply:    DependencyAllDone,
+		Verify:   DependencyAllDone,
+		Archive:  DependencyAllDone,
+	}
 }
 
 // openSpecChangeContainer reports whether a directory under openspec/changes
@@ -517,6 +591,11 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	if !contains(activeChanges, changeName) {
 		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
+		}
+		// #4002: an absent active folder may mean the change was archived, and
+		// closure is a positive terminal fact, not a not-found block.
+		if archiveEntry, ok := newestArchivedOpenSpecEntry(workspaceRoot, changeName); ok {
+			return archivedOpenSpecStatus(workspaceRoot, changeName, archiveEntry, options.IncludeInstructions), nil
 		}
 		return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
 	}
@@ -917,13 +996,20 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if _, archived := artifactsByType["archive-report"]; archived {
 		// The archive phase wrote the archive report, so the change is closed.
 		// Discovery already skips it (#3008); naming it must not send an
-		// orchestrator back to archive (#3480). The same closure OpenSpec reports
-		// as "Active OpenSpec change not found".
-		status.Dependencies.Archive = DependencyAllDone
-		status.NextRecommended = "sdd-new"
-		status.BlockedReasons = append(status.BlockedReasons, fmt.Sprintf("Engram change %s is archived: sdd/%s/archive-report exists, so no phase remains. List the active changes with `gentle-ai sdd-status --cwd %s`.", changeName, changeName, pathquote.Quote(workspaceRoot)))
+		// orchestrator back to archive (#3480). #4002: closure is a positive
+		// terminal fact, not a blocker — project it the way OpenSpec projects an
+		// archived folder. The location fact this store can expose is the
+		// archive report topic key, and a closed change has nothing left to
+		// block or remediate.
+		status.Dependencies = allDoneDependencies()
+		status.ApplyState = ApplyAllDone
+		status.NextRecommended = "archived"
+		status.Archived = &ArchivedProjection{Path: fmt.Sprintf("sdd/%s/archive-report", changeName)}
+		status.BlockedReasons = []string{}
+		status.RemediationState = RemediationState{}
+	} else {
+		status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	}
-	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
 	}
@@ -1976,6 +2062,17 @@ func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 			"",
 			"### Next Selection Operation",
 			fmt.Sprintf("- Rerun with an explicit change name from Blocked Reasons above: `gentle-ai sdd-status --cwd %s <change-name>` or `gentle-ai sdd-continue --cwd %s <change-name>`.", pathquote.Quote(status.ActionContext.WorkspaceRoot), pathquote.Quote(status.ActionContext.WorkspaceRoot)),
+		}, true
+	case "archived":
+		location := ""
+		if status.Archived != nil {
+			location = fmt.Sprintf(" at %s", status.Archived.Path)
+		}
+		return []string{
+			"",
+			"### Archived Change",
+			fmt.Sprintf("- This change is already archived%s; no phase remains and nothing is blocked.", location),
+			fmt.Sprintf("- Start new work with a fresh change: `gentle-ai sdd-status --cwd %s` lists what is active.", pathquote.Quote(status.ActionContext.WorkspaceRoot)),
 		}, true
 	default:
 		return nil, false

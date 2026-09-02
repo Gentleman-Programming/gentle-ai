@@ -44,6 +44,8 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 	return append(captureTransportClausesFor(agent), []string{
 		"Native Compact Review Orchestration",
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
+		"## Entry rule",
+		"before reporting it complete",
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
 		"run that provider-issued command verbatim",
@@ -612,6 +614,51 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 	}
 	if rendered != 4 {
 		t.Fatalf("authority-first lifecycle runtime count = %d, want 4", rendered)
+	}
+}
+
+// TestReviewLifecycleContractNamesTheEntryRuleBeforeTheAtomicLifecycle pins
+// issue #4051: the shared contract described only how the lifecycle runs
+// once entered, never when an orchestrator must enter it. Commit b43e0928
+// removed the old entry sentence and pre-commit gate table without
+// replacing them, so an orchestrator could finish an implementation with
+// RDD enabled and never run the selectorless STATUS preflight.
+func TestReviewLifecycleContractNamesTheEntryRuleBeforeTheAtomicLifecycle(t *testing.T) {
+	content := boundedReviewContract()
+	if got := strings.Count(content, "## Entry rule"); got != 1 {
+		t.Fatalf("shared contract contains %d entry rule sections, want exactly one", got)
+	}
+	entryIndex := strings.Index(content, "## Entry rule")
+	lifecycleIndex := strings.Index(content, "## Atomic lifecycle")
+	if entryIndex < 0 || lifecycleIndex < 0 || entryIndex >= lifecycleIndex {
+		t.Fatalf("entry rule index %d must precede atomic lifecycle index %d", entryIndex, lifecycleIndex)
+	}
+	for _, want := range []string{"never runs START", "route only from its returned"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("shared contract missing entry rule clause %q", want)
+		}
+	}
+
+	rendered := 0
+	for _, agent := range catalog.AllAgents() {
+		if !expectedReviewLifecycleRuntime(agent.ID) {
+			continue
+		}
+		rendered++
+		t.Run(string(agent.ID), func(t *testing.T) {
+			runtimeContent := renderSDDOrchestratorAsset(agent.ID)
+			if got := strings.Count(runtimeContent, "## Entry rule"); got != 1 {
+				t.Fatalf("rendered orchestrator contains %d entry rule sections, want exactly one", got)
+			}
+			runtimeEntryIndex := strings.Index(runtimeContent, "## Entry rule")
+			runtimeLifecycleIndex := strings.Index(runtimeContent, "## Atomic lifecycle")
+			if runtimeEntryIndex < 0 || runtimeLifecycleIndex < 0 || runtimeEntryIndex >= runtimeLifecycleIndex {
+				t.Fatalf("rendered entry rule index %d must precede atomic lifecycle index %d", runtimeEntryIndex, runtimeLifecycleIndex)
+			}
+		})
+	}
+	if rendered != 4 {
+		t.Fatalf("entry rule runtime count = %d, want 4", rendered)
 	}
 }
 

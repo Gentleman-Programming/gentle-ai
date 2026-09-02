@@ -7,7 +7,7 @@ Pi support installs the Gentleman harness as Pi packages, then lets Pi own its o
 ## Quick Start
 
 1. Install Pi and make sure `pi` is available on `PATH`.
-2. Install the Pi support stack from Gentle AI:
+2. Install the Pi support stack from Gentle AI™:
 
 ```bash
 gentle-ai install --agent pi
@@ -19,7 +19,7 @@ gentle-ai install --agent pi
 pi
 ```
 
-Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi.
+Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram™ component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi.
 
 ## Installed Packages
 

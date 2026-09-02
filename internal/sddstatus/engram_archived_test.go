@@ -3,7 +3,6 @@ package sddstatus
 import (
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -78,7 +77,10 @@ func TestArchiveReportAloneDoesNotCreateAChange(t *testing.T) {
 // TestNamedArchivedEngramChangeDoesNotRecommendArchive pins #3480's residue:
 // naming an archived Engram change still answered `archive: ready` and
 // `nextRecommended: archive`, so an orchestrator was told to archive a change
-// whose archive report already exists.
+// whose archive report already exists. #4002 upgrades #3480's suppression from
+// a blocked-channel prose reason to the same positive terminal projection
+// OpenSpec gets for an archived folder: the location fact this store can
+// expose is the archive report topic key the reason used to name.
 func TestNamedArchivedEngramChangeDoesNotRecommendArchive(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, "openspec", "config.yaml"), "sdd:\n  artifact_store: engram\n")
@@ -99,7 +101,8 @@ func TestNamedArchivedEngramChangeDoesNotRecommendArchive(t *testing.T) {
 	if status.NextRecommended == string(PhaseArchive) || status.Dependencies.Archive == DependencyReady {
 		t.Fatalf("archived change routed to archive again: archive %q next %q", status.Dependencies.Archive, status.NextRecommended)
 	}
-	if !slices.ContainsFunc(status.BlockedReasons, func(reason string) bool { return strings.Contains(reason, "sdd/wave-one/archive-report") }) {
-		t.Fatalf("blocked reasons do not name the archive report: %v", status.BlockedReasons)
+	assertArchivedTerminal(t, status, "sdd/wave-one/archive-report")
+	if status.RemediationState.Required {
+		t.Fatalf("RemediationState = %#v, want no remediation on a closed change", status.RemediationState)
 	}
 }

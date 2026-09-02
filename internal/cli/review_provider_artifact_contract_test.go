@@ -162,6 +162,25 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 	}
 }
 
+func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"schemas/capabilities-v2.4.schema.json":            "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
+		"schemas/intended-untracked-selection.schema.json": "6f300c4cc10ab669fa3ef8cc608829df623a453cd5e6629958786e0724430259",
+		"schemas/status-v6.schema.json":                    "0aa731e4d3961d678b4e51a6be0af93f2de82a4a326c3366e2fbe6a3e687236c",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
 // TestReviewProviderArtifactConformanceSchemasArePinned pins the schemas the
 // cross-lane battery conformance work first published: the delivery gate
 // result (gentle-ai.review-gate-result/v1) and the OpenCode provider-role
@@ -295,10 +314,13 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaIDV3},
 		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaIDV4},
 		{name: "status-v5.schema.json", id: ReviewIntegrationStatusSchemaIDV5},
+		{name: "status-v6.schema.json", id: ReviewIntegrationStatusSchemaIDV6},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
 		{name: "capabilities-v2.3.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV23},
+		{name: "capabilities-v2.4.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV24},
+		{name: "intended-untracked-selection.schema.json", id: reviewIntendedUntrackedSelectionSchema},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
