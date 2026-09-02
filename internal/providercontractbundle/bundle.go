@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 )
 
@@ -34,6 +36,14 @@ const (
 	maxBundleBytes     int64 = 16 << 20
 	maxManifestBytes   int64 = 64 << 10
 	bundleFileMode           = 0o644
+	// bundleFixedFileCount is README.md, manifest.json, and the three
+	// schema/vector pairs every role contributes (2*3).
+	bundleFixedFileCount = 8
+	// maxBundleFileCount bounds the raw tar header pre-check before the
+	// canonical inventory is known: the fixed files plus one entry per closed
+	// orchestration runtime. It must grow only alongside
+	// orchestrationRuntimeIdentities.
+	maxBundleFileCount = bundleFixedFileCount + 1
 )
 
 var bundleTimestamp = time.Unix(0, 0).UTC()
@@ -60,13 +70,69 @@ type roleManifest struct {
 	Vector               fileReference `json:"vector"`
 }
 
+type orchestrationManifest struct {
+	Runtime string        `json:"runtime"`
+	File    fileReference `json:"file"`
+}
+
 type manifest struct {
-	Schema              string         `json:"schema"`
-	ContractSemver      string         `json:"contract_semver"`
-	TransportCapability string         `json:"transport_capability"`
-	Runtimes            []string       `json:"runtimes"`
-	README              fileReference  `json:"readme"`
-	Roles               []roleManifest `json:"roles"`
+	Schema              string                  `json:"schema"`
+	ContractSemver      string                  `json:"contract_semver"`
+	TransportCapability string                  `json:"transport_capability"`
+	Runtimes            []string                `json:"runtimes"`
+	README              fileReference           `json:"readme"`
+	Roles               []roleManifest          `json:"roles"`
+	Orchestration       []orchestrationManifest `json:"orchestration"`
+}
+
+// orchestrationRuntimeIdentities is deliberately closed, the same discipline
+// reviewerprovider applies to registeredRuntimeIdentities: a runtime is added
+// here only once it has no other delivery channel for the review execution
+// contract inside Gentle AI's own installer (no system prompt, skill, or
+// file-subagent surface to splice generic SDD composition into), so this
+// bundle becomes that runtime's sole channel. Pi is first: its capability
+// manifest advertises MCP only, so sdd.Inject is a no-op for it and the
+// contract text renderBoundedReviewAssetBody produces for every other
+// runtime never reaches gentle-pi any other way (issue #4056).
+var orchestrationRuntimeIdentities = []string{"pi"}
+
+// orchestrationEntry is one closed runtime's bound review execution contract,
+// materialized once so Generate and Verify read the exact same bytes.
+type orchestrationEntry struct {
+	runtime string
+	content []byte
+}
+
+// canonicalOrchestrationEntries renders the bound review execution contract
+// for every closed orchestration runtime, in sorted runtime order. It is the
+// single source both Generate and Verify read, so the shipped bytes can never
+// drift from what sdd.ReviewExecutionContractFor actually produces.
+func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
+	runtimes := slices.Clone(orchestrationRuntimeIdentities)
+	sort.Strings(runtimes)
+	entries := make([]orchestrationEntry, 0, len(runtimes))
+	for index, runtime := range runtimes {
+		if index > 0 && runtimes[index-1] == runtime {
+			return nil, fmt.Errorf("%w: orchestration runtime %q is duplicated", errInvalidBundle, runtime)
+		}
+		agent := model.AgentID(runtime)
+		if !reviewerprovider.RegisteredRuntime(agent) {
+			return nil, fmt.Errorf("%w: orchestration runtime %q is not a registered review runtime", errInvalidBundle, runtime)
+		}
+		content, err := sdd.ReviewExecutionContractFor(agent)
+		if err != nil {
+			return nil, fmt.Errorf("%w: orchestration runtime %q: %v", errInvalidBundle, runtime, err)
+		}
+		if strings.Contains(content, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
+			return nil, fmt.Errorf("%w: orchestration runtime %q left the runtime identity placeholder unbound", errInvalidBundle, runtime)
+		}
+		wantCommand := "--agent " + runtime
+		if count := strings.Count(content, wantCommand); count != 1 {
+			return nil, fmt.Errorf("%w: orchestration runtime %q contract names %q %d times, want 1", errInvalidBundle, runtime, wantCommand, count)
+		}
+		entries = append(entries, orchestrationEntry{runtime: runtime, content: []byte(strings.TrimSpace(content) + "\n")})
+	}
+	return entries, nil
 }
 
 var bundleREADME = []byte(`# Gentle AI review provider contract
@@ -79,6 +145,16 @@ This data-only bundle describes the provider result contracts admitted by Gentle
 2. Verify every listed file hash and the transport capability before activation.
 3. Confirm your runtime identity appears in the manifest's registered runtimes before trusting the layout.
 4. Pass the Go-materialized opaque prompt to the provider and return only raw output or an error.
+
+## Orchestration
+
+manifest.json's orchestration array lists, for closed runtimes only, one
+orchestration/<runtime>.md file: the exact review execution contract text
+Gentle AI's own installer would have spliced into that runtime's system
+prompt, for a runtime whose adapter has no system prompt to splice it into.
+It carries no executable content, same as every other file in this bundle: a
+runtime mirrors and delivers the text as-is and still relies on Go for every
+review decision, prompt, receipt, and delivery gate.
 
 Go remains the admission authority for prompts, results, receipts, and delivery gates.
 `)
@@ -154,6 +230,19 @@ func generatedFiles(contractSemver string) (map[string][]byte, error) {
 			Vector:               fileReference{Path: vectorPath, SHA256: hash(files[vectorPath])},
 		})
 	}
+	orchestrationSources, err := canonicalOrchestrationEntries()
+	if err != nil {
+		return nil, err
+	}
+	orchestration := make([]orchestrationManifest, 0, len(orchestrationSources))
+	for _, entry := range orchestrationSources {
+		filePath := path.Join("orchestration", entry.runtime+".md")
+		files[filePath] = entry.content
+		orchestration = append(orchestration, orchestrationManifest{
+			Runtime: entry.runtime,
+			File:    fileReference{Path: filePath, SHA256: hash(files[filePath])},
+		})
+	}
 	manifestPayload, err := json.MarshalIndent(manifest{
 		Schema:              bundleSchema,
 		ContractSemver:      contractSemver,
@@ -161,13 +250,14 @@ func generatedFiles(contractSemver string) (map[string][]byte, error) {
 		Runtimes:            reviewerprovider.RegisteredRuntimeIdentities(),
 		README:              fileReference{Path: "README.md", SHA256: hash(files["README.md"])},
 		Roles:               roles,
+		Orchestration:       orchestration,
 	}, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode manifest: %v", errInvalidBundle, err)
 	}
 	files["manifest.json"] = append(manifestPayload, '\n')
-	if len(files) != 8 {
-		return nil, fmt.Errorf("%w: generated inventory has %d files, want 8", errInvalidBundle, len(files))
+	if want := bundleFixedFileCount + len(orchestrationSources); len(files) != want {
+		return nil, fmt.Errorf("%w: generated inventory has %d files, want %d", errInvalidBundle, len(files), want)
 	}
 	return files, nil
 }
@@ -312,8 +402,8 @@ func validateRawTarHeaders(payload []byte) error {
 			return fmt.Errorf("tar entry exceeds size limits: %v", err)
 		}
 		entries++
-		if entries > 8 {
-			return errors.New("tar has too many entries") // refusal:by-design input: a provider contract archive has exactly eight files.
+		if entries > maxBundleFileCount {
+			return errors.New("tar has too many entries") // refusal:by-design input: a provider contract archive has a fixed, closed file count.
 		}
 		padding := (blockSize - size%blockSize) % blockSize
 		if size > int64(len(payload)-offset) || padding > int64(len(payload)-offset)-size {
@@ -446,6 +536,30 @@ func validateEntries(entries map[string][]byte) error {
 		}
 		expected[schemaPath] = struct{}{}
 		expected[vectorPath] = struct{}{}
+	}
+	orchestrationSources, err := canonicalOrchestrationEntries()
+	if err != nil {
+		return err
+	}
+	if len(decoded.Orchestration) != len(orchestrationSources) {
+		return fmt.Errorf("%w: manifest orchestration inventory is incomplete", errInvalidBundle)
+	}
+	for index, source := range orchestrationSources {
+		entry := decoded.Orchestration[index]
+		if index > 0 && decoded.Orchestration[index-1].Runtime >= entry.Runtime {
+			return fmt.Errorf("%w: manifest orchestration entries are not strictly sorted", errInvalidBundle)
+		}
+		if entry.Runtime != source.runtime {
+			return fmt.Errorf("%w: manifest orchestration runtime %q does not match the canonical registry", errInvalidBundle, entry.Runtime)
+		}
+		if !reviewerprovider.RegisteredRuntime(model.AgentID(entry.Runtime)) {
+			return fmt.Errorf("%w: manifest orchestration runtime %q is not a registered review runtime", errInvalidBundle, entry.Runtime)
+		}
+		filePath := path.Join("orchestration", entry.Runtime+".md")
+		if err := validateFileReference(entries, entry.File, filePath, source.content); err != nil {
+			return err
+		}
+		expected[filePath] = struct{}{}
 	}
 	if len(entries) != len(expected) {
 		return fmt.Errorf("%w: archive inventory has %d files, want %d", errInvalidBundle, len(entries), len(expected))

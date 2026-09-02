@@ -95,6 +95,23 @@ func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRend
 	return composeOrchestratorPrompt(agent, options...)
 }
 
+// ReviewExecutionContractFor returns the exact review execution contract text
+// a runtime receives when generic SDD composition renders it: the shared
+// ledger contract, its capture-transport paragraph, and its concurrent-lens
+// group addendum, all bound to the requesting agent's identity. It is the
+// single entry point the provider contract bundle (issue #4056) uses to ship
+// this text to a runtime whose adapter cannot render it into a live system
+// prompt, so that channel can never drift from what every other runtime's
+// installed contract says. It errors when the agent's compiled capability does
+// not advertise the review transport contract, matching the same gate
+// renderBoundedReviewAssetBody applies before splicing this section in.
+func ReviewExecutionContractFor(agent model.AgentID) (string, error) {
+	if !rendersReviewLifecycle(agent) {
+		return "", fmt.Errorf("%s does not render the review execution contract", agent)
+	}
+	return bindRuntimeAgentIdentity(boundedReviewContractFor(agent), agent), nil
+}
+
 func boundedReviewContractFor(agent model.AgentID) string {
 	contract := selectReviewerCaptureTransport(boundedReviewContractSource(), agent)
 	switch {

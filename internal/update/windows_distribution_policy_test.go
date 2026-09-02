@@ -121,7 +121,7 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 		{
 			name: "provider contract archive version differs from committed semver",
 			mutate: func(t *testing.T, root string) {
-				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"), "gentle-ai-review-provider-contract-1.1.0.tar.gz", "gentle-ai-review-provider-contract-2.0.0.tar.gz")
+				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"), "gentle-ai-review-provider-contract-1.2.0.tar.gz", "gentle-ai-review-provider-contract-2.0.0.tar.gz")
 			},
 		},
 		{
@@ -518,7 +518,7 @@ const releasePolicyArtifactsFixture = `[
   {"name":"gentle-ai_0.0.0-SNAPSHOT_linux_arm64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_linux_arm64.tar.gz","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
   {"name":"gentle-ai_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
   {"name":"gentle-ai_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
-  {"name":"gentle-ai-review-provider-contract-1.1.0.tar.gz","path":"dist/gentle-ai-review-provider-contract-1.1.0.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"review-provider-contract"}},
+  {"name":"gentle-ai-review-provider-contract-1.2.0.tar.gz","path":"dist/gentle-ai-review-provider-contract-1.2.0.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"review-provider-contract"}},
   {"name":"gentle-ai-release-provenance-v1.tar.gz","path":"dist/gentle-ai-release-provenance-v1.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"release-provenance"}},
   {"name":"checksums.txt","path":"dist/checksums.txt","type":"Checksum","extra":{}},
   {"name":"gentle-ai.rb","path":"dist/homebrew/Formula/gentle-ai.rb","type":"Homebrew Formula","extra":{"BrewConfig":{"name":"gentle-ai","repository":{"owner":"Gentleman-Programming","name":"homebrew-tap","token":"{{ .Env.HOMEBREW_TAP_TOKEN }}"},"directory":"Formula"}}}
