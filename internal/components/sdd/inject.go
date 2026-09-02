@@ -1870,14 +1870,17 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
-// ensureClaudeReviewStopHook appends the managed review preflight command to
-// hooks.Stop in the Claude Code settings file. The hook makes the review
-// preflight deterministic at the end of a Claude turn: `gentle-ai review
-// stop-hook --agent <agentID>` reads the Stop payload from stdin and prints
-// a block decision only when RDD is enabled and the repository holds an
-// unreviewed candidate. It never starts a review by itself. The runtime
-// identity is always the caller-supplied agentID (never a compiled literal)
-// per issue #2440: only the caller states which runtime is executing.
+// ensureClaudeReviewStopHook appends the managed review preflight commands to
+// hooks.Stop and hooks.SessionStart in the Claude Code settings file. The
+// pair makes the review preflight deterministic across a Claude turn.
+// `gentle-ai review stop-hook --agent <agentID>` reads `hook_event_name` from
+// the payload on stdin: at SessionStart it records the session's starting
+// candidate as the per-session baseline, and at Stop it prints a block
+// decision only when RDD is enabled and the session has produced an
+// unreviewed candidate since that baseline. It never starts a review by
+// itself. The runtime identity is always the caller-supplied agentID (never
+// a compiled literal) per issue #2440: only the caller states which runtime
+// is executing.
 func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (bool, error) {
 	root := map[string]any{}
 	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
@@ -1889,9 +1892,6 @@ func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (boo
 	}
 
 	command := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
 
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
@@ -1901,12 +1901,8 @@ func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (boo
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
-	stopRaw, hasStop := hooksMap["Stop"]
-	stop, _ := stopRaw.([]any)
-	if hasStop && stop == nil {
-		return false, fmt.Errorf("Claude settings %q has unsupported hooks.Stop shape: want array", settingsPath)
-	}
-	stop = append(stop, map[string]any{
+
+	stopChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "Stop", settingsPath, command, map[string]any{
 		"matcher": "",
 		"hooks": []any{
 			map[string]any{
@@ -1916,9 +1912,29 @@ func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (boo
 			},
 		},
 	})
-	hooksMap["Stop"] = stop
-	root["hooks"] = hooksMap
+	if err != nil {
+		return false, err
+	}
 
+	sessionStartChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "SessionStart", settingsPath, command, map[string]any{
+		"matcher": "startup|resume|clear|compact",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 30,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if !stopChanged && !sessionStartChanged {
+		return false, nil
+	}
+
+	root["hooks"] = hooksMap
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return false, err
@@ -1929,6 +1945,25 @@ func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (boo
 		return false, err
 	}
 	return wr.Changed, nil
+}
+
+// appendClaudeReviewStopHookEntry appends entry to hooksMap[hookKey] unless
+// an entry with the identical command is already present under that exact
+// key, so the Stop reminder and the SessionStart baseline (which share the
+// same command string) are tracked independently and both keys can coexist
+// with the UserPromptSubmit skill-registry hook.
+func appendClaudeReviewStopHookEntry(hooksMap map[string]any, hookKey, settingsPath, command string, entry map[string]any) (bool, error) {
+	raw, has := hooksMap[hookKey]
+	entries, _ := raw.([]any)
+	if has && entries == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.%s shape: want array", settingsPath, hookKey)
+	}
+	if claudeHookListContains(entries, command) {
+		return false, nil
+	}
+	entries = append(entries, entry)
+	hooksMap[hookKey] = entries
+	return true, nil
 }
 
 func claudeHookExists(root map[string]any, command string) bool {

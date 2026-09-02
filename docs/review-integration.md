@@ -25,7 +25,7 @@ gentle-ai review status \
   --next-transition
 ```
 
-Claude Code also gets a deterministic end-of-turn reminder through its installed `Stop` hook, which runs the review stop-hook subcommand and never starts a review by itself.
+Claude Code also gets a deterministic per-session baseline and end-of-turn reminder through its installed `SessionStart` and `Stop` hooks, both backed by the review stop-hook subcommand: SessionStart records the session's starting candidate, and Stop reminds only about candidates that session itself produced; neither starts a review by itself.
 
 ## Cross-repository root
 

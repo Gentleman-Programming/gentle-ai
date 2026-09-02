@@ -1342,6 +1342,15 @@ func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
         ]
       }
     ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 30},
+          {"type": "command", "command": "echo custom session-start"}
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -1371,9 +1380,9 @@ func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
 	}
 	text := string(raw)
 	if strings.Contains(text, "gentle-ai review stop-hook") {
-		t.Fatalf("managed stop-hook should be removed:\n%s", text)
+		t.Fatalf("managed stop-hook should be removed from both Stop and SessionStart:\n%s", text)
 	}
-	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo custom session-start") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }

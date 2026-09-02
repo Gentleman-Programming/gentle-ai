@@ -7139,7 +7139,15 @@ func TestEnsureClaudeReviewStopHookAppendsIdempotently(t *testing.T) {
       {
         "matcher": "",
         "hooks": [
-          {"type": "command", "command": "echo existing"}
+          {"type": "command", "command": "echo existing stop"}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {"type": "command", "command": "echo existing session-start"}
         ]
       }
     ]
@@ -7169,10 +7177,13 @@ func TestEnsureClaudeReviewStopHookAppendsIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Count(text, "gentle-ai review stop-hook --agent claude-code") != 1 {
-		t.Fatalf("hook command count mismatch:\n%s", text)
+	if strings.Count(text, "gentle-ai review stop-hook --agent claude-code") != 2 {
+		t.Fatalf("hook command count mismatch, want one Stop entry and one SessionStart entry:\n%s", text)
 	}
-	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo existing") {
+	if !strings.Contains(text, `"matcher": "startup|resume|clear|compact"`) {
+		t.Fatalf("SessionStart baseline entry missing expected matcher:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo existing stop") || !strings.Contains(text, "echo existing session-start") {
 		t.Fatalf("existing hooks not preserved:\n%s", text)
 	}
 }
@@ -7223,8 +7234,11 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 	if !strings.Contains(text, "gentle-ai skill-registry refresh") {
 		t.Fatalf("Claude settings.json missing skill-registry hook:\n%s", text)
 	}
-	if !strings.Contains(text, "gentle-ai review stop-hook --agent claude-code") {
-		t.Fatalf("Claude settings.json missing review stop-hook:\n%s", text)
+	if strings.Count(text, "gentle-ai review stop-hook --agent claude-code") != 2 {
+		t.Fatalf("Claude settings.json missing review stop-hook Stop+SessionStart entries:\n%s", text)
+	}
+	if !strings.Contains(text, `"matcher": "startup|resume|clear|compact"`) {
+		t.Fatalf("Claude settings.json missing SessionStart baseline matcher:\n%s", text)
 	}
 }
 
