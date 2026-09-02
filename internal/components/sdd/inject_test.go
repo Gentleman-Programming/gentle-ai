@@ -7119,6 +7119,115 @@ func TestEnsureClaudeSkillRegistryHookRejectsUnexpectedHookSchema(t *testing.T) 
 	}
 }
 
+func TestEnsureClaudeReviewStopHookAppendsIdempotently(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "echo existing"}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeReviewStopHook(settingsPath, model.AgentClaudeCode)
+	if err != nil {
+		t.Fatalf("ensureClaudeReviewStopHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("first call changed = false, want true")
+	}
+	changed, err = ensureClaudeReviewStopHook(settingsPath, model.AgentClaudeCode)
+	if err != nil {
+		t.Fatalf("second ensureClaudeReviewStopHook() error = %v", err)
+	}
+	if changed {
+		t.Fatal("second call changed = true, want false")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "gentle-ai review stop-hook --agent claude-code") != 1 {
+		t.Fatalf("hook command count mismatch:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo existing") {
+		t.Fatalf("existing hooks not preserved:\n%s", text)
+	}
+}
+
+func TestEnsureClaudeReviewStopHookRejectsUnexpectedHookSchema(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"hooks":{"Stop":{"bad":true}}}`)
+	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := ensureClaudeReviewStopHook(settingsPath, model.AgentClaudeCode)
+	if err == nil {
+		t.Fatal("ensureClaudeReviewStopHook() error = nil, want schema error")
+	}
+	if changed {
+		t.Fatal("changed = true, want false")
+	}
+	after, readErr := os.ReadFile(settingsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("settings were modified: %q", after)
+	}
+}
+
+func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if !containsPath(result.Files, settingsPath) {
+		t.Fatalf("result.Files missing Claude settings path %q: %v", settingsPath, result.Files)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "gentle-ai skill-registry refresh") {
+		t.Fatalf("Claude settings.json missing skill-registry hook:\n%s", text)
+	}
+	if !strings.Contains(text, "gentle-ai review stop-hook --agent claude-code") {
+		t.Fatalf("Claude settings.json missing review stop-hook:\n%s", text)
+	}
+}
+
 func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testing.T) {
 	home := t.TempDir()
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")

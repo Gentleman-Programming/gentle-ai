@@ -1315,6 +1315,69 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 	}
 }
 
+func TestComponentOperationsSDD_ClaudeRemovesReviewStopHook(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("claude adapter not found in registry")
+	}
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 60},
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "echo pre"}]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if op.typeID == opRewriteFile && op.path == settingsPath {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatalf("settings rewrite op.apply() error = %v", err)
+			}
+		}
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "gentle-ai review stop-hook") {
+		t.Fatalf("managed stop-hook should be removed:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
+		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
+	}
+}
+
 func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

@@ -25,6 +25,8 @@ gentle-ai review status \
   --next-transition
 ```
 
+Claude Code also gets a deterministic end-of-turn reminder through its installed `Stop` hook, which runs the review stop-hook subcommand and never starts a review by itself.
+
 ## Cross-repository root
 
 A session in repository A may review a nested target in unrelated repository B only after the user explicitly authorizes B. Native Go resolves the requested path to B's canonical worktree root; adapters carry opaque provider output and never parse authorization or roots.

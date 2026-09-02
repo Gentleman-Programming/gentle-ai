@@ -1753,7 +1753,11 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("install Claude skill-registry hook: %w", err)
 	}
-	return InjectionResult{Changed: changed, Files: []string{settingsPath}}, nil
+	stopHookChanged, err := ensureClaudeReviewStopHook(settingsPath, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
+	}
+	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
@@ -1866,12 +1870,73 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
+// ensureClaudeReviewStopHook appends the managed review preflight command to
+// hooks.Stop in the Claude Code settings file. The hook makes the review
+// preflight deterministic at the end of a Claude turn: `gentle-ai review
+// stop-hook --agent <agentID>` reads the Stop payload from stdin and prints
+// a block decision only when RDD is enabled and the repository holds an
+// unreviewed candidate. It never starts a review by itself. The runtime
+// identity is always the caller-supplied agentID (never a compiled literal)
+// per issue #2440: only the caller states which runtime is executing.
+func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	command := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
+	if claudeHookExists(root, command) {
+		return false, nil
+	}
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+	stopRaw, hasStop := hooksMap["Stop"]
+	stop, _ := stopRaw.([]any)
+	if hasStop && stop == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.Stop shape: want array", settingsPath)
+	}
+	stop = append(stop, map[string]any{
+		"matcher": "",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 60,
+			},
+		},
+	})
+	hooksMap["Stop"] = stop
+	root["hooks"] = hooksMap
+
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
 func claudeHookExists(root map[string]any, command string) bool {
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
 		hookEntries, ok := hooksMap[key].([]any)
 		if !ok {
 			continue

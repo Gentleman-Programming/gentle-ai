@@ -1170,7 +1170,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 	changed := false
-	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart"} {
+	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
 		entries, ok := hooksMap[hookKey].([]any)
 		if !ok {
 			continue
@@ -1191,7 +1191,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 			for _, hook := range hooks {
 				hookMap, ok := hook.(map[string]any)
 				cmd, _ := hookMap["command"].(string)
-				if ok && strings.Contains(cmd, "gentle-ai skill-registry refresh") {
+				if ok && (strings.Contains(cmd, "gentle-ai skill-registry refresh") || strings.Contains(cmd, "gentle-ai review stop-hook")) {
 					changed = true
 					continue
 				}
