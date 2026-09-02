@@ -157,6 +157,55 @@ func TestDiscoverCatalogRejectsInvalidOutput(t *testing.T) {
 	}
 }
 
+// TestProcessStreamReaderReadSurfacesExitStatusAfterEOF pins the Read
+// contract: once the drained stream is exhausted, Read must reap the child
+// and return its exit error, never swallow it as a plain io.EOF.
+func TestProcessStreamReaderReadSurfacesExitStatusAfterEOF(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX exit-status fixture")
+	}
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "exit-helper")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	source := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(source, []byte("package main\nfunc main() { }\n"), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	// Re-run the helper forcing a non-zero status through sh.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: "sh", Args: []string{"-c", "exit 7"}})
+	if err != nil {
+		t.Fatalf("runCatalogCommand: %v", err)
+	}
+	var buf [256]byte
+	for {
+		_, readErr := r.Read(buf[:])
+		if readErr != nil {
+			var catalogErr *CatalogError
+			if errors.As(readErr, &catalogErr) {
+				if catalogErr.Kind != CatalogErrorCommandFailed {
+					t.Fatalf("Read terminal error = %v, want command_failed", readErr)
+				}
+				return
+			}
+			var exitErr *exec.ExitError
+			if errors.As(readErr, &exitErr) {
+				if code := exitErr.ExitCode(); code != 7 {
+					t.Fatalf("Read terminal exit code = %d, want 7", code)
+				}
+				return
+			}
+			if !errors.Is(readErr, io.EOF) {
+				t.Fatalf("Read terminal error = %v, want the child's exit status", readErr)
+			}
+			t.Fatal("Read returned plain io.EOF; the child's non-zero exit was swallowed")
+		}
+	}
+}
+
 func TestRunCatalogCommandCancelsOverflowingChild(t *testing.T) {
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "catalog-helper")

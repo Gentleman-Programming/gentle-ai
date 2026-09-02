@@ -517,14 +517,16 @@ type processStreamReader struct {
 	waitErr    error
 }
 
-// Read serves drained stdout bytes; it returns the child's exit error after
-// the stream is exhausted.
+// Read serves drained stdout bytes. Once the stream is exhausted it reaps
+// the child and returns its exit error (typed as a CatalogError when the
+// caller supplied no custom reader), or io.EOF when the child exited
+// cleanly. Stream-level failures other than EOF propagate unchanged.
 func (p *processStreamReader) Read(buf []byte) (int, error) {
 	n, err := p.stream.Read(buf)
 	if n > 0 {
 		return n, nil
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return n, err
 	}
 	p.closeAndReap()
@@ -558,6 +560,11 @@ func (p *processStreamReader) WaitError() error {
 // called here: the context that owns the child (Close or the deadline) drives
 // it, and cancelling before Wait would make Wait report context cancellation
 // instead of the child's real exit status.
+//
+// Concurrency note: the consumer side (Read, Close, WaitError) is expected to
+// run on a single goroutine, as DiscoverCatalogWithRunner does. The stdout
+// and stderr drain goroutines synchronize through boundedPipeBuffer's lock
+// and stderrDone; they never touch p.closed or p.waitErr.
 func (p *processStreamReader) closeAndReap() {
 	if p.closed {
 		return
@@ -603,9 +610,4 @@ func (c *countingLimitReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p[:maxToRead])
 	c.read += int64(n)
 	return n, err
-}
-
-// ParseCatalogForDiag is a temporary diagnostic entry point; remove before commit.
-func ParseCatalogForDiag(r io.Reader) (map[string]Provider, error) {
-	return parseVerboseCatalog(r)
 }
