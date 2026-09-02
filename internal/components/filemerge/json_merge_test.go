@@ -103,6 +103,71 @@ func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.
 	}
 }
 
+func TestMergeJSONObjectsPreserveJSONCInsertsMissingKeyAndUnwrapsSentinel(t *testing.T) {
+	base := []byte(`{
+  "provider": {"local": {}} // keep provider note
+}`)
+	overlay := []byte(`{"mcp":{"engram":{"__replace__":{"command":["engram","mcp"],"type":"local"}}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	text := string(merged)
+	if strings.Contains(text, "__replace__") {
+		t.Fatalf("sentinel leaked into inserted JSONC output:\n%s", text)
+	}
+	if !strings.Contains(text, "// keep provider note") {
+		t.Fatalf("existing trailing comment was not preserved:\n%s", text)
+	}
+	parsed, err := UnmarshalJSONObject(merged)
+	if err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, text)
+	}
+	mcp := parsed["mcp"].(map[string]any)
+	engram := mcp["engram"].(map[string]any)
+	if _, ok := engram["command"].([]any); !ok {
+		t.Fatalf("engram command was not unwrapped into an array: %#v", engram)
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *testing.T) {
+	base := []byte(`{
+  "provider": {"local": {}} // keep provider note
+}
+// comment with } after document
+`)
+	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	if _, err := UnmarshalJSONObject(merged); err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, string(merged))
+	}
+	if !strings.Contains(string(merged), "// comment with } after document") {
+		t.Fatalf("closing-brace comment was not preserved:\n%s", string(merged))
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCExistingFinalMemberIdempotent(t *testing.T) {
+	base := []byte("{\n  \"theme\": \"default\"  \n}\n")
+	overlay := []byte(`{"theme":"gentleman"}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+	}
+	mergedAgain, err := MergeJSONObjectsPreserveJSONC(merged, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjectsPreserveJSONC() second merge error = %v", err)
+	}
+	if string(mergedAgain) != string(merged) {
+		t.Fatalf("repeated merge changed bytes:\nfirst:\n%s\nsecond:\n%s", string(merged), string(mergedAgain))
+	}
+}
+
 func TestMergeJSONObjectsMalformedBaseReturnsOverlayOnly(t *testing.T) {
 	// Real user machines (e.g. Windows) may have a malformed ~/.cursor/mcp.json.
 	// The installer should recover by treating the broken base as {} and continuing.

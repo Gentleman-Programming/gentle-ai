@@ -190,3 +190,18 @@ func TestResolveEffectiveConfigUsesBaseURLFallback(t *testing.T) {
 		t.Fatalf("provider URL = %q, want options.baseURL fallback", got)
 	}
 }
+
+func TestEffectiveSettingsPathPreservesSelectedWritePathOnReadError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	projectDir := t.TempDir()
+	configPath := filepath.Join(projectDir, "opencode.jsonc")
+	if err := os.WriteFile(configPath, []byte(`{"provider":`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if got := EffectiveSettingsPath(home, projectDir); got != configPath {
+		t.Fatalf("EffectiveSettingsPath() = %q, want selected malformed config path %q", got, configPath)
+	}
+}

@@ -12,7 +12,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodesettings "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -357,9 +356,6 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	// while non-gentleman personas remove agent.gentleman entirely.
 	if (adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode) && persona != model.PersonaCustom {
 		settingsPath := adapter.SettingsPath(homeDir)
-		if adapter.Agent() == model.AgentOpenCode {
-			settingsPath = opencodesettings.EffectiveSettingsPath(homeDir, "")
-		}
 		if settingsPath != "" {
 			if isGentlemanConversationPersona(persona) {
 				if !syncManaged {
@@ -417,9 +413,6 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		}
 
 		settingsPath := adapter.SettingsPath(homeDir)
-		if adapter.Agent() == model.AgentOpenCode {
-			settingsPath = opencodesettings.EffectiveSettingsPath(homeDir, "")
-		}
 		if selectedStyle && settingsPath != "" {
 			var settingsResult filemerge.WriteResult
 			var err error
@@ -597,15 +590,9 @@ func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (fi
 		}
 	}
 
-	var merged []byte
-	var mergeErr error
-	if strings.HasSuffix(path, ".jsonc") {
-		merged, mergeErr = filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
-	} else {
-		merged, mergeErr = filemerge.MergeJSONObjects(baseJSON, overlay)
-	}
-	if mergeErr != nil {
-		return filemerge.WriteResult{}, mergeErr
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	if err != nil {
+		return filemerge.WriteResult{}, err
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)

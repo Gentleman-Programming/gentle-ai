@@ -31,6 +31,16 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+// MergeJSONObjectsForPath selects the JSON object merge mode appropriate for
+// path. JSONC files preserve comments and formatting around untouched values;
+// strict JSON files are normalized through standard JSON encoding.
+func MergeJSONObjectsForPath(path string, baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+	if strings.HasSuffix(path, ".jsonc") {
+		return MergeJSONObjectsPreserveJSONC(baseJSON, overlayJSON)
+	}
+	return MergeJSONObjects(baseJSON, overlayJSON)
+}
+
 // MergeJSONObjectsPreserveJSONC merges JSON object overlays while preserving the
 // surrounding JSONC document text. It rewrites only top-level values touched by
 // the overlay, keeping unrelated comments and trailing commas intact.
@@ -47,18 +57,10 @@ func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte,
 		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
 	}
 
+	merged := mergeObjects(base, overlay)
 	updated := string(baseJSON)
-	for key, overlayValue := range overlay {
-		value := overlayValue
-		if baseValue, ok := base[key]; ok {
-			if replacement, isSentinel := asSentinel(overlayValue); isSentinel {
-				value = replacement
-			} else if baseMap, baseIsMap := baseValue.(map[string]any); baseIsMap {
-				if overlayMap, overlayIsMap := overlayValue.(map[string]any); overlayIsMap {
-					value = mergeObjects(baseMap, overlayMap)
-				}
-			}
-		}
+	for key := range overlay {
+		value := merged[key]
 		encoded, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("marshal merged jsonc value %q: %w", key, err)
@@ -252,17 +254,25 @@ func upsertTopLevelJSONCValue(content, key, encodedValue string) string {
 	if start, end, ok := topLevelJSONCValueRange(content, key); ok {
 		return content[:start] + indentJSONCValue(encodedValue, valueIndent(content, start)) + content[end:]
 	}
-	insert := strings.LastIndex(content, "}")
+	insert := topLevelJSONCObjectEnd(content)
 	if insert < 0 {
 		return content
 	}
 	prefix := content[:insert]
 	suffix := content[insert:]
 	trimmedPrefix := strings.TrimRight(prefix, " \t\r\n")
-	needsComma := strings.TrimSpace(trimmedPrefix) != "{" && !strings.HasSuffix(trimmedPrefix, ",")
+	commentStrippedPrefix := strings.TrimSpace(string(stripJSONComments([]byte(trimmedPrefix))))
+	needsComma := commentStrippedPrefix != "{" && !strings.HasSuffix(commentStrippedPrefix, ",")
+	if needsComma {
+		withComma := addCommaBeforeTrailingLineComment(trimmedPrefix)
+		if withComma != trimmedPrefix {
+			needsComma = false
+		}
+		trimmedPrefix = withComma
+	}
 	var b strings.Builder
 	b.WriteString(trimmedPrefix)
-	if needsComma {
+	if needsComma && !strings.HasSuffix(trimmedPrefix, ",") {
 		b.WriteString(",")
 	}
 	b.WriteString("\n  ")
@@ -272,6 +282,133 @@ func upsertTopLevelJSONCValue(content, key, encodedValue string) string {
 	b.WriteString("\n")
 	b.WriteString(suffix)
 	return b.String()
+}
+
+func topLevelJSONCObjectEnd(content string) int {
+	inString, escaped, lineComment, blockComment := false, false, false, false
+	depth := 0
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && i+1 < len(content) && content[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '/' && i+1 < len(content) {
+			if content[i+1] == '/' {
+				lineComment = true
+				i++
+				continue
+			}
+			if content[i+1] == '*' {
+				blockComment = true
+				i++
+				continue
+			}
+		}
+		if ch == '"' {
+			inString = true
+			continue
+		}
+		if ch == '{' || ch == '[' {
+			depth++
+			continue
+		}
+		if ch == '}' || ch == ']' {
+			depth--
+			if depth == 0 && ch == '}' {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func addCommaBeforeTrailingLineComment(content string) string {
+	commentStart := trailingLineCommentStart(content)
+	if commentStart < 0 {
+		return content
+	}
+	left := strings.TrimRight(content[:commentStart], " \t")
+	if strings.HasSuffix(left, ",") {
+		return content
+	}
+	return left + "," + content[len(left):]
+}
+
+func trailingLineCommentStart(content string) int {
+	inString, escaped, lineComment, blockComment := false, false, false, false
+	commentStart := -1
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+				commentStart = -1
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && i+1 < len(content) && content[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '/' && i+1 < len(content) {
+			if content[i+1] == '/' {
+				lineComment = true
+				commentStart = i
+				i++
+				continue
+			}
+			if content[i+1] == '*' {
+				blockComment = true
+				i++
+				continue
+			}
+		}
+		if ch == '"' {
+			inString = true
+		}
+	}
+	return commentStart
 }
 
 func topLevelJSONCValueRange(content, key string) (int, int, bool) {
@@ -400,16 +537,16 @@ func scanJSONCValueEnd(content string, start int) int {
 		}
 		if ch == '}' || ch == ']' {
 			if depth == 0 {
-				return i
+				return trimTrailingJSONWhitespace(content, start, i)
 			}
 			depth--
 			continue
 		}
 		if depth == 0 && ch == ',' {
-			return i
+			return trimTrailingJSONWhitespace(content, start, i)
 		}
 	}
-	return len(content)
+	return trimTrailingJSONWhitespace(content, start, len(content))
 }
 
 func valueIndent(content string, start int) string {
@@ -423,6 +560,13 @@ func indentJSONCValue(value, indent string) string {
 }
 
 func isJSONWhitespace(ch byte) bool { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' }
+
+func trimTrailingJSONWhitespace(content string, start, end int) int {
+	for end > start && isJSONWhitespace(content[end-1]) {
+		end--
+	}
+	return end
+}
 
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)

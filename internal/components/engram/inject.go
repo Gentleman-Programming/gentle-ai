@@ -14,7 +14,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodesettings "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -350,9 +349,6 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 
 	case model.StrategyMergeIntoSettings:
 		settingsPath := adapter.SettingsPath(configHomeDir)
-		if adapter.Agent() == model.AgentOpenCode {
-			settingsPath = opencodesettings.EffectiveSettingsPath(configHomeDir, "")
-		}
 		if settingsPath == "" {
 			break
 		}
@@ -386,9 +382,6 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 
 		if adapter.Agent() == model.AgentAntigravity {
 			settingsTarget := adapter.SettingsPath(configHomeDir)
-			if adapter.Agent() == model.AgentOpenCode {
-				settingsTarget = opencodesettings.EffectiveSettingsPath(configHomeDir, "")
-			}
 			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
 				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
@@ -677,15 +670,9 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	var merged []byte
-	var mergeErr error
-	if strings.HasSuffix(path, ".jsonc") {
-		merged, mergeErr = filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
-	} else {
-		merged, mergeErr = filemerge.MergeJSONObjects(baseJSON, overlay)
-	}
-	if mergeErr != nil {
-		return filemerge.WriteResult{}, mergeErr
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	if err != nil {
+		return filemerge.WriteResult{}, err
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)

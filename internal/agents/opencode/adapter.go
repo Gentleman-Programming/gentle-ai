@@ -11,7 +11,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodesettings "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -99,7 +98,17 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return opencodesettings.EffectiveSettingsPath(homeDir, "")
+	configDir := ConfigPath(homeDir)
+	jsoncPath := filepath.Join(configDir, "opencode.jsonc")
+	if regularFileExists(jsoncPath) {
+		return jsoncPath
+	}
+	return filepath.Join(configDir, "opencode.json")
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // --- Config strategies ---

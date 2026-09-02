@@ -45,10 +45,13 @@ func ResolveEffectiveConfig(projectDir string) (ConfigSnapshot, error) {
 // JSONC wins over JSON so user-owned comments are not silently flattened.
 func EffectiveSettingsPath(homeDir, projectDir string) string {
 	snapshot, err := ResolveEffectiveConfigForHome(homeDir, projectDir)
-	if err != nil || snapshot.WritePath == "" {
+	if snapshot.WritePath != "" {
+		return snapshot.WritePath
+	}
+	if err != nil {
 		return DefaultSettingsPathForHome(homeDir)
 	}
-	return snapshot.WritePath
+	return DefaultSettingsPathForHome(homeDir)
 }
 
 // ResolveEffectiveConfigForHome is ResolveEffectiveConfig with an explicit home

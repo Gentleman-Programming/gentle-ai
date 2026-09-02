@@ -931,11 +931,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 }
 
 func openCodeSettingsPath(homeDir string, adapter agents.Adapter) string {
-	settingsPath := adapter.SettingsPath(homeDir)
-	if adapter.Agent() != model.AgentOpenCode || settingsPath == "" {
-		return settingsPath
-	}
-	return opencode.EffectiveSettingsPath(homeDir, "")
+	return adapter.SettingsPath(homeDir)
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -2307,11 +2303,7 @@ func readAndMigrateOpenCodeCompatibleJSON(path string) ([]byte, error) {
 func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResult, error) {
 	var merged []byte
 	var err error
-	if strings.HasSuffix(path, ".jsonc") {
-		merged, err = filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
-	} else {
-		merged, err = filemerge.MergeJSONObjects(baseJSON, overlay)
-	}
+	merged, err = filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}

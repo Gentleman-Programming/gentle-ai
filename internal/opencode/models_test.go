@@ -1,6 +1,8 @@
 package opencode
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -39,5 +41,25 @@ func TestReviewPhasesCompleteRuntimeSet(t *testing.T) {
 	configurable := ConfigurableAgentPhases()
 	if got := configurable[len(configurable)-len(want):]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ConfigurableAgentPhases() review suffix = %v, want %v", got, want)
+	}
+}
+
+func TestDefaultSettingsPathForHomeRejectsRelativeXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "relative-config")
+
+	want := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if got := DefaultSettingsPathForHome(home); got != want {
+		t.Fatalf("DefaultSettingsPathForHome() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultSettingsPathForHomeEmptyHome(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(os.TempDir(), "xdg-config"))
+
+	if got := DefaultSettingsPathForHome(""); got != "" {
+		t.Fatalf("DefaultSettingsPathForHome(empty) = %q, want empty", got)
 	}
 }

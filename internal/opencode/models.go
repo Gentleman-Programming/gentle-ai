@@ -18,7 +18,10 @@ func DefaultSettingsPath() string {
 
 // DefaultSettingsPathForHome returns the XDG-compatible default OpenCode settings path.
 func DefaultSettingsPathForHome(homeDir string) string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && homeDir == os.Getenv("HOME") {
+	if homeDir == "" {
+		return ""
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdg) && homeDir == os.Getenv("HOME") {
 		return filepath.Join(xdg, "opencode", "opencode.json")
 	}
 	return filepath.Join(homeDir, ".config", "opencode", "opencode.json")

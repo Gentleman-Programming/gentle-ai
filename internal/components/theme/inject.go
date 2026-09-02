@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodesettings "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -90,9 +88,6 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	settingsPath := adapter.SettingsPath(homeDir)
-	if adapter.Agent() == model.AgentOpenCode {
-		settingsPath = opencodesettings.EffectiveSettingsPath(homeDir, "")
-	}
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -145,7 +140,7 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 	case model.AgentClaudeCode:
 		root = filepath.Join(adapter.GlobalConfigDir(homeDir), "themes")
 	case model.AgentOpenCode:
-		root = filepath.Join(filepath.Dir(opencodesettings.EffectiveSettingsPath(homeDir, "")), "themes")
+		root = filepath.Join(filepath.Dir(adapter.SettingsPath(homeDir)), "themes")
 	default:
 		return nil
 	}
@@ -158,15 +153,9 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	var merged []byte
-	var mergeErr error
-	if strings.HasSuffix(path, ".jsonc") {
-		merged, mergeErr = filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
-	} else {
-		merged, mergeErr = filemerge.MergeJSONObjects(baseJSON, overlay)
-	}
-	if mergeErr != nil {
-		return filemerge.WriteResult{}, mergeErr
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	if err != nil {
+		return filemerge.WriteResult{}, err
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)

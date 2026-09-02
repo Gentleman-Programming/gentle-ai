@@ -194,10 +194,7 @@ func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, erro
 }
 
 func mergeSettingsJSON(path string, baseJSON, overlay []byte) ([]byte, error) {
-	if strings.HasSuffix(path, ".jsonc") {
-		return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
-	}
-	return filemerge.MergeJSONObjects(baseJSON, overlay)
+	return filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 }
 
 func injectOpenClawMergeIntoSettings(settingsPath string) (InjectionResult, error) {
@@ -396,7 +393,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}

@@ -2391,11 +2391,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 }
 
 func effectiveOpenCodeSettingsPath(targetDir string, adapter agents.Adapter) string {
-	settingsPath := adapter.SettingsPath(targetDir)
-	if adapter.Agent() != model.AgentOpenCode || settingsPath == "" {
-		return settingsPath
-	}
-	return opencodeactivation.EffectiveSettingsPath(targetDir, "")
+	return adapter.SettingsPath(targetDir)
 }
 
 func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {

@@ -3,12 +3,10 @@ package permissions
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodesettings "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -23,9 +21,6 @@ type InjectionResult struct {
 func TargetPath(homeDir string, adapter agents.Adapter) string {
 	if agentOverlay(adapter.Agent()) == nil {
 		return ""
-	}
-	if adapter.Agent() == model.AgentOpenCode {
-		return opencodesettings.EffectiveSettingsPath(homeDir, "")
 	}
 	return adapter.SettingsPath(homeDir)
 }
@@ -182,15 +177,9 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	var merged []byte
-	var mergeErr error
-	if strings.HasSuffix(path, ".jsonc") {
-		merged, mergeErr = filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
-	} else {
-		merged, mergeErr = filemerge.MergeJSONObjects(baseJSON, overlay)
-	}
-	if mergeErr != nil {
-		return filemerge.WriteResult{}, mergeErr
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	if err != nil {
+		return filemerge.WriteResult{}, err
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)
