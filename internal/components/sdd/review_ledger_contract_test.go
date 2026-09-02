@@ -727,8 +727,16 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// (`--scope global`): the clone form only clears a clone-local off, so
 		// the old row documented a no-op loop. Deliberate, not drift; the
 		// ceilings are unchanged and the standard row stays under 15_866.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_863, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_208, maxCharacters: 30_063},
+		// +783 per case (15_863 -> 16_646 / 28_208 -> 28_991) when #4051 added
+		// the "## Entry rule" section naming when an orchestrator must enter
+		// the lifecycle: the contract described only how STATUS/START/collect
+		// run once entered, never when to run the preflight, so an
+		// implementation could finish with RDD enabled and never trigger
+		// STATUS. Deliberate, not drift. The ceilings move with it
+		// (15_866 -> 16_649 / 30_063 -> 30_846) to restore the same small
+		// headroom each row already had.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_646, maxCharacters: 16_649},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_991, maxCharacters: 30_846},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
