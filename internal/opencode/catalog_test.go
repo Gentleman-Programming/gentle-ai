@@ -181,7 +181,7 @@ func TestRunCatalogCommandCancelsOverflowingChild(t *testing.T) {
 	defer cancel()
 
 	limit := 128
-	r, err := runCatalogCommand(ctx, Command{Path: helper, OutputLimit: limit})
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
 	if err != nil {
 		t.Fatalf("runCatalogCommand() error = %v", err)
 	}
@@ -286,6 +286,157 @@ func TestCountingLimitReaderAllowsExactFitStream(t *testing.T) {
 	}
 }
 
+// exitOnCloseReader mimics a process stream reader whose stream may carry a
+// parse failure while the child exits non-zero: Close reports the child's
+// wait error, mirroring processStreamReader.Close after the lifecycle fix.
+type exitOnCloseReader struct {
+	r       io.Reader
+	waitErr error
+}
+
+func (e *exitOnCloseReader) Read(p []byte) (int, error) { return e.r.Read(p) }
+func (e *exitOnCloseReader) Close() error               { return e.waitErr }
+func (e *exitOnCloseReader) WaitError() error           { return e.waitErr }
+
+// TestDiscoverCatalogPrefersCommandFailureOverParseClassification pins the
+// classification precedence of issue #4043 review feedback: a non-zero child
+// exit must surface as command_failed (or timeout) and must never be masked
+// by a downstream parse classification. Only a genuine output overflow keeps
+// its own category, matching the pre-streaming cmd.Run() behavior.
+func TestDiscoverCatalogPrefersCommandFailureOverParseClassification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX exit-status fixture")
+	}
+	fixture := exec.Command("sh", "-c", "exit 7")
+	if err := fixture.Run(); err == nil {
+		t.Fatal("expected fixture command to exit non-zero")
+	}
+	exitErr := &exec.ExitError{ProcessState: fixture.ProcessState}
+
+	tests := []struct {
+		name string
+		out  string
+		want CatalogErrorKind
+	}{
+		{"malformed stream with non-zero exit", "custom/model\n{\"id\":", CatalogErrorCommandFailed},
+		{"valid stream with non-zero exit", verboseCatalog, CatalogErrorCommandFailed},
+		{"oversized stream with non-zero exit", strings.Repeat("x", maxCatalogOutput+1), CatalogErrorOutputTooLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := func(context.Context, Command) (io.Reader, error) {
+				return &exitOnCloseReader{r: strings.NewReader(tt.out), waitErr: exitErr}, nil
+			}
+			_, err := DiscoverCatalogWithRunner(context.Background(), "project", runner)
+			var catalogErr *CatalogError
+			if !errors.As(err, &catalogErr) || catalogErr.Kind != tt.want {
+				t.Fatalf("err = %v, want %v (child exit status must not be masked)", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendant reproduces
+// the inherited-pipe cancellation defect: a descendant of the child that
+// inherits stdout and stderr must not extend discovery past the context
+// deadline.
+func TestRunCatalogCommandDeadlineNotBlockedByInheritingDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX sleep descendant to inherit the pipes")
+	}
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "descendant-helper")
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"time"
+)
+
+func main() {
+	descendant := exec.Command("sleep", "5")
+	descendant.Stdout = os.Stdout
+	descendant.Stderr = os.Stderr
+	_ = descendant.Start()
+	fmt.Println("custom/model")
+	fmt.Println("{\"id\":\"model\",\"name\":\"Model\",\"capabilities\":{\"toolcall\":true}}")
+	time.Sleep(25 * time.Millisecond)
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
+	}
+	started := time.Now()
+	_, _ = io.ReadAll(r)
+	if closer, ok := r.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("discovery stayed blocked for %v; want bounded by the 300ms deadline", elapsed)
+	}
+}
+
+// slowReader throttles consumption so the parser runs far slower than the
+// child writes. OpenCode's catalog writer aborts when its stdout pipe drains
+// too slowly, so discovery must drain the pipe in the background and let the
+// consumer parse at its own pace.
+type slowReader struct {
+	r io.Reader
+}
+
+func (s *slowReader) Read(p []byte) (int, error) {
+	time.Sleep(2 * time.Millisecond)
+	return s.r.Read(p)
+}
+
+// TestDiscoverCatalogSurvivesSlowConsumer pins the background-drain contract:
+// a consumer slower than the child's writer must still observe the complete
+// catalog, because the drain goroutine keeps the pipe empty. Without the
+// background drain this test truncates the catalog mid-record with
+// malformed_output on hosts where OpenCode aborts slow stdout writers.
+func TestDiscoverCatalogSurvivesSlowConsumer(t *testing.T) {
+	if _, err := exec.LookPath("opencode"); err != nil {
+		t.Skip("opencode binary not in PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: "."})
+	if err != nil {
+		t.Fatalf("runCatalogCommand: %v", err)
+	}
+	if closer, ok := r.(io.Closer); ok {
+		defer closer.Close()
+	}
+	providers, err := parseVerboseCatalog(&countingLimitReader{r: &slowReader{r: r}, limit: maxCatalogOutput, cancel: cancel})
+	if err != nil {
+		t.Fatalf("slow-consumer parse error = %v, want complete catalog", err)
+	}
+	if len(providers) == 0 {
+		t.Fatal("slow consumer discovered 0 providers")
+	}
+	count := 0
+	for _, p := range providers {
+		count += len(p.Models)
+	}
+	if count == 0 {
+		t.Fatal("slow consumer discovered 0 models")
+	}
+	t.Logf("slow consumer parsed %d providers / %d models", len(providers), count)
+}
+
 // TestDiscoverCatalogLegacyVsNew pins the regression contract of issue #4042
 // against a generated fixture: under the legacy 1 MiB ceiling a large catalog
 // fails with output_too_large, while the current 16 MiB ceiling parses the
@@ -350,7 +501,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	r, err := runCatalogCommand(ctx, Command{Path: helper, OutputLimit: 16 << 20})
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
 	if err != nil {
 		t.Fatalf("runCatalogCommand error = %v", err)
 	}
