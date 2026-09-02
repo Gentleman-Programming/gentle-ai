@@ -2695,7 +2695,10 @@ var legacyPiSystemPromptSectionIDs = []string{
 // It is safe to call unconditionally: a missing file is a no-op, and repeated
 // calls are idempotent. Content outside the managed markers is preserved
 // byte-for-byte. If nothing but whitespace remains after stripping, the file
-// is removed instead of being rewritten empty.
+// is rewritten with that whitespace-only remainder rather than deleted: a
+// whitespace-only file is harmless (Pi appends nothing), the rewrite is
+// recoverable and consistent with every other managed-section rewrite, and
+// only the uninstall call site registers a backup target for this file.
 //
 // Only ever call this with the Pi adapter. Unlike the SupportsSystemPrompt()
 // gated helpers elsewhere in this package, it strips these sections
@@ -2718,13 +2721,6 @@ func RetirePiSystemPromptBlocks(homeDir string, adapter agents.Adapter) (Injecti
 
 	if updated == existing {
 		return InjectionResult{}, nil
-	}
-
-	if strings.TrimSpace(updated) == "" {
-		if err := os.Remove(promptPath); err != nil && !os.IsNotExist(err) {
-			return InjectionResult{}, err
-		}
-		return InjectionResult{Changed: true, Files: []string{promptPath}}, nil
 	}
 
 	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)

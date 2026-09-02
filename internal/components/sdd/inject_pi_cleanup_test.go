@@ -61,12 +61,13 @@ func TestRetirePiSystemPromptBlocksStripsManagedSectionsAndPreservesUserContent(
 	}
 }
 
-func TestRetirePiSystemPromptBlocksRemovesWhitespaceOnlyFile(t *testing.T) {
+func TestRetirePiSystemPromptBlocksKeepsWhitespaceOnlyFile(t *testing.T) {
 	home := t.TempDir()
 	adapter := pi.NewAdapter()
 	promptPath := adapter.SystemPromptFile(home)
 
-	fixture := "<!-- gentle-ai:persona -->\n" +
+	fixture := "   \n" +
+		"<!-- gentle-ai:persona -->\n" +
 		"persona body\n" +
 		"<!-- /gentle-ai:persona -->\n"
 
@@ -84,8 +85,14 @@ func TestRetirePiSystemPromptBlocksRemovesWhitespaceOnlyFile(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("RetirePiSystemPromptBlocks() Changed = false, want true")
 	}
-	if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
-		t.Fatalf("APPEND_SYSTEM.md still exists after whitespace-only cleanup, stat err = %v", err)
+
+	got, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("APPEND_SYSTEM.md was removed after whitespace-only cleanup, want it kept: %v", err)
+	}
+	want := "   \n"
+	if string(got) != want {
+		t.Fatalf("APPEND_SYSTEM.md content = %q, want %q", string(got), want)
 	}
 }
 
