@@ -1161,6 +1161,58 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }
 
+func TestInstallPiCleansLegacyAppendSectionsWithoutRecreatingAgentRouting(t *testing.T) {
+	home := t.TempDir()
+	piAgentDir := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(piAgentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "# User Custom Notes\n" +
+		"<!-- gentle-ai:persona -->Legacy persona<!-- /gentle-ai:persona -->\n" +
+		"<!-- gentle-ai:agent-routing -->Legacy routing<!-- /gentle-ai:agent-routing -->\n" +
+		"<!-- gentle-ai:engram-protocol -->Legacy engram<!-- /gentle-ai:engram-protocol -->\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->Legacy SDD<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"<!-- gentle-ai:strict-tdd-mode -->Legacy TDD<!-- /gentle-ai:strict-tdd-mode -->\n" +
+		"<!-- gentle-ai:trigger-rules -->Legacy trigger<!-- /gentle-ai:trigger-rules -->\n" +
+		"<!-- gentle-ai:codegraph-guidance -->Legacy codegraph<!-- /gentle-ai:codegraph-guidance -->\n" +
+		"# User Epilogue\n"
+	origPerm := os.FileMode(0o640)
+	if err := os.WriteFile(appendPath, []byte(content), origPerm); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Persona:    model.PersonaGentleman,
+		Preset:     model.PresetFullGentleman,
+		Components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
+	}
+	rt := newTestInstallRuntime(t, home, selection)
+	runInstallInjectionSteps(t, rt)
+
+	info, err := os.Stat(appendPath)
+	if err != nil {
+		t.Fatalf("Stat(APPEND_SYSTEM.md) error = %v", err)
+	}
+	if info.Mode().Perm() != origPerm {
+		t.Fatalf("File mode = %v, want %v", info.Mode().Perm(), origPerm)
+	}
+
+	gotBytes, err := os.ReadFile(appendPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(gotBytes)
+	for _, sec := range []string{"persona", "agent-routing", "engram-protocol", "sdd-orchestrator", "strict-tdd-mode", "trigger-rules", "codegraph-guidance"} {
+		if strings.Contains(got, "<!-- gentle-ai:"+sec) {
+			t.Errorf("APPEND_SYSTEM.md still contains legacy section %q: %s", sec, got)
+		}
+	}
+	if !strings.Contains(got, "# User Custom Notes") || !strings.Contains(got, "# User Epilogue") {
+		t.Errorf("user content lost: %s", got)
+	}
+}
+
 func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 	t.Helper()
 

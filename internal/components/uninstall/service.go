@@ -15,6 +15,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
@@ -457,6 +458,20 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	// before other component cleanup (notably Engram) mutates that file, otherwise
 	// an unrelated mutation is indistinguishable from user drift.
 	if slices.Contains(agentsToRemove, model.AgentPi) {
+		if changed, path, err := pi.CleanLegacyAppendSystem(s.homeDir); err != nil {
+			failures = append(failures, operationFailure{
+				path:   filepath.Join(pi.AgentConfigPath(s.homeDir), "APPEND_SYSTEM.md"),
+				agents: []model.AgentID{model.AgentPi},
+				err:    fmt.Errorf("clean legacy Pi append system: %w", err),
+			})
+		} else if changed && path != "" {
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				result.RemovedFiles = append(result.RemovedFiles, path)
+			} else {
+				result.ChangedFiles = append(result.ChangedFiles, path)
+			}
+		}
+
 		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
 		if piErr != nil {
 			failures = append(failures, operationFailure{

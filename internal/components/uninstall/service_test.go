@@ -247,6 +247,80 @@ func TestExecutePlanPiUninstallPreservesDriftedChildAndGentlePiSource(t *testing
 	}
 }
 
+func TestPiUninstallCleansLegacyAppendSectionsWithoutChangingPiOwnedAssets(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	agentDir := filepath.Join(homeDir, ".pi", "agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appendPath := filepath.Join(agentDir, "APPEND_SYSTEM.md")
+	content := "# User Preamble\n" +
+		"<!-- gentle-ai:persona -->Legacy persona<!-- /gentle-ai:persona -->\n" +
+		"<!-- gentle-ai:agent-routing -->Legacy routing<!-- /gentle-ai:agent-routing -->\n" +
+		"<!-- gentle-ai:engram-protocol -->Legacy engram<!-- /gentle-ai:engram-protocol -->\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->Legacy SDD<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"<!-- gentle-ai:strict-tdd-mode -->Legacy TDD<!-- /gentle-ai:strict-tdd-mode -->\n" +
+		"<!-- gentle-ai:trigger-rules -->Legacy trigger<!-- /gentle-ai:trigger-rules -->\n" +
+		"<!-- gentle-ai:codegraph-guidance -->Legacy codegraph<!-- /gentle-ai:codegraph-guidance -->\n" +
+		"# User Epilogue\n"
+	origPerm := os.FileMode(0o640)
+	if err := os.WriteFile(appendPath, []byte(content), origPerm); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+	if !slices.Contains(result.ChangedFiles, appendPath) {
+		t.Fatalf("result.ChangedFiles = %v, want %q", result.ChangedFiles, appendPath)
+	}
+
+	info, err := os.Stat(appendPath)
+	if err != nil {
+		t.Fatalf("Stat(APPEND_SYSTEM.md) error = %v", err)
+	}
+	if info.Mode().Perm() != origPerm {
+		t.Fatalf("File mode = %v, want %v", info.Mode().Perm(), origPerm)
+	}
+
+	gotBytes, err := os.ReadFile(appendPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(gotBytes)
+	for _, sec := range []string{"persona", "agent-routing", "engram-protocol", "sdd-orchestrator", "strict-tdd-mode", "trigger-rules", "codegraph-guidance"} {
+		if strings.Contains(got, "<!-- gentle-ai:"+sec) {
+			t.Errorf("APPEND_SYSTEM.md still contains legacy section %q: %s", sec, got)
+		}
+	}
+	if !strings.Contains(got, "# User Preamble") || !strings.Contains(got, "# User Epilogue") {
+		t.Errorf("user content lost: %s", got)
+	}
+
+	// When APPEND_SYSTEM.md contains only legacy sections, it should be deleted.
+	onlyLegacy := "<!-- gentle-ai:persona -->Legacy persona<!-- /gentle-ai:persona -->\n"
+	if err := os.WriteFile(appendPath, []byte(onlyLegacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result2, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatalf("executePlan() second run error = %v", err)
+	}
+	if !slices.Contains(result2.RemovedFiles, appendPath) {
+		t.Fatalf("result2.RemovedFiles = %v, want %q", result2.RemovedFiles, appendPath)
+	}
+	if _, err := os.Stat(appendPath); !os.IsNotExist(err) {
+		t.Fatalf("APPEND_SYSTEM.md was not deleted when empty")
+	}
+}
+
 func piCodeGraphProbeForServiceTest(string) (communitytool.PiCodeGraphMCPProbeResult, error) {
 	return communitytool.PiCodeGraphMCPProbeResult{
 		AdapterAvailable: true,

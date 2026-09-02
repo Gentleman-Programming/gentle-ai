@@ -374,3 +374,97 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 		t.Fatalf("packages = %#v", settings.Packages)
 	}
 }
+
+func TestPiLegacyAppendCleanupPreservesUserBytesModeAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	appendFile := filepath.Join(agentDir, "APPEND_SYSTEM.md")
+
+	initial := "# User Preamble\n" +
+		"<!-- gentle-ai:persona -->Legacy persona<!-- /gentle-ai:persona -->\n" +
+		"<!-- gentle-ai:engram-protocol -->Legacy engram<!-- /gentle-ai:engram-protocol -->\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->Legacy SDD<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"<!-- gentle-ai:strict-tdd-mode -->Legacy TDD<!-- /gentle-ai:strict-tdd-mode -->\n" +
+		"<!-- gentle-ai:agent-routing -->Legacy routing<!-- /gentle-ai:agent-routing -->\n" +
+		"<!-- gentle-ai:trigger-rules -->Legacy trigger<!-- /gentle-ai:trigger-rules -->\n" +
+		"<!-- gentle-ai:codegraph-guidance -->Legacy codegraph<!-- /gentle-ai:codegraph-guidance -->\n" +
+		"<!-- gentle-ai:custom-user-marker -->\nPreserved custom marker\n<!-- /gentle-ai:custom-user-marker -->\n" +
+		"# User Epilogue\n"
+	origPerm := os.FileMode(0o640)
+	if err := os.WriteFile(appendFile, []byte(initial), origPerm); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	changed, path, err := CleanLegacyAppendSystem(home)
+	if err != nil {
+		t.Fatalf("CleanLegacyAppendSystem error = %v", err)
+	}
+	if !changed {
+		t.Fatalf("CleanLegacyAppendSystem reported changed = false")
+	}
+	if path != appendFile {
+		t.Fatalf("CleanLegacyAppendSystem path = %q, want %q", path, appendFile)
+	}
+
+	info, err := os.Stat(appendFile)
+	if err != nil {
+		t.Fatalf("Stat error = %v", err)
+	}
+	if info.Mode().Perm() != origPerm {
+		t.Fatalf("File mode = %v, want %v", info.Mode().Perm(), origPerm)
+	}
+
+	contentBytes, err := os.ReadFile(appendFile)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+	cleaned := string(contentBytes)
+
+	for _, sec := range LegacyPiAppendSections {
+		if strings.Contains(cleaned, "<!-- gentle-ai:"+sec) {
+			t.Errorf("cleaned file still contains legacy section %q", sec)
+		}
+	}
+	if !strings.Contains(cleaned, "# User Preamble") {
+		t.Errorf("cleaned file missing user preamble")
+	}
+	if !strings.Contains(cleaned, "<!-- gentle-ai:custom-user-marker -->\nPreserved custom marker\n<!-- /gentle-ai:custom-user-marker -->") {
+		t.Errorf("cleaned file missing non-allowlisted custom marker")
+	}
+	if !strings.Contains(cleaned, "# User Epilogue") {
+		t.Errorf("cleaned file missing user epilogue")
+	}
+
+	// Second run is idempotent no-op
+	secondChanged, secondPath, err := CleanLegacyAppendSystem(home)
+	if err != nil {
+		t.Fatalf("second CleanLegacyAppendSystem error = %v", err)
+	}
+	if secondChanged || secondPath != "" {
+		t.Fatalf("second run reported changed = %v, path = %q, want no-op", secondChanged, secondPath)
+	}
+
+	secondContent, err := os.ReadFile(appendFile)
+	if err != nil {
+		t.Fatalf("ReadFile after second run error = %v", err)
+	}
+	if string(secondContent) != cleaned {
+		t.Fatalf("content mutated on second run")
+	}
+
+	// Empty file test: only legacy sections should cause file deletion
+	onlyLegacy := "<!-- gentle-ai:persona -->Legacy persona<!-- /gentle-ai:persona -->\n<!-- gentle-ai:agent-routing -->Legacy routing<!-- /gentle-ai:agent-routing -->\n"
+	if err := os.WriteFile(appendFile, []byte(onlyLegacy), 0o644); err != nil {
+		t.Fatalf("WriteFile onlyLegacy error = %v", err)
+	}
+	delChanged, delPath, err := CleanLegacyAppendSystem(home)
+	if err != nil || !delChanged || delPath != appendFile {
+		t.Fatalf("CleanLegacyAppendSystem onlyLegacy error = %v, changed = %v, path = %q", err, delChanged, delPath)
+	}
+	if _, err := os.Stat(appendFile); !os.IsNotExist(err) {
+		t.Fatalf("expected empty file to be deleted, stat error = %v", err)
+	}
+}

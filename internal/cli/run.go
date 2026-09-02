@@ -19,6 +19,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
@@ -868,6 +869,18 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
+
+	if s.agent == model.AgentPi {
+		changed, path, err := pi.CleanLegacyAppendSystem(s.homeDir)
+		if err != nil {
+			return fmt.Errorf("clean legacy Pi append system: %w", err)
+		}
+		if changed && path != "" {
+			s.recordChanged(agentguidance.Result{Changed: true, Files: []string{path}})
+		}
+		return nil
+	}
+
 	targetDir := routingGuidanceDir(s.homeDir, s.workspaceDir, s.scope, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
@@ -2144,6 +2157,13 @@ func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallSc
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			piAppend := filepath.Join(pi.AgentConfigPath(homeDir), "APPEND_SYSTEM.md")
+			if _, err := os.Stat(piAppend); err == nil {
+				paths = append(paths, piAppend)
+			}
+			continue
+		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
 		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
 		if err != nil {

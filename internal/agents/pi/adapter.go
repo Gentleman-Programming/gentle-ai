@@ -317,6 +317,62 @@ func ConfigPath(homeDir string) string { return filepath.Join(homeDir, ".pi") }
 // AgentConfigPath returns Pi's current agent-owned config directory path.
 func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(homeDir), "agent") }
 
+// LegacyPiAppendSections lists the allowlisted Gentle-managed sections that are cleaned from Pi's APPEND_SYSTEM.md.
+var LegacyPiAppendSections = []string{
+	"persona",
+	"engram-protocol",
+	"sdd-orchestrator",
+	"strict-tdd-mode",
+	"agent-routing",
+	"trigger-rules",
+	"codegraph-guidance",
+}
+
+// CleanLegacyAppendSystem removes the allowlisted Gentle-managed legacy sections
+// from Pi's APPEND_SYSTEM.md file while preserving user-authored content and file permissions.
+// If the file becomes empty (or contains only whitespace), it is deleted.
+// A second identical run is an idempotent no-op.
+func CleanLegacyAppendSystem(homeDir string) (bool, string, error) {
+	path := filepath.Join(AgentConfigPath(homeDir), piAppendSystemFile)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("stat pi append system file %q: %w", path, err)
+	}
+
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return false, "", fmt.Errorf("read pi append system file %q: %w", path, err)
+	}
+
+	content := string(contentBytes)
+	original := content
+	for _, section := range LegacyPiAppendSections {
+		content = filemerge.InjectMarkdownSection(content, section, "")
+	}
+
+	if content == original {
+		return false, "", nil
+	}
+
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return false, "", fmt.Errorf("remove empty pi append system file %q: %w", path, err)
+		}
+		return true, path, nil
+	}
+
+	perm := info.Mode().Perm()
+	writeRes, err := filemerge.WriteFileAtomic(path, []byte(content), perm)
+	if err != nil {
+		return false, "", fmt.Errorf("rewrite pi append system file %q: %w", path, err)
+	}
+	return writeRes.Changed, path, nil
+}
+
 // ProvisionEngramMCP declares pi-mcp-adapter in Pi's settings.json and
 // package.json. It is invoked by ComponentEngram; keeping it here lets Pi
 // own the exact config shape without teaching the generic Engram injector

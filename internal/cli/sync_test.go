@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -5544,4 +5545,76 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
+}
+
+func testRunSyncPiAppendFixture(t *testing.T, args []string) {
+	t.Helper()
+	home := t.TempDir()
+	original := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = original })
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"pi", "claude-code"},
+		Components:      []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	piAgentDir := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(piAgentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appendPath := filepath.Join(piAgentDir, "APPEND_SYSTEM.md")
+	content := "# User Notes\n" +
+		"<!-- gentle-ai:persona -->p<!-- /gentle-ai:persona -->\n" +
+		"<!-- gentle-ai:agent-routing -->r<!-- /gentle-ai:agent-routing -->\n" +
+		"<!-- gentle-ai:engram-protocol -->e<!-- /gentle-ai:engram-protocol -->\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->s<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"<!-- gentle-ai:strict-tdd-mode -->t<!-- /gentle-ai:strict-tdd-mode -->\n" +
+		"<!-- gentle-ai:trigger-rules -->tr<!-- /gentle-ai:trigger-rules -->\n" +
+		"<!-- gentle-ai:codegraph-guidance -->c<!-- /gentle-ai:codegraph-guidance -->\n" +
+		"# User Notes End\n"
+	origPerm := os.FileMode(0o640)
+	if err := os.WriteFile(appendPath, []byte(content), origPerm); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RunSync(args)
+	if err != nil {
+		t.Fatalf("RunSync(%v) error = %v", args, err)
+	}
+
+	info, err := os.Stat(appendPath)
+	if err != nil {
+		t.Fatalf("Stat(APPEND_SYSTEM.md) error = %v", err)
+	}
+	if info.Mode().Perm() != origPerm {
+		t.Fatalf("File mode = %v, want %v", info.Mode().Perm(), origPerm)
+	}
+
+	gotBytes, err := os.ReadFile(appendPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(gotBytes)
+	for _, sec := range []string{"persona", "agent-routing", "engram-protocol", "sdd-orchestrator", "strict-tdd-mode", "trigger-rules", "codegraph-guidance"} {
+		if strings.Contains(got, "<!-- gentle-ai:"+sec) {
+			t.Errorf("APPEND_SYSTEM.md still contains legacy section %q: %s", sec, got)
+		}
+	}
+	if !strings.Contains(got, "# User Notes") || !strings.Contains(got, "# User Notes End") {
+		t.Errorf("user content lost: %s", got)
+	}
+	if !slices.Contains(result.ChangedFiles, appendPath) {
+		t.Errorf("result.ChangedFiles = %v, want it to contain %q", result.ChangedFiles, appendPath)
+	}
+}
+
+func TestRunSyncCleansLegacyPiAppendSectionsWithoutRecreatingAgentRouting(t *testing.T) {
+	testRunSyncPiAppendFixture(t, nil)
+}
+
+func TestRunSyncExplicitPiCleansLegacyAppendSectionsWithoutRecreatingAgentRouting(t *testing.T) {
+	testRunSyncPiAppendFixture(t, []string{"--agent", "pi"})
 }
