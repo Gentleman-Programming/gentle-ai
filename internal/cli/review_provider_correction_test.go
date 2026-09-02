@@ -242,6 +242,32 @@ func TestProviderCaptureTransportErrorSkipsCorrectionAndPreservation(t *testing.
 	}
 }
 
+// R4-budget-skip-unclassified: an over-budget corrective prompt must still
+// classify as *reviewProviderCaptureRefusedError, carry the preserved clause,
+// and skip the second invocation.
+func TestProviderCaptureSkipsCorrectionOverBudgetAndClassifiesAsRefused(t *testing.T) {
+	invocation := reviewerprovider.NewInvocation([]byte("original prompt"))
+	admit := func(_ context.Context, _ []byte) (string, error) {
+		return "", errors.New(strings.Repeat("x", reviewLensContextByteBudget))
+	}
+	preserve := func(_ context.Context, _ int, _ error, _ []byte) string { return "preserved-clause" }
+	continuation := func() string { return "gentle-ai review status --next-transition" }
+	reviewCalls := 0
+	adapter := providerTestAdapterFunc(func(_ context.Context, _ reviewerprovider.Invocation) ([]byte, error) {
+		reviewCalls++
+		return []byte("raw reviewer output"), nil
+	})
+
+	_, _, err := reviewProviderCaptureRetry(context.Background(), adapter, invocation, admit, preserve, continuation, nil)
+	var refused *reviewProviderCaptureRefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "preserved-clause") {
+		t.Fatalf("over-budget error is not a classified refusal carrying the preserved clause: %v", err)
+	}
+	if reviewCalls != 1 {
+		t.Fatalf("adapter invocations = %d, want exactly 1 (no corrective re-invocation)", reviewCalls)
+	}
+}
+
 func TestRawInputCapturePreservesRejectedResultWithoutInvokingProvider(t *testing.T) {
 	repo, binding, record, _ := newCandidateInspectionReview(t, "candidate\n", false)
 	lens := record.State.SelectedLenses[0]

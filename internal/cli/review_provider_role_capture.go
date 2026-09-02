@@ -190,21 +190,22 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 		}
 		return nil
 	}
-	var raw []byte
 	if reviewProviderCaptureRuntime(binding.runtime) {
 		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleRefuter, binding.runtime)
 		if adapterErr != nil {
 			return reviewPreflightError(adapterErr)
 		}
-		raw, err = adapter.Review(ctx, request.Invocation)
+		if err := reviewProviderCaptureRefuterWithOneCorrection(ctx, binding, adapter, store, state, request); err != nil {
+			return err
+		}
 	} else {
-		raw, err = reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
-	}
-	if err != nil {
-		return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", err))
-	}
-	if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw); err != nil {
-		return reviewPreflightError(err)
+		raw, hostErr := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+		if hostErr != nil {
+			return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", hostErr))
+		}
+		if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw); err != nil {
+			return reviewPreflightError(err)
+		}
 	}
 	currentRecord, currentErr := store.LoadContext(ctx)
 	if currentErr != nil {
@@ -260,22 +261,112 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 		}
 		return nil
 	}
-	var raw []byte
 	if reviewProviderCaptureRuntime(binding.runtime) {
 		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleTargetedValidator, binding.runtime)
 		if adapterErr != nil {
 			return reviewPreflightError(adapterErr)
 		}
-		raw, err = adapter.Review(ctx, request.Invocation)
-	} else {
-		raw, err = reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+		closure, err := reviewProviderCaptureValidationWithOneCorrection(ctx, binding, adapter, store, state, correction, request)
+		if err != nil {
+			return err
+		}
+		return encodeReviewJSON(stdout, closure)
 	}
-	if err != nil {
-		return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", err))
+	raw, hostErr := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+	if hostErr != nil {
+		return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", hostErr))
 	}
 	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
 	return encodeReviewJSON(stdout, closure)
+}
+
+// reviewProviderCaptureRefuterAdmission bundles the one refuter admission
+// result so the shared corrective-retry core can carry it as a single type
+// parameter.
+type reviewProviderCaptureRefuterAdmission struct {
+	result facadeRefuterResult
+}
+
+// reviewProviderCaptureRefuterWithOneCorrection grants the compiled runtime
+// (claude, codex) the same single corrective re-invocation the lens role
+// already had (issue #4061): a malformed refuter document is retried once
+// with the exact admission error before it is durably captured. The Pi host
+// relay keeps its own reviewer process and is not routed through this path.
+func reviewProviderCaptureRefuterWithOneCorrection(ctx context.Context, binding *reviewProviderRoleCaptureBinding, adapter reviewerprovider.Adapter, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, request reviewProviderRefuterRequest) error {
+	admit := func(_ context.Context, raw []byte) (reviewProviderCaptureRefuterAdmission, error) {
+		result, err := reviewProviderAdmitRefuterRaw(request, raw)
+		return reviewProviderCaptureRefuterAdmission{result: result}, err
+	}
+	preserve := func(ctx context.Context, attempt int, admission error, raw []byte) string {
+		return reviewRejectedResultClause(ctx, binding.root, reviewRejectedResultMeta{
+			LineageID: state.LineageID, Lens: reviewProviderRoleRefuter, Attempt: attempt, Reason: admission.Error(),
+		}, raw)
+	}
+	continuation := func() string { return reviewProviderCaptureContinuation(binding.runtime, state.LineageID) }
+
+	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, admit, preserve, continuation, nil)
+	if err != nil {
+		var refused *reviewProviderCaptureRefusedError
+		if errors.As(err, &refused) {
+			return reviewPreflightRefusal(reviewPreflightProviderCaptureRefusedReason, err)
+		}
+		return reviewPreflightError(err)
+	}
+	if _, err := reviewProviderCaptureAdmittedRefuterResult(ctx, binding.root, store, state, state.CapturePhaseRevision, request, captured.result, raw); err != nil {
+		return reviewPreflightError(err)
+	}
+	return nil
+}
+
+// reviewProviderCaptureValidatorAdmission bundles the one targeted validator
+// admission result so the shared corrective-retry core can carry it as a
+// single type parameter.
+type reviewProviderCaptureValidatorAdmission struct {
+	result facadeValidationResult
+	native reviewtransaction.ScopedValidationResult
+}
+
+// reviewProviderCaptureValidationWithOneCorrection grants the compiled
+// runtime the same single corrective re-invocation the lens role already had
+// (issue #4061): a syntactically invalid validator document -- the defect a
+// live claude adapter run actually hit -- is retried once with the exact
+// admission census before it is durably captured. An inconclusive verdict is
+// not retried here: it already owns its own retry ladder (relaunch once the
+// validator regains access to the frozen trees), so it is recorded on the
+// ledger exactly as it was before this correction existed.
+func reviewProviderCaptureValidationWithOneCorrection(ctx context.Context, binding *reviewProviderRoleCaptureBinding, adapter reviewerprovider.Adapter, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, correction reviewtransaction.Snapshot, request reviewProviderTargetedValidatorRequest) (*reviewLastEventClosureResult, error) {
+	admit := func(_ context.Context, raw []byte) (reviewProviderCaptureValidatorAdmission, error) {
+		result, native, err := reviewProviderAdmitTargetedValidatorRaw(request, raw)
+		return reviewProviderCaptureValidatorAdmission{result: result, native: native}, err
+	}
+	preserve := func(ctx context.Context, attempt int, admission error, raw []byte) string {
+		return reviewRejectedResultClause(ctx, binding.root, reviewRejectedResultMeta{
+			LineageID: state.LineageID, Lens: reviewProviderRoleTargetedValidator, Attempt: attempt, Reason: admission.Error(),
+		}, raw)
+	}
+	continuation := func() string { return reviewProviderCaptureContinuation(binding.runtime, state.LineageID) }
+	retryable := func(err error) bool { return !errors.Is(err, errReviewTargetedValidationInconclusive) }
+
+	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, admit, preserve, continuation, retryable)
+	if err != nil {
+		if errors.Is(err, errReviewTargetedValidationInconclusive) {
+			if _, ledgerErr := store.RecordInconclusiveTargetedValidatorAttempt(ctx, request.ValidationRequest, facadePayloadHash(raw)); ledgerErr != nil {
+				return nil, reviewPreflightError(ledgerErr)
+			}
+			return nil, reviewPreflightError(err)
+		}
+		var refused *reviewProviderCaptureRefusedError
+		if errors.As(err, &refused) {
+			return nil, reviewPreflightRefusal(reviewPreflightProviderCaptureRefusedReason, err)
+		}
+		return nil, reviewPreflightError(err)
+	}
+	closure, err := reviewProviderCaptureAdmittedTargetedValidatorResult(ctx, binding.root, store, state, correction, request, captured.result, captured.native)
+	if err != nil {
+		return nil, reviewPreflightError(err)
+	}
+	return closure, nil
 }
