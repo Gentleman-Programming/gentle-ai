@@ -13,6 +13,12 @@
 <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 
+<p>
+<a href="https://gentle-ai.gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
+<a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a> &bull;
+<a href="https://engram.gentlemanprogramming.com/"><strong>Engram</strong></a>
+</p>
+
 <!--
   sealed_token is a GitHub fine-grained token encrypted against Star History's
   public key, so only the encrypted value is published here. It is required
