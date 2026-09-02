@@ -230,6 +230,11 @@ func TestDiscoverCatalogClassifiesCommandFailuresAndEmptyCatalog(t *testing.T) {
 	}
 }
 
+// TestDiscoverCatalogLiveHostIntegration runs against the real `opencode`
+// binary when it is available and asserts only host-portable invariants: the
+// command exits successfully and yields at least one provider with at least
+// one model. Specific provider or model IDs vary per machine and must not be
+// asserted here, or the test breaks on every other host and in CI.
 func TestDiscoverCatalogLiveHostIntegration(t *testing.T) {
 	if _, err := exec.LookPath("opencode"); err != nil {
 		t.Skip("opencode binary not in PATH")
@@ -243,25 +248,55 @@ func TestDiscoverCatalogLiveHostIntegration(t *testing.T) {
 	}
 	count := 0
 	for _, p := range providers {
+		if p.ID == "" || p.Models == nil || len(p.Models) == 0 {
+			t.Errorf("provider %q has no models: %+v", p.ID, p)
+			continue
+		}
+		for _, m := range p.Models {
+			if m.ID == "" {
+				t.Errorf("provider %q contains a model with an empty ID", p.ID)
+			}
+		}
 		count += len(p.Models)
 	}
-	t.Logf("DiscoverCatalog() successfully discovered %d providers and %d models on live host", len(providers), count)
-
-	// Verify model from beginning
-	if p, ok := providers["opencode"]; !ok || p.Models["big-pickle"].ID != "big-pickle" {
-		t.Errorf("expected model opencode/big-pickle from beginning of output, got provider=%+v", p)
+	if count == 0 {
+		t.Fatal("DiscoverCatalog() returned 0 models on this host")
 	}
-	// Verify model from end
-	if p, ok := providers["zai"]; !ok || p.Models["glm-5v-turbo"].ID != "glm-5v-turbo" {
-		t.Errorf("expected model zai/glm-5v-turbo from end of output, got provider=%+v", p)
+	t.Logf("DiscoverCatalog() successfully discovered %d providers and %d models on live host", len(providers), count)
+}
+
+// TestCountingLimitReaderAllowsExactFitStream verifies that a valid catalog
+// stream whose total size equals the configured limit parses completely
+// instead of being rejected as output_too_large. Only streams that exceed the
+// limit must fail; a catalog ending exactly at the defensive ceiling is valid.
+func TestCountingLimitReaderAllowsExactFitStream(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 25; i++ {
+		fmt.Fprintf(&b, "prov/model-%02d\n", i)
+		fmt.Fprintf(&b, `{"id":"model-%02d","name":"Model %02d %s","capabilities":{"toolcall":true}}`+"\n", i, i, strings.Repeat("x", 40))
+	}
+	payload := b.String()
+
+	providers, err := parseVerboseCatalog(&countingLimitReader{r: strings.NewReader(payload), limit: int64(len(payload))})
+	if err != nil {
+		t.Fatalf("parseVerboseCatalog() exact-fit catalog error = %v, want successful parse", err)
+	}
+	if got := len(providers["prov"].Models); got != 25 {
+		t.Fatalf("parsed models = %d, want 25 (exact-fit catalog must parse completely)", got)
 	}
 }
 
+// TestDiscoverCatalogLegacyVsNew pins the regression contract of issue #4042
+// against a generated fixture: under the legacy 1 MiB ceiling a large catalog
+// fails with output_too_large, while the current 16 MiB ceiling parses the
+// same stream completely. No host fixture file is required.
 func TestDiscoverCatalogLegacyVsNew(t *testing.T) {
-	data, err := os.ReadFile("/tmp/opencode_models.txt")
-	if err != nil {
-		t.Skip("skipping legacy vs new test, /tmp/opencode_models.txt not found")
+	var b strings.Builder
+	for i := 0; i < 3500; i++ {
+		fmt.Fprintf(&b, "prov/model-%d\n", i)
+		fmt.Fprintf(&b, `{"id":"model-%d","name":"Model %d %s","capabilities":{"toolcall":true},"limit":{"context":128000},"variants":{"low":{},"medium":{},"high":{}}}`+"\n", i, i, strings.Repeat("x", 300))
 	}
+	data := []byte(b.String())
 
 	// Legacy 1 MiB limit: must fail with CatalogErrorOutputTooLarge
 	limitReaderLegacy := &countingLimitReader{r: bytes.NewReader(data), limit: 1 << 20}
@@ -270,7 +305,6 @@ func TestDiscoverCatalogLegacyVsNew(t *testing.T) {
 	if !errors.As(errLegacy, &catErr) || catErr.Kind != CatalogErrorOutputTooLarge {
 		t.Fatalf("legacy limit (1 MiB) err = %v, want output_too_large", errLegacy)
 	}
-	t.Logf("Legacy 1 MiB limit correctly reproduced error: %v", errLegacy)
 
 	// New 16 MiB limit: must succeed and parse all models
 	limitReaderNew := &countingLimitReader{r: bytes.NewReader(data), limit: 16 << 20}
@@ -278,7 +312,9 @@ func TestDiscoverCatalogLegacyVsNew(t *testing.T) {
 	if errNew != nil {
 		t.Fatalf("new limit (16 MiB) err = %v, want success", errNew)
 	}
-	t.Logf("New 16 MiB limit successfully parsed %d providers", len(providersNew))
+	if got := len(providersNew["prov"].Models); got != 3500 {
+		t.Fatalf("parsed models = %d, want 3500", got)
+	}
 }
 
 func TestStderrPressure_NoDeadlock(t *testing.T) {
@@ -369,11 +405,20 @@ func TestChunkFragmentation_OneByteAtATime(t *testing.T) {
 	t.Logf("One byte chunk fragmentation test passed successfully")
 }
 
-func BenchmarkParseCatalogMemory_RealData(b *testing.B) {
-	data, err := os.ReadFile("/tmp/opencode_models.txt")
-	if err != nil {
-		b.Skip("real data file not found")
+// generateCatalogFixture returns a deterministic synthetic catalog payload of
+// approximately the requested size by emitting valid model records.
+func generateCatalogFixture(records int) []byte {
+	var b strings.Builder
+	for i := 0; i < records; i++ {
+		fmt.Fprintf(&b, "prov/model-%d\n", i)
+		fmt.Fprintf(&b, `{"id":"model-%d","name":"Model %d %s","capabilities":{"toolcall":true},"limit":{"context":128000},"variants":{"low":{},"medium":{},"high":{}}}`+"\n", i, i, strings.Repeat("x", 300))
 	}
+	return []byte(b.String())
+}
+
+func BenchmarkParseCatalogMemory_Synthesized1MB(b *testing.B) {
+	data := generateCatalogFixture(3500)
+	b.SetBytes(int64(len(data)))
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -383,21 +428,11 @@ func BenchmarkParseCatalogMemory_RealData(b *testing.B) {
 }
 
 func BenchmarkParseCatalogMemory_Synthesized5MB(b *testing.B) {
-	data, err := os.ReadFile("/tmp/opencode_models.txt")
-	if err != nil {
-		b.Skip("real data file not found")
-	}
-	// Replicate real dataset 5 times to form ~5.5 MB
-	var big bytes.Buffer
-	for i := 0; i < 5; i++ {
-		big.Write(data)
-	}
-	bigBytes := big.Bytes()
-
+	data := generateCatalogFixture(17500)
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		r := bytes.NewReader(bigBytes)
+		r := bytes.NewReader(data)
 		_, _ = parseVerboseCatalog(r)
 	}
 }
