@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -40,6 +41,19 @@ func CheckAllWithCooldown(
 	nowFn func() time.Time,
 	checkFn checkAllFn,
 ) []UpdateResult {
+	return checkAllWithCooldown(ctx, currentVersion, profile, homeDir, ttl, nowFn, checkFn, persistLastUpdateCheck)
+}
+
+func checkAllWithCooldown(
+	ctx context.Context,
+	currentVersion string,
+	profile system.PlatformProfile,
+	homeDir string,
+	ttl time.Duration,
+	nowFn func() time.Time,
+	checkFn checkAllFn,
+	persistTimestamp func(string, time.Time) error,
+) []UpdateResult {
 	now := nowFn()
 
 	// When homeDir is empty (home resolution failed), skip both state read and
@@ -67,23 +81,25 @@ func CheckAllWithCooldown(
 	// non-failed result, or empty-but-no-error; never if all are CheckFailed).
 	// Also skip write when homeDir is empty.
 	if homeDir != "" && checkSucceeded(results) {
-		// Re-read state to avoid clobbering unrelated fields written concurrently.
-		current, readErr := state.Read(homeDir)
-		if readErr != nil {
-			if !errors.Is(readErr, os.ErrNotExist) {
-				// File exists but is unreadable/corrupt — do not overwrite; skip
-				// persisting the timestamp this round to avoid data loss.
-				return results
-			}
-			// File genuinely missing (first run) — start fresh.
-			current = state.InstallState{}
-		}
-		current.LastUpdateCheck = &now
-		// Ignore write errors — non-fatal; next launch will retry.
-		_ = state.Write(homeDir, current)
+		// Ignore persistence errors — non-fatal; next launch will retry.
+		_ = persistTimestamp(homeDir, now)
 	}
 
 	return results
+}
+
+func persistLastUpdateCheck(homeDir string, timestamp time.Time) error {
+	return statecoord.WithLock(homeDir, func() error {
+		current, err := state.Read(homeDir)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			current = state.InstallState{}
+		}
+		current.LastUpdateCheck = &timestamp
+		return state.WriteReconciled(homeDir, current)
+	})
 }
 
 // checkSucceeded returns true when the result set should be considered a
