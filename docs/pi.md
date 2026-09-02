@@ -19,7 +19,7 @@ gentle-ai install --agent pi
 pi
 ```
 
-Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram™ component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi. Pi has no system prompt for Gentle AI to write into, so the review execution contract instead ships as `orchestration/pi.md` in the published provider contract bundle, which `gentle-pi` mirrors and injects at session start.
+Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram™ component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi. Gentle AI writes nothing into the Pi system prompt because `gentle-pi` owns it, so the review execution contract ships as `orchestration/pi.md` in the published provider contract bundle, which `gentle-pi` mirrors and injects at session start.
 
 ## Installed Packages
 

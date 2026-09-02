@@ -80,7 +80,7 @@ After a successful burn, no terminal receipt, tombstone, witness, mirror, or del
 
 ## Reviewer transport
 
-The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go derives frozen trees, manifest, subject hash, role, binding, schema, evidence limits, and admission. Adapters transport opaque provider output and never parse bindings, manufacture a verdict, or mutate review authority. Pi has no system prompt to render this contract into, so it ships as `orchestration/pi.md` in the published provider contract bundle, which gentle-pi mirrors and injects at session start.
+The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go derives frozen trees, manifest, subject hash, role, binding, schema, evidence limits, and admission. Adapters transport opaque provider output and never parse bindings, manufacture a verdict, or mutate review authority. Gentle AI writes nothing into the Pi system prompt because gentle-pi owns it, so this contract ships as `orchestration/pi.md` in the published provider contract bundle, which gentle-pi mirrors and injects at session start.
 
 Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
