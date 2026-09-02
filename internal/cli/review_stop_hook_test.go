@@ -33,6 +33,31 @@ func reviewStopHookTestPayload(t *testing.T, sessionID, cwd string, stopHookActi
 	return string(payload)
 }
 
+// reviewStopHookTestSessionStartPayload builds one SessionStart hook stdin
+// payload.
+func reviewStopHookTestSessionStartPayload(t *testing.T, sessionID, cwd, source string) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"session_id":      sessionID,
+		"cwd":             cwd,
+		"hook_event_name": "SessionStart",
+		"source":          source,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
+}
+
+func runReviewStopHookSessionStartTest(t *testing.T, sessionID, repo string) (stdout, stderr bytes.Buffer) {
+	t.Helper()
+	stdin := strings.NewReader(reviewStopHookTestSessionStartPayload(t, sessionID, repo, "startup"))
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("SessionStart run: %v\nstderr: %s", err, stderr.String())
+	}
+	return stdout, stderr
+}
+
 func stageReviewStopHookCandidate(t *testing.T, repo string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
@@ -288,5 +313,145 @@ func TestReviewStopHookRequiresSupportedAgent(t *testing.T) {
 				t.Fatalf("expected no stdout on a preflight error, got %q", stdout.String())
 			}
 		})
+	}
+}
+
+func TestReviewStopHookSessionStartWritesBaselineSilently(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+
+	stdout, stderr := runReviewStopHookSessionStartTest(t, "sess-baseline", repo)
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("SessionStart must print nothing, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	raw, err := os.ReadFile(reviewStopHookStateFile(home, "sess-baseline"))
+	if err != nil {
+		t.Fatalf("expected a baseline state file: %v", err)
+	}
+	var record reviewStopHookReminderRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode baseline record: %v\n%s", err, raw)
+	}
+	if record.Schema != reviewStopHookReminderSchema || record.BaselineTargetIdentity == "" {
+		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestReviewStopHookStopSilentWhenCandidateMatchesSessionBaseline(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+
+	// The candidate already existed when the session started: SessionStart
+	// baselines it, so a Stop for that same candidate must stay silent.
+	stdout, stderr := runReviewStopHookSessionStartTest(t, "sess-preexisting", repo)
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("SessionStart must print nothing, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-preexisting", repo, false, nil))
+	var stopStdout, stopStderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stopStdout, &stopStderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stopStderr.String())
+	}
+	if stopStdout.Len() != 0 || stopStderr.Len() != 0 {
+		t.Fatalf("a candidate matching the session baseline must stay silent, got stdout=%q stderr=%q", stopStdout.String(), stopStderr.String())
+	}
+}
+
+func TestReviewStopHookStopRemindsAfterCandidateChangesFromBaseline(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+
+	stdout, stderr := runReviewStopHookSessionStartTest(t, "sess-changed", repo)
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("SessionStart must print nothing, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	// The session itself changes the candidate after baselining it: the new
+	// candidate identity differs from the recorded baseline, so Stop reminds.
+	// The addition is staged, exactly like stageReviewStopHookCandidate's own
+	// edit, so it is part of the workspace projection STATUS resolves.
+	if err := os.WriteFile(filepath.Join(repo, "session-authored.txt"), []byte("new content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "-A")
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-changed", repo, false, nil))
+	var stopStdout, stopStderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stopStdout, &stopStderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stopStderr.String())
+	}
+	if decodeReviewStopHookResult(t, stopStdout.Bytes()).Decision != "block" {
+		t.Fatalf("a candidate that changed since the session baseline must remind: stdout=%q stderr=%q", stopStdout.String(), stopStderr.String())
+	}
+}
+
+func TestReviewStopHookSessionStartOnCleanWorktreeThenDirtyStopReminds(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	enableReviewStopHookRDD(t, repo)
+	// No candidate staged yet: the worktree is clean at session start.
+
+	stdout, stderr := runReviewStopHookSessionStartTest(t, "sess-clean-start", repo)
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("SessionStart must print nothing, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	// The session then produces a candidate: its identity differs from the
+	// clean baseline, so Stop reminds.
+	stageReviewStopHookCandidate(t, repo)
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-clean-start", repo, false, nil))
+	var stopStdout, stopStderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stopStdout, &stopStderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stopStderr.String())
+	}
+	if decodeReviewStopHookResult(t, stopStdout.Bytes()).Decision != "block" {
+		t.Fatalf("a candidate produced after a clean-worktree baseline must remind: stdout=%q stderr=%q", stopStdout.String(), stopStderr.String())
+	}
+}
+
+func TestReviewStopHookSessionStartSilentWhenRDDOff(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	// Receipt-driven development is opt-in and off by default: no enable call.
+
+	stdout, stderr := runReviewStopHookSessionStartTest(t, "sess-rdd-off", repo)
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("SessionStart must print nothing, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-rdd-off")); !os.IsNotExist(err) {
+		t.Fatalf("expected no baseline state file while RDD is off, stat err=%v", err)
+	}
+}
+
+func TestReviewStopHookUnknownHookEventNameIsSilent(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id":      "sess-unknown-event",
+		"cwd":             repo,
+		"hook_event_name": "PreToolUse",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(string(payload)), &stdout, &stderr); err != nil {
+		t.Fatalf("runReviewStopHook: %v\nstderr: %s", err, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("an unrecognized hook_event_name must be silent, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

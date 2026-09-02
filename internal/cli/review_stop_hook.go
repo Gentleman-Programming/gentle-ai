@@ -20,21 +20,25 @@ import (
 // stdout. Claude Code reads "decision" and "reason" as top-level keys.
 const reviewStopHookSchema = "gentle-ai.review-stop-hook/v1"
 
-// reviewStopHookReminderSchema identifies the small per-session dedupe record
-// kept under ~/.gentle-ai/review-stop-hook/v1.
+// reviewStopHookReminderSchema identifies the small per-session record kept
+// under ~/.gentle-ai/review-stop-hook/v1. The schema name is unchanged from
+// its first shape; it now optionally carries baseline_target_identity
+// alongside target_identity (see reviewStopHookReminderRecord).
 const reviewStopHookReminderSchema = "gentle-ai.review-stop-hook-reminder/v1"
 
-// maxReviewStopHookPayloadBytes bounds the Stop hook stdin payload, mirroring
-// the sdd-task-result precedent (internal/cli/sdd_task_result.go): a hook
-// reports a small event, never a large or unbounded stream.
+// maxReviewStopHookPayloadBytes bounds the hook stdin payload, mirroring the
+// sdd-task-result precedent (internal/cli/sdd_task_result.go): a hook reports
+// a small event, never a large or unbounded stream.
 const maxReviewStopHookPayloadBytes = 1 << 20
 
 // reviewStopHookSessionIDPattern is the safe filename alphabet a session id
 // must match before it is used to name a state file.
 var reviewStopHookSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
-// reviewStopHookPayload is Claude Code's Stop hook stdin payload. Unknown
-// fields are ignored by json.Unmarshal, never rejected.
+// reviewStopHookPayload is Claude Code's hook stdin payload, shared by the
+// SessionStart and Stop shapes this command handles. Unknown fields
+// (including SessionStart's "source") are ignored by json.Unmarshal, never
+// rejected.
 type reviewStopHookPayload struct {
 	SessionID      string `json:"session_id"`
 	TranscriptPath string `json:"transcript_path"`
@@ -50,21 +54,28 @@ type reviewStopHookOutput struct {
 	Reason   string `json:"reason"`
 }
 
-// reviewStopHookReminderRecord is the per-session dedupe record: one file
-// keeps the last target_identity a session was reminded about, so a second
-// Stop for the same unreviewed candidate stays silent.
+// reviewStopHookReminderRecord is the per-session state: BaselineTargetIdentity
+// is the unreviewed-candidate identity (if any) that SessionStart observed
+// when the session began, so a Stop later in the same session never reminds
+// about a candidate the session did not produce. TargetIdentity is the
+// identity of the last candidate a Stop actually reminded about, so a repeat
+// Stop for the same candidate stays silent. The two fields are independent
+// and each written without disturbing the other.
 type reviewStopHookReminderRecord struct {
-	Schema         string `json:"schema"`
-	TargetIdentity string `json:"target_identity"`
+	Schema                 string `json:"schema"`
+	TargetIdentity         string `json:"target_identity,omitempty"`
+	BaselineTargetIdentity string `json:"baseline_target_identity,omitempty"`
 }
 
 // RunReviewStopHook is the `gentle-ai review stop-hook` entry point. Claude
-// Code runs it as a Stop hook: it reads one Stop hook payload from stdin and,
-// only when receipt-driven development is enabled and the repository holds an
-// unreviewed candidate, prints one reminder that routes the agent through the
+// Code runs it as both a SessionStart and a Stop hook. On SessionStart it
+// records the repository's current unreviewed-candidate identity (if any) as
+// this session's baseline, with zero output. On Stop it prints one reminder,
+// only when receipt-driven development is enabled and the repository holds a
+// candidate the session did not start with, that routes the agent through the
 // selectorless STATUS preflight before it reports completion. Every other
-// case is silent (exit 0, no output), and this command never starts a review
-// itself.
+// case -- including an unrecognized hook_event_name -- is silent (exit 0, no
+// output), and this command never starts a review itself.
 func RunReviewStopHook(args []string, stdout io.Writer) error {
 	return runReviewStopHook(args, os.Stdin, stdout, os.Stderr)
 }
@@ -73,12 +84,12 @@ func RunReviewStopHook(args []string, stdout io.Writer) error {
 // both explicit so a test can supply a payload and assert on diagnostics
 // without touching the process streams. stderr is also where flag usage/help
 // text is written (never stdout), so stdout stays reserved for the exact one
-// JSON reminder object this command may print.
+// JSON reminder object a Stop event may print.
 func runReviewStopHook(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags := newReviewFlagSet("review stop-hook", stderr,
-		"Read one Claude Code Stop hook payload from stdin. When receipt-driven development is enabled and the repository holds an unreviewed candidate, print one reminder that routes the agent through the selectorless STATUS preflight before it reports completion. Every other case is silent, and this command never runs review start itself.")
+		"Read one Claude Code hook payload from stdin (SessionStart or Stop). On SessionStart, record the repository's current unreviewed-candidate identity as this session's baseline, with no output. On Stop, when receipt-driven development is enabled and the repository holds a candidate the session did not start with, print one reminder that routes the agent through the selectorless STATUS preflight before it reports completion. Every other case -- including an unrecognized hook_event_name -- is silent, and this command never runs review start itself.")
 	agent := flags.String("agent", "", "required; generated active runtime identity (only claude-code is accepted today)")
-	cwdOverride := flags.String("cwd", "", "optional; overrides the Stop hook payload's cwd")
+	cwdOverride := flags.String("cwd", "", "optional; overrides the hook payload's cwd")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -97,52 +108,122 @@ func runReviewStopHook(args []string, stdin io.Reader, stdout, stderr io.Writer)
 
 	raw, err := io.ReadAll(io.LimitReader(stdin, maxReviewStopHookPayloadBytes))
 	if err != nil {
-		return fmt.Errorf("review stop-hook: read Stop hook payload: %w", err)
+		return fmt.Errorf("review stop-hook: read hook payload: %w", err)
 	}
 	var payload reviewStopHookPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return fmt.Errorf("review stop-hook: decode Stop hook payload: %w", err)
-	}
-
-	if payload.StopHookActive {
-		return nil
+		return fmt.Errorf("review stop-hook: decode hook payload: %w", err)
 	}
 
 	repo := strings.TrimSpace(*cwdOverride)
 	if repo == "" {
 		repo = strings.TrimSpace(payload.Cwd)
 	}
-	if repo == "" {
-		return nil
-	}
 
 	ctx := context.Background()
 
-	// Confirm the cwd is inside a Git repository without ever bootstrapping
-	// one: ResolveRepositoryRoot alone (never PrepareReviewRepositoryRoot)
-	// never runs `git init`. This has to happen before resolving the review
-	// mode below: the clone-local override lookup shells out to git, and on a
-	// genuinely non-Git cwd it returns a hard error rather than "no override"
-	// -- so silently exiting here, before that call, is what keeps a
-	// non-repository cwd silent instead of surfacing as an internal error.
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	switch payload.HookEventName {
+	case "SessionStart":
+		return runReviewStopHookSessionStart(ctx, payload.SessionID, repo, runtimeAgent)
+	case "Stop":
+		return runReviewStopHookStop(ctx, payload, repo, runtimeAgent, stdout)
+	default:
+		return nil
+	}
+}
+
+// runReviewStopHookSessionStart records the repository's current
+// unreviewed-candidate identity (if any) as sessionID's baseline. It is
+// always silent: SessionStart never prints a reminder, and every
+// precondition that keeps Stop silent (no usable cwd, RDD off, non-repository
+// cwd) also means there is nothing to baseline here.
+func runReviewStopHookSessionStart(ctx context.Context, sessionID, repo, runtimeAgent string) error {
+	_, targetIdentity, _, ok, err := reviewStopHookResolveTargetIdentity(ctx, repo, runtimeAgent)
 	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if err := recordReviewStopHookBaseline(sessionID, targetIdentity); err != nil {
+		return fmt.Errorf("review stop-hook: record baseline: %w", err)
+	}
+	return nil
+}
+
+// runReviewStopHookStop is the original Stop behavior, now also silent when
+// the current candidate matches the session's recorded SessionStart baseline
+// -- that candidate predates the session, so this session did not produce it.
+func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, repo, runtimeAgent string, stdout io.Writer) error {
+	if payload.StopHookActive {
 		return nil
 	}
 
-	// Resolve the effective receipt-driven-development mode exactly like
-	// reviewtransaction.OfferReviewAfterVerify does: global mode plus this
-	// clone's off-only override, with zero side effects. Off means silent.
-	global, err := readGlobalRDDMode()
+	root, targetIdentity, status, ok, err := reviewStopHookResolveTargetIdentity(ctx, repo, runtimeAgent)
 	if err != nil {
-		return fmt.Errorf("review stop-hook: read global review mode: %w", err)
+		return err
 	}
-	rddStatus, err := reviewtransaction.ResolveRDDMode(ctx, root, global)
+	if !ok {
+		return nil
+	}
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		return nil
+	}
+
+	silent, persistErr := recordReviewStopHookReminder(payload.SessionID, targetIdentity)
+	if persistErr != nil {
+		return fmt.Errorf("review stop-hook: record reminder: %w", persistErr)
+	}
+	if silent {
+		return nil
+	}
+
+	output := reviewStopHookOutput{
+		Schema:   reviewStopHookSchema,
+		Decision: "block",
+		Reason:   reviewStopHookReasonText(targetIdentity, root, runtimeAgent, status.NextTransition.Execute.Command),
+	}
+	encoded, err := json.Marshal(output)
 	if err != nil {
-		return fmt.Errorf("review stop-hook: resolve review mode: %w", err)
+		return fmt.Errorf("review stop-hook: encode reminder: %w", err)
+	}
+	_, err = fmt.Fprintln(stdout, string(encoded))
+	return err
+}
+
+// reviewStopHookResolveTargetIdentity resolves the repository root, the
+// effective receipt-driven-development mode, and the current STATUS target
+// identity together -- the read-only preflight both SessionStart and Stop
+// need. ok is false whenever there is nothing to check: no usable cwd, a cwd
+// outside a Git repository (never bootstrapped: ResolveRepositoryRoot alone,
+// never PrepareReviewRepositoryRoot, so `git init` never runs), or RDD off.
+// err is non-nil only for a genuine unexpected internal failure.
+//
+// The Git-repository check runs before resolving RDD mode: the clone-local
+// override lookup shells out to git, and on a genuinely non-Git cwd it
+// returns a hard error rather than "no override" -- so resolving the root
+// first is what keeps a non-repository cwd silent instead of surfacing as an
+// internal error.
+func reviewStopHookResolveTargetIdentity(ctx context.Context, repo, runtimeAgent string) (root, targetIdentity string, status ReviewTargetStatusResult, ok bool, err error) {
+	if repo == "" {
+		return "", "", ReviewTargetStatusResult{}, false, nil
+	}
+	root, rootErr := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if rootErr != nil {
+		return "", "", ReviewTargetStatusResult{}, false, nil
+	}
+
+	global, globalErr := readGlobalRDDMode()
+	if globalErr != nil {
+		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: read global review mode: %w", globalErr)
+	}
+	rddStatus, rddErr := reviewtransaction.ResolveRDDMode(ctx, root, global)
+	if rddErr != nil {
+		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: resolve review mode: %w", rddErr)
 	}
 	if !rddStatus.Enabled() {
-		return nil
+		return "", "", ReviewTargetStatusResult{}, false, nil
 	}
 
 	// Calling runReviewStatus directly (rather than RunReview) avoids a
@@ -155,36 +236,13 @@ func runReviewStopHook(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		"--agent", runtimeAgent, "--next-transition",
 	}, &statusOutput)
 	if statusErr != nil {
-		return fmt.Errorf("review stop-hook: review status: %w", statusErr)
+		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: review status: %w", statusErr)
 	}
-	var status ReviewTargetStatusResult
-	if err := json.Unmarshal(statusOutput.Bytes(), &status); err != nil {
-		return fmt.Errorf("review stop-hook: decode review status: %w", err)
+	var result ReviewTargetStatusResult
+	if err := json.Unmarshal(statusOutput.Bytes(), &result); err != nil {
+		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: decode review status: %w", err)
 	}
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
-		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
-		return nil
-	}
-
-	alreadyReminded, persistErr := recordReviewStopHookReminder(payload.SessionID, status.TargetIdentity)
-	if persistErr != nil {
-		return fmt.Errorf("review stop-hook: record reminder: %w", persistErr)
-	}
-	if alreadyReminded {
-		return nil
-	}
-
-	output := reviewStopHookOutput{
-		Schema:   reviewStopHookSchema,
-		Decision: "block",
-		Reason:   reviewStopHookReasonText(status.TargetIdentity, root, runtimeAgent, status.NextTransition.Execute.Command),
-	}
-	encoded, err := json.Marshal(output)
-	if err != nil {
-		return fmt.Errorf("review stop-hook: encode reminder: %w", err)
-	}
-	_, err = fmt.Fprintln(stdout, string(encoded))
-	return err
+	return root, result.TargetIdentity, result, true, nil
 }
 
 // reviewStopHookReasonText composes the one-paragraph reminder Claude Code
@@ -204,11 +262,74 @@ func reviewStopHookReasonText(targetIdentity, root, runtimeAgent, startCommand s
 	}, "\n")
 }
 
-// recordReviewStopHookReminder persists that sessionID was reminded about
-// targetIdentity, and reports whether it already had been. An invalid or
-// missing session id still reminds (the caller proceeds) but is never
-// persisted, since there is no safe file name to record it under.
-func recordReviewStopHookReminder(sessionID, targetIdentity string) (alreadyReminded bool, err error) {
+// reviewStopHookRecordPath is the per-session state file path for sessionID.
+func reviewStopHookRecordPath(home, sessionID string) string {
+	return filepath.Join(home, ".gentle-ai", "review-stop-hook", "v1", sessionID+".json")
+}
+
+// readReviewStopHookRecord reads sessionID's existing record, if any. A
+// missing file reports a zero record with ok false and no error; a corrupt
+// file is treated the same as missing, since replacing it is safe (this
+// state is a dedupe hint, not authority).
+func readReviewStopHookRecord(path string) (record reviewStopHookReminderRecord, ok bool, err error) {
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return reviewStopHookReminderRecord{}, false, nil
+		}
+		return reviewStopHookReminderRecord{}, false, readErr
+	}
+	if json.Unmarshal(existing, &record) != nil {
+		return reviewStopHookReminderRecord{}, false, nil
+	}
+	return record, true, nil
+}
+
+// recordReviewStopHookBaseline writes targetIdentity as sessionID's
+// SessionStart baseline, leaving any already-recorded TargetIdentity (the
+// last candidate a Stop reminded about) untouched. An invalid or missing
+// session id is a silent no-op: there is no safe file name to record it
+// under.
+func recordReviewStopHookBaseline(sessionID, targetIdentity string) error {
+	if !reviewStopHookSessionIDPattern.MatchString(sessionID) {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve user home directory: %w", err)
+	}
+	path := reviewStopHookRecordPath(home, sessionID)
+
+	record, _, err := readReviewStopHookRecord(path)
+	if err != nil {
+		return err
+	}
+	record.Schema = reviewStopHookReminderSchema
+	record.BaselineTargetIdentity = targetIdentity
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = filemerge.WriteFileAtomic(path, payload, 0o644)
+	return err
+}
+
+// recordReviewStopHookReminder decides, and records, whether a Stop for
+// targetIdentity should stay silent. It reports silent=true when: the session
+// id is invalid (there is nothing safe to record, so the caller still
+// reminds -- see below); the recorded SessionStart baseline equals
+// targetIdentity (the candidate predates this session); or the session was
+// already reminded about this exact targetIdentity. Otherwise it records
+// targetIdentity as the session's last reminder (preserving any recorded
+// baseline untouched) and reports silent=false so the caller reminds.
+//
+// An invalid or missing session id is the one case that reminds (silent
+// false) without persisting: there is no safe file name to record it under.
+func recordReviewStopHookReminder(sessionID, targetIdentity string) (silent bool, err error) {
 	if !reviewStopHookSessionIDPattern.MatchString(sessionID) {
 		return false, nil
 	}
@@ -216,24 +337,27 @@ func recordReviewStopHookReminder(sessionID, targetIdentity string) (alreadyRemi
 	if err != nil {
 		return false, fmt.Errorf("resolve user home directory: %w", err)
 	}
-	dir := filepath.Join(home, ".gentle-ai", "review-stop-hook", "v1")
-	path := filepath.Join(dir, sessionID+".json")
-	existing, readErr := os.ReadFile(path)
-	if readErr == nil {
-		var record reviewStopHookReminderRecord
-		if json.Unmarshal(existing, &record) == nil && record.TargetIdentity == targetIdentity {
-			return true, nil
-		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return false, readErr
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	path := reviewStopHookRecordPath(home, sessionID)
+
+	record, hadRecord, err := readReviewStopHookRecord(path)
+	if err != nil {
 		return false, err
 	}
-	payload, err := json.Marshal(reviewStopHookReminderRecord{
-		Schema:         reviewStopHookReminderSchema,
-		TargetIdentity: targetIdentity,
-	})
+	if hadRecord {
+		if record.BaselineTargetIdentity != "" && record.BaselineTargetIdentity == targetIdentity {
+			return true, nil
+		}
+		if record.TargetIdentity != "" && record.TargetIdentity == targetIdentity {
+			return true, nil
+		}
+	}
+
+	record.Schema = reviewStopHookReminderSchema
+	record.TargetIdentity = targetIdentity
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
+	}
+	payload, err := json.Marshal(record)
 	if err != nil {
 		return false, err
 	}
