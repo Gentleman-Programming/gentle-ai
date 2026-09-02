@@ -1825,6 +1825,31 @@ func TestInjectOpenCodeMigratesLegacyAgentsKeyPreservesUnrelatedJSONCComments(t 
 	}
 }
 
+func TestInjectOpenCodeMigratesLegacyAgentsKeyWithCommentBeforeColon(t *testing.T) {
+	seed := []byte(`{
+  "agents" /* comment mentioning "agents" before colon */: {
+    "legacy-agent": {"mode": "all", "prompt": "{file:./AGENTS.md}"},
+  },
+  "theme": "dark"
+}
+`)
+	content, err := migrateLegacyOpenCodeAgentsKey(seed)
+	if err != nil {
+		t.Fatalf("migrateLegacyOpenCodeAgentsKey() error = %v", err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
+		t.Fatalf("UnmarshalJSONObject(opencode.jsonc) error = %v\n%s", err, string(content))
+	}
+	if _, hasLegacy := root["agents"]; hasLegacy {
+		t.Fatalf("legacy agents key should be removed from JSONC with comment before colon:\n%s", string(content))
+	}
+	agents := root["agent"].(map[string]any)
+	if _, ok := agents["legacy-agent"]; !ok {
+		t.Fatalf("legacy-agent should move under agent:\n%s", string(content))
+	}
+}
+
 func TestInjectCursorWritesSDDOrchestratorAndSkills(t *testing.T) {
 	home := t.TempDir()
 

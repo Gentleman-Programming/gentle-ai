@@ -188,7 +188,11 @@ func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
 
 func TestSettingsPathIgnoresNonRegularJSONC(t *testing.T) {
 	home := t.TempDir()
-	configDir := filepath.Join(home, ".config", "opencode")
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	configDir := filepath.Join(xdg, "opencode")
 	if err := os.MkdirAll(filepath.Join(configDir, "opencode.jsonc"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(opencode.jsonc directory) error = %v", err)
 	}

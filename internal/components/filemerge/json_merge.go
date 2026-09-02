@@ -321,12 +321,9 @@ func RemoveTopLevelJSONCValue(raw []byte, key string) []byte {
 }
 
 func topLevelJSONCPropertyRange(content, key string) (int, int, bool) {
-	target := strconvQuote(key)
-	if start, end, ok := topLevelJSONCValueRange(content, key); ok {
-		nameStart := strings.LastIndex(content[:start], target)
-		if nameStart >= 0 {
-			return nameStart, end, true
-		}
+	nameStart, _, end, ok := topLevelJSONCPropertyValueRange(content, key)
+	if ok {
+		return nameStart, end, true
 	}
 	return 0, 0, false
 }
@@ -459,6 +456,11 @@ func trailingLineCommentStart(content string) int {
 }
 
 func topLevelJSONCValueRange(content, key string) (int, int, bool) {
+	_, start, end, ok := topLevelJSONCPropertyValueRange(content, key)
+	return start, end, ok
+}
+
+func topLevelJSONCPropertyValueRange(content, key string) (int, int, int, bool) {
 	target := strconvQuote(key)
 	inString, escaped, lineComment, blockComment := false, false, false, false
 	depth := 0
@@ -506,16 +508,14 @@ func topLevelJSONCValueRange(content, key string) (int, int, bool) {
 		if ch == '"' {
 			if depth == 1 && strings.HasPrefix(content[i:], target) {
 				j := i + len(target)
-				for j < len(content) && isJSONWhitespace(content[j]) {
-					j++
-				}
+				j = scanJSONCWhitespaceAndComments(content, j)
 				if j < len(content) && content[j] == ':' {
 					start := j + 1
 					for start < len(content) && isJSONWhitespace(content[start]) {
 						start++
 					}
 					end := scanJSONCValueEnd(content, start)
-					return start, end, true
+					return i, start, end, true
 				}
 			}
 			inString = true
@@ -527,7 +527,37 @@ func topLevelJSONCValueRange(content, key string) (int, int, bool) {
 			depth--
 		}
 	}
-	return 0, 0, false
+	return 0, 0, 0, false
+}
+
+func scanJSONCWhitespaceAndComments(content string, i int) int {
+	for i < len(content) {
+		if isJSONWhitespace(content[i]) {
+			i++
+			continue
+		}
+		if content[i] == '/' && i+1 < len(content) {
+			switch content[i+1] {
+			case '/':
+				i += 2
+				for i < len(content) && content[i] != '\n' {
+					i++
+				}
+				continue
+			case '*':
+				i += 2
+				for i+1 < len(content) && !(content[i] == '*' && content[i+1] == '/') {
+					i++
+				}
+				if i+1 < len(content) {
+					i += 2
+				}
+				continue
+			}
+		}
+		return i
+	}
+	return i
 }
 
 func scanJSONCValueEnd(content string, start int) int {
