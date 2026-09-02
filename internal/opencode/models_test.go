@@ -41,3 +41,24 @@ func TestReviewPhasesCompleteRuntimeSet(t *testing.T) {
 		t.Fatalf("ConfigurableAgentPhases() review suffix = %v, want %v", got, want)
 	}
 }
+
+func TestNativeFallbackPhasesAreConfigurable(t *testing.T) {
+	want := []string{"general", "explore"}
+	if got := NativeFallbackPhases(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("NativeFallbackPhases() = %v, want %v", got, want)
+	}
+
+	configurable := ConfigurableAgentPhases()
+	for _, phase := range want {
+		found := false
+		for _, candidate := range configurable {
+			if candidate == phase {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("ConfigurableAgentPhases() missing native fallback %q: %v", phase, configurable)
+		}
+	}
+}

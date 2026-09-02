@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,9 +34,51 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 
 func TestModelPickerRows_Count(t *testing.T) {
 	rows := ModelPickerRows()
-	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.ReviewPhases())
+	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.NativeFallbackPhases()) + 1 + len(opencode.ReviewPhases())
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRows() len = %d, want %d; rows = %v", len(rows), want, rows)
+	}
+}
+
+func TestModelPickerRows_NativeFallbackAgentsAreConfigurable(t *testing.T) {
+	rows := ModelPickerRows()
+	want := append([]string{"--- OpenCode native agents ---"}, opencode.NativeFallbackPhases()...)
+	reviewSeparator := -1
+	for i, row := range rows {
+		if row == "--- Review agents ---" {
+			reviewSeparator = i
+			break
+		}
+	}
+	if reviewSeparator < len(want) {
+		t.Fatalf("native fallback section missing before review agents: %v", rows)
+	}
+	if got := rows[reviewSeparator-len(want) : reviewSeparator]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("native fallback rows = %v, want %v", got, want)
+	}
+}
+
+func TestHandleModelNav_AssignsGeneralFallback(t *testing.T) {
+	rows := ModelPickerRows()
+	generalIndex := -1
+	for i, row := range rows {
+		if row == "general" {
+			generalIndex = i
+			break
+		}
+	}
+	if generalIndex < 0 {
+		t.Fatal("general fallback row is missing")
+	}
+
+	state := makeTestState(generalIndex)
+	handled, assignments := handleModelNav("enter", state, map[string]model.ModelAssignment{})
+	if !handled {
+		t.Fatal("general fallback selection was not handled")
+	}
+	want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+	if got := assignments["general"]; got != want {
+		t.Fatalf("general assignment = %#v, want %#v", got, want)
 	}
 }
 
