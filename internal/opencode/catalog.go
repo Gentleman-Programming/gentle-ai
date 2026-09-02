@@ -10,21 +10,20 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	catalogTimeout   = 15 * time.Second
 	maxCatalogOutput = 16 << 20
-	maxStderrOutput  = 64 << 10
 )
 
 // Command describes the bounded OpenCode command used for runtime discovery.
 type Command struct {
-	Path        string
-	Args        []string
-	Dir         string
-	OutputLimit int
+	Path string
+	Args []string
+	Dir  string
 }
 
 type CommandRunner func(context.Context, Command) (io.Reader, error)
@@ -52,12 +51,27 @@ func DiscoverCatalog(ctx context.Context, projectDir string) (map[string]Provide
 	return DiscoverCatalogWithRunner(ctx, projectDir, runCatalogCommand)
 }
 
-// DiscoverCatalogWithRunner permits deterministic command-boundary tests.
+// waitErrorReader is the contract for stream readers that surface the child's
+// wait error on Close, mirroring processStreamReader. It lets the discovery
+// pipeline honor the child's exit status instead of masking it with a parse
+// classification.
+type waitErrorReader interface {
+	io.Reader
+	io.Closer
+	WaitError() error
+}
+
+// DiscoverCatalogWithRunner parses the streamed catalog and classifies the
+// outcome. The child's exit status takes precedence over downstream parse
+// classification: a non-zero exit surfaces as command_failed (or timeout),
+// never masked by malformed/unsupported_schema. The exception is a genuine
+// output overflow, which keeps its own category — matching the pre-streaming
+// cmd.Run() semantics where overflow was detected during cmd.Run() itself.
 func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner CommandRunner) (map[string]Provider, error) {
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
 	limit := maxCatalogOutput
-	r, err := runner(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: projectDir, OutputLimit: limit})
+	r, err := runner(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: projectDir})
 	if err != nil {
 		return nil, catalogCommandError(ctx, err)
 	}
@@ -67,9 +81,30 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 	limitReader := &countingLimitReader{r: r, limit: int64(limit), cancel: cancel}
 	providers, parseErr := parseVerboseCatalog(limitReader)
 	if parseErr != nil {
-		return nil, catalogCommandError(ctx, parseErr)
+		var catalogErr *CatalogError
+		if errors.As(parseErr, &catalogErr) && catalogErr.Kind == CatalogErrorOutputTooLarge {
+			return nil, catalogErr
+		}
+		return nil, catalogCommandErrorWithRunnerWait(ctx, r, parseErr)
+	}
+	if waiter, ok := r.(waitErrorReader); ok {
+		if waitErr := waiter.WaitError(); waitErr != nil {
+			return nil, catalogCommandError(ctx, waitErr)
+		}
 	}
 	return providers, nil
+}
+
+// catalogCommandErrorWithRunnerWait classifies a parse failure while honoring
+// a completed child's wait error: when the child already exited non-zero, the
+// exit status wins over the parse classification.
+func catalogCommandErrorWithRunnerWait(ctx context.Context, r io.Reader, parseErr error) error {
+	if waiter, ok := r.(waitErrorReader); ok {
+		if waitErr := waiter.WaitError(); waitErr != nil {
+			return catalogCommandError(ctx, waitErr)
+		}
+	}
+	return catalogCommandError(ctx, parseErr)
 }
 
 // catalogCommandError maps a raw discovery failure to the typed CatalogError
@@ -330,13 +365,18 @@ func sortVariants(variants []string) {
 }
 
 // runCatalogCommand starts `opencode models --verbose` and returns a reader
-// over its stdout instead of buffering the whole output in memory. Stderr is
-// drained concurrently to prevent pipe deadlocks, and the returned reader
-// must be Closed to cancel the process and reap the child.
+// over its stdout. Both pipes are drained concurrently into bounded state so
+// a slow consumer can never make the child block or die on a full pipe:
+// OpenCode's catalog writer aborts when its stdout pipe drains too slowly,
+// which would otherwise truncate the catalog mid-record. Stdout is retained
+// up to the defensive ceiling; stderr is discarded because CatalogError never
+// exposes command output. The returned reader must be Closed to cancel the
+// process and reap the child.
 func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
+	configureProcessGroup(cmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -357,82 +397,174 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 		return nil, err
 	}
 
+	stream := newBoundedPipeBuffer(maxCatalogOutput, cancel)
 	stderrDone := make(chan struct{})
+
+	// Drain stdout at full speed into the bounded buffer.
 	go func() {
-		defer close(stderrDone)
-		var buf [maxStderrOutput]byte
+		var chunk [8192]byte
 		for {
-			_, readErr := stderrPipe.Read(buf[:])
+			n, readErr := stdoutPipe.Read(chunk[:])
+			if n > 0 {
+				if overflow := stream.append(chunk[:n]); overflow {
+					cancel()
+					readErr = io.EOF
+				}
+			}
 			if readErr != nil {
 				break
 			}
 		}
+		stream.finish()
+	}()
+
+	// Drain stderr concurrently so a chatty child can never fill its pipe and
+	// deadlock. Discarded on purpose: CatalogError never exposes command
+	// output, so there is nothing to retain.
+	go func() {
+		_, _ = io.Copy(io.Discard, stderrPipe)
+		close(stderrDone)
 	}()
 
 	return &processStreamReader{
 		cmd:        cmd,
-		stdout:     stdoutPipe,
+		stream:     stream,
 		stderrDone: stderrDone,
 		cancel:     cancel,
 	}, nil
 }
 
-// processStreamReader owns the started child process: it exposes stdout as an
-// io.Reader, drains stderr on a background goroutine, and on Close cancels the
-// process and waits for both the stderr drain and the child to be reaped.
+// boundedPipeBuffer accumulates a child's stdout up to a defensive ceiling so
+// the child can write at full speed while consumers parse at their own pace.
+// Reads block until data is available or the drain goroutine finishes.
+type boundedPipeBuffer struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	buf      []byte
+	pos      int64
+	finished bool
+	overflow bool
+	limit    int64
+	cancel   context.CancelFunc
+}
+
+func newBoundedPipeBuffer(limit int64, cancel context.CancelFunc) *boundedPipeBuffer {
+	b := &boundedPipeBuffer{limit: limit, cancel: cancel}
+	b.cond = sync.NewCond(&b.mu)
+	return b
+}
+
+// append stores one drained chunk. It reports overflow — and stops accepting
+// further bytes — once the ceiling is exceeded.
+func (b *boundedPipeBuffer) append(data []byte) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.overflow {
+		return true
+	}
+	if int64(len(b.buf))+int64(len(data)) > b.limit {
+		b.overflow = true
+		b.cond.Broadcast()
+		return true
+	}
+	b.buf = append(b.buf, data...)
+	b.cond.Broadcast()
+	return false
+}
+
+// finish marks the drain as complete so blocked readers observe EOF.
+func (b *boundedPipeBuffer) finish() {
+	b.mu.Lock()
+	b.finished = true
+	b.cond.Broadcast()
+	b.mu.Unlock()
+}
+
+// Read serves buffered bytes, blocking while the drain is still running and
+// no data is available.
+func (b *boundedPipeBuffer) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for b.pos == int64(len(b.buf)) && !b.finished {
+		b.cond.Wait()
+	}
+	if b.overflow {
+		if b.cancel != nil {
+			b.cancel()
+		}
+		return 0, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+	}
+	n := copy(p, b.buf[b.pos:])
+	b.pos += int64(n)
+	if b.pos == int64(len(b.buf)) && b.finished {
+		if n == 0 {
+			return 0, io.EOF
+		}
+		return n, nil
+	}
+	return n, nil
+}
+
+// processStreamReader owns the started child process: it exposes the drained
+// stdout buffer as an io.Reader, drains stderr on a background goroutine, and
+// on Close cancels the process and waits for both drains and the child.
 type processStreamReader struct {
 	cmd        *exec.Cmd
-	stdout     io.ReadCloser
+	stream     *boundedPipeBuffer
 	stderrDone chan struct{}
 	cancel     context.CancelFunc
 	closed     bool
 	waitErr    error
-	eof        bool
 }
 
-// Read serves stdout bytes; the first terminal read triggers process cleanup
-// and reaping, surfacing the child's exit error (if any) after EOF.
+// Read serves drained stdout bytes; it returns the child's exit error after
+// the stream is exhausted.
 func (p *processStreamReader) Read(buf []byte) (int, error) {
-	if p.eof {
-		if p.waitErr != nil {
-			return 0, p.waitErr
-		}
-		return 0, io.EOF
+	n, err := p.stream.Read(buf)
+	if n > 0 {
+		return n, nil
 	}
-	n, err := p.stdout.Read(buf)
 	if err != nil {
-		p.eof = true
-		p.closeAndReap()
-		if err == io.EOF {
-			if p.waitErr != nil {
-				return n, p.waitErr
-			}
-			return n, io.EOF
-		}
+		return n, err
 	}
-	return n, err
+	p.closeAndReap()
+	if p.waitErr != nil {
+		return 0, p.waitErr
+	}
+	return 0, io.EOF
 }
 
 // Close cancels the underlying command and reaps the child process exactly
-// once. It is safe to call multiple times and never blocks indefinitely: the
-// concurrent stderr drain is awaited before the child is waited on.
+// once. Cancellation is honored even when descendants inherited the pipes:
+// the child is reaped first (it dies with the context), and only then the
+// stderr drain is awaited.
 func (p *processStreamReader) Close() error {
 	p.cancel()
 	p.closeAndReap()
 	return nil
 }
 
-// closeAndReap performs the idempotent shutdown sequence: close stdout, wait
-// for the stderr drain to finish, then reap the child and retain its exit
-// error for the next Read.
+// WaitError reports the child's wait error after the stream was reaped. It
+// implements waitErrorReader so discovery can classify a non-zero exit even
+// when the parse itself failed.
+func (p *processStreamReader) WaitError() error {
+	p.closeAndReap()
+	return p.waitErr
+}
+
+// closeAndReap performs the idempotent shutdown sequence: reap the child and
+// only afterwards wait for the stderr drain. The stdout drain goroutine ends
+// on its own once the child's pipe is closed by Wait. Cancellation is not
+// called here: the context that owns the child (Close or the deadline) drives
+// it, and cancelling before Wait would make Wait report context cancellation
+// instead of the child's real exit status.
 func (p *processStreamReader) closeAndReap() {
 	if p.closed {
 		return
 	}
 	p.closed = true
-	_ = p.stdout.Close()
-	<-p.stderrDone
 	p.waitErr = p.cmd.Wait()
+	<-p.stderrDone
 }
 
 // countingLimitReader enforces the defensive stdout ceiling: a stream of at
@@ -471,4 +603,9 @@ func (c *countingLimitReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p[:maxToRead])
 	c.read += int64(n)
 	return n, err
+}
+
+// ParseCatalogForDiag is a temporary diagnostic entry point; remove before commit.
+func ParseCatalogForDiag(r io.Reader) (map[string]Provider, error) {
+	return parseVerboseCatalog(r)
 }
