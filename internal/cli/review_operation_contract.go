@@ -343,6 +343,19 @@ var reviewPreflightSlotOccupiedReason = reviewPreflightReason{
 	NextAction: "review.status",
 }
 
+// reviewPreflightProviderCaptureRefusedReason classifies a non-lens provider
+// role capture (targeted validator or refuter) refused on both admission
+// attempts, including the single corrective re-invocation: the provider, not
+// the operator's request, produced malformed output twice, so
+// "correct_request" would be an actively wrong instruction (issue #4061).
+// Nothing was captured, and the bound slot is unchanged, so the way out is
+// the same STATUS re-query and relaunch every other capture refusal uses.
+var reviewPreflightProviderCaptureRefusedReason = reviewPreflightReason{
+	Code:       "provider_capture_result_refused",
+	Message:    "The provider role capture result was refused on both admission attempts; the provider, not the request, produced a malformed result.",
+	NextAction: "review.status",
+}
+
 type reviewIntegrationPreflightError struct {
 	cause  error
 	reason *reviewPreflightReason

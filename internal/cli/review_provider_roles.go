@@ -412,12 +412,21 @@ func reviewProviderCaptureRefuterRaw(ctx context.Context, repo string, store rev
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
+	return reviewProviderCaptureAdmittedRefuterResult(ctx, repo, store, revision, request, result, raw)
+}
+
+// reviewProviderCaptureAdmittedRefuterResult durably captures a refuter
+// result the caller already admitted from raw provider bytes. It stays split
+// from admission so a caller that grants the compiled runtime a corrective
+// re-invocation on a rejected result (issue #4061) can retry admission alone
+// and only ever durably capture the one payload that was actually admitted.
+func reviewProviderCaptureAdmittedRefuterResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, revision string, request reviewProviderRefuterRequest, result facadeRefuterResult, raw []byte) (facadeRefuterResult, error) {
 	payload, err := canonicalProviderRoleResult(compactProviderRefuterResult{Results: result.native()})
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
 	err = store.CaptureAdmittedRefuterResult(ctx, reviewtransaction.CompactAdmittedRefuterResultRequest{
-		ExpectedRevision: revision, TargetIdentity: state.InitialSnapshot.Identity, RequestHash: request.RequestHash, Payload: payload,
+		ExpectedRevision: revision, TargetIdentity: request.TargetIdentity, RequestHash: request.RequestHash, Payload: payload,
 		PreparePublication: func(current reviewtransaction.CompactState) error {
 			currentRequest, err := reviewProviderNewRefuterRequest(ctx, repo, store.Dir, current, revision)
 			if err != nil {
@@ -546,12 +555,24 @@ func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, s
 		}
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
+	closure, err := reviewProviderCaptureAdmittedTargetedValidatorResult(ctx, repo, store, state, correction, request, result, native)
+	return result, native, closure, err
+}
+
+// reviewProviderCaptureAdmittedTargetedValidatorResult durably captures a
+// targeted validator verdict the caller already admitted from raw provider
+// bytes. It stays split from admission and from the inconclusive-attempt
+// ledger recording above so a caller that grants the compiled runtime a
+// corrective re-invocation on a rejected result (issue #4061) can retry
+// admission alone and only ever durably capture the one verdict that was
+// actually admitted.
+func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, correction reviewtransaction.Snapshot, request reviewProviderTargetedValidatorRequest, result facadeValidationResult, native reviewtransaction.ScopedValidationResult) (*reviewLastEventClosureResult, error) {
 	evidence := reviewProviderTargetedValidatorEvidence(result)
 	payload, err := canonicalProviderRoleResult(compactProviderTargetedValidatorResult{
 		Outcome: reviewProviderTargetedValidatorOutcome(native), Evidence: evidence,
 	})
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		return nil, err
 	}
 	capture := reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
 		ExpectedRequest: request.ValidationRequest, Payload: payload, Evidence: &evidence, Validation: &native,
@@ -559,35 +580,27 @@ func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, s
 	if reviewProviderTargetedValidatorOutcome(native) == "failed" {
 		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
 		if err != nil {
-			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+			return nil, err
 		}
 		complete, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildCorrectedCandidate(ctx, state.InitialSnapshot, correction)
 		if err != nil {
-			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+			return nil, err
 		}
 		capture.Complete = func(next *reviewtransaction.CompactState) error {
 			return next.CompleteCorrectionVerification(correction, actual, native, complete)
 		}
 	}
 	if err := store.CaptureAdmittedTargetedValidatorResult(ctx, capture); err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		return nil, err
 	}
 	current, err := store.LoadContext(ctx)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		return nil, err
 	}
 	if reviewProviderTargetedValidatorOutcome(native) == "passed" {
-		closure, err := closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
-		if err != nil {
-			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
-		}
-		return result, native, closure, nil
+		return closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
 	}
-	closure, err := newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
-	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
-	}
-	return result, native, closure, nil
+	return newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
 }
 
 func reviewProviderTargetedValidatorEvidence(result facadeValidationResult) reviewtransaction.CompactTargetedValidatorEvidence {
