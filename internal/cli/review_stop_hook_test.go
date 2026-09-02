@@ -85,6 +85,30 @@ func reviewStopHookStateFile(home, sessionID string) string {
 	return filepath.Join(home, ".gentle-ai", "review-stop-hook", "v1", sessionID+".json")
 }
 
+func TestReviewStopHookFailedWriteDoesNotPersistReminder(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+
+	payload := reviewStopHookTestPayload(t, "sess-write-fail", repo, false, nil)
+	failWriter := reviewEmitFailureWriter{err: fmt.Errorf("stop-hook stdout write failed")}
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(payload), failWriter, io.Discard); err == nil {
+		t.Fatal("expected an error when the stdout write fails")
+	}
+	if _, statErr := os.Stat(reviewStopHookStateFile(home, "sess-write-fail")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no reminder recorded after a failed write, stat err=%v", statErr)
+	}
+
+	var second bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(payload), &second, io.Discard); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if decodeReviewStopHookResult(t, second.Bytes()).Decision != "block" {
+		t.Fatalf("expected the second run with a working writer to still remind: %s", second.String())
+	}
+}
+
 func TestReviewStopHookBlocksWithReasonAndBothCommands(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)

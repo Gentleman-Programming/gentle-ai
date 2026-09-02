@@ -171,12 +171,21 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		return nil
 	}
 
-	silent, persistErr := recordReviewStopHookReminder(payload.SessionID, targetIdentity)
-	if persistErr != nil {
-		return fmt.Errorf("review stop-hook: record reminder: %w", persistErr)
-	}
-	if silent {
-		return nil
+	// Check first, persist after delivery below: recording before the write
+	// risks losing the reminder if it fails or the process dies in between.
+	if reviewStopHookSessionIDPattern.MatchString(payload.SessionID) {
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return fmt.Errorf("resolve user home directory: %w", herr)
+		}
+		record, hadRecord, rerr := readReviewStopHookRecord(reviewStopHookRecordPath(home, payload.SessionID))
+		if rerr != nil {
+			return rerr
+		}
+		if hadRecord && ((record.BaselineTargetIdentity != "" && record.BaselineTargetIdentity == targetIdentity) ||
+			(record.TargetIdentity != "" && record.TargetIdentity == targetIdentity)) {
+			return nil
+		}
 	}
 
 	output := reviewStopHookOutput{
@@ -188,7 +197,10 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 	if err != nil {
 		return fmt.Errorf("review stop-hook: encode reminder: %w", err)
 	}
-	_, err = fmt.Fprintln(stdout, string(encoded))
+	if _, err := fmt.Fprintln(stdout, string(encoded)); err != nil {
+		return err
+	}
+	_, err = recordReviewStopHookReminder(payload.SessionID, targetIdentity)
 	return err
 }
 
