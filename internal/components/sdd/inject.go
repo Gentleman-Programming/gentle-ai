@@ -2674,6 +2674,67 @@ func stripBareOrchestratorForFilePrompt(content string) string {
 	return result
 }
 
+// legacyPiSystemPromptSectionIDs lists every gentle-ai:-marked section that a
+// Pi install made before the capability manifest started reporting
+// SupportsSystemPrompt()==false for Pi (see 965187e6) could have left behind
+// in the Pi adapter's SystemPromptFile. Nothing manages this file anymore, so
+// none of these blocks self-heal on install/sync/uninstall. The last entry
+// mirrors communitytool.codeGraphGuidanceSectionID, which is unexported.
+var legacyPiSystemPromptSectionIDs = []string{
+	"sdd-orchestrator",
+	"strict-tdd-mode",
+	"persona",
+	"codegraph-guidance",
+}
+
+// RetirePiSystemPromptBlocks removes any gentle-ai managed markdown sections
+// (and a bare legacy SDD orchestrator block) that an older gentle-ai build
+// wrote into the Pi adapter's SystemPromptFile. gentle-pi owns the Pi system
+// prompt, so this file should carry no gentle-ai content going forward.
+//
+// It is safe to call unconditionally: a missing file is a no-op, and repeated
+// calls are idempotent. Content outside the managed markers is preserved
+// byte-for-byte. If nothing but whitespace remains after stripping, the file
+// is removed instead of being rewritten empty.
+//
+// Only ever call this with the Pi adapter. Unlike the SupportsSystemPrompt()
+// gated helpers elsewhere in this package, it strips these sections
+// unconditionally regardless of what the adapter reports.
+func RetirePiSystemPromptBlocks(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	promptPath := adapter.SystemPromptFile(homeDir)
+
+	existing, err := readFileOrEmpty(promptPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	updated := existing
+	if hasLegacyBareOrchestrator(updated) {
+		updated = stripBareOrchestratorForFilePrompt(updated)
+	}
+	for _, sectionID := range legacyPiSystemPromptSectionIDs {
+		updated = filemerge.InjectMarkdownSection(updated, sectionID, "")
+	}
+
+	if updated == existing {
+		return InjectionResult{}, nil
+	}
+
+	if strings.TrimSpace(updated) == "" {
+		if err := os.Remove(promptPath); err != nil && !os.IsNotExist(err) {
+			return InjectionResult{}, err
+		}
+		return InjectionResult{Changed: true, Files: []string{promptPath}}, nil
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
 const instructionsFrontmatter = "---\n" +
 	"name: Gentle AI Persona\n" +
 	"description: Gentleman persona with SDD orchestration and Engram protocol\n" +

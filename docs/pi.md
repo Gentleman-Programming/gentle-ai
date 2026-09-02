@@ -19,7 +19,7 @@ gentle-ai install --agent pi
 pi
 ```
 
-Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram™ component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi.
+Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram™ component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi. Because `gentle-pi` owns the Pi system prompt, `install` and `sync` also remove any gentle-ai managed blocks an older build left in `~/.pi/agent/APPEND_SYSTEM.md`.
 
 ## Installed Packages
 
