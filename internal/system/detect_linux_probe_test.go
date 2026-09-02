@@ -204,14 +204,14 @@ func TestLinuxRefusalNamesTheProbedManagersAndARunnableCheck(t *testing.T) {
 
 	// Every manager the probe looks for must be named, so the reader knows
 	// exactly which one to install.
-	for _, manager := range []string{"brew", "apt", "dnf", "pacman", "apk", "zypper", "nix", "emerge"} {
+	for _, manager := range []string{"brew", "apt", "dnf", "rpm-ostree", "pacman", "apk", "zypper", "nix", "emerge"} {
 		if !strings.Contains(message, manager) {
 			t.Errorf("refusal does not name probed package manager %q:\n%s", manager, message)
 		}
 	}
 
 	// The exit has to be runnable, not a description of a policy.
-	if !strings.Contains(message, `for m in brew apt dnf pacman apk zypper nix emerge; do command -v "$m"; done`) {
+	if !strings.Contains(message, `for m in brew apt dnf rpm-ostree pacman apk zypper nix emerge; do command -v "$m"; done`) {
 		t.Errorf("refusal does not print the runnable probe check:\n%s", message)
 	}
 	if !strings.Contains(message, "PATH") {

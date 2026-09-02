@@ -56,6 +56,23 @@ func TestDetectFromInputsMarksFedoraSupported(t *testing.T) {
 	}
 }
 
+func TestDetectFromInputsMarksFedoraSilverblueSupported(t *testing.T) {
+	osRelease := "NAME=\"Fedora Linux\"\nID=fedora\nVARIANT=\"Silverblue\"\nVARIANT_ID=silverblue\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("rpm-ostree"), nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected supported system for fedora silverblue")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroFedora {
+		t.Fatalf("expected fedora distro, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "rpm-ostree" {
+		t.Fatalf("expected rpm-ostree package manager, got %q", result.System.Profile.PackageManager)
+	}
+}
+
 func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 	osRelease := "ID=ubuntu\nID_LIKE=debian\n"
 	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("apt"), nil)
@@ -163,6 +180,16 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			tools:         toolsOnPath("dnf"),
 			wantOS:        "linux",
 			wantPM:        "dnf",
+			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
+		},
+		{
+			name:          "fedora silverblue profile",
+			goos:          "linux",
+			osRelease:     "ID=fedora\nVARIANT_ID=silverblue\n",
+			tools:         toolsOnPath("rpm-ostree"),
+			wantOS:        "linux",
+			wantPM:        "rpm-ostree",
 			wantDistro:    LinuxDistroFedora,
 			wantSupported: true,
 		},

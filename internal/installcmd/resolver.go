@@ -186,6 +186,8 @@ func uvInstallHint(profile system.PlatformProfile) string {
 		return "sudo pacman -S --noconfirm uv"
 	case "dnf":
 		return "sudo dnf install -y uv"
+	case "rpm-ostree":
+		return "rpm-ostree install -y --apply-live uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -218,6 +220,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+	case "rpm-ostree":
+		return CommandSequence{{"rpm-ostree", "install", "-y", "--apply-live", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:

@@ -29,6 +29,14 @@ func TestInstallHintGitArch(t *testing.T) {
 	}
 }
 
+func TestInstallHintGitSilverblue(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	hint := installHintGit(profile)
+	if hint != "rpm-ostree install git" {
+		t.Fatalf("installHintGit(silverblue) = %q, want %q", hint, "rpm-ostree install git")
+	}
+}
+
 func TestInstallHintNodeDarwin(t *testing.T) {
 	profile := PlatformProfile{OS: "darwin", PackageManager: "brew"}
 	hint := installHintNode(profile)
@@ -58,6 +66,14 @@ func TestInstallHintNodeFedora(t *testing.T) {
 	hint := installHintNode(profile)
 	if !strings.Contains(hint, "rpm.nodesource.com") || !strings.Contains(hint, "dnf install -y nodejs") {
 		t.Fatalf("installHintNode(fedora) = %q, want NodeSource LTS setup + dnf install", hint)
+	}
+}
+
+func TestInstallHintNodeSilverblue(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	hint := installHintNode(profile)
+	if hint != "rpm-ostree install nodejs" {
+		t.Fatalf("installHintNode(silverblue) = %q, want %q", hint, "rpm-ostree install nodejs")
 	}
 }
 
@@ -182,6 +198,17 @@ func TestInstallCommandsForDepGitFedoraUsesDnf(t *testing.T) {
 	}
 }
 
+func TestInstallCommandsForDepGitSilverblueUsesRpmOstree(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	cmds := InstallCommandsForDep("git", profile)
+	if len(cmds) != 1 {
+		t.Fatalf("git silverblue commands = %d, want 1", len(cmds))
+	}
+	if cmds[0][0] != "rpm-ostree" || cmds[0][1] != "install" || cmds[0][2] != "-y" || cmds[0][3] != "--apply-live" || cmds[0][4] != "git" {
+		t.Fatalf("git silverblue command = %v, want rpm-ostree install -y --apply-live git", cmds[0])
+	}
+}
+
 func TestFormatMissingDepsMessageAllPresent(t *testing.T) {
 	report := DependencyReport{AllPresent: true}
 	msg := FormatMissingDepsMessage(report)
@@ -281,6 +308,7 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 		{OS: "linux", PackageManager: "apt", LinuxDistro: "ubuntu"},
 		{OS: "linux", PackageManager: "pacman", LinuxDistro: "arch"},
 		{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora},
+		{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora},
 	}
 
 	deps := []string{"git", "curl", "node", "go"}

@@ -49,14 +49,15 @@ const (
 // and the refusal in EnsureSupportedPlatform names this exact list so a user
 // on a machine with none of them knows what to install.
 var linuxPackageManagers = []string{
-	"brew",   // any distribution, via Homebrew on Linux
-	"apt",    // Debian, Ubuntu, Mint, Pop!_OS, Deepin, UOS
-	"dnf",    // Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Nobara
-	"pacman", // Arch, Manjaro, EndeavourOS
-	"apk",    // Alpine
-	"zypper", // openSUSE, SUSE Linux Enterprise
-	"nix",    // NixOS
-	"emerge", // Gentoo, Calculate
+	"brew",       // any distribution, via Homebrew on Linux
+	"apt",        // Debian, Ubuntu, Mint, Pop!_OS, Deepin, UOS
+	"dnf",        // Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Nobara
+	"rpm-ostree", // Fedora Silverblue, Kinoite, IoT, CoreOS
+	"pacman",     // Arch, Manjaro, EndeavourOS
+	"apk",        // Alpine
+	"zypper",     // openSUSE, SUSE Linux Enterprise
+	"nix",        // NixOS
+	"emerge",     // Gentoo, Calculate
 }
 
 // detectedToolNames is the fixed probe list passed to DetectTools: the tools

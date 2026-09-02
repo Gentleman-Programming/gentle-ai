@@ -180,6 +180,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "silverblue resolves rpm-ostree command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"rpm-ostree", "install", "-y", "--apply-live", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
