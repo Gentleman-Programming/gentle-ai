@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -230,5 +231,23 @@ func TestRefuterCaptureRetriesOnceWithAdmissionFeedback(t *testing.T) {
 	}
 	for _, envelope := range preserved {
 		assertRejectedEnvelope(t, envelope, record.State.LineageID, string(reviewerprovider.RoleRefuter), 1, truncated)
+	}
+}
+
+// R3-refuter-capture-guard-identity: a drifted request TargetIdentity must be
+// refused before any authority write, ahead of payload canonicalization.
+func TestRefuterCaptureRefusesRequestTargetIdentityDriftFromState(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, store, record, _ := piRefuterReview(t)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.TargetIdentity = "sha256:" + strings.Repeat("a", 64)
+	if _, err := reviewProviderCaptureAdmittedRefuterResult(t.Context(), repo, store, record.State, record.State.CapturePhaseRevision, request, facadeRefuterResult{}, nil); err == nil {
+		t.Fatal("expected refusal on a drifted request target identity")
+	}
+	if after, loadErr := store.Load(); loadErr != nil || !reflect.DeepEqual(after.State, record.State) {
+		t.Fatalf("refused capture mutated reviewing authority: after=%#v err=%v", after.State, loadErr)
 	}
 }

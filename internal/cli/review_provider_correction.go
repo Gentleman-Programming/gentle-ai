@@ -114,7 +114,7 @@ func reviewProviderCaptureRetry[T any](
 	firstClause := preserve(ctx, 1, firstErr, raw)
 	corrective := reviewProviderCorrectivePrompt(invocation.Prompt(), firstErr)
 	if len(corrective) > reviewLensContextByteBudget {
-		return zero, raw, fmt.Errorf("%w%s; the corrective re-invocation was skipped because its prompt exceeds the native reviewer context budget; re-query %s and run the reoffered capture", firstErr, firstClause, continuation())
+		return zero, raw, &reviewProviderCaptureRefusedError{cause: fmt.Errorf("%w%s; the corrective re-invocation was skipped because its prompt exceeds the native reviewer context budget; re-query %s and run the reoffered capture", firstErr, firstClause, continuation())}
 	}
 	correctiveRaw, err := adapter.Review(ctx, reviewerprovider.NewInvocation(corrective))
 	if err != nil {

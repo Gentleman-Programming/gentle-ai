@@ -412,7 +412,7 @@ func reviewProviderCaptureRefuterRaw(ctx context.Context, repo string, store rev
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
-	return reviewProviderCaptureAdmittedRefuterResult(ctx, repo, store, revision, request, result, raw)
+	return reviewProviderCaptureAdmittedRefuterResult(ctx, repo, store, state, revision, request, result, raw)
 }
 
 // reviewProviderCaptureAdmittedRefuterResult durably captures a refuter
@@ -420,13 +420,16 @@ func reviewProviderCaptureRefuterRaw(ctx context.Context, repo string, store rev
 // from admission so a caller that grants the compiled runtime a corrective
 // re-invocation on a rejected result (issue #4061) can retry admission alone
 // and only ever durably capture the one payload that was actually admitted.
-func reviewProviderCaptureAdmittedRefuterResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, revision string, request reviewProviderRefuterRequest, result facadeRefuterResult, raw []byte) (facadeRefuterResult, error) {
+func reviewProviderCaptureAdmittedRefuterResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, request reviewProviderRefuterRequest, result facadeRefuterResult, raw []byte) (facadeRefuterResult, error) {
+	if request.TargetIdentity != state.InitialSnapshot.Identity {
+		return facadeRefuterResult{}, errors.New("provider refuter request target identity does not match the reviewing authority's initial snapshot identity") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
 	payload, err := canonicalProviderRoleResult(compactProviderRefuterResult{Results: result.native()})
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
 	err = store.CaptureAdmittedRefuterResult(ctx, reviewtransaction.CompactAdmittedRefuterResultRequest{
-		ExpectedRevision: revision, TargetIdentity: request.TargetIdentity, RequestHash: request.RequestHash, Payload: payload,
+		ExpectedRevision: revision, TargetIdentity: state.InitialSnapshot.Identity, RequestHash: request.RequestHash, Payload: payload,
 		PreparePublication: func(current reviewtransaction.CompactState) error {
 			currentRequest, err := reviewProviderNewRefuterRequest(ctx, repo, store.Dir, current, revision)
 			if err != nil {

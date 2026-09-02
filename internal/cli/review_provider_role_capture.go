@@ -315,7 +315,7 @@ func reviewProviderCaptureRefuterWithOneCorrection(ctx context.Context, binding 
 		}
 		return reviewPreflightError(err)
 	}
-	if _, err := reviewProviderCaptureAdmittedRefuterResult(ctx, binding.root, store, state.CapturePhaseRevision, request, captured.result, raw); err != nil {
+	if _, err := reviewProviderCaptureAdmittedRefuterResult(ctx, binding.root, store, state, state.CapturePhaseRevision, request, captured.result, raw); err != nil {
 		return reviewPreflightError(err)
 	}
 	return nil
