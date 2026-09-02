@@ -110,10 +110,13 @@ The canonical native bounded-review contract is injected from the shared provide
 
 {{GENTLE_AI_RESEARCH_LIFECYCLE}}
 
+<!-- gentle-ai:sdd-model-assignments -->
+<!-- /gentle-ai:sdd-model-assignments -->
+
 ## SDD Workflow (lazy-loaded)
 
 The detailed SDD procedure is intentionally NOT embedded in this always-on parent thread. Before handling any SDD command, meta-command, continuation, apply/verify/archive routing, or SDD/Judgment-Day phase delegation, read:
 
 `.claude/skills/_shared/sdd-orchestrator-workflow.md` under the workspace when a workspace-scope install wrote it there, otherwise `~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
 
-That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, model assignments, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
+That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
