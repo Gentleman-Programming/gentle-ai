@@ -869,3 +869,33 @@ func TestPowerShellSingleQuotedValue(t *testing.T) {
 		t.Fatalf("PowerShellSingleQuoted() = %q, want %q", got, want)
 	}
 }
+
+func TestUVInstallHint(t *testing.T) {
+	tests := []struct {
+		pm   string
+		want string
+	}{
+		{
+			pm:   "rpm-ostree",
+			want: "rpm-ostree install -y --apply-live uv (or see https://docs.astral.sh/uv/getting-started/installation/)",
+		},
+		{
+			pm:   "brew",
+			want: "brew install uv",
+		},
+		{
+			pm:   "unknown-pm",
+			want: "https://docs.astral.sh/uv/getting-started/installation/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pm, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "linux", PackageManager: tt.pm}
+			got := uvInstallHint(profile)
+			if got != tt.want {
+				t.Fatalf("uvInstallHint(%q) = %q, want %q", tt.pm, got, tt.want)
+			}
+		})
+	}
+}

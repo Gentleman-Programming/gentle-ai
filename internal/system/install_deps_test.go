@@ -1,6 +1,7 @@
 package system
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -72,8 +73,8 @@ func TestInstallHintNodeFedora(t *testing.T) {
 func TestInstallHintNodeSilverblue(t *testing.T) {
 	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
 	hint := installHintNode(profile)
-	if hint != "rpm-ostree install nodejs" {
-		t.Fatalf("installHintNode(silverblue) = %q, want %q", hint, "rpm-ostree install nodejs")
+	if hint != "rpm-ostree install nodejs npm" {
+		t.Fatalf("installHintNode(silverblue) = %q, want %q", hint, "rpm-ostree install nodejs npm")
 	}
 }
 
@@ -198,14 +199,28 @@ func TestInstallCommandsForDepGitFedoraUsesDnf(t *testing.T) {
 	}
 }
 
-func TestInstallCommandsForDepGitSilverblueUsesRpmOstree(t *testing.T) {
+func TestInstallCommandsForDepSilverblueUsesRpmOstree(t *testing.T) {
 	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
-	cmds := InstallCommandsForDep("git", profile)
-	if len(cmds) != 1 {
-		t.Fatalf("git silverblue commands = %d, want 1", len(cmds))
+	tests := []struct {
+		dep     string
+		wantCmd []string
+	}{
+		{dep: "git", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "git"}},
+		{dep: "curl", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "curl"}},
+		{dep: "node", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "nodejs", "npm"}},
+		{dep: "go", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "golang"}},
 	}
-	if cmds[0][0] != "rpm-ostree" || cmds[0][1] != "install" || cmds[0][2] != "-y" || cmds[0][3] != "--apply-live" || cmds[0][4] != "git" {
-		t.Fatalf("git silverblue command = %v, want rpm-ostree install -y --apply-live git", cmds[0])
+
+	for _, tt := range tests {
+		t.Run(tt.dep, func(t *testing.T) {
+			cmds := InstallCommandsForDep(tt.dep, profile)
+			if len(cmds) != 1 {
+				t.Fatalf("commands for %q = %d, want 1", tt.dep, len(cmds))
+			}
+			if !slices.Equal(cmds[0], tt.wantCmd) {
+				t.Fatalf("command for %q = %v, want %v", tt.dep, cmds[0], tt.wantCmd)
+			}
+		})
 	}
 }
 

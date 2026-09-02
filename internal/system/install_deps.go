@@ -56,7 +56,7 @@ func installHintNode(profile PlatformProfile) string {
 	case profile.PackageManager == "dnf":
 		return "curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash - && sudo dnf install -y nodejs"
 	case profile.PackageManager == "rpm-ostree":
-		return "rpm-ostree install nodejs"
+		return "rpm-ostree install nodejs npm"
 	default:
 		return "install node from https://nodejs.org/"
 	}
@@ -197,7 +197,7 @@ func installCommandsNode(profile PlatformProfile) [][]string {
 		}
 	case profile.PackageManager == "rpm-ostree":
 		return [][]string{
-			{"rpm-ostree", "install", "-y", "--apply-live", "nodejs"},
+			{"rpm-ostree", "install", "-y", "--apply-live", "nodejs", "npm"},
 		}
 	default:
 		return nil
