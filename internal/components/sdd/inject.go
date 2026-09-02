@@ -2678,13 +2678,16 @@ func stripBareOrchestratorForFilePrompt(content string) string {
 // Pi install made before the capability manifest started reporting
 // SupportsSystemPrompt()==false for Pi (see 965187e6) could have left behind
 // in the Pi adapter's SystemPromptFile. Nothing manages this file anymore, so
-// none of these blocks self-heal on install/sync/uninstall. The last entry
-// mirrors communitytool.codeGraphGuidanceSectionID, which is unexported.
+// none of these blocks self-heal on install/sync/uninstall. The
+// "codegraph-guidance" entry mirrors communitytool.codeGraphGuidanceSectionID,
+// which is unexported; agentguidance.RoutingSectionID covers the routing
+// guidance block a defect once wrote here instead of skipping Pi (#4063).
 var legacyPiSystemPromptSectionIDs = []string{
 	"sdd-orchestrator",
 	"strict-tdd-mode",
 	"persona",
 	"codegraph-guidance",
+	agentguidance.RoutingSectionID,
 }
 
 // RetirePiSystemPromptBlocks removes any gentle-ai managed markdown sections

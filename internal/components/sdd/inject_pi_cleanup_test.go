@@ -61,6 +61,49 @@ func TestRetirePiSystemPromptBlocksStripsManagedSectionsAndPreservesUserContent(
 	}
 }
 
+// TestRetirePiSystemPromptBlocksStripsAgentRoutingBlock covers issue #4063:
+// an older build could have written a gentle-ai:agent-routing block into
+// Pi's APPEND_SYSTEM.md before the routing step learned to skip agents that
+// do not support a managed system prompt. This block is retired the same way
+// as the other legacy sections.
+func TestRetirePiSystemPromptBlocksStripsAgentRoutingBlock(t *testing.T) {
+	home := t.TempDir()
+	adapter := pi.NewAdapter()
+	promptPath := adapter.SystemPromptFile(home)
+
+	fixture := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(promptPath, []byte(fixture), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := RetirePiSystemPromptBlocks(home, adapter)
+	if err != nil {
+		t.Fatalf("RetirePiSystemPromptBlocks() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("RetirePiSystemPromptBlocks() Changed = false, want true")
+	}
+
+	got, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := "user text before\n\nuser text after\n"
+	if string(got) != want {
+		t.Fatalf("APPEND_SYSTEM.md content = %q, want %q", string(got), want)
+	}
+}
+
 func TestRetirePiSystemPromptBlocksKeepsWhitespaceOnlyFile(t *testing.T) {
 	home := t.TempDir()
 	adapter := pi.NewAdapter()

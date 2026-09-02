@@ -4529,19 +4529,56 @@ func TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks(t *testing.T) {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	// Routing guidance (agent-routing) is refreshed for Pi unconditionally
-	// after the component loop, so it legitimately reappears at the end of
-	// the file; only the leading user content must survive byte-exact.
-	wantPrefix := "user text before\n\nuser text after\n"
+	// Routing guidance is scheduled per agent too, but the step is a no-op for
+	// Pi (issue #4063: gentle-pi owns the Pi system prompt), so nothing writes
+	// an agent-routing block back into the file. Only the leading and trailing
+	// user content must survive, byte-exact.
+	want := "user text before\n\nuser text after\n"
 	got := readTextFile(t, appendSystemPath)
-	if !strings.HasPrefix(got, wantPrefix) {
-		t.Fatalf("APPEND_SYSTEM.md = %q, want prefix %q", got, wantPrefix)
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
 	}
 	if strings.Contains(got, "sdd-orchestrator") || strings.Contains(got, "gentle-ai:persona") {
 		t.Fatalf("APPEND_SYSTEM.md still carries a stale managed block: %q", got)
 	}
 	if result.FilesChanged < 1 {
 		t.Fatalf("FilesChanged = %d, want >= 1", result.FilesChanged)
+	}
+}
+
+// TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten covers issue #4063:
+// a sync with Pi selected must not write, or leave behind, a
+// gentle-ai:agent-routing block in ~/.pi/agent/APPEND_SYSTEM.md. Before the
+// fix, agentRoutingGuidanceStep ran for every agent unconditionally, so a
+// pre-existing agent-routing block was rewritten instead of stripped and
+// left alone.
+func TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"stale routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	got := readTextFile(t, appendSystemPath)
+	if strings.Contains(got, "gentle-ai:agent-routing") {
+		t.Fatalf("APPEND_SYSTEM.md still carries an agent-routing block: %q", got)
+	}
+	want := "user text before\n\nuser text after\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
 	}
 }
 
