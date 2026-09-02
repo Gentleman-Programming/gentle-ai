@@ -164,16 +164,7 @@ func TestProcessStreamReaderReadSurfacesExitStatusAfterEOF(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires a POSIX exit-status fixture")
 	}
-	dir := t.TempDir()
-	helper := filepath.Join(dir, "exit-helper")
-	if runtime.GOOS == "windows" {
-		helper += ".exe"
-	}
-	source := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(source, []byte("package main\nfunc main() { }\n"), 0o600); err != nil {
-		t.Fatalf("write helper: %v", err)
-	}
-	// Re-run the helper forcing a non-zero status through sh.
+	// Force a child with a non-zero exit status through sh.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	r, err := runCatalogCommand(ctx, Command{Path: "sh", Args: []string{"-c", "exit 7"}})
