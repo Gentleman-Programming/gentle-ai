@@ -3185,6 +3185,10 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 	// Explicit assignments for existing custom agents are not present in the
 	// managed overlay. Add a minimal overlay definition so the deep merge updates
 	// only the model fields while preserving the user's custom agent settings.
+	// For an empty Effort, omit "variant" so the deep merge preserves the user's
+	// existing variant on the custom agent — owned by the user, not by gentle-ai.
+	// Managed definitions keep clearing the variant on empty effort (see the
+	// case-1 / case-3 contract above and the pinned regression in profiles_test.go).
 	for agent, assignment := range assignments {
 		if !existingAgentKeys[agent] || assignment.ProviderID == "" || assignment.ModelID == "" {
 			continue
@@ -3192,10 +3196,13 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 		if _, managed := agents[agent]; managed {
 			continue
 		}
-		agents[agent] = map[string]any{
-			"model":   assignment.FullID(),
-			"variant": assignment.Effort,
+		customOverlay := map[string]any{
+			"model": assignment.FullID(),
 		}
+		if assignment.Effort != "" {
+			customOverlay["variant"] = assignment.Effort
+		}
+		agents[agent] = customOverlay
 	}
 
 	result, err := json.MarshalIndent(overlay, "", "  ")

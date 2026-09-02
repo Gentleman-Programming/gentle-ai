@@ -3460,8 +3460,12 @@ func TestInjectOpenCodeMultiModeWithCustomAgentModelAssignment(t *testing.T) {
 	if custom["description"] != "preserve me" || custom["mode"] != "subagent" {
 		t.Fatalf("custom-refactor settings were not preserved: %v", custom)
 	}
-	if variant, ok := custom["variant"].(string); !ok || variant != "" {
-		t.Fatalf("custom-refactor variant = %v, want empty string", custom["variant"])
+	// Ownership-boundary contract (issue #3262): a user-owned custom agent
+	// keeps its existing variant when the assignment carries no Effort. The
+	// minimal custom-agent overlay omits "variant" so the deep merge preserves
+	// "high". Managed definitions still clear stale variants on empty effort.
+	if variant, _ := custom["variant"].(string); variant != "high" {
+		t.Fatalf("custom-refactor variant = %v, want %q (user-owned custom agents preserve variant on empty effort)", custom["variant"], "high")
 	}
 	if _, exists := agents["missing-custom"]; exists {
 		t.Fatal("inject must not create a missing custom agent definition")
@@ -4905,6 +4909,52 @@ func TestInjectModelAssignments_RootModelFallbackClearsVariant(t *testing.T) {
 	}
 	if v != "" {
 		t.Errorf("variant = %q, want empty string (case 3 must clear stale variant)", v)
+	}
+}
+
+// TestInjectModelAssignments_CustomAgentNonEmptyEffortReplacesVariant pins
+// the second half of the ownership-boundary split (issue #3262): when the
+// assignment DOES carry an explicit Effort, the minimal custom-agent overlay
+// still writes "variant" so the user's choice is replaced — matching the
+// managed branch behavior on a non-empty effort.
+func TestInjectModelAssignments_CustomAgentNonEmptyEffortReplacesVariant(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent", "prompt": "test"}
+  }
+}`)
+
+	assignments := map[string]model.ModelAssignment{
+		"my-researcher": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "high"},
+	}
+	existingAgentKeys := map[string]bool{
+		"my-researcher": true,
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments, "", existingAgentKeys)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	agents := parsed["agent"].(map[string]any)
+	custom, ok := agents["my-researcher"].(map[string]any)
+	if !ok {
+		t.Fatal("custom agent entry must be added to the overlay")
+	}
+	if m, _ := custom["model"].(string); m != "anthropic/claude-opus-4" {
+		t.Errorf("custom agent model = %q, want %q", m, "anthropic/claude-opus-4")
+	}
+	v, hasKey := custom["variant"].(string)
+	if !hasKey {
+		t.Fatal("custom agent variant key must be present when Effort is non-empty")
+	}
+	if v != "high" {
+		t.Errorf("custom agent variant = %q, want %q", v, "high")
 	}
 }
 
