@@ -3,7 +3,7 @@ description: Fast-forward all SDD planning phases — proposal through tasks
 ---
 
 Read the SDD workflow FIRST: `.claude/skills/_shared/sdd-orchestrator-workflow.md` under the workspace when a workspace-scope install wrote it there, otherwise `~/.claude/skills/_shared/sdd-orchestrator-workflow.md`. Then treat it as the authoritative SDD workflow instructions for this command.
-The Claude Code session model is controlled by Claude Code; Gentle AI only configures models for Agent tool calls to phase sub-agents.
+The Claude Code session model is controlled by Claude Code; Gentle AI's always-on Model Assignments policy resolves every Agent tool call, including generic/organic delegation through `default`.
 
 WORKFLOW:
 Honor the cached execution mode from SDD Session Preflight.

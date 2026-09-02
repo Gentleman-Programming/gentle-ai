@@ -1195,6 +1195,11 @@ func (s componentSyncStep) Run() error {
 					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 				}
 				s.countChanged(boolToInt(res.Changed), res.Files...)
+				retireRes, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter)
+				if err != nil {
+					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+				}
+				s.countChanged(boolToInt(retireRes.Changed), retireRes.Files...)
 				continue
 			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)

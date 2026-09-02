@@ -705,7 +705,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// workflow procedure is installed as a lazy shared skill document and read
 	// only when an SDD command or SDD/Judgment-Day delegation needs it.
 	if adapter.Agent() == model.AgentClaudeCode {
-		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments)
+		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter)
 		if workflowErr != nil {
 			return InjectionResult{}, workflowErr
 		}
@@ -1765,7 +1765,11 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("install Claude skill-registry hook: %w", err)
 	}
-	return InjectionResult{Changed: changed, Files: []string{settingsPath}}, nil
+	stopHookChanged, err := ensureClaudeReviewStopHook(settingsPath, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
+	}
+	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
@@ -1878,12 +1882,108 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
+// ensureClaudeReviewStopHook appends the managed review preflight commands to
+// hooks.Stop and hooks.SessionStart in the Claude Code settings file. The
+// pair makes the review preflight deterministic across a Claude turn.
+// `gentle-ai review stop-hook --agent <agentID>` reads `hook_event_name` from
+// the payload on stdin: at SessionStart it records the session's starting
+// candidate as the per-session baseline, and at Stop it prints a block
+// decision only when RDD is enabled and the session has produced an
+// unreviewed candidate since that baseline. It never starts a review by
+// itself. The runtime identity is always the caller-supplied agentID (never
+// a compiled literal) per issue #2440: only the caller states which runtime
+// is executing.
+func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	command := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+
+	stopChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "Stop", settingsPath, command, map[string]any{
+		"matcher": "",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 60,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	sessionStartChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "SessionStart", settingsPath, command, map[string]any{
+		"matcher": "startup|resume|clear|compact",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 30,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if !stopChanged && !sessionStartChanged {
+		return false, nil
+	}
+
+	root["hooks"] = hooksMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
+// appendClaudeReviewStopHookEntry appends entry to hooksMap[hookKey] unless
+// an entry with the identical command is already present under that exact
+// key, so the Stop reminder and the SessionStart baseline (which share the
+// same command string) are tracked independently and both keys can coexist
+// with the UserPromptSubmit skill-registry hook.
+func appendClaudeReviewStopHookEntry(hooksMap map[string]any, hookKey, settingsPath, command string, entry map[string]any) (bool, error) {
+	raw, has := hooksMap[hookKey]
+	entries, _ := raw.([]any)
+	if has && entries == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.%s shape: want array", settingsPath, hookKey)
+	}
+	if claudeHookListContains(entries, command) {
+		return false, nil
+	}
+	entries = append(entries, entry)
+	hooksMap[hookKey] = entries
+	return true, nil
+}
+
 func claudeHookExists(root map[string]any, command string) bool {
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
 		hookEntries, ok := hooksMap[key].([]any)
 		if !ok {
 			continue
@@ -2696,6 +2796,66 @@ func stripBareOrchestratorForFilePrompt(content string) string {
 	return result
 }
 
+// legacyPiSystemPromptSectionIDs lists every gentle-ai:-marked section that a
+// Pi install made before the capability manifest started reporting
+// SupportsSystemPrompt()==false for Pi (see 965187e6) could have left behind
+// in the Pi adapter's SystemPromptFile. Nothing manages this file anymore, so
+// none of these blocks self-heal on install/sync/uninstall. The
+// "codegraph-guidance" entry mirrors communitytool.codeGraphGuidanceSectionID,
+// which is unexported; agentguidance.RoutingSectionID covers the routing
+// guidance block a defect once wrote here instead of skipping Pi (#4063).
+var legacyPiSystemPromptSectionIDs = []string{
+	"sdd-orchestrator",
+	"strict-tdd-mode",
+	"persona",
+	"codegraph-guidance",
+	agentguidance.RoutingSectionID,
+}
+
+// RetirePiSystemPromptBlocks removes any gentle-ai managed markdown sections
+// (and a bare legacy SDD orchestrator block) that an older gentle-ai build
+// wrote into the Pi adapter's SystemPromptFile. gentle-pi owns the Pi system
+// prompt, so this file should carry no gentle-ai content going forward.
+//
+// It is safe to call unconditionally: a missing file is a no-op, and repeated
+// calls are idempotent. Content outside the managed markers is preserved
+// byte-for-byte. If nothing but whitespace remains after stripping, the file
+// is rewritten with that whitespace-only remainder rather than deleted: a
+// whitespace-only file is harmless (Pi appends nothing), the rewrite is
+// recoverable and consistent with every other managed-section rewrite, and
+// only the uninstall call site registers a backup target for this file.
+//
+// Only ever call this with the Pi adapter. Unlike the SupportsSystemPrompt()
+// gated helpers elsewhere in this package, it strips these sections
+// unconditionally regardless of what the adapter reports.
+func RetirePiSystemPromptBlocks(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	promptPath := adapter.SystemPromptFile(homeDir)
+
+	existing, err := readFileOrEmpty(promptPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	updated := existing
+	if hasLegacyBareOrchestrator(updated) {
+		updated = stripBareOrchestratorForFilePrompt(updated)
+	}
+	for _, sectionID := range legacyPiSystemPromptSectionIDs {
+		updated = filemerge.InjectMarkdownSection(updated, sectionID, "")
+	}
+
+	if updated == existing {
+		return InjectionResult{}, nil
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
 const instructionsFrontmatter = "---\n" +
 	"name: Gentle AI Persona\n" +
 	"description: Gentleman persona with SDD orchestration and Engram protocol\n" +
@@ -2774,6 +2934,13 @@ func stripBareOrchestratorSection(content string) string {
 func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, renderOptions OrchestratorRenderOptions) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 	content := renderSDDOrchestratorAsset(adapter.Agent(), renderOptions)
+	if adapter.Agent() == model.AgentClaudeCode {
+		var err error
+		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+	}
 
 	existing, err := readFileOrEmpty(promptPath)
 	if err != nil {
@@ -2800,7 +2967,7 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssign
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
 }
 
-func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
+func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if adapter.Agent() != model.AgentClaudeCode {
 		return InjectionResult{}, nil
 	}
@@ -2810,13 +2977,6 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 	}
 
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	if len(legacyAssignments) > 0 || len(phaseAssignments) > 0 {
-		var err error
-		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-	}
 
 	path := filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md")
 	writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
@@ -2858,7 +3018,7 @@ var claudeModelAssignmentReasons = map[string]string{
 	"jd-judge-a":   "Adversarial review — blind judge A",
 	"jd-judge-b":   "Adversarial review — blind judge B",
 	"jd-fix-agent": "Surgical fixes from confirmed issues",
-	"default":      "SDD/JD phase fallback",
+	"default":      "Generic and SDD/JD delegation fallback",
 }
 
 func injectClaudeModelAssignments(content string, assignments map[string]model.ClaudeModelAlias) (string, error) {
@@ -2939,9 +3099,9 @@ func renderClaudeEffortFrontmatter(assignment model.ClaudePhaseAssignment) strin
 func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudePhaseAssignment) string {
 	var b strings.Builder
 	b.WriteString("## Model Assignments\n\n")
-	b.WriteString("Read this table at session start (or before first SDD/Judgment-Day delegation), cache it for the session, and use the mapped alias only for SDD/Judgment-Day phase agents. If an SDD/Judgment-Day phase is missing, use the `default` fallback row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.\n\n")
-	b.WriteString("The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD/Judgment-Day phase sub-agents, not generic delegation.\n\n")
-	b.WriteString("**Mandatory phase model gate:** Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`. Generic/non-SDD delegation MUST NOT use this table; omit `model` unless the user explicitly requested an override. Before each SDD/Judgment-Day Agent call, resolve the target phase to an alias from this table.\n\n")
+	b.WriteString("Read this table at session start (or before the first Claude Agent delegation), cache it for the session, and use the mapped alias for every Claude Agent call. Named SDD/Judgment-Day roles use their named row; organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment. If a named SDD/Judgment-Day role is missing, use the `default` row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.\n\n")
+	b.WriteString("The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model.\n\n")
+	b.WriteString("**Mandatory model gate:** Every Claude Agent tool call MUST include `model`. Before each Claude Agent call, resolve named SDD/Judgment-Day roles from this table; for organic explorer/mapper/writer/verifier and other generic delegations, use the `default` assignment.\n\n")
 	b.WriteString("| Phase | Default Model | Effort | Reason |\n")
 	b.WriteString("|-------|---------------|--------|--------|\n")
 	for _, key := range claudeModelAssignmentRowOrder {

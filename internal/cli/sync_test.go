@@ -4674,6 +4674,120 @@ func TestRunSyncWithSelectionPiCustomPersistedPersonaIsByteStable(t *testing.T) 
 	}
 }
 
+// TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks covers issue #4057:
+// a Pi install made before the capability manifest flipped
+// SupportsSystemPrompt()==false for Pi left gentle-ai managed blocks in
+// ~/.pi/agent/APPEND_SYSTEM.md. Nothing reads or rewrites that file for Pi
+// anymore, so sync must retire those stale blocks directly.
+func TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\n" +
+		"SDD body\n" +
+		"<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"\n" +
+		"<!-- gentle-ai:persona -->\n" +
+		"persona body\n" +
+		"<!-- /gentle-ai:persona -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	// Routing guidance is scheduled per agent too, but the step is a no-op for
+	// Pi (issue #4063: gentle-pi owns the Pi system prompt), so nothing writes
+	// an agent-routing block back into the file. Only the leading and trailing
+	// user content must survive, byte-exact.
+	want := "user text before\n\nuser text after\n"
+	got := readTextFile(t, appendSystemPath)
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "sdd-orchestrator") || strings.Contains(got, "gentle-ai:persona") {
+		t.Fatalf("APPEND_SYSTEM.md still carries a stale managed block: %q", got)
+	}
+	if result.FilesChanged < 1 {
+		t.Fatalf("FilesChanged = %d, want >= 1", result.FilesChanged)
+	}
+}
+
+// TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten covers issue #4063:
+// a sync with Pi selected must not write, or leave behind, a
+// gentle-ai:agent-routing block in ~/.pi/agent/APPEND_SYSTEM.md. Before the
+// fix, agentRoutingGuidanceStep ran for every agent unconditionally, so a
+// pre-existing agent-routing block was rewritten instead of stripped and
+// left alone.
+func TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"stale routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	got := readTextFile(t, appendSystemPath)
+	if strings.Contains(got, "gentle-ai:agent-routing") {
+		t.Fatalf("APPEND_SYSTEM.md still carries an agent-routing block: %q", got)
+	}
+	want := "user text before\n\nuser text after\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+}
+
+// TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents guards against
+// the Pi-only stale-block cleanup leaking to other agents' prompt files
+// selected in the same sync run.
+func TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, appendSystemPath, []byte(
+		"<!-- gentle-ai:sdd-orchestrator -->\nSDD body\n<!-- /gentle-ai:sdd-orchestrator -->\n"))
+
+	claudePath := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	claudeContent := "user preamble\n\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\nKEEP-CLAUDE-SDD\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	mustWriteFile(t, claudePath, []byte(claudeContent))
+
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi","claude-code"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi, model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got := readTextFile(t, appendSystemPath); strings.Contains(got, "sdd-orchestrator") {
+		t.Fatalf("Pi APPEND_SYSTEM.md still carries a stale block: %q", got)
+	}
+	if got := readTextFile(t, claudePath); !strings.Contains(got, "KEEP-CLAUDE-SDD") {
+		t.Fatalf("Claude system prompt lost unrelated content: %q", got)
+	}
+}
+
 // ─── TUI path: RunSyncWithSelection persona resolution from state ───────────
 
 // TestRunSyncWithSelection_PersonaResolvesFromStateNeutral verifies that when

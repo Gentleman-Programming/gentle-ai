@@ -98,6 +98,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`
+- Three managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry, `SessionStart` runs the review stop-hook subcommand to record the session's starting candidate as its baseline, and `Stop` runs that same subcommand to remind only about candidates the session itself produced; uninstall removes all three
 
 ### OpenCode
 

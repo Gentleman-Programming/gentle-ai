@@ -683,6 +683,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewSchema(args[1:], stdout)
 	case "opencode-transport":
 		return RunReviewOpenCodeTransport(args[1:], stdout)
+	case "stop-hook":
+		return RunReviewStopHook(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}

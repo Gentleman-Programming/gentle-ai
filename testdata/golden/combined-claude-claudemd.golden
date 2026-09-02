@@ -245,13 +245,41 @@ Each launch runs only its own provider-issued `review.capture-result` argument t
 
 ### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research` immediately after `sdd-explore`; selection makes completion mandatory. Before every `propose`, invoke `sdd-propose` only when selected research is `done` or research is unselected, product decisions are `confirmed`, evidence references are valid, and the selected artifact-store state is ready. The orchestrator owns product discovery. Automatic unresolved choices require one lossless grouped prompt with all context, options, consequences, allowed answers, and exact tokens; it MUST persist the pending state before prompting, then STOP without invoking `sdd-propose`. The proposer receives a confirmed pre-proposal handoff and MUST NOT interview or infer consent. Native `gentle-ai.sdd-status/v2` is the sole status contract.
 
+<!-- gentle-ai:sdd-model-assignments -->
+## Model Assignments
+
+Read this table at session start (or before the first Claude Agent delegation), cache it for the session, and use the mapped alias for every Claude Agent call. Named SDD/Judgment-Day roles use their named row; organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment. If a named SDD/Judgment-Day role is missing, use the `default` row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.
+
+The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model.
+
+**Mandatory model gate:** Every Claude Agent tool call MUST include `model`. Before each Claude Agent call, resolve named SDD/Judgment-Day roles from this table; for organic explorer/mapper/writer/verifier and other generic delegations, use the `default` assignment.
+
+| Phase | Default Model | Effort | Reason |
+|-------|---------------|--------|--------|
+| sdd-explore | sonnet | default | Reads code, structural - not architectural |
+| sdd-research | sonnet | default | Collects source-backed evidence |
+| sdd-propose | opus | default | Architectural decisions |
+| sdd-spec | sonnet | default | Structured writing |
+| sdd-design | opus | default | Architecture decisions |
+| sdd-tasks | sonnet | default | Mechanical breakdown |
+| sdd-apply | sonnet | default | Implementation |
+| sdd-verify | sonnet | default | Validation against spec |
+| sdd-archive | haiku | default | Copy and close |
+| sdd-onboard | haiku | default | Guided walkthrough, pedagogical |
+| jd-judge-a | sonnet | default | Adversarial review — blind judge A |
+| jd-judge-b | sonnet | default | Adversarial review — blind judge B |
+| jd-fix-agent | sonnet | default | Surgical fixes from confirmed issues |
+| default | sonnet | default | Generic and SDD/JD delegation fallback |
+
+<!-- /gentle-ai:sdd-model-assignments -->
+
 ## SDD Workflow (lazy-loaded)
 
 The detailed SDD procedure is intentionally NOT embedded in this always-on parent thread. Before handling any SDD command, meta-command, continuation, apply/verify/archive routing, or SDD/Judgment-Day phase delegation, read:
 
 `.claude/skills/_shared/sdd-orchestrator-workflow.md` under the workspace when a workspace-scope install wrote it there, otherwise `~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
 
-That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, model assignments, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
+That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
 <!-- /gentle-ai:sdd-orchestrator -->
 
 <!-- gentle-ai:engram-protocol -->

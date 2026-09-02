@@ -868,6 +868,15 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
+
+	// Pi (and any future agent without a managed system prompt) owns its own
+	// prompt delivery outside gentle-ai, so there is nothing to strip or
+	// inject here: skip the step entirely rather than writing routing
+	// guidance into a file gentle-ai does not own (issue #4063).
+	if !adapter.SupportsSystemPrompt() {
+		return nil
+	}
+
 	targetDir := routingGuidanceDir(s.homeDir, s.workspaceDir, s.scope, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
@@ -1631,6 +1640,9 @@ func (s componentApplyStep) Run() error {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
+				if _, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter); err != nil {
+					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+				}
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
@@ -2144,6 +2156,12 @@ func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallSc
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		// Mirrors the same skip agentRoutingGuidanceStep.Run() applies: an
+		// agent without a managed system prompt (Pi) gets no routing guidance
+		// write, so it must not be declared as a backup target either.
+		if !adapter.SupportsSystemPrompt() {
+			continue
+		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
 		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
 		if err != nil {
