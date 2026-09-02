@@ -65,6 +65,7 @@ test('the workflow binds and parses GitHub rendered text rather than the event b
 });
 
 test('closing and non-closing references are kind-tagged, in order of appearance', () => {
+  assert.deepEqual(parseLinkedIssues(readFileSync(resolve(__dirname, '../PULL_REQUEST_TEMPLATE.md'), 'utf8').replace(/^Closes #$/m, 'Closes #42').replace(/`/g, '')), ok(closing(42)));
   const cases = [
     ['Closes #10\nFixes #11\nResolves #12', [closing(10), closing(11), closing(12)]],
     ['Refs #1770', [nonClosing(1770)]],

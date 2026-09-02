@@ -10,7 +10,7 @@ Closes #
 
 <!-- Replace the # above with the issue number, e.g.: Closes #42 -->
 
-Use `Closes/Fixes/Resolves #N` to close an approved issue on merge, or `Refs #N` for a non-closing link. References must be visible and well-formed for an issue in this base repository; cross-repository references or both forms for the same issue are rejected.
+Use a closing keyword (Closes, Fixes, or Resolves) followed by the numeric issue identifier to close an approved issue on merge; use Refs followed by the numeric issue identifier for a non-closing link. References must be visible and well-formed for an issue in this base repository; malformed, cross-repository, or ambiguous references are rejected.
 
 ---
 
@@ -95,7 +95,7 @@ The following checks run automatically on this PR:
 | Check | Status | Description |
 |-------|--------|-------------|
 | Check PR Cognitive Load | ⏳ | PR should stay within 400 changed lines (`additions + deletions`) or use `size:exception` |
-| Check Issue Reference | ⏳ | PR body must contain a visible, well-formed `Closes/Fixes/Resolves #N` or non-closing `Refs #N` |
+| Check Issue Reference | ⏳ | PR body must contain a visible, well-formed closing or non-closing reference to a numeric issue in this base repository |
 | Check Issue Has `status:approved` | ⏳ | Linked issue must have been approved before work began |
 | Check PR Has `type:*` Label | ⏳ | Exactly one `type:*` label must be applied |
 | Unit Tests | ⏳ | `go test ./...` must pass |
