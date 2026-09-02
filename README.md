@@ -26,10 +26,10 @@
 > go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > ```
 >
-> To opt into the current prerelease, [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), install its exact tag:
+> To opt into the current prerelease, [`v2.4.0-rc.8`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.8), install its exact tag:
 >
 > ```bash
-> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.8
 > ```
 >
 > Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
@@ -193,7 +193,7 @@ $env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
 
 Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. Those are historical milestones; the negotiated public review contract was published in `v2.1.6`.
 
-The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). The current prerelease is [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1). `main` is unreleased development.
+The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). The current prerelease is [`v2.4.0-rc.8`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.8). `main` is unreleased development.
 
 **Stable channel (`@latest`, currently `v2.3.0`)**
 
@@ -202,10 +202,10 @@ go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
-**Prerelease channel (`v2.4.0-rc.1`)**
+**Prerelease channel (`v2.4.0-rc.8`)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.8
 gentle-ai version
 ```
 

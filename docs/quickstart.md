@@ -54,8 +54,8 @@
 # Stable channel (`@latest`, currently v2.3.0)
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 
-# Opt-in prerelease (v2.4.0-rc.1)
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+# Opt-in prerelease (v2.4.0-rc.8)
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.8
 ```
 
 Both commands use the `/v2` module path. Go requires that suffix for major
@@ -65,7 +65,7 @@ version 2 and above.
 
 Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
 
-The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` explicitly tracks this stable channel. The current opt-in prerelease is [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1). `@main` installs unreleased development changes.
+The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` explicitly tracks this stable channel. The current opt-in prerelease is [`v2.4.0-rc.8`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.8). `@main` installs unreleased development changes.
 
 ### Install the stable channel
 
@@ -77,7 +77,7 @@ gentle-ai version
 ### Install the opt-in prerelease
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.8
 gentle-ai version
 ```
 
