@@ -19,6 +19,8 @@ const UpdateCheckTTL = 6 * time.Hour
 // allow injection of a stub in tests.
 type checkAllFn func(ctx context.Context, currentVersion string, profile system.PlatformProfile) []UpdateResult
 
+type installStateWriter func(string, state.InstallState) error
+
 // CheckAllWithCooldown gates CheckAll behind a TTL-based cooldown. It reads
 // LastUpdateCheck from state.json in homeDir; if the elapsed time since the
 // last successful check is less than ttl, it returns nil (no network call).
@@ -89,6 +91,10 @@ func checkAllWithCooldown(
 }
 
 func persistLastUpdateCheck(homeDir string, timestamp time.Time) error {
+	return persistLastUpdateCheckWithWriter(homeDir, timestamp, state.WriteReconciled)
+}
+
+func persistLastUpdateCheckWithWriter(homeDir string, timestamp time.Time, write installStateWriter) error {
 	return statecoord.WithLock(homeDir, func() error {
 		current, err := state.Read(homeDir)
 		if err != nil {
@@ -98,7 +104,7 @@ func persistLastUpdateCheck(homeDir string, timestamp time.Time) error {
 			current = state.InstallState{}
 		}
 		current.LastUpdateCheck = &timestamp
-		return state.WriteReconciled(homeDir, current)
+		return write(homeDir, current)
 	})
 }
 

@@ -23,7 +23,11 @@ func TestLockPathResolvesHomeSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LockPath() error = %v", err)
 	}
-	want := state.Path(realHome) + ".lock"
+	resolvedHome, err := filepath.EvalSymlinks(realHome)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(real home): %v", err)
+	}
+	want := state.Path(resolvedHome) + ".lock"
 	if got != want {
 		t.Fatalf("LockPath() = %q, want %q", got, want)
 	}
