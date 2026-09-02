@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
@@ -115,6 +116,47 @@ func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 		if !slices.Contains(plan.backupTargets, path) {
 			t.Fatalf("backup targets = %v, missing Pi artifact %q", plan.backupTargets, path)
 		}
+	}
+	promptPath := pi.NewAdapter().SystemPromptFile(homeDir)
+	if !slices.Contains(plan.backupTargets, promptPath) {
+		t.Fatalf("backup targets = %v, missing Pi system prompt file %q", plan.backupTargets, promptPath)
+	}
+}
+
+// TestExecutePlanRetiresStalePiSystemPromptBlocks covers issue #4057: a Pi
+// install made before SupportsSystemPrompt()==false for Pi left gentle-ai
+// managed blocks in ~/.pi/agent/APPEND_SYSTEM.md. Since adapter.SupportsSystemPrompt()
+// is false, componentOperations() never queues a rewrite op for that file, so
+// uninstall must retire the stale blocks directly.
+func TestExecutePlanRetiresStalePiSystemPromptBlocks(t *testing.T) {
+	home := t.TempDir()
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	promptPath := pi.NewAdapter().SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := "user text\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD body\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(promptPath, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := string(mustReadServiceFile(t, promptPath))
+	want := "user text\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+	if !slices.Contains(result.ChangedFiles, promptPath) {
+		t.Fatalf("ChangedFiles = %v, want to contain %q", result.ChangedFiles, promptPath)
 	}
 }
 

@@ -429,7 +429,7 @@ func TestInjectClaudeRetiresUnprefixedCommands(t *testing.T) {
 	}
 }
 
-func TestInjectClaudeCustomModelAssignments(t *testing.T) {
+func TestInjectClaudeCustomModelAssignmentsApplyToEveryDelegation(t *testing.T) {
 	home := t.TempDir()
 
 	opts := InjectOptions{ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
@@ -446,49 +446,66 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		t.Fatal("Inject(claude, custom assignments) changed = false")
 	}
 
-	content, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md"))
+	promptContent, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
+	}
+	prompt := string(promptContent)
+	for _, want := range []string{
+		"<!-- gentle-ai:sdd-model-assignments -->",
+		"<!-- /gentle-ai:sdd-model-assignments -->",
+		"| sdd-design | sonnet | default | Architecture decisions |",
+		"| sdd-propose | fable | default | Architectural decisions |",
+		"| default | haiku | default | Generic and SDD/JD delegation fallback |",
+		"Every Claude Agent tool call MUST include `model`",
+		"organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("CLAUDE.md missing every-delegation model policy %q", want)
+		}
+	}
+
+	lazyContent, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(sdd-orchestrator-workflow.md) error = %v", err)
 	}
-
-	text := string(content)
-	if strings.Contains(text, "| orchestrator |") {
-		t.Fatal("lazy workflow should not expose orchestrator as a configurable model row")
-	}
-	for _, want := range []string{
-		"| sdd-design | sonnet | default | Architecture decisions |",
-		"| sdd-propose | fable | default | Architectural decisions |",
-		"| default | haiku | default | SDD/JD phase fallback |",
-		"Gentle AI does not configure the main orchestrator model",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("lazy workflow missing custom table row %q", want)
-		}
-	}
-
-	if !strings.Contains(text, "<!-- gentle-ai:sdd-model-assignments -->") {
-		t.Fatal("lazy workflow missing model assignment open marker")
-	}
-	if !strings.Contains(text, "<!-- /gentle-ai:sdd-model-assignments -->") {
-		t.Fatal("lazy workflow missing model assignment close marker")
-	}
-	for _, want := range []string{
-		"Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`",
+	lazy := string(lazyContent)
+	for _, forbidden := range []string{
+		"<!-- gentle-ai:sdd-model-assignments -->",
+		"## Model Assignments",
 		"Generic/non-SDD delegation MUST NOT use this table",
 		"omit `model` unless the user explicitly requested an override",
+		"model assignments",
 	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("lazy workflow missing scoped model gate text %q", want)
+		if strings.Contains(lazy, forbidden) {
+			t.Fatalf("lazy workflow retains model-routing content %q", forbidden)
 		}
 	}
-	for _, forbidden := range []string{
-		"Every Agent tool call MUST include `model`",
-		"for general/non-SDD delegation use `default`",
-		"Non-SDD general delegation",
-	} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("lazy workflow contains legacy generic delegation model routing text %q", forbidden)
-		}
+}
+
+func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, claudeAdapter(), ""); err != nil {
+		t.Fatalf("Inject(claude) error = %v", err)
+	}
+
+	const stale = "Gentle AI only configures models for Agent tool calls to phase sub-agents."
+	const want = "The Claude Code session model is controlled by Claude Code; Gentle AI's always-on Model Assignments policy resolves every Agent tool call, including generic/organic delegation through `default`."
+	for _, name := range []string{"gentle-sdd-new.md", "gentle-sdd-ff.md", "gentle-sdd-continue.md"} {
+		t.Run(name, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(home, ".claude", "commands", name))
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", name, err)
+			}
+			text := string(content)
+			if strings.Contains(text, stale) {
+				t.Fatalf("installed command retains phase-only model wording %q", stale)
+			}
+			if !strings.Contains(text, want) {
+				t.Fatalf("installed command missing always-on model wording %q", want)
+			}
+		})
 	}
 }
 

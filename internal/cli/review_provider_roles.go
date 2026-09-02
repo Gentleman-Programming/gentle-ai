@@ -239,6 +239,24 @@ type providerValidationCheckWire struct {
 	Evidence []string `json:"evidence"`
 }
 
+// reviewProviderTargetedValidatorKnownTopLevelJSON allows providers to add
+// advisory top-level metadata without weakening strict decoding of the result's
+// admitted fields or any nested object.
+func reviewProviderTargetedValidatorKnownTopLevelJSON(payload []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return nil, err
+	}
+	for name := range fields {
+		switch name {
+		case "targeted_validation_request_hash", "correction_target_identity", "original_criteria", "correction_regression", "follow_ups":
+		default:
+			delete(fields, name)
+		}
+	}
+	return json.Marshal(fields)
+}
+
 func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, correction reviewtransaction.Snapshot) (reviewProviderTargetedValidatorRequest, error) {
 	contract, err := reviewProviderRoleContractFor(reviewProviderRoleTargetedValidator)
 	if err != nil {
@@ -470,6 +488,10 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleTargetedValidator, raw)
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	payload, err = reviewProviderTargetedValidatorKnownTopLevelJSON(payload)
+	if err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, fmt.Errorf("decode provider targeted validator result: %w", err)
 	}
 	var result facadeValidationResult
 	var wire providerValidationResultWire

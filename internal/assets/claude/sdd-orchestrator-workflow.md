@@ -210,30 +210,6 @@ Always pass the resolved `delivery_strategy`, `chain_strategy`, and PR boundary/
 
 When launching `sdd-apply`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
 
-<!-- gentle-ai:sdd-model-assignments -->
-
-## Model Assignments
-
-Read this table before the first SDD/Judgment-Day delegation in a session, cache it, and use the mapped alias only for SDD/Judgment-Day phase agents. If a phase is missing, use `default`. If the assigned model is unavailable, substitute `sonnet` and continue.
-
-The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD/Judgment-Day phase sub-agents, not generic delegation.
-
-**Mandatory phase model gate:** Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`. Generic/non-SDD delegation MUST NOT use this table; omit `model` unless the user explicitly requested an override.
-
-| Phase       | Default Model | Effort  | Reason                                     |
-| ----------- | ------------- | ------- | ------------------------------------------ |
-| sdd-explore | sonnet        | default | Reads code, structural - not architectural |
-| sdd-propose | opus          | default | Architectural decisions                    |
-| sdd-spec    | sonnet        | default | Structured writing                         |
-| sdd-design  | opus          | default | Architecture decisions                     |
-| sdd-tasks   | sonnet        | default | Mechanical breakdown                       |
-| sdd-apply   | sonnet        | default | Implementation                             |
-| sdd-verify  | sonnet        | default | Validation against spec                    |
-| sdd-archive | haiku         | default | Copy and close                             |
-| default     | sonnet        | default | SDD/JD phase fallback                      |
-
-<!-- /gentle-ai:sdd-model-assignments -->
-
 ### Sub-Agent Launch Deduplication (MANDATORY)
 
 Maintain a session-scoped launch log of `(phase, task-fingerprint)` pairs. If the same pair already exists, do NOT launch again. Emit exactly one launch per distinct task and append the pair after launch.
@@ -241,13 +217,6 @@ Maintain a session-scoped launch log of `(phase, task-fingerprint)` pairs. If th
 ### Sub-Agent Launch Protocol
 
 ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved skill paths from the skill registry. Follow `~/.claude/skills/_shared/skill-resolver.md`.
-
-Pre-flight before every SDD/Judgment-Day Agent call:
-
-1. Identify the phase key (`sdd-apply`, `sdd-verify`, `jd-judge-a`, etc.).
-2. Look up the model alias in the Model Assignments table.
-3. Include `model: "<alias>"` in SDD/Judgment-Day Agent calls.
-4. For generic/non-SDD delegation, omit `model` unless the user explicitly requested one.
 
 Resolve skills once per session, cache the registry, and pass exact `SKILL.md` paths. If a delegated result reports `skill_resolution` as `fallback-registry`, `fallback-path`, or `none`, re-read the registry before subsequent delegations.
 

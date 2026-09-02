@@ -1631,6 +1631,9 @@ func (s componentApplyStep) Run() error {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
+				if _, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter); err != nil {
+					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+				}
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
