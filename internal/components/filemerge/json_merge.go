@@ -284,6 +284,53 @@ func upsertTopLevelJSONCValue(content, key, encodedValue string) string {
 	return b.String()
 }
 
+// RemoveTopLevelJSONCValue removes a single top-level JSON/JSONC object member
+// while preserving unrelated bytes. If the key is absent, raw is returned.
+func RemoveTopLevelJSONCValue(raw []byte, key string) []byte {
+	content := string(raw)
+	nameStart, valueEnd, ok := topLevelJSONCPropertyRange(content, key)
+	if !ok {
+		return raw
+	}
+	start := nameStart
+	for start > 0 && (content[start-1] == ' ' || content[start-1] == '\t') {
+		start--
+	}
+	if lineStart := strings.LastIndex(content[:start], "\n") + 1; strings.TrimSpace(content[lineStart:start]) == "" {
+		start = lineStart
+	}
+	end := valueEnd
+	for end < len(content) && isJSONWhitespace(content[end]) {
+		end++
+	}
+	if end < len(content) && content[end] == ',' {
+		end++
+		if end < len(content) && content[end] == '\n' {
+			end++
+		}
+		return []byte(content[:start] + content[end:])
+	}
+	comma := start - 1
+	for comma >= 0 && isJSONWhitespace(content[comma]) {
+		comma--
+	}
+	if comma >= 0 && content[comma] == ',' {
+		start = comma
+	}
+	return []byte(content[:start] + content[end:])
+}
+
+func topLevelJSONCPropertyRange(content, key string) (int, int, bool) {
+	target := strconvQuote(key)
+	if start, end, ok := topLevelJSONCValueRange(content, key); ok {
+		nameStart := strings.LastIndex(content[:start], target)
+		if nameStart >= 0 {
+			return nameStart, end, true
+		}
+	}
+	return 0, 0, false
+}
+
 func topLevelJSONCObjectEnd(content string) int {
 	inString, escaped, lineComment, blockComment := false, false, false, false
 	depth := 0

@@ -108,7 +108,7 @@ func (a *Adapter) SettingsPath(homeDir string) string {
 
 func regularFileExists(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	return err == nil && info.Mode().IsRegular()
 }
 
 // --- Config strategies ---

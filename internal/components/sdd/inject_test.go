@@ -22,6 +22,7 @@ import (
 	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
@@ -1517,6 +1518,59 @@ func TestInjectOpenCodeMigratesLegacyBaseOrchestratorToGentleOrchestrator(t *tes
 	}
 }
 
+func TestInjectOpenCodeMigratesLegacyBaseOrchestratorPreservesUnrelatedJSONCComments(t *testing.T) {
+	seed := []byte(`// leading comment must stay byte-exact
+{
+  "username": "jsonc-user", // username comment must stay
+  "agent": {
+    "sdd-orchestrator": {"mode":"primary","prompt":"LEGACY_PROMPT"},
+    "sdd-orchestrator-cheap": {"mode":"primary"},
+  },
+  // outside agent comment must stay
+  "theme": "dark",
+}
+`)
+	content, err := migrateLegacyOpenCodeSDDOrchestrator(seed)
+	if err != nil {
+		t.Fatalf("migrateLegacyOpenCodeSDDOrchestrator() error = %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{"// leading comment must stay byte-exact", `"username": "jsonc-user", // username comment must stay`, "// outside agent comment must stay"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated opencode.jsonc lost unrelated comment/format %q:\n%s", want, text)
+		}
+	}
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
+		t.Fatalf("UnmarshalJSONObject(opencode.jsonc) error = %v", err)
+	}
+	agents := root["agent"].(map[string]any)
+	if _, exists := agents["sdd-orchestrator"]; exists {
+		t.Fatal("legacy sdd-orchestrator should be removed")
+	}
+	if _, exists := agents["sdd-orchestrator-cheap"]; !exists {
+		t.Fatal("profile orchestrator should be preserved")
+	}
+	if _, exists := agents["gentle-orchestrator"]; !exists {
+		t.Fatal("gentle-orchestrator should be created from legacy agent")
+	}
+}
+
+func TestHasOpenCodeAgentKeyAcceptsJSONC(t *testing.T) {
+	settings := `// user settings
+{
+  "agent": {
+    "gentle-orchestrator": {"mode": "primary",},
+  },
+}`
+	if !hasOpenCodeAgentKey(settings, "gentle-orchestrator") {
+		t.Fatal("hasOpenCodeAgentKey() = false, want true for JSONC settings")
+	}
+	if hasOpenCodeAgentKey(`{"agent":`, "gentle-orchestrator") {
+		t.Fatal("hasOpenCodeAgentKey() = true for malformed settings, want false")
+	}
+}
+
 func TestInjectOpenCodeMigratesMisnamedGentlemanSDDOrchestrator(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -1734,6 +1788,40 @@ func TestInjectOpenCodeMigratesLegacyAgentsKey(t *testing.T) {
 	}
 	if _, ok := agentMap["sdd-orchestrator"]; ok {
 		t.Fatal("legacy sdd-orchestrator agent should not remain after merge")
+	}
+}
+
+func TestInjectOpenCodeMigratesLegacyAgentsKeyPreservesUnrelatedJSONCComments(t *testing.T) {
+	seed := []byte(`// leading comment must stay
+{
+  "username": "jsonc-user", // keep username line
+  "agents": {
+    "legacy-agent": {"mode": "all", "prompt": "{file:./AGENTS.md}",},
+  },
+  // keep trailing setting comment
+  "theme": "dark",
+}
+`)
+	content, err := migrateLegacyOpenCodeAgentsKey(seed)
+	if err != nil {
+		t.Fatalf("migrateLegacyOpenCodeAgentsKey() error = %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{"// leading comment must stay", `"username": "jsonc-user", // keep username line`, "// keep trailing setting comment"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated opencode.jsonc lost unrelated comment/format %q:\n%s", want, text)
+		}
+	}
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
+		t.Fatalf("UnmarshalJSONObject(opencode.jsonc) error = %v", err)
+	}
+	if _, hasLegacy := root["agents"]; hasLegacy {
+		t.Fatal("legacy agents key should be removed")
+	}
+	agents := root["agent"].(map[string]any)
+	if _, ok := agents["legacy-agent"]; !ok {
+		t.Fatal("legacy-agent should move under agent")
 	}
 }
 
@@ -7793,6 +7881,17 @@ func TestMigrateLegacyOpenCodeCommandPrompt(t *testing.T) {
 			wantField: map[string]string{"x": "body"},
 			wantNoKey: []string{"x"},
 		},
+		{
+			name: "accepts commented trailing-comma JSONC",
+			input: `// user command config
+{
+  "command": {
+    "skill-creator": {"description": "Create a skill", "prompt": "Load skill-creator",},
+  },
+}`,
+			wantField: map[string]string{"skill-creator": "Load skill-creator"},
+			wantNoKey: []string{"skill-creator"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -7801,8 +7900,8 @@ func TestMigrateLegacyOpenCodeCommandPrompt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("migrateLegacyOpenCodeCommandPrompt() error = %v", err)
 			}
-			root := map[string]any{}
-			if err := json.Unmarshal(out, &root); err != nil {
+			root, err := filemerge.UnmarshalJSONObject(out)
+			if err != nil {
 				t.Fatalf("result is not valid JSON: %v", err)
 			}
 			commands, _ := root["command"].(map[string]any)

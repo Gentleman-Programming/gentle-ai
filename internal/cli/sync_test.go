@@ -859,6 +859,41 @@ func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
 	}
 }
 
+func TestSyncPersonaRollbackRestoresPiSystemPromptFile(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	before := []byte("user text before\n\n<!-- gentle-ai:persona -->\nstale persona\n<!-- /gentle-ai:persona -->\n\nuser text after\n")
+	mustWriteFile(t, appendSystemPath, before)
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentID("later-failure")},
+		Persona:    model.PersonaNeutral,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, appendSystemPath) {
+		t.Fatalf("sync backup targets omit Pi system prompt file: %v", targets)
+	}
+	if containsPath(syncPersonaPathsWithWorkspace(home, "", selection, resolveAdapters(selection.Agents)), appendSystemPath) {
+		t.Fatalf("sync persona paths include backup-only Pi system prompt file")
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(appendSystemPath)
+	if err != nil {
+		t.Fatalf("ReadFile(Pi system prompt) error = %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("Pi system prompt after rollback = %q, want exact before-image %q", after, before)
+	}
+}
+
 func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	home := t.TempDir()
 

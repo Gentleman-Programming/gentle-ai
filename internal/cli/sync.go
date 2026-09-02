@@ -651,6 +651,9 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		if component == model.ComponentPersona {
 			plan := persona.ResourcePlanFor(selection.Persona)
 			for _, adapter := range adapters {
+				if adapter.Agent() == model.AgentPi {
+					paths[adapter.SystemPromptFile(homeDir)] = struct{}{}
+				}
 				if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 					// Persona sync can remove stale managed agent state from settings.
 					// This target is backup-only: syncPersonaPaths intentionally does

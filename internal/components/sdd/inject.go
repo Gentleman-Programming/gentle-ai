@@ -2447,11 +2447,11 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 		delete(agentsMap, "gentleman")
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agentsMap}})
 	if err != nil {
 		return nil, err
 	}
-	return append(encoded, '\n'), nil
+	return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
 }
 
 func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
@@ -2483,8 +2483,8 @@ func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
 }
 
 func hasOpenCodeAgentKey(settingsText, agentKey string) bool {
-	root := map[string]any{}
-	if err := json.Unmarshal([]byte(settingsText), &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject([]byte(settingsText))
+	if err != nil {
 		return false
 	}
 	agentsRaw, ok := root["agent"]
@@ -2522,12 +2522,7 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 
 	legacy, ok := legacyRaw.(map[string]any)
 	if !ok {
-		delete(root, "agents")
-		encoded, err := json.MarshalIndent(root, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		return append(encoded, '\n'), nil
+		return filemerge.RemoveTopLevelJSONCValue(baseJSON, "agents"), nil
 	}
 
 	current := map[string]any{}
@@ -2546,12 +2541,15 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	root["agent"] = current
 	delete(root, "agents")
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": current}})
 	if err != nil {
 		return nil, err
 	}
-
-	return append(encoded, '\n'), nil
+	updated, err := filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
+	if err != nil {
+		return nil, err
+	}
+	return filemerge.RemoveTopLevelJSONCValue(updated, "agents"), nil
 }
 
 // migrateLegacyOpenCodeCommandPrompt normalizes inline OpenCode command entries
@@ -2568,8 +2566,8 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}
@@ -2602,12 +2600,11 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"command": map[string]any{"__replace__": commandsRaw}})
 	if err != nil {
 		return nil, err
 	}
-
-	return append(encoded, '\n'), nil
+	return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
 }
 
 // sddOrchestratorMarkers are used to detect if SDD content was already injected
