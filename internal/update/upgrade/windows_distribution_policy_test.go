@@ -14,6 +14,9 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 	originalExec := execCommand
 	t.Cleanup(func() { execCommand = originalExec })
 	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "scoop" && len(args) == 2 && args[0] == "config" && args[1] == "root_path" {
+			return mockCmd("echo", "'root_path' is not set")
+		}
 		t.Fatalf("Windows omission policy executed %s %v", name, args)
 		return nil
 	}
