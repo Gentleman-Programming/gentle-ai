@@ -376,7 +376,7 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
-	configureProcessGroup(cmd)
+	afterStart, release := configureProcessGroup(cmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -391,10 +391,16 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 	}
 
 	if err := cmd.Start(); err != nil {
+		if release != nil {
+			release()
+		}
 		_ = stdoutPipe.Close()
 		_ = stderrPipe.Close()
 		cancel()
 		return nil, err
+	}
+	if afterStart != nil {
+		afterStart()
 	}
 
 	stream := newBoundedPipeBuffer(maxCatalogOutput, cancel)
@@ -437,6 +443,7 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 		stream:     stream,
 		stderrDone: stderrDone,
 		stdoutDone: stdoutDone,
+		release:    release,
 		cancel:     cancel,
 	}, nil
 }
@@ -520,9 +527,12 @@ type processStreamReader struct {
 	stream     *boundedPipeBuffer
 	stderrDone chan struct{}
 	stdoutDone chan struct{}
-	cancel     context.CancelFunc
-	closed     bool
-	waitErr    error
+	// release frees platform process-tree state (the Windows Job Object
+	// handle); nil on Unix where there is nothing to release.
+	release func()
+	cancel  context.CancelFunc
+	closed  bool
+	waitErr error
 }
 
 // Read serves drained stdout bytes. Once the stream is exhausted it reaps
@@ -596,6 +606,9 @@ func (p *processStreamReader) closeAndReap() {
 	p.waitErr = p.cmd.Wait()
 	if p.stderrDone != nil {
 		<-p.stderrDone
+	}
+	if p.release != nil {
+		p.release()
 	}
 }
 
