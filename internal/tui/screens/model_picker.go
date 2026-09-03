@@ -2,6 +2,7 @@ package screens
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -78,11 +79,17 @@ type ModelPickerRow struct {
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers         map[string]opencode.Provider
-	AvailableIDs      []string                    // provider IDs with tool_call-capable models
-	SDDModels         map[string][]opencode.Model // provider ID -> SDD-capable models
-	ConfigWarning     string
-	CatalogStatus     RuntimeCatalogStatus
+	Providers     map[string]opencode.Provider
+	AvailableIDs  []string                    // provider IDs with tool_call-capable models
+	SDDModels     map[string][]opencode.Model // provider ID -> SDD-capable models
+	ConfigWarning string
+	CatalogStatus RuntimeCatalogStatus
+	// CatalogError retains the typed discovery failure from the last runtime
+	// catalog attempt so the failed-phase message can state the real cause
+	// (timeout, oversized output, malformed catalog) instead of always
+	// blaming a missing OpenCode binary. It is cleared after a successful
+	// refresh.
+	CatalogError      error
 	CatalogRequestID  uint64
 	CatalogProjectDir string
 
@@ -130,6 +137,9 @@ type ModelPickerState struct {
 	catalogDiscover RuntimeCatalogDiscoverer
 }
 
+// NewRuntimeModelPickerStateWithDiscoverer builds the picker state with a
+// runtime catalog discoverer, starting in the loading phase and seeding the
+// custom native agent list from the project's opencode.json.
 func NewRuntimeModelPickerStateWithDiscoverer(settingsPath string, discover RuntimeCatalogDiscoverer) ModelPickerState {
 	state := ModelPickerState{Providers: map[string]opencode.Provider{}, SDDModels: map[string][]opencode.Model{}, CatalogStatus: RuntimeCatalogLoading, Mode: ModePhaseList, catalogDiscover: discover}
 	if agents, err := sdd.DiscoverCustomAgents(settingsPath); err != nil {
@@ -140,6 +150,9 @@ func NewRuntimeModelPickerStateWithDiscoverer(settingsPath string, discover Runt
 	return state
 }
 
+// StartRuntimeCatalogDiscovery launches the async OpenCode catalog discovery
+// for projectDir, tagging the request so late or stale discovery results can
+// be ignored by Update.
 func (state *ModelPickerState) StartRuntimeCatalogDiscovery(requestID uint64, projectDir string) tea.Cmd {
 	state.CatalogRequestID = requestID
 	state.CatalogProjectDir = projectDir
@@ -153,6 +166,11 @@ func (state *ModelPickerState) StartRuntimeCatalogDiscovery(requestID uint64, pr
 	}
 }
 
+// Update applies runtime catalog discovery results to the picker state.
+// Stale requests (mismatched request ID or project dir) are ignored; a failed
+// discovery records the typed CatalogError for truthful diagnostics, while a
+// success clears it and transitions to ready (or empty when no provider offers
+// SDD-capable models).
 func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	if discovery, ok := msg.(RuntimeCatalogDiscoveryMsg); ok {
 		if discovery.RequestID != state.CatalogRequestID || discovery.ProjectDir != state.CatalogProjectDir {
@@ -160,8 +178,10 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		}
 		if discovery.Err != nil {
 			state.CatalogStatus = RuntimeCatalogFailed
+			state.CatalogError = discovery.Err
 			return state
 		}
+		state.CatalogError = nil
 		state.Providers = discovery.Providers
 		state.refreshRuntimeModels()
 		state.CatalogStatus = RuntimeCatalogReady
@@ -173,6 +193,9 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	return state
 }
 
+// refreshRuntimeModels recomputes the provider list and SDD-capable models
+// from the discovered catalog, keeping only providers that offer tool_call
+// capable models.
 func (state *ModelPickerState) refreshRuntimeModels() {
 	state.AvailableIDs = state.AvailableIDs[:0]
 	state.SDDModels = make(map[string][]opencode.Model, len(state.Providers))
@@ -809,8 +832,7 @@ func renderPhaseList(
 			message = "Discovering models from OpenCode..."
 			subtext = "You can continue with default assignments while discovery runs."
 		case RuntimeCatalogFailed:
-			message = "Could not discover models from OpenCode."
-			subtext = "Verify OpenCode is installed and can run in this project, then return to this picker."
+			message, subtext = modelPickerCatalogFailureExplanation(state.CatalogError)
 		}
 		b.WriteString(styles.WarningStyle.Render(message))
 		b.WriteString("\n")
@@ -1043,4 +1065,28 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	}
 
 	return provName, modelName
+}
+
+// modelPickerCatalogFailureExplanation renders the user-facing diagnostic for
+// a failed runtime catalog discovery. Each CatalogError kind maps to a truthful
+// headline and next step so the picker never blames a missing OpenCode binary
+// for failures caused by output size, timeouts, or malformed catalogs. Unknown
+// errors keep the generic installation guidance.
+func modelPickerCatalogFailureExplanation(err error) (string, string) {
+	var catalogErr *opencode.CatalogError
+	if errors.As(err, &catalogErr) {
+		switch catalogErr.Kind {
+		case opencode.CatalogErrorOutputTooLarge:
+			return "OpenCode model catalog is too large.", "OpenCode produced more model data than can be safely processed. Check your configured providers."
+		case opencode.CatalogErrorTimeout:
+			return "Model discovery timed out.", "OpenCode took too long to return models for this project. Check your OpenCode configuration."
+		case opencode.CatalogErrorCommandFailed:
+			return "Could not discover models from OpenCode.", "OpenCode command failed. Verify OpenCode can run in this project, then return to this picker."
+		case opencode.CatalogErrorMalformed, opencode.CatalogErrorUnsupportedSchema:
+			return "Could not parse models from OpenCode.", "OpenCode returned an unexpected model catalog format. Verify your OpenCode version."
+		case opencode.CatalogErrorMissingBinary:
+			return "Could not discover models from OpenCode.", "Verify OpenCode is installed and can run in this project, then return to this picker."
+		}
+	}
+	return "Could not discover models from OpenCode.", "Verify OpenCode is installed and can run in this project, then return to this picker."
 }
