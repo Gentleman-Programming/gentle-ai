@@ -189,8 +189,10 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 		modelValue, hasModel := def["model"]
 		modelSpec, _ := modelValue.(string)
 		if !hasModel || strings.TrimSpace(modelSpec) == "" {
-			managed := looksLikeManagedOpenCodeAgent(def)
-			assignments[key] = AssignmentPresence{Present: true, Cleared: !managed, Managed: managed}
+			// Presence is the pre-write evidence that an existing assignment was
+			// cleared. Restoration may exempt a managed definition when its active
+			// mode intentionally generates agents without model fields.
+			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(def)}
 			continue
 		}
 		providerID, modelID, ok := model.SplitModelSpec(strings.TrimSpace(modelSpec))

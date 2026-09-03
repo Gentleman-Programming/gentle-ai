@@ -50,11 +50,16 @@ func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte,
 	}
 	base, err := unmarshalJSONObject(baseJSON)
 	if err != nil {
-		return MergeJSONObjects(baseJSON, overlayJSON)
+		return baseJSON, fmt.Errorf("refuse to merge malformed jsonc: %w", err)
 	}
 	overlay, err := unmarshalJSONObject(overlayJSON)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
+	}
+	for key := range overlay {
+		if topLevelJSONCKeyCount(string(baseJSON), key) > 1 {
+			return baseJSON, fmt.Errorf("refuse to merge jsonc with duplicate touched top-level key %q", key)
+		}
 	}
 
 	merged := mergeObjects(base, overlay)
@@ -248,6 +253,73 @@ func stripTrailingCommas(raw []byte) []byte {
 	}
 
 	return out
+}
+
+// topLevelJSONCKeyCount counts exact top-level object keys without normalizing
+// the document. It is intentionally narrow: callers only need to reject a
+// duplicate key they are about to rewrite, while untouched duplicate keys remain
+// user-owned and are left byte-for-byte intact.
+func topLevelJSONCKeyCount(content, key string) int {
+	count := 0
+	inString, escaped, lineComment, blockComment := false, false, false, false
+	depth := 0
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && i+1 < len(content) && content[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '/' && i+1 < len(content) {
+			if content[i+1] == '/' {
+				lineComment = true
+				i++
+				continue
+			}
+			if content[i+1] == '*' {
+				blockComment = true
+				i++
+				continue
+			}
+		}
+		if ch == '"' {
+			if depth == 1 && strings.HasPrefix(content[i:], strconvQuote(key)) {
+				end := i + len(strconvQuote(key))
+				if end < len(content) && (isJSONWhitespace(content[end]) || content[end] == ':' || content[end] == '/') {
+					end = scanJSONCWhitespaceAndComments(content, end)
+					if end < len(content) && content[end] == ':' {
+						count++
+					}
+				}
+			}
+			inString = true
+			continue
+		}
+		if ch == '{' || ch == '[' {
+			depth++
+		} else if ch == '}' || ch == ']' {
+			depth--
+		}
+	}
+	return count
 }
 
 func upsertTopLevelJSONCValue(content, key, encodedValue string) string {

@@ -168,6 +168,36 @@ func TestMergeJSONObjectsPreserveJSONCExistingFinalMemberIdempotent(t *testing.T
 	}
 }
 
+func TestMergeJSONObjectsPreserveJSONCRejectsMalformedInputWithoutReplacingBytes(t *testing.T) {
+	base := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
+	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err == nil {
+		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for malformed JSONC")
+	}
+	if string(merged) != string(base) {
+		t.Fatalf("malformed JSONC was replaced:\n got: %q\nwant: %q", merged, base)
+	}
+}
+
+func TestMergeJSONObjectsPreserveJSONCRejectsDuplicateTouchedTopLevelKey(t *testing.T) {
+	base := []byte(`{
+  "agent": {"effective": "stale"},
+  "agent": {"effective": "current"}
+}
+`)
+	overlay := []byte(`{"agent":{"managed":true}}`)
+
+	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	if err == nil {
+		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for duplicate touched top-level key")
+	}
+	if string(merged) != string(base) {
+		t.Fatalf("duplicate-key JSONC was modified on refusal:\n got: %q\nwant: %q", merged, base)
+	}
+}
+
 func TestMergeJSONObjectsMalformedBaseReturnsOverlayOnly(t *testing.T) {
 	// Real user machines (e.g. Windows) may have a malformed ~/.cursor/mcp.json.
 	// The installer should recover by treating the broken base as {} and continuing.

@@ -1069,7 +1069,7 @@ func (s componentSyncStep) Run() error {
 			settingsPath := ""
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentOpenCode {
-					settingsPath = adapter.SettingsPath(s.homeDir)
+					settingsPath = effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter)
 					break
 				}
 			}
@@ -1095,6 +1095,7 @@ func (s componentSyncStep) Run() error {
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
+				OpenCodeSettingsPath:               effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter),
 				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
 				ClaudePhaseAssignments:             s.selection.ClaudePhaseAssignments,
 				KiroModelAssignments:               s.selection.KiroModelAssignments,
@@ -1563,7 +1564,8 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		applyResolvedPersona(&selection, persistedPersona)
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
-		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, persistedState, selection.SDDMode)
+		workspaceDir, _ := os.Getwd()
+		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, ScopeGlobal, persistedState, selection.SDDMode)
 	}
 
 	// Migrate a persisted legacy alias BEFORE any early return: a no-agent
@@ -1802,7 +1804,8 @@ func RunSync(args []string) (SyncResult, error) {
 		selection.KiroModelAssignments = m
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
-		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, persistedState, selection.SDDMode)
+		workspaceDir, _ := os.Getwd()
+		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, ScopeGlobal, persistedState, selection.SDDMode)
 	}
 	if selection.CodexOrchestratorAssignment == nil && persistedState.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(persistedState.CodexOrchestratorAssignment)
@@ -1889,15 +1892,15 @@ func RunSync(args []string) (SyncResult, error) {
 	return result, nil
 }
 
-func restoreOpenCodeModelAssignmentsFromState(homeDir string, persistedState state.InstallState, sddMode model.SDDModeID) map[string]model.ModelAssignment {
+func restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir string, scope InstallScope, persistedState state.InstallState, sddMode model.SDDModeID) map[string]model.ModelAssignment {
 	if len(persistedState.ModelAssignments) == 0 {
 		return nil
 	}
 	presence := map[string]opencodeactivation.AssignmentPresence{}
-	settingsPath := effectiveOpenCodeSettingsPath(homeDir, opencodeagent.NewAdapter())
+	settingsPath := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter())
 	if settingsPath != "" {
 		if _, err := os.Stat(settingsPath); err == nil {
-			snapshot, err := opencodeactivation.ResolveEffectiveConfig(filepath.Dir(settingsPath))
+			snapshot, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, filepath.Dir(settingsPath))
 			if err == nil && snapshot.Path == settingsPath {
 				presence = snapshot.Assignments
 			}
@@ -1907,7 +1910,13 @@ func restoreOpenCodeModelAssignmentsFromState(homeDir string, persistedState sta
 	assignments := make(map[string]model.ModelAssignment, len(persistedState.ModelAssignments))
 	for k, v := range persistedState.ModelAssignments {
 		if current, exists := presence[k]; exists && current.Present {
-			if current.Cleared || current.Assignment.ProviderID != "" || current.Assignment.ModelID != "" {
+			// Single mode intentionally generates managed agents without model fields,
+			// so their absence is not evidence of a user clear. Multi mode writes
+			// assignments into managed agents, making an absent/empty value explicit.
+			if current.Cleared && !(sddMode == model.SDDModeSingle && current.Managed) {
+				continue
+			}
+			if current.Assignment.ProviderID != "" || current.Assignment.ModelID != "" {
 				continue
 			}
 		}

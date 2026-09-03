@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeconfig "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -958,7 +959,7 @@ func TestRunSyncPreservesCurrentOpenCodeAssignmentOverStaleState(t *testing.T) {
 		agents:    []model.AgentID{model.AgentOpenCode},
 		selection: model.Selection{
 			SDDMode:          model.SDDModeMulti,
-			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
+			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti),
 		},
 		changedFiles: &changedFiles,
 	}
@@ -1018,7 +1019,7 @@ func TestRunSyncPreservesClearedOpenCodeAssignmentOverStaleState(t *testing.T) {
 		agents:    []model.AgentID{model.AgentOpenCode},
 		selection: model.Selection{
 			SDDMode:          model.SDDModeMulti,
-			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti),
+			ModelAssignments: restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti),
 		},
 		changedFiles: &changedFiles,
 	}
@@ -1033,6 +1034,157 @@ func TestRunSyncPreservesClearedOpenCodeAssignmentOverStaleState(t *testing.T) {
 	initAgent := settings["sdd-init"].(map[string]any)
 	if got := initAgent["model"]; got != "openai/gpt-root" {
 		t.Fatalf("new SDD agent model = %v, want root model fallback to still apply", got)
+	}
+}
+
+func TestComponentSyncStepWritesSDDModelsToEffectiveProjectOpenCodeConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	projectSettings := filepath.Join(workspace, "opencode.jsonc")
+	globalSettings := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	mustWriteFile(t, projectSettings, []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent"}
+  }
+}
+`))
+	globalBefore := []byte(`{
+  "agent": {
+    "sdd-apply": {"model": "global/unchanged"}
+  }
+}
+`)
+	mustWriteFile(t, globalSettings, globalBefore)
+
+	snapshot, err := opencodeconfig.ResolveEffectiveConfigForHome(home, workspace)
+	if err != nil {
+		t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+	}
+	if snapshot.Path != projectSettings || snapshot.WritePath != projectSettings {
+		t.Fatalf("effective config paths = (%q, %q), want project config %q", snapshot.Path, snapshot.WritePath, projectSettings)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+		ModelAssignments: map[string]model.ModelAssignment{
+			"sdd-apply": {ProviderID: "openai", ModelID: "gpt-project"},
+		},
+	}
+	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, projectSettings) {
+		t.Fatalf("sync backup targets omit effective project config %q: %v", projectSettings, targets)
+	}
+	if containsPath(targets, globalSettings) {
+		t.Fatalf("sync backup targets include non-effective global config %q: %v", globalSettings, targets)
+	}
+
+	var changed []string
+	step := componentSyncStep{
+		component:    model.ComponentSDD,
+		homeDir:      home,
+		workspaceDir: workspace,
+		agents:       selection.Agents,
+		selection:    selection,
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	projectAgents := readOpenCodeAgentMap(t, projectSettings)
+	projectApply := projectAgents["sdd-apply"].(map[string]any)
+	if got := projectApply["model"]; got != "openai/gpt-project" {
+		t.Fatalf("project sdd-apply model = %v, want openai/gpt-project", got)
+	}
+	if !containsPath(changed, projectSettings) {
+		t.Fatalf("ChangedFiles = %v, want effective project config %q", changed, projectSettings)
+	}
+	if containsPath(changed, globalSettings) {
+		t.Fatalf("ChangedFiles = %v, must not include non-effective global config %q", changed, globalSettings)
+	}
+	globalAfter, err := os.ReadFile(globalSettings)
+	if err != nil {
+		t.Fatalf("ReadFile(global config) error = %v", err)
+	}
+	if !bytes.Equal(globalAfter, globalBefore) {
+		t.Fatalf("non-effective global config changed:\n got: %s\nwant: %s", globalAfter, globalBefore)
+	}
+}
+
+func TestRestoreOpenCodeModelAssignmentsDoesNotRestoreExplicitClearOnGeneratedAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		clear func(map[string]any)
+	}{
+		{
+			name: "model and variant removed",
+			clear: func(agent map[string]any) {
+				delete(agent, "model")
+				delete(agent, "variant")
+			},
+		},
+		{
+			name: "model and variant empty",
+			clear: func(agent map[string]any) {
+				agent["model"] = ""
+				agent["variant"] = ""
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter, err := agents.NewAdapter(model.AgentOpenCode)
+			if err != nil {
+				t.Fatalf("NewAdapter(opencode) error = %v", err)
+			}
+			if _, err := sdd.Inject(home, adapter, model.SDDModeMulti, sdd.InjectOptions{
+				OpenCodeModelAssignments: map[string]model.ModelAssignment{
+					"sdd-apply": {ProviderID: "openai", ModelID: "gpt-generated", Effort: "high"},
+				},
+			}); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			raw, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(generated settings) error = %v", err)
+			}
+			root, err := filemerge.UnmarshalJSONObject(raw)
+			if err != nil {
+				t.Fatalf("UnmarshalJSONObject(generated settings) error = %v", err)
+			}
+			agentsMap := root["agent"].(map[string]any)
+			applyAgent := agentsMap["sdd-apply"].(map[string]any)
+			if applyAgent["model"] != "openai/gpt-generated" || applyAgent["variant"] != "high" {
+				t.Fatalf("generated sdd-apply definition lacks assigned model and variant: %#v", applyAgent)
+			}
+			tc.clear(applyAgent)
+			updated, err := json.MarshalIndent(root, "", "  ")
+			if err != nil {
+				t.Fatalf("MarshalIndent(cleared generated settings) error = %v", err)
+			}
+			mustWriteFile(t, settingsPath, append(updated, '\n'))
+
+			if err := state.Write(home, state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+				"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+			}}); err != nil {
+				t.Fatalf("state.Write() error = %v", err)
+			}
+			persisted, err := state.Read(home)
+			if err != nil {
+				t.Fatalf("state.Read() error = %v", err)
+			}
+
+			restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti)
+			if assignment, restoredStale := restored["sdd-apply"]; restoredStale {
+				t.Fatalf("explicitly cleared generated assignment was restored from stale state: %#v", assignment)
+			}
+		})
 	}
 }
 
@@ -1051,7 +1203,7 @@ func TestRestoreOpenCodeModelAssignmentsSkipsClearedAssignmentInSingleMode(t *te
 		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
 	}}
 
-	restored := restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeSingle)
+	restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeSingle)
 	if _, exists := restored["sdd-apply"]; exists {
 		t.Fatalf("single-mode cleared assignment restored stale state: %#v", restored)
 	}
@@ -1072,7 +1224,7 @@ func TestRestoreOpenCodeModelAssignmentsRestoresMalformedAssignmentSpec(t *testi
 		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
 	}}
 
-	restored := restoreOpenCodeModelAssignmentsFromState(home, persisted, model.SDDModeMulti)
+	restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti)
 	if got := restored["sdd-apply"]; got.ProviderID != "openai" || got.ModelID != "gpt-stale" || got.Effort != "low" {
 		t.Fatalf("malformed assignment spec was not restored from state: %#v", restored)
 	}

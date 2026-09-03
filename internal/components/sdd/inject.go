@@ -28,6 +28,9 @@ type InjectionResult struct {
 
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
+	// OpenCodeSettingsPath is the resolver-selected effective config path. When
+	// empty, injection preserves the adapter's global-path fallback.
+	OpenCodeSettingsPath string
 	// IncludeOpenCodeBackgroundPolicy includes the resolved OpenCode-only
 	// background-task policy in rendered prompts. The zero value is false. The
 	// caller MUST set this only after a later intent/capability resolution step;
@@ -382,18 +385,18 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if err := validateOpenClawWorkspacePath(homeDir, adapter); err != nil {
 		return InjectionResult{}, err
 	}
-	var defaultPlan *opencodedefault.InstallPlan
-	if adapter.Agent() == model.AgentOpenCode {
-		var err error
-		defaultPlan, err = opencodedefault.PrepareInstall(openCodeSettingsPath(homeDir, adapter))
-		if err != nil {
-			return InjectionResult{}, err
-		}
-	}
-
 	var opts InjectOptions
 	if len(options) > 0 {
 		opts = options[0]
+	}
+	settingsPath := openCodeSettingsPath(homeDir, adapter, opts.OpenCodeSettingsPath)
+	var defaultPlan *opencodedefault.InstallPlan
+	if adapter.Agent() == model.AgentOpenCode {
+		var err error
+		defaultPlan, err = opencodedefault.PrepareInstall(settingsPath)
+		if err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	files := make([]string, 0)
@@ -544,7 +547,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-		settingsPath := openCodeSettingsPath(homeDir, adapter)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
@@ -854,7 +856,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// opposite failure mode can also occur (in-memory buffer stale but
 	// disk has the correct content).
 	if adapter.Agent() == model.AgentOpenCode {
-		settingsPath := openCodeSettingsPath(homeDir, adapter)
 		settingsText := string(mergedSettingsBytes)
 
 		// Fallback: if in-memory bytes are empty but the merge succeeded
@@ -930,7 +931,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-func openCodeSettingsPath(homeDir string, adapter agents.Adapter) string {
+func openCodeSettingsPath(homeDir string, adapter agents.Adapter, effectivePath string) string {
+	if effectivePath != "" {
+		return effectivePath
+	}
 	return adapter.SettingsPath(homeDir)
 }
 
