@@ -145,6 +145,75 @@ func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing
 	}
 }
 
+func TestSnapshotIndexSemanticsAllowWriteTreePhysicalRewrite(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "staged candidate\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	before, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(index before): %v", err)
+	}
+	beforeTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	after, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(index after): %v", err)
+	}
+	if bytes.Equal(before, after) {
+		t.Fatal("fixture did not make git write-tree rewrite the physical index")
+	}
+	afterTree := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	if afterTree != beforeTree {
+		t.Fatalf("write-tree changed candidate tree: before=%s after=%s", beforeTree, afterTree)
+	}
+	equal, err := snapshotIndexSemanticsEqual(context.Background(), repo, indexPath, before, after)
+	if err != nil {
+		t.Fatalf("snapshotIndexSemanticsEqual(write-tree rewrite) error = %v", err)
+	}
+	if !equal {
+		t.Fatal("write-tree physical index rewrite changed semantic index fingerprint")
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatalf("Build(staged) after write-tree rewrite error = %v", err)
+	}
+	if err := (SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("ValidateLiveSnapshot after write-tree physical rewrite error = %v", err)
+	}
+}
+
+func TestSnapshotIndexSemanticsDetectStagingMutation(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	before, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(index before): %v", err)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "mutated candidate\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	after, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(index after): %v", err)
+	}
+	equal, err := snapshotIndexSemanticsEqual(context.Background(), repo, indexPath, before, after)
+	if err != nil {
+		t.Fatalf("snapshotIndexSemanticsEqual(staging mutation) error = %v", err)
+	}
+	if equal {
+		t.Fatal("semantic staging mutation was treated as an unchanged index")
+	}
+}
+
 func TestSnapshotBuilderCurrentChangesPreservesRacyCleanDetection(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)

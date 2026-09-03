@@ -1113,28 +1113,108 @@ func canonicalGitDirectory(repo string, output []byte) (string, error) {
 	return filepath.Clean(directory), nil
 }
 
-func readSnapshotIndex(path string) ([]byte, time.Time, error) {
-	file, err := os.Open(path)
+func readSnapshotIndex(ctx context.Context, repo, path string) ([]byte, time.Time, error) {
+	payload, modTime, stable, complete, err := readSnapshotIndexPhysical(path)
 	if err != nil {
 		return nil, time.Time{}, err
+	}
+	if stable {
+		return payload, modTime, nil
+	}
+	if !complete {
+		return nil, time.Time{}, errors.New("real index changed while being copied")
+	}
+	live, liveModTime, err := readStableSnapshotIndexPhysical(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	equal, err := snapshotIndexSemanticsEqual(ctx, repo, path, payload, live)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("compare changed real index semantics: %w", err)
+	}
+	if !equal {
+		return nil, time.Time{}, errors.New("real index changed while being copied")
+	}
+	return live, liveModTime, nil
+}
+
+func readStableSnapshotIndexPhysical(path string) ([]byte, time.Time, error) {
+	for range 3 {
+		payload, modTime, stable, _, err := readSnapshotIndexPhysical(path)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if stable {
+			return payload, modTime, nil
+		}
+	}
+	return nil, time.Time{}, errors.New("real index changed while being copied")
+}
+
+func readSnapshotIndexPhysical(path string) ([]byte, time.Time, bool, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, time.Time{}, false, false, err
 	}
 	defer file.Close()
 	before, err := file.Stat()
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, false, false, err
 	}
 	payload, err := io.ReadAll(file)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, false, false, err
 	}
 	after, err := file.Stat()
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, false, false, err
 	}
-	if before.Size() != after.Size() || before.ModTime() != after.ModTime() || int64(len(payload)) != after.Size() {
-		return nil, time.Time{}, errors.New("real index changed while being copied")
+	complete := int64(len(payload)) == before.Size()
+	stable := before.Size() == after.Size() && before.ModTime() == after.ModTime() && int64(len(payload)) == after.Size()
+	return payload, after.ModTime(), stable, complete, nil
+}
+
+type snapshotIndexSemantics struct {
+	CandidateTree string
+	Entries       []byte
+}
+
+func snapshotIndexSemanticsEqual(ctx context.Context, repo, indexPath string, left, right []byte) (bool, error) {
+	leftSemantics, err := snapshotIndexSemanticsForContent(ctx, repo, indexPath, left)
+	if err != nil {
+		return false, err
 	}
-	return payload, after.ModTime(), nil
+	rightSemantics, err := snapshotIndexSemanticsForContent(ctx, repo, indexPath, right)
+	if err != nil {
+		return false, err
+	}
+	return leftSemantics.CandidateTree == rightSemantics.CandidateTree && bytes.Equal(leftSemantics.Entries, rightSemantics.Entries), nil
+}
+
+func snapshotIndexSemanticsForContent(ctx context.Context, repo, indexPath string, payload []byte) (snapshotIndexSemantics, error) {
+	temp, err := os.CreateTemp(filepath.Dir(indexPath), ".gentle-ai-review-index-compare-*")
+	if err != nil {
+		return snapshotIndexSemantics{}, err
+	}
+	tempIndex := temp.Name()
+	defer os.Remove(tempIndex)
+	if _, err := temp.Write(payload); err != nil {
+		_ = temp.Close()
+		return snapshotIndexSemantics{}, err
+	}
+	if err := temp.Close(); err != nil {
+		return snapshotIndexSemantics{}, err
+	}
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	candidateOutput, err := runGit(ctx, repo, env, nil, "write-tree")
+	if err != nil {
+		return snapshotIndexSemantics{}, err
+	}
+	entries, err := runGitInventoryWithEnv(ctx, repo, env, "ls-files", "--stage", "-z")
+	if err != nil {
+		return snapshotIndexSemantics{}, err
+	}
+	return snapshotIndexSemantics{CandidateTree: strings.TrimSpace(string(candidateOutput)), Entries: entries}, nil
 }
 
 func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string, allowStagedIntended bool, projection Projection) (string, string, string, error) {
@@ -1151,7 +1231,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 	if !filepath.IsAbs(indexPath) {
 		indexPath = filepath.Join(builder.Repo, indexPath)
 	}
-	indexContent, indexModTime, err := readSnapshotIndex(indexPath)
+	indexContent, indexModTime, err := readSnapshotIndex(ctx, builder.Repo, indexPath)
 	missingIndex := errors.Is(err, os.ErrNotExist)
 	if err != nil && !missingIndex {
 		return "", "", "", fmt.Errorf("read real index: %w", err)
