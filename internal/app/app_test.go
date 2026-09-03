@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,50 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
 )
+
+func TestRunArgsSkillRegistryListRelativeCwdMatchesAbsoluteCwd(t *testing.T) {
+	project := t.TempDir()
+	home := t.TempDir()
+	setupMockHome(t, home)
+	t.Chdir(project)
+
+	skillPath := filepath.Join(project, "skills", "local", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte("---\nname: local\ndescription: Local skill\n---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	type skillRow struct {
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
+		Path  string `json:"path"`
+	}
+	list := func(cwd string) skillRow {
+		var output bytes.Buffer
+		if err := RunArgs([]string{"skill-registry", "list", "--json", "--cwd", cwd}, &output); err != nil {
+			t.Fatalf("RunArgs(skill-registry list --cwd %s): %v", cwd, err)
+		}
+		var rows []skillRow
+		if err := json.Unmarshal(output.Bytes(), &rows); err != nil {
+			t.Fatalf("decode output for --cwd %s: %v\n%s", cwd, err, output.String())
+		}
+		if len(rows) != 1 {
+			t.Fatalf("got %d rows for --cwd %s, want 1: %s", len(rows), cwd, output.String())
+		}
+		return rows[0]
+	}
+
+	absolute := list(project)
+	relative := list(".")
+	if absolute != relative {
+		t.Fatalf("relative and absolute cwd rows differ: absolute=%+v relative=%+v", absolute, relative)
+	}
+	if absolute.Name != "local" || absolute.Scope != "project" || absolute.Path != skillPath {
+		t.Fatalf("row = %+v, want local project skill at %s", absolute, skillPath)
+	}
+}
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.

@@ -366,6 +366,12 @@ func resolveSkillRegistryDirs(cwd string) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("resolve cwd: %w", err)
 		}
+	} else if !filepath.IsAbs(cwd) {
+		var err error
+		cwd, err = filepath.Abs(cwd)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve cwd: %w", err)
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
