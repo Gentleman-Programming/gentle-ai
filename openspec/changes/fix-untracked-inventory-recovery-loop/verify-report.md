@@ -201,3 +201,56 @@ rest of the corpus undisturbed.
 
 **Unchanged caveat**: `go test ./...` was still not observed green end to end locally, for
 the three pre-existing reasons documented above. CI remains the authority.
+
+---
+
+## Merge-Time Amendment (merged as `1f9d7941`)
+
+The change shipped to `main` through PR #4066. Two further commits landed on the branch
+after the amendment above, and this section records them so the archived report matches
+what actually merged rather than what this session last verified.
+
+**1. Upstream integration (`6e321836`, authored here).** `main` advanced by 11 commits
+while the PR was open, mostly the review stop-hook work (#4067, #4071). Two conflicts, both
+adjacent insertions resolved by keeping both sides:
+
+| File | Resolution |
+|------|------------|
+| `bench/journeys.go` | Register both `stopHookJourneys()` and `untrackedInventoryRecoveryLoopJourneys()` |
+| `bench/review_declarations.go` | Declare review modes for both `j125-claude-code-stop-hook-reminds-once-per-candidate` and `j4040-untracked-inventory-recovery-loop` |
+
+No semantic overlap with this change. `internal/cli/review_facade.go` auto-merged because
+upstream added the `stop-hook` case to `runReviewCommand` while this change only touches
+`runReviewStatus`. The capabilities v2.5 / status v7 bump is independent of upstream's
+`review-provider-contract` 1.1.0 to 1.2.0 bump; they are different contracts.
+
+**2. Maintainer amendment (`67193488`, `test(bench): cover #4040 deletion recovery`).** The
+maintainer rewrote `bench/journeys_4040_untracked_inventory.go` (+57/-42) before merging.
+This supersedes the journey described in the Post-Verify Amendment above.
+
+The verified journey drove the freshness refusal with `untrackedRecoveryLoopStaleDigest`, a
+well-formed all-zero digest that is deliberately wrong. The merged journey removes that
+constant and produces real drift instead: it reads the recovery route while the candidate
+file exists, deletes the file, and then asserts that STATUS republishes a canonical digest
+distinct from the previous one, and that the now-stale digest's refusal discloses the
+canonical empty inventory that can still close the active attempt.
+
+**What this changes about this report's findings**: the 8 requirements / 13 scenarios traced
+above are unaffected. No production code, contract schema, or delta-spec requirement changed
+in either commit. The merged journey is strictly stronger evidence for the same
+requirements: it exercises the deletion direction of inventory drift, which no reporter on
+issue #4040 had covered and which the verified journey could not reach with a synthetic
+digest. The `reviewUntouched` declaration assessed in "Apply-Time Deviations Assessed" item
+2 is unchanged in the merged tree.
+
+**Evidence for the merged tree**: the re-run table in the amendment above covers the
+verified journey, not the merged one. The merged journey's execution proof is CI on PR
+#4066 and the maintainer's own validation; this session did not re-run the driven harness
+against `67193488`. Locally confirmed against the merged tree at `1f9d7941`: `go build ./...`
+clean, and from `bench/`, `go vet ./...` and `go test ./...` clean (`ok`, 6.5s). Note that
+`bench/` is a separate Go module, so `go test ./bench/...` from the repository root fails
+with a module-prefix error and is not the gate; it must be run from inside `bench/`.
+
+**Delivery**: PR #4066 merged 2026-09-03 as merge commit `1f9d7941`. Issue #4040 closed as
+completed. The fix is on `main` and is not yet carried by any published release tag, so
+occurrences reported against `2.5.0` stable remain reproducible until a release ships.
