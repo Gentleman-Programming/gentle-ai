@@ -652,6 +652,24 @@ func dedupeSortedStrings(items []string) []string {
 	return slices.Compact(cloned)
 }
 
+func settingsTargets(homeDir string, adapter agents.Adapter) []string {
+	path := adapter.SettingsPath(homeDir)
+	if path == "" {
+		return nil
+	}
+	if adapter.Agent() != model.AgentOpenCode {
+		return []string{path}
+	}
+	targets := []string{opencodeactivation.EffectiveSettingsPath(homeDir, "")}
+	legacyJSON := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
+	if legacyJSON != targets[0] {
+		if info, err := os.Stat(legacyJSON); err == nil && !info.IsDir() {
+			targets = append(targets, legacyJSON)
+		}
+	}
+	return dedupeSortedStrings(targets)
+}
+
 func (s *Service) componentOperations(adapter agents.Adapter, componentID model.ComponentID) ([]operation, []string, error) {
 	ops := make([]operation, 0)
 	targets := make([]string, 0)
@@ -674,7 +692,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeFile(path))
 			ops = append(ops, removeDirIfEmpty(adapter.OutputStyleDir(homeDir)))
 		}
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			jsonPaths := []jsonPath{{"outputStyle"}}
 			if adapter.Agent() == model.AgentOpenCode {
@@ -705,7 +723,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}))
 		}
 	case model.ComponentPermission:
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			switch adapter.Agent() {
 			case model.AgentClaudeCode:
@@ -719,7 +737,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 		}
 	case model.ComponentTheme:
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
 		}
@@ -793,35 +811,38 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			targets = append(targets, path)
 			ops = append(ops, rewriteSkillRegistryHook(path))
 		}
-		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentOpenCode {
-			defaultPlan, err := opencodedefault.PrepareUninstall(path)
-			if err != nil {
-				return nil, nil, err
-			}
-			targets = append(targets, path, opencodedefault.OwnershipPath(path))
-			paths := make([]jsonPath, 0, len(configuredAgents))
-			for _, agentKey := range configuredAgents {
-				paths = append(paths, jsonPath{"agent", agentKey})
-			}
+		if adapter.Agent() == model.AgentOpenCode {
+			for _, path := range settingsTargets(homeDir, adapter) {
+				defaultPlan, err := opencodedefault.PrepareUninstall(path)
+				if err != nil {
+					return nil, nil, err
+				}
+				targets = append(targets, path, opencodedefault.OwnershipPath(path))
+				paths := make([]jsonPath, 0, len(configuredAgents)+1)
+				for _, agentKey := range configuredAgents {
+					paths = append(paths, jsonPath{"agent", agentKey})
+				}
+				paths = append(paths, jsonPath{"agent", "default_agent"})
 
-			// Remove named SDD profile agents (suffixed keys). If a profile subset was
-			// selected in the uninstall flow, remove only those profiles; otherwise,
-			// preserve legacy behavior and remove all detected profiles.
-			if s.profileSelectionScoped {
-				for _, profileName := range s.profileNamesToRemove {
-					for _, agentKey := range sdd.ProfileAgentKeys(profileName) {
-						paths = append(paths, jsonPath{"agent", agentKey})
+				// Remove named SDD profile agents (suffixed keys). If a profile subset was
+				// selected in the uninstall flow, remove only those profiles; otherwise,
+				// preserve legacy behavior and remove all detected profiles.
+				if s.profileSelectionScoped {
+					for _, profileName := range s.profileNamesToRemove {
+						for _, agentKey := range sdd.ProfileAgentKeys(profileName) {
+							paths = append(paths, jsonPath{"agent", agentKey})
+						}
+					}
+				} else if profiles, err := sdd.DetectProfiles(path); err == nil {
+					for _, profile := range profiles {
+						for _, agentKey := range sdd.ProfileAgentKeys(profile.Name) {
+							paths = append(paths, jsonPath{"agent", agentKey})
+						}
 					}
 				}
-			} else if profiles, err := sdd.DetectProfiles(path); err == nil {
-				for _, profile := range profiles {
-					for _, agentKey := range sdd.ProfileAgentKeys(profile.Name) {
-						paths = append(paths, jsonPath{"agent", agentKey})
-					}
-				}
-			}
 
-			ops = append(ops, rewriteOpenCodeSDDSettings(path, defaultPlan, paths...))
+				ops = append(ops, rewriteOpenCodeSDDSettings(path, defaultPlan, paths...))
+			}
 
 			// The SDD plugin writer resolves the config directory through the
 			// adapter and owns the plugin list; uninstall must match it (#3219).
@@ -908,6 +929,9 @@ func context7Targets(adapter agents.Adapter, homeDir string) []string {
 		}
 		return []string{adapter.MCPConfigPath(homeDir, "context7")}
 	case model.StrategyMergeIntoSettings, model.StrategyMCPConfigFile:
+		if adapter.Agent() == model.AgentOpenCode {
+			return settingsTargets(homeDir, adapter)
+		}
 		return []string{adapter.MCPConfigPath(homeDir, "context7")}
 	default:
 		return nil
@@ -924,10 +948,14 @@ func context7Operations(adapter agents.Adapter, homeDir string) []operation {
 		path := adapter.MCPConfigPath(homeDir, "context7")
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
 	case model.StrategyMergeIntoSettings:
-		path := adapter.SettingsPath(homeDir)
 		if adapter.Agent() == model.AgentOpenCode {
-			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "context7"})}
+			ops := make([]operation, 0)
+			for _, path := range settingsTargets(homeDir, adapter) {
+				ops = append(ops, rewriteJSONFile(path, jsonPath{"mcp", "context7"}))
+			}
+			return ops
 		}
+		path := adapter.SettingsPath(homeDir)
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "context7"})}
 	case model.StrategyMCPConfigFile:
 		path := adapter.MCPConfigPath(homeDir, "context7")
@@ -953,7 +981,7 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 		}
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyMergeIntoSettings:
-		targets = append(targets, adapter.SettingsPath(homeDir))
+		targets = append(targets, settingsTargets(homeDir, adapter)...)
 	case model.StrategyMCPConfigFile:
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyTOMLFile:
@@ -975,10 +1003,14 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		}
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
 	case model.StrategyMergeIntoSettings:
-		path := adapter.SettingsPath(homeDir)
 		if adapter.Agent() == model.AgentOpenCode {
-			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "engram"})}
+			ops := make([]operation, 0)
+			for _, path := range settingsTargets(homeDir, adapter) {
+				ops = append(ops, rewriteJSONFile(path, jsonPath{"mcp", "engram"}))
+			}
+			return ops
 		}
+		path := adapter.SettingsPath(homeDir)
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
 	case model.StrategyMCPConfigFile:
 		path := adapter.MCPConfigPath(homeDir, "engram")

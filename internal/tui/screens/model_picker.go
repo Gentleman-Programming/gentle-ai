@@ -78,13 +78,14 @@ type ModelPickerRow struct {
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers         map[string]opencode.Provider
-	AvailableIDs      []string                    // provider IDs with tool_call-capable models
-	SDDModels         map[string][]opencode.Model // provider ID -> SDD-capable models
-	ConfigWarning     string
-	CatalogStatus     RuntimeCatalogStatus
-	CatalogRequestID  uint64
-	CatalogProjectDir string
+	Providers           map[string]opencode.Provider
+	ConfiguredProviders map[string]opencode.Provider
+	AvailableIDs        []string                    // provider IDs with tool_call-capable models
+	SDDModels           map[string][]opencode.Model // provider ID -> SDD-capable models
+	ConfigWarning       string
+	CatalogStatus       RuntimeCatalogStatus
+	CatalogRequestID    uint64
+	CatalogProjectDir   string
 
 	Mode             ModelPickerMode
 	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
@@ -158,12 +159,15 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		if discovery.RequestID != state.CatalogRequestID || discovery.ProjectDir != state.CatalogProjectDir {
 			return state
 		}
+		state.Providers = opencode.MergeConfiguredCatalog(discovery.Providers, state.ConfiguredProviders)
+		state.refreshRuntimeModels()
 		if discovery.Err != nil {
-			state.CatalogStatus = RuntimeCatalogFailed
+			state.CatalogStatus = RuntimeCatalogReady
+			if !state.hasSelectableConfiguredModels() {
+				state.CatalogStatus = RuntimeCatalogFailed
+			}
 			return state
 		}
-		state.Providers = discovery.Providers
-		state.refreshRuntimeModels()
 		state.CatalogStatus = RuntimeCatalogReady
 		if len(state.AvailableIDs) == 0 {
 			state.CatalogStatus = RuntimeCatalogEmpty
@@ -171,6 +175,15 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 		return state
 	}
 	return state
+}
+
+func (state ModelPickerState) hasSelectableConfiguredModels() bool {
+	for _, provider := range state.ConfiguredProviders {
+		if len(opencode.FilterModelsForSDD(provider)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (state *ModelPickerState) refreshRuntimeModels() {

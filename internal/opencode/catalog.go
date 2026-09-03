@@ -63,6 +63,53 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 	return parseVerboseCatalog(output.Stdout)
 }
 
+// MergeConfiguredCatalog augments the runtime catalog with file-backed config
+// data without replacing runtime-discovered providers or models.
+func MergeConfiguredCatalog(runtimeCatalog, configuredCatalog map[string]Provider) map[string]Provider {
+	merged := cloneCatalog(runtimeCatalog)
+	for providerID, configuredProvider := range configuredCatalog {
+		runtimeProvider, exists := merged[providerID]
+		if !exists {
+			merged[providerID] = cloneProvider(configuredProvider)
+			continue
+		}
+		if runtimeProvider.URL == "" {
+			runtimeProvider.URL = configuredProvider.URL
+		}
+		if runtimeProvider.Models == nil {
+			runtimeProvider.Models = map[string]Model{}
+		}
+		for modelID, configuredModel := range configuredProvider.Models {
+			if _, exists := runtimeProvider.Models[modelID]; !exists {
+				runtimeProvider.Models[modelID] = configuredModel
+			}
+		}
+		merged[providerID] = runtimeProvider
+	}
+	return merged
+}
+
+func cloneCatalog(catalog map[string]Provider) map[string]Provider {
+	clone := make(map[string]Provider, len(catalog))
+	for id, provider := range catalog {
+		clone[id] = cloneProvider(provider)
+	}
+	return clone
+}
+
+func cloneProvider(provider Provider) Provider {
+	provider.Models = cloneModels(provider.Models)
+	return provider
+}
+
+func cloneModels(models map[string]Model) map[string]Model {
+	clone := make(map[string]Model, len(models))
+	for id, model := range models {
+		clone[id] = model
+	}
+	return clone
+}
+
 func catalogCommandError(ctx context.Context, err error) error {
 	var catalogErr *CatalogError
 	if errors.As(err, &catalogErr) {
