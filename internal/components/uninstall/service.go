@@ -27,6 +27,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/symlinkguard"
 )
 
 type Manager interface {
@@ -155,6 +156,22 @@ type operation struct {
 	// cleanup it was.
 	agents []model.AgentID
 	apply  func(path string) (changed bool, removed bool, err error)
+}
+
+func protectRemovalOperation(op operation, root string) operation {
+	if op.typeID == opRewriteFile {
+		return op
+	}
+
+	apply := op.apply
+	op.apply = func(path string) (bool, bool, error) {
+		safePath, err := symlinkguard.SafeRemovalPath(path, root)
+		if err != nil {
+			return false, false, fmt.Errorf("validate removal path %q: %w", path, err)
+		}
+		return apply(safePath)
+	}
+	return op
 }
 
 // operationFailure records one operation that did not complete, so the run can
@@ -916,6 +933,17 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		ops = append(ops, removeDirIfEmpty(filepath.Dir(gga.ConfigPath(homeDir))))
 	default:
 		return nil, nil, fmt.Errorf("unsupported component ID %q", componentID)
+	}
+
+	for i, op := range ops {
+		if op.typeID == opRewriteFile {
+			continue
+		}
+		root := homeDir
+		if s.workspaceDir != "" && symlinkguard.WithinRoot(op.path, s.workspaceDir) {
+			root = s.workspaceDir
+		}
+		ops[i] = protectRemovalOperation(op, root)
 	}
 
 	return ops, targets, nil

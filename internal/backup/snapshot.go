@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/symlinkguard"
 )
 
 const ManifestFilename = "manifest.json"
@@ -99,11 +101,16 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 	cleanSource := filepath.Clean(sourcePath)
 	entry := ManifestEntry{OriginalPath: cleanSource}
 
-	info, err := os.Stat(cleanSource)
+	resolvedSource, exists, err := symlinkguard.ResolveExisting(cleanSource)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return entry, ArchiveEntry{}, nil
-		}
+		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("resolve source path %q: %w", cleanSource, err)
+	}
+	if !exists {
+		return entry, ArchiveEntry{}, nil
+	}
+
+	info, err := os.Stat(resolvedSource)
+	if err != nil {
 		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("stat source path %q: %w", cleanSource, err)
 	}
 
@@ -125,7 +132,7 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 
 	archiveEntry := ArchiveEntry{
 		RelPath:    relPath,
-		SourcePath: cleanSource,
+		SourcePath: resolvedSource,
 		Mode:       info.Mode(),
 	}
 

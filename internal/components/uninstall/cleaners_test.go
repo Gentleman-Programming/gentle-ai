@@ -2,11 +2,34 @@ package uninstall
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func isSymlinkPrivilegeError(err error) bool {
+	var errno syscall.Errno
+	return errors.As(err, &errno) && errno == 1314 // ERROR_PRIVILEGE_NOT_HELD
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
+		t.Fatalf("Symlink(%q, %q) error = %v", target, link, err)
+	}
+}
+
+func setTestHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
 
 func FuzzNormalizeJSON_NoPanic(f *testing.F) {
 	seeds := [][]byte{
@@ -270,20 +293,134 @@ func TestRemoveJSONPaths_PreservesCRLF(t *testing.T) {
 	}
 }
 
-func TestReadManagedFile_RejectsSymlink(t *testing.T) {
+func TestReadManagedFile_FollowsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.json")
+	want := []byte(`{"ok":true}`)
+	if err := os.WriteFile(target, want, 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	link := filepath.Join(dir, "link.json")
+	mustSymlink(t, target, link)
+
+	got, err := readManagedFile(link)
+	if err != nil {
+		t.Fatalf("readManagedFile(symlink) error = %v, want success", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("readManagedFile(symlink) = %q, want %q", got, want)
+	}
+}
+
+func TestReadManagedFile_AllowsSymlinkWithinHome(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	target := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	want := []byte(`{"ok":true}`)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("MkdirAll(target dir) error = %v", err)
+	}
+	if err := os.WriteFile(target, want, 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	link := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatalf("MkdirAll(link dir) error = %v", err)
+	}
+	mustSymlink(t, target, link)
+
+	got, err := readManagedFile(link)
+	if err != nil {
+		t.Fatalf("readManagedFile(home symlink) error = %v, want success", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("readManagedFile(home symlink) = %q, want %q", got, want)
+	}
+}
+
+func TestReadManagedFile_BrokenSymlinkReturnsNotExist(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	link := filepath.Join(dir, "link.json")
+	mustSymlink(t, target, link)
+
+	_, err := readManagedFile(link)
+	if err == nil {
+		t.Fatal("readManagedFile(broken symlink) error = nil, want error")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("readManagedFile(broken symlink) error = %v, want os.IsNotExist", err)
+	}
+}
+
+func TestReadManagedFile_RejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	setTestHome(t, dir)
+	outside := t.TempDir()
+	target := filepath.Join(outside, "target.json")
 	if err := os.WriteFile(target, []byte(`{"ok":true}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(target) error = %v", err)
 	}
 	link := filepath.Join(dir, "link.json")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("Symlink() error = %v", err)
-	}
+	mustSymlink(t, target, link)
 
 	_, err := readManagedFile(link)
-	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") {
-		t.Fatalf("readManagedFile(symlink) error = %v, want symlink rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("readManagedFile(escape) error = %v, want allowed-root rejection", err)
+	}
+}
+
+func TestReadManagedFile_RejectsBrokenSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	setTestHome(t, dir)
+	outside := t.TempDir()
+	link := filepath.Join(dir, "link.json")
+	mustSymlink(t, filepath.Join(outside, "missing.json"), link)
+
+	_, err := readManagedFile(link)
+	if err == nil || os.IsNotExist(err) || !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("readManagedFile(broken escape) error = %v, want non-NotExist allowed-root rejection", err)
+	}
+}
+
+func TestReadManagedFile_RejectsEscapingSymlinkParentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	setTestHome(t, dir)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "config.json"), []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside config) error = %v", err)
+	}
+	linkDir := filepath.Join(dir, "linked")
+	mustSymlink(t, outside, linkDir)
+
+	_, err := readManagedFile(filepath.Join(linkDir, "config.json"))
+	if err == nil || !strings.Contains(err.Error(), "outside allowed root") {
+		t.Fatalf("readManagedFile(parent escape) error = %v, want allowed-root rejection", err)
+	}
+}
+
+func TestRemoveFileIfExists_RemovesSymlinkNotTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.md")
+	content := []byte("keep target\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	link := filepath.Join(dir, "link.md")
+	mustSymlink(t, target, link)
+
+	if err := removeFileIfExists(link); err != nil {
+		t.Fatalf("removeFileIfExists(symlink) error = %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("symlink still exists after remove: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(target) error = %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("target content = %q, want %q", got, content)
 	}
 }
 

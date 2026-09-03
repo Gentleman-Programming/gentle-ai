@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/symlinkguard"
 )
 
 // runtimeGOOS and syncDirFn are package-level vars so tests can override them
@@ -145,6 +147,16 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 		perm = 0o644
 	}
 
+	writePath, _, err := symlinkguard.ResolveExisting(path)
+	if err != nil {
+		return false, StreamResult{}, err
+	}
+	// Every message below must name the destination the caller asked for.
+	// A resolved symlink target is a path the caller never passed in, so
+	// reporting it turns a legible error into a confusing one.
+	reportPath := path
+	path = writePath
+
 	dir := filepath.Dir(path)
 	if err := ensureAtomicParentDir(dir, path); err != nil {
 		return false, StreamResult{}, err
@@ -152,7 +164,7 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 
 	tmp, err := createStagedFile(dir)
 	if err != nil {
-		return false, StreamResult{}, fmt.Errorf("create temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("create temp file for %q: %w", reportPath, err)
 	}
 
 	tmpPath := tmp.Name()
@@ -171,26 +183,26 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	written, err := io.Copy(io.MultiWriter(tmp, staged), src)
 	if err != nil {
 		_ = tmp.Close()
-		return false, StreamResult{}, fmt.Errorf("write temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("write temp file for %q: %w", reportPath, err)
 	}
 	stagedDigest := hex.EncodeToString(staged.Sum(nil))
 
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
-		return false, StreamResult{}, fmt.Errorf("set permissions on temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("set permissions on temp file for %q: %w", reportPath, err)
 	}
 
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return false, StreamResult{}, fmt.Errorf("sync temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("sync temp file for %q: %w", reportPath, err)
 	}
 
 	if err := tmp.Close(); err != nil {
-		return false, StreamResult{}, fmt.Errorf("close temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("close temp file for %q: %w", reportPath, err)
 	}
 
 	if err := renameFn(tmpPath, path); err != nil {
-		return false, StreamResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("replace %q atomically: %w", reportPath, err)
 	}
 
 	// Read the destination back before claiming anything about it. A rename that
@@ -199,12 +211,12 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	// point of this sequence is that its result describes disk, not intent.
 	diskDigest, diskBytes, err := digestFileOnDisk(path)
 	if err != nil {
-		return false, StreamResult{}, fmt.Errorf("read back %q after replacement: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("read back %q after replacement: %w", reportPath, err)
 	}
 	if diskBytes != written || diskDigest != stagedDigest {
 		return false, StreamResult{}, fmt.Errorf(
 			"replace %q atomically: the replacement did not land. The destination holds %d bytes (%s); %d bytes (%s) were written",
-			path, diskBytes, diskDigest, written, stagedDigest)
+			reportPath, diskBytes, diskDigest, written, stagedDigest)
 	}
 
 	// Past this point the destination holds the new bytes. Every remaining
@@ -213,7 +225,7 @@ func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, 
 	result = StreamResult{Bytes: diskBytes, Digest: diskDigest}
 
 	if err := SyncDir(dir); err != nil {
-		return true, result, fmt.Errorf("sync parent directory for %q: %w", path, err)
+		return true, result, fmt.Errorf("sync parent directory for %q: %w", reportPath, err)
 	}
 
 	return true, result, nil
@@ -270,12 +282,18 @@ func digestFileOnDisk(path string) (digest string, size int64, err error) {
 }
 
 func readComparableFile(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
+	resolved, exists, err := symlinkguard.ResolveExisting(path)
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to read symlink %q", path)
+	if !exists {
+		return nil, &os.PathError{Op: "resolve symlink", Path: path, Err: os.ErrNotExist}
+	}
+	path = resolved
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
 	}
 	if info.Size() > maxAtomicFileSize {
 		return nil, fmt.Errorf("file %q exceeds max atomic compare size %d bytes", path, maxAtomicFileSize)
@@ -309,11 +327,17 @@ func ensureAtomicParentDir(dir, path string) error {
 		return fmt.Errorf("stat parent directory for %q: %w", path, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		// Parent is a symlink (e.g. ~/.claude/agents → dotfiles repo).
-		// Resolve the target and continue checks against the real directory.
+		// Symlinked parents are valid only when their target stays in-bounds.
+		root, rootErr := symlinkguard.AllowedRoot(dir)
+		if rootErr != nil {
+			return rootErr
+		}
 		resolved, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			return fmt.Errorf("resolving symlink parent %q for %q: %w", dir, path, err)
+		}
+		if err := symlinkguard.EnsureWithinRoot(resolved, root, dir); err != nil {
+			return err
 		}
 		info, err = os.Stat(resolved)
 		if err != nil {

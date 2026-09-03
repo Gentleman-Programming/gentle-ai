@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/symlinkguard"
 )
 
 type jsonPath []string
@@ -229,15 +230,22 @@ func restoreEOL(content, eol string) string {
 }
 
 func readManagedFile(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
+	original := path
+	resolved, exists, err := symlinkguard.ResolveExisting(path)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, &os.PathError{Op: "resolve symlink", Path: original, Err: os.ErrNotExist}
+	}
+	path = resolved
+
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("stat file %q: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to read symlink %q", path)
 	}
 	if info.Size() > maxManagedFileSize {
 		return nil, fmt.Errorf("file %q exceeds max managed size %d bytes", path, maxManagedFileSize)
