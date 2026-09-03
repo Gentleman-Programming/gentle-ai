@@ -106,6 +106,23 @@ func TestInstallCommandsForDepGitUbuntu(t *testing.T) {
 	}
 }
 
+func TestInstallCommandsForDepAndroidNeverUsesSudo(t *testing.T) {
+	profile := PlatformProfile{OS: "android", PackageManager: "apt"}
+	for _, dep := range []string{"git", "curl", "node", "go"} {
+		cmds := InstallCommandsForDep(dep, profile)
+		if len(cmds) == 0 {
+			t.Fatalf("InstallCommandsForDep(%q) returned no commands", dep)
+		}
+		for _, cmd := range cmds {
+			for _, arg := range cmd {
+				if strings.Contains(arg, "sudo") {
+					t.Fatalf("InstallCommandsForDep(%q) = %v, must not use sudo on Android", dep, cmds)
+				}
+			}
+		}
+	}
+}
+
 func TestInstallCommandsForDepNodeUbuntuHasTwoSteps(t *testing.T) {
 	profile := PlatformProfile{OS: "linux", PackageManager: "apt", LinuxDistro: "ubuntu"}
 	cmds := InstallCommandsForDep("node", profile)

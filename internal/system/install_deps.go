@@ -5,6 +5,8 @@ import "fmt"
 // installHintGit returns the platform-specific install hint for git.
 func installHintGit(profile PlatformProfile) string {
 	switch {
+	case profile.OS == "android":
+		return "apt-get install -y git"
 	case profile.OS == "darwin":
 		return "brew install git"
 	case profile.OS == "windows":
@@ -23,6 +25,8 @@ func installHintGit(profile PlatformProfile) string {
 // installHintCurl returns the platform-specific install hint for curl.
 func installHintCurl(profile PlatformProfile) string {
 	switch {
+	case profile.OS == "android":
+		return "apt-get install -y curl"
 	case profile.OS == "darwin":
 		return "brew install curl"
 	case profile.OS == "windows":
@@ -41,6 +45,8 @@ func installHintCurl(profile PlatformProfile) string {
 // installHintNode returns the platform-specific install hint for Node.js.
 func installHintNode(profile PlatformProfile) string {
 	switch {
+	case profile.OS == "android":
+		return "apt-get install -y nodejs"
 	case profile.OS == "darwin":
 		return "brew install node"
 	case profile.OS == "windows":
@@ -70,6 +76,8 @@ func installHintBrew() string {
 // installHintGo returns the platform-specific install hint for Go.
 func installHintGo(profile PlatformProfile) string {
 	switch {
+	case profile.OS == "android":
+		return "apt-get install -y golang"
 	case profile.OS == "darwin":
 		return "brew install go"
 	case profile.OS == "windows":
@@ -109,23 +117,32 @@ func InstallHintForDep(name string, profile PlatformProfile) string {
 // InstallCommandsForDep returns the command sequence to install a missing dependency.
 // Returns nil if no automatic install is available.
 func InstallCommandsForDep(name string, profile PlatformProfile) [][]string {
+	var commands [][]string
 	switch name {
 	case "git":
-		return installCommandsGit(profile)
+		commands = installCommandsGit(profile)
 	case "curl":
-		return installCommandsCurl(profile)
+		commands = installCommandsCurl(profile)
 	case "node":
-		return installCommandsNode(profile)
+		commands = installCommandsNode(profile)
 	case "npm":
 		// npm comes with node; installing node installs npm.
 		return nil
 	case "brew":
-		return installCommandsBrew(profile)
+		commands = installCommandsBrew(profile)
 	case "go":
-		return installCommandsGo(profile)
+		commands = installCommandsGo(profile)
 	default:
 		return nil
 	}
+	if profile.OS == "android" {
+		for i, command := range commands {
+			if len(command) > 0 && command[0] == "sudo" {
+				commands[i] = append([]string(nil), command[1:]...)
+			}
+		}
+	}
+	return commands
 }
 
 func installCommandsGit(profile PlatformProfile) [][]string {
@@ -165,6 +182,9 @@ func installCommandsCurl(profile PlatformProfile) [][]string {
 
 func installCommandsNode(profile PlatformProfile) [][]string {
 	switch {
+	case profile.OS == "android":
+		// Termux has no sudo privilege path; apt is provided by the Termux package manager.
+		return [][]string{{"apt-get", "install", "-y", "nodejs"}}
 	case profile.OS == "darwin":
 		return [][]string{{"brew", "install", "node"}}
 	case profile.OS == "windows":

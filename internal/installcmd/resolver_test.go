@@ -168,6 +168,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "apt-get", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "android termux resolves apt command without sudo",
+			profile: system.PlatformProfile{OS: "android", PackageManager: "apt"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"apt-get", "install", "-y", "somepkg"}},
+		},
+		{
 			name:    "arch resolves pacman command",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			dep:     "somepkg",
@@ -297,6 +303,12 @@ func TestResolveAgentInstall(t *testing.T) {
 		{
 			name:    "claude-code on darwin uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			agent:   model.AgentClaudeCode,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
+		},
+		{
+			name:    "claude-code on android never uses sudo",
+			profile: system.PlatformProfile{OS: "android", PackageManager: "apt"},
 			agent:   model.AgentClaudeCode,
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},

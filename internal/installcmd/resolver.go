@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/installcommands"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
@@ -66,11 +67,7 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 // hardcoded version goes wrong the moment a newer release ships (the same
 // drift this shape fixed for Codex's GPT-5.6 update advice).
 func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
-	const pkg = "@anthropic-ai/claude-code@latest"
-	if profile.OS == "linux" && !profile.NpmWritable {
-		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
-	}
-	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
+	return installcommands.NpmInstallCommands(profile, "@anthropic-ai/claude-code@latest")
 }
 
 // resolveKilocodeInstall returns the npm install command sequence gentle-ai
@@ -78,11 +75,7 @@ func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
 // Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
 // On Windows and macOS, sudo is never needed.
 func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
-	const pkg = "@kilocode/cli@latest"
-	if profile.OS == "linux" && !profile.NpmWritable {
-		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
-	}
-	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
+	return installcommands.NpmInstallCommands(profile, "@kilocode/cli@latest")
 }
 
 // resolveKimiInstall returns the official Kimi install command sequence.
@@ -177,6 +170,9 @@ func validateKimiInstallPreflight(profile system.PlatformProfile) error {
 }
 
 func uvInstallHint(profile system.PlatformProfile) string {
+	if profile.OS == "android" {
+		return "apt-get install -y uv"
+	}
 	switch profile.PackageManager {
 	case "brew":
 		return "brew install uv"
@@ -209,17 +205,18 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return nil, fmt.Errorf("dependency name is required")
 	}
 
+	var commands CommandSequence
 	switch profile.PackageManager {
 	case "brew":
-		return CommandSequence{{"brew", "install", dependency}}, nil
+		commands = CommandSequence{{"brew", "install", dependency}}
 	case "apt":
-		return CommandSequence{{"sudo", "apt-get", "install", "-y", dependency}}, nil
+		commands = CommandSequence{{"sudo", "apt-get", "install", "-y", dependency}}
 	case "pacman":
-		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
+		commands = CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}
 	case "dnf":
-		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+		commands = CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}
 	case "winget":
-		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
+		commands = CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}
 	default:
 		return nil, fmt.Errorf(
 			"unsupported package manager %q for os=%q distro=%q",
@@ -228,6 +225,14 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 			profile.LinuxDistro,
 		)
 	}
+	if profile.OS == "android" {
+		for i, command := range commands {
+			if len(command) > 0 && command[0] == "sudo" {
+				commands[i] = command[1:]
+			}
+		}
+	}
+	return commands, nil
 }
 
 // resolveOpenCodeInstall returns the display-only install command sequence
@@ -261,11 +266,8 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		// re-enumerating managers would silently narrow the probe's list
 		// (issue #2499). The gate keeps a probe-rejected Linux profile
 		// (empty PackageManager) on the unsupported arm.
-		if profile.OS == "linux" && profile.PackageManager != "" {
-			if profile.NpmWritable {
-				return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
-			}
-			return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+		if (profile.OS == "linux" || profile.OS == "android") && profile.PackageManager != "" {
+			return installcommands.NpmInstallCommands(profile, pkg), nil
 		}
 		return nil, fmt.Errorf(
 			"unsupported platform for opencode: os=%q distro=%q pm=%q",

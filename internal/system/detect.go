@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -99,15 +100,38 @@ func Detect(ctx context.Context) (DetectionResult, error) {
 	return result, nil
 }
 
-// detectNpmWritable checks if npm's global prefix is under the user's home
-// directory (nvm, fnm, volta, etc.), meaning sudo is not needed for global installs.
-func detectNpmWritable(homeDir string) bool {
-	out, err := exec.Command("npm", "config", "get", "prefix").Output()
+// npmConfigPrefix is package-level for testing the real prefix writability probe.
+var npmConfigPrefix = func() ([]byte, error) {
+	return exec.Command("npm", "config", "get", "prefix").Output()
+}
+
+// detectNpmWritable probes the npm global prefix itself. Prefix location is not
+// a reliable writability signal: a user may have write access outside $HOME,
+// and a home-prefixed directory may still be read-only.
+func detectNpmWritable(_ string) bool {
+	out, err := npmConfigPrefix()
 	if err != nil {
 		return false
 	}
 	prefix := strings.TrimSpace(string(out))
-	return strings.HasPrefix(prefix, homeDir)
+	if prefix == "" {
+		return false
+	}
+
+	return writableDirectory(filepath.Join(prefix, "lib", "node_modules")) && writableDirectory(filepath.Join(prefix, "bin"))
+}
+
+func writableDirectory(path string) bool {
+	probe, err := os.CreateTemp(path, ".gentle-ai-npm-writable-*")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(name)
+		return false
+	}
+	return os.Remove(name) == nil
 }
 
 func detectFromInputs(goos, arch, shell, linuxOSRelease string, tools map[string]ToolStatus, configs []ConfigState) DetectionResult {

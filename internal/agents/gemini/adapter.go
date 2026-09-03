@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/installcommands"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -72,11 +73,7 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 // advises "latest" rather than a pin: a human reads and runs this, and a
 // hardcoded version goes stale the moment a newer Gemini CLI ships.
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	const pkg = "@google/gemini-cli@latest"
-	if profile.OS == "linux" && !profile.NpmWritable {
-		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
-	}
-	return [][]string{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+	return installcommands.NpmInstallCommands(profile, "@google/gemini-cli@latest"), nil
 }
 
 // --- Config paths ---
