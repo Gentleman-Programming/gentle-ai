@@ -224,6 +224,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
 	runtime.state.cleanupRollbackSnapshot()
+	// Apply steps raise non-fatal actionable outcomes through runtimeState, and
+	// RenderInstallManualActions — the CLI's only renderer for them — reads
+	// result.Execution.ManualActions. Copy before any return so the message is
+	// not stranded in internal state. Mirrors executeTUIInstallWithBackground.
+	result.Execution.ManualActions = append(result.Execution.ManualActions, runtime.state.manualActions...)
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -661,6 +666,13 @@ type runtimeState struct {
 	rollbackSnapshotDir      string
 	piCodeGraph              *communitytool.PiCodeGraphResult
 	compatibilityTransaction compatibilityRefreshTransaction
+
+	// manualActions carries non-fatal, actionable outcomes raised by apply
+	// steps — an optional component whose prerequisite is absent, for
+	// example. They reach the user through ExecutionResult.ManualActions
+	// instead of failing the run, so a pipeline whose core install succeeded
+	// does not report itself as errored.
+	manualActions []string
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -1852,16 +1864,34 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
+	result.ManualActions = append(result.ManualActions, runtime.state.manualActions...)
 	return result, orchestrator
 }
 
 // RenderInstallManualActions renders non-fatal completion actions after the
 // normal verification report so CLI users receive the same drift guidance.
+// It renders both sources of non-fatal actions: the Pi CodeGraph result and
+// the ones apply steps raise through the pipeline. The TUI route copies Pi
+// CodeGraph's actions into ExecutionResult.ManualActions, so the two lists can
+// carry the same action; deduplicating keeps a future caller that hands over a
+// merged result from printing it twice.
 func RenderInstallManualActions(result InstallResult) string {
-	if result.PiCodeGraph == nil || len(result.PiCodeGraph.ManualActions) == 0 {
+	actions := make([]string, 0, len(result.Execution.ManualActions))
+	if result.PiCodeGraph != nil {
+		actions = append(actions, result.PiCodeGraph.ManualActions...)
+	}
+	actions = append(actions, result.Execution.ManualActions...)
+
+	unique := make([]string, 0, len(actions))
+	for _, action := range actions {
+		if action != "" && !slices.Contains(unique, action) {
+			unique = append(unique, action)
+		}
+	}
+	if len(unique) == 0 {
 		return ""
 	}
-	return "\nManual actions required:\n- " + strings.Join(result.PiCodeGraph.ManualActions, "\n- ") + "\n"
+	return "\nManual actions required:\n- " + strings.Join(unique, "\n- ") + "\n"
 }
 
 // ResolveInstallProfile returns the platform profile from detection, defaulting to darwin/brew.
