@@ -443,28 +443,24 @@ func setSelectionComponent(selection *model.Selection, component model.Component
 	}
 }
 
-// DiscoverAgents returns the agent IDs to sync.
-//
-// Discovery order:
-//  1. Persisted state (~/.gentle-ai/state.json) — written at install time.
-//     When present and non-empty, only the agents the user explicitly installed
-//     are returned. This prevents sync from injecting into every IDE config dir
-//     that happens to exist on the system (issue #107).
-//  2. Filesystem fallback — delegates to agents.DiscoverInstalled with the
-//     default registry. Used when state.json is absent (users who installed
-//     before state persistence was added) or empty.
+// DiscoverAgents returns the agent IDs to sync. Persisted selections are
+// authoritative, including an explicitly configured empty selection. Missing or
+// incidental state falls back to filesystem discovery; unreadable state fails
+// closed so sync cannot inject into unselected agent configuration.
 //
 // When --agents is provided explicitly, callers should pass those IDs directly
 // instead of calling DiscoverAgents.
 func DiscoverAgents(homeDir string) []model.AgentID {
-	// Try the persisted selection first — agents.SelectedAgentIDs is the single
-	// authority for what the user chose at install time.
-	if ids := agents.SelectedAgentIDs(homeDir); len(ids) > 0 {
-		return ids
+	scope := agents.ReadSelectionScope(homeDir)
+	switch scope.Mode {
+	case agents.SelectionScopeConfigured:
+		return scope.AgentIDs
+	case agents.SelectionScopeUnavailable:
+		return nil
 	}
 
-	// Fallback: filesystem discovery (backward compat for users who installed
-	// before state persistence was added).
+	// Fallback: filesystem discovery for legacy installs and incidental state
+	// written before an installation records a user selection.
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		// Registry construction only fails if a duplicate adapter is registered,

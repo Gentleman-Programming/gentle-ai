@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -387,65 +388,51 @@ func TestDiscoverSelected_HonoursSelectionInBothDirections(t *testing.T) {
 	}
 }
 
-// TestDiscoverSelected_FallsBackToFilesystemWithoutState verifies pre-state
-// installs keep the old behaviour: no persisted selection means every detected
-// agent stays in scope. A readable state.json listing no agents means the same
-// and must not be read as "the user chose nothing" — update/cooldown.go writes
-// exactly that before any install completes, so scoping to zero there would
-// turn sync into a permanent silent no-op.
-func TestDiscoverSelected_FallsBackToFilesystemWithoutState(t *testing.T) {
-	home := t.TempDir()
-	codexDir := filepath.Join(home, ".codex")
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+// TestReadSelectionScope is the semantic matrix shared by every selection
+// consumer. Only an explicit configured-empty selection is authoritative; missing
+// and incidental state retain filesystem fallback, while unreadable state fails
+// closed.
+func TestReadSelectionScope(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		state     *state.InstallState
+		malformed bool
+		wantMode  SelectionScopeMode
+		wantIDs   []model.AgentID
+	}{
+		{name: "missing state falls back to filesystem", wantMode: SelectionScopeFilesystemFallback},
+		{name: "unreadable state fails closed", malformed: true, wantMode: SelectionScopeUnavailable},
+		{name: "configured empty selection is authoritative", state: &state.InstallState{SelectionConfigured: true}, wantMode: SelectionScopeConfigured},
+		{name: "cooldown state falls back to filesystem", state: &state.InstallState{LastUpdateCheck: &now}, wantMode: SelectionScopeFilesystemFallback},
+		{name: "non-empty selection is authoritative", state: &state.InstallState{InstalledAgents: []string{"opencode", "codex"}}, wantMode: SelectionScopeConfigured, wantIDs: []model.AgentID{model.AgentOpenCode, model.AgentCodex}},
 	}
 
-	reg := newStubRegistry(t, stubAdapter{agent: model.AgentCodex, configDir: codexDir})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tt.malformed {
+				if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(state.Path(home), []byte("{not json"), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			} else if tt.state != nil {
+				if err := state.Write(home, *tt.state); err != nil {
+					t.Fatalf("state.Write: %v", err)
+				}
+			}
 
-	for _, stage := range []string{"no state file", "state with an empty agent list"} {
-		if got := DiscoverSelected(reg, home); len(got) != 1 || got[0].ID != model.AgentCodex {
-			t.Fatalf("DiscoverSelected() with %s = %v, want the detected agent", stage, got)
-		}
-		writeInstalledAgentsState(t, home)
-	}
-}
-
-// TestDiscoverSelected_FailsClosedOnUnreadableState verifies that a present but
-// undecodable state file scopes to nothing rather than widening to every agent
-// on the machine. Treating "selection unknown" as "selection absent" would
-// reinstate the very behaviour this scoping prevents.
-func TestDiscoverSelected_FailsClosedOnUnreadableState(t *testing.T) {
-	home := t.TempDir()
-
-	codexDir := filepath.Join(home, ".codex")
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, ".gentle-ai"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".gentle-ai", "state.json"), []byte("{not json"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	reg := newStubRegistry(t, stubAdapter{agent: model.AgentCodex, configDir: codexDir})
-
-	if got := DiscoverSelected(reg, home); len(got) != 0 {
-		t.Fatalf("DiscoverSelected() = %v, want none on unreadable state", got)
-	}
-}
-
-// TestSelectedAgentIDs verifies the persisted selection round-trips, and that
-// "nothing persisted" is an empty slice — which callers read as "fall back to
-// the filesystem", not as "no agents".
-func TestSelectedAgentIDs(t *testing.T) {
-	if got := SelectedAgentIDs(t.TempDir()); len(got) != 0 {
-		t.Fatalf("SelectedAgentIDs() without state = %v, want empty", got)
-	}
-
-	home := t.TempDir()
-	writeInstalledAgentsState(t, home, model.AgentOpenCode, model.AgentCodex)
-	if got := SelectedAgentIDs(home); len(got) != 2 || got[0] != model.AgentOpenCode || got[1] != model.AgentCodex {
-		t.Fatalf("SelectedAgentIDs() = %v, want [opencode codex]", got)
+			got := ReadSelectionScope(home)
+			if got.Mode != tt.wantMode || len(got.AgentIDs) != len(tt.wantIDs) {
+				t.Fatalf("ReadSelectionScope() = %+v, want mode %v and IDs %v", got, tt.wantMode, tt.wantIDs)
+			}
+			for i, want := range tt.wantIDs {
+				if got.AgentIDs[i] != want {
+					t.Errorf("ReadSelectionScope().AgentIDs[%d] = %q, want %q", i, got.AgentIDs[i], want)
+				}
+			}
+		})
 	}
 }

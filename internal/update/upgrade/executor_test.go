@@ -1553,6 +1553,26 @@ func TestConfigPathsForBackup_EmptyStateAgentsFallsBackToFilesystem(t *testing.T
 	}
 }
 
+func TestConfigPathsForBackup_ConfiguredEmptySelectionExcludesDetectedAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	claudeSettings := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(claudeSettings), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(claudeSettings), err)
+	}
+	if err := os.WriteFile(claudeSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", claudeSettings, err)
+	}
+	if err := state.Write(homeDir, state.InstallState{SelectionConfigured: true}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	for _, path := range configPathsForBackup(homeDir) {
+		if path == claudeSettings {
+			t.Fatalf("configPathsForBackup() included %q for a configured empty selection", claudeSettings)
+		}
+	}
+}
+
 func mockCmd(name string, args ...string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		if name == "echo" {

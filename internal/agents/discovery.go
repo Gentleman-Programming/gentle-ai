@@ -75,32 +75,58 @@ func ConfigRootsForBackup(reg *Registry, homeDir string) []string {
 	return dirs
 }
 
-// SelectedAgentIDs returns the agent IDs the user chose at install time, as
-// persisted in ~/.gentle-ai/state.json (installed_agents). It is the single
-// authority for "which agents did the user pick". An empty result conflates
-// "never persisted" (pre-state installs) with "unreadable": read-only callers
-// may treat both as "fall back to filesystem", but callers that WRITE must use
-// DiscoverSelected, which fails closed on unreadable state.
-func SelectedAgentIDs(homeDir string) []model.AgentID {
-	ids, _ := persistedSelection(homeDir)
-	return ids
+// SelectionScopeMode describes whether persisted installation state defines the
+// managed agent scope or whether callers may use filesystem discovery instead.
+type SelectionScopeMode uint8
+
+const (
+	// SelectionScopeFilesystemFallback preserves behavior for missing state and
+	// incidental state written before installation, such as the update cooldown.
+	SelectionScopeFilesystemFallback SelectionScopeMode = iota
+	// SelectionScopeConfigured means AgentIDs is authoritative, including when it
+	// is empty because the user deliberately saved an empty selection.
+	SelectionScopeConfigured
+	// SelectionScopeUnavailable means state could not be read and callers must not
+	// widen scope through filesystem discovery.
+	SelectionScopeUnavailable
+)
+
+// SelectionScope is the persisted installation-selection contract shared by
+// managed-file writers, backup, and TUI preselection.
+type SelectionScope struct {
+	Mode     SelectionScopeMode
+	AgentIDs []model.AgentID
 }
 
-// persistedSelection reports the selection and whether the state was
-// intelligible. A confirmed-absent file is the legacy case — nothing to scope
-// by, nothing wrong — so it reports usable with no ids. Any other failure
-// reports unusable: unknown, not empty.
-func persistedSelection(homeDir string) (ids []model.AgentID, usable bool) {
+// SelectionScopeFromInstallState classifies a readable install state. A
+// non-empty installed_agents list is always authoritative for backward
+// compatibility. An empty list becomes authoritative only after installation
+// recorded SelectionConfigured; otherwise it may be incidental state created by
+// non-install flows such as the update cooldown.
+func SelectionScopeFromInstallState(s state.InstallState) SelectionScope {
+	ids := make([]model.AgentID, 0, len(s.InstalledAgents))
+	for _, id := range s.InstalledAgents {
+		ids = append(ids, model.AgentID(id))
+	}
+	if len(ids) > 0 || s.SelectionConfigured {
+		return SelectionScope{Mode: SelectionScopeConfigured, AgentIDs: ids}
+	}
+	return SelectionScope{Mode: SelectionScopeFilesystemFallback}
+}
+
+// ReadSelectionScope reads and classifies the persisted installation selection.
+// Missing state is a legacy filesystem-fallback case. Any other read error leaves
+// the scope unavailable so callers fail closed instead of managing detected
+// agents that were never selected.
+func ReadSelectionScope(homeDir string) SelectionScope {
 	s, err := state.Read(homeDir)
 	if err != nil {
-		return nil, os.IsNotExist(err)
+		if os.IsNotExist(err) {
+			return SelectionScope{Mode: SelectionScopeFilesystemFallback}
+		}
+		return SelectionScope{Mode: SelectionScopeUnavailable}
 	}
-
-	ids = make([]model.AgentID, 0, len(s.InstalledAgents))
-	for _, a := range s.InstalledAgents {
-		ids = append(ids, model.AgentID(a))
-	}
-	return ids, true
+	return SelectionScopeFromInstallState(s)
 }
 
 // DiscoverSelected returns the installed agents the user actually selected, and
@@ -110,24 +136,21 @@ func persistedSelection(homeDir string) (ids []model.AgentID, usable bool) {
 // question: an IDE the user never chose still has a config directory, and
 // writing into it violates the install-time selection.
 // Intersecting the two keeps both guarantees: never touch an unselected agent,
-// never create a config directory for an agent that is not installed. With no
-// persisted selection, the filesystem result is returned unchanged.
+// never create a config directory for an agent that is not installed. Legacy or
+// incidental state falls back to the filesystem; unreadable state fails closed.
 func DiscoverSelected(reg *Registry, homeDir string) []InstalledAgent {
-	selected, usable := persistedSelection(homeDir)
-	if !usable {
-		// Fail closed: the selection is unknown, not absent. Widening to every
-		// detected agent would reinstate what this scoping prevents. No error
-		// escapes here, so a caller wanting the cause must read state itself.
+	scope := ReadSelectionScope(homeDir)
+	if scope.Mode == SelectionScopeUnavailable {
 		return nil
 	}
 
 	installed := DiscoverInstalled(reg, homeDir)
-	if len(selected) == 0 {
+	if scope.Mode == SelectionScopeFilesystemFallback {
 		return installed
 	}
 
-	allowed := make(map[model.AgentID]struct{}, len(selected))
-	for _, id := range selected {
+	allowed := make(map[model.AgentID]struct{}, len(scope.AgentIDs))
+	for _, id := range scope.AgentIDs {
 		allowed[id] = struct{}{}
 	}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
@@ -4421,29 +4422,20 @@ func (m *Model) buildDependencyPlan() {
 }
 
 // agentsToManage returns the canonical list of agents gentle-ai should manage.
-//
-// Priority:
-//  1. state.InstalledAgents is non-empty → use those (persisted user selection).
-//  2. detectedIDs is non-empty          → use those (filesystem detection fallback).
-//  3. Both empty                         → return all catalog agents (first-time install default).
-//
-// This is the single source of truth for both the TUI pre-selection and the
-// pre-upgrade backup scope. It ensures that a user who deliberately un-selected
-// an agent in the TUI does not see it re-selected or backed-up on the next run.
+// A persisted selection is authoritative, including a deliberately configured
+// empty selection. Only state without an install selection falls back to detected
+// agents, then to the first-install catalog default.
 func agentsToManage(installState state.InstallState, detectedIDs []model.AgentID) []model.AgentID {
-	if len(installState.InstalledAgents) > 0 {
-		ids := make([]model.AgentID, 0, len(installState.InstalledAgents))
-		for _, a := range installState.InstalledAgents {
-			ids = append(ids, model.AgentID(a))
-		}
-		return ids
+	scope := agents.SelectionScopeFromInstallState(installState)
+	if scope.Mode == agents.SelectionScopeConfigured {
+		return scope.AgentIDs
 	}
 	if len(detectedIDs) > 0 {
 		return detectedIDs
 	}
-	agents := catalog.AllAgents()
-	all := make([]model.AgentID, 0, len(agents))
-	for _, agent := range agents {
+	catalogAgents := catalog.AllAgents()
+	all := make([]model.AgentID, 0, len(catalogAgents))
+	for _, agent := range catalogAgents {
 		all = append(all, agent.ID)
 	}
 	return all

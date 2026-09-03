@@ -3780,11 +3780,12 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 // when state.json is populated, it overrides filesystem detection for TUI pre-selection.
 func TestAgentsToManage_StateTakesPriorityOverDetection(t *testing.T) {
 	tests := []struct {
-		name        string
-		stateAgents []string        // InstalledAgents from state.json
-		detectedIDs []model.AgentID // agents detected on filesystem
-		want        []model.AgentID
-		desc        string
+		name                string
+		stateAgents         []string // InstalledAgents from state.json
+		selectionConfigured bool
+		detectedIDs         []model.AgentID // agents detected on filesystem
+		want                []model.AgentID
+		desc                string
 	}{
 		{
 			name:        "empty state falls back to filesystem detection",
@@ -3807,17 +3808,25 @@ func TestAgentsToManage_StateTakesPriorityOverDetection(t *testing.T) {
 			desc: "state.json wins: only persisted agents are returned, not all 5 detected",
 		},
 		{
-			name:        "explicit empty installed_agents produces empty list",
+			name:        "unconfigured empty state falls back to filesystem detection",
 			stateAgents: []string{},
 			detectedIDs: []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
 			want:        []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
-			desc:        "empty slice in state.json is treated as no state (falls back to detection)",
+			desc:        "cooldown-like state is not an installation selection and falls back to detection",
+		},
+		{
+			name:                "configured empty selection is authoritative",
+			stateAgents:         []string{},
+			selectionConfigured: true,
+			detectedIDs:         []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI},
+			want:                nil,
+			desc:                "a saved empty selection must not reselect detected agents",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			installState := state.InstallState{InstalledAgents: tt.stateAgents}
+			installState := state.InstallState{InstalledAgents: tt.stateAgents, SelectionConfigured: tt.selectionConfigured}
 			got := agentsToManage(installState, tt.detectedIDs)
 
 			if len(got) != len(tt.want) {
