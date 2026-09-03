@@ -8144,8 +8144,6 @@ func TestInjectNonCodexAdapterCarrilUnaffected(t *testing.T) {
 	}
 }
 
-
-
 func TestMigrateLegacyOpenCodeCommandPrompt(t *testing.T) {
 	tests := []struct {
 		name      string
