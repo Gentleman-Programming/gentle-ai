@@ -469,7 +469,8 @@ func TestEffectiveMethod(t *testing.T) {
 }
 
 func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
-	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewRoot := t.TempDir()
+	brewPrefix := filepath.Join(brewRoot, "opt", "gentle-ai")
 	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
 	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
 
@@ -482,6 +483,11 @@ func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
 		}
 		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
 			return mockCmd("echo", brewPrefix)
+		}
+		// `brew --prefix` (no args) returns the Homebrew root used to derive
+		// the bin directory the package owns symlinks under.
+		if len(args) == 1 && args[0] == "--prefix" {
+			return mockCmd("echo", brewRoot)
 		}
 		return mockCmd("false")
 	}

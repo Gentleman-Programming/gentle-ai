@@ -35,29 +35,64 @@ func homebrewPackageInstalledWith(run commandRunner, resolvePath pathResolver, t
 	if brewPrefix == "" {
 		return false
 	}
+	brewRootOutput, err := run("brew", "--prefix").Output()
+	if err != nil {
+		return false
+	}
+	brewRoot := strings.TrimSpace(string(brewRootOutput))
+	if brewRoot == "" {
+		return false
+	}
+	brewBinRoot := filepath.Join(brewRoot, "bin")
 
 	activePath, err := resolvePath(toolName)
 	if err != nil || activePath == "" {
 		return false
 	}
 
-	return pathWithinPrefix(activePath, brewPrefix)
+	return pathWithinPrefix(activePath, brewPrefix, brewBinRoot)
 }
 
-func pathWithinPrefix(path, prefix string) bool {
-	resolvedPath, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		path = resolvedPath
-	}
+// pathWithinPrefix mirrors internal/update.pathWithinPrefix. A Homebrew-created
+// symlink in <brew-root>/bin/<tool> is accepted as Homebrew-owned even when its
+// target lies outside the Homebrew prefix, because brew install placed the
+// symlink and brew upgrade will replace it. See internal/update/homebrew.go for
+// the full rationale.
+func pathWithinPrefix(path, prefix, binRoot string) bool {
 	resolvedPrefix, err := filepath.EvalSymlinks(prefix)
 	if err == nil {
 		prefix = resolvedPrefix
 	}
-
-	path = filepath.Clean(path)
 	prefix = filepath.Clean(prefix)
-	if path == prefix {
+
+	cleanPath := filepath.Clean(path)
+
+	if cleanPath == prefix || strings.HasPrefix(cleanPath, prefix+string(filepath.Separator)) {
 		return true
 	}
-	return strings.HasPrefix(path, prefix+string(filepath.Separator))
+	if resolvedPath, err := filepath.EvalSymlinks(cleanPath); err == nil {
+		resolvedPath = filepath.Clean(resolvedPath)
+		if resolvedPath == prefix || strings.HasPrefix(resolvedPath, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+
+	if binRoot != "" {
+		resolvedBin, err := filepath.EvalSymlinks(binRoot)
+		if err == nil {
+			binRoot = resolvedBin
+		}
+		binRoot = filepath.Clean(binRoot)
+		if resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(cleanPath)); err == nil {
+			resolvedParent = filepath.Clean(resolvedParent)
+			if resolvedParent == binRoot || strings.HasPrefix(resolvedParent, binRoot+string(filepath.Separator)) {
+				return true
+			}
+		}
+		if parent := filepath.Dir(cleanPath); parent == binRoot || strings.HasPrefix(parent, binRoot+string(filepath.Separator)) {
+			return true
+		}
+	}
+
+	return false
 }
