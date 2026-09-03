@@ -579,6 +579,7 @@ func TestPiFacadeLifecycleValidation(t *testing.T) {
 		{name: "missing single capture", content: strings.Replace(valid, "`gentle_review_capture`", "", 1)},
 		{name: "missing group capture", content: strings.Replace(valid, "`gentle_review_capture_group`", "", 1)},
 		{name: "missing approved acknowledgement", content: strings.Replace(valid, "Only the exact provider-issued acknowledgement continuation burns approved authority.", "", 1)},
+		{name: "missing public facade acknowledgement operation", content: strings.Replace(valid, "`acknowledge-approved` continuation", "`replacement` continuation", 1), valid: false},
 		{name: "raw status", content: valid + "\ngentle-ai review status\n"},
 		{name: "raw capture", content: valid + "\ngentle-ai review capture-result\n"},
 		{name: "raw acknowledgement", content: valid + "\ngentle-ai review acknowledge-approved\n"},

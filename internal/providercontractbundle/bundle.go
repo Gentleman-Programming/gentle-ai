@@ -147,6 +147,7 @@ func validPiFacadeLifecycle(content string) bool {
 		"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
 		"`gentle_review_capture` for one current returned slot",
 		"`gentle_review_capture_group` for the complete current reviewer group",
+		"On `approved`, use bound facade STATUS to obtain or replay the exact provider-issued `acknowledge-approved` continuation, then execute it unchanged.",
 		"Only the exact provider-issued acknowledgement continuation burns approved authority.",
 	} {
 		if !strings.Contains(content, required) {
