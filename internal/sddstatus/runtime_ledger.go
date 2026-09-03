@@ -989,10 +989,43 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	})
 }
 
-// runtimeUndeclaredUntrackedListLimit bounds the paths a single refusal spells
-// out. The eligible inventory is unbounded, and a refusal nobody can read is
-// one nobody acts on.
-const runtimeUndeclaredUntrackedListLimit = 10
+// RuntimeUntrackedRecoveryError is the structured recovery for an untracked
+// settlement refusal that observed a current eligible inventory. It preserves
+// only the current digest and the retained selection floor; callers choose any
+// newly eligible paths themselves.
+type RuntimeUntrackedRecoveryError struct {
+	ExpectedUntrackedInventory string
+	RetainedIntendedUntracked  []string
+}
+
+func (err *RuntimeUntrackedRecoveryError) Error() string {
+	retained := ""
+	if len(err.RetainedIntendedUntracked) > 0 {
+		quoted := make([]string, len(err.RetainedIntendedUntracked))
+		for i, path := range err.RetainedIntendedUntracked {
+			quoted[i] = pathquote.Quote(path)
+		}
+		retained = "; retain " + strings.Join(quoted, ", ")
+	}
+	return fmt.Sprintf("%s: retry the same settlement with --expected-untracked-inventory=%s%s", ErrRuntimeUndeclaredUntracked, err.ExpectedUntrackedInventory, retained)
+}
+
+func (err *RuntimeUntrackedRecoveryError) Unwrap() error { return ErrRuntimeUndeclaredUntracked }
+
+func runtimeUntrackedRecovery(digest string, active RuntimeAttempt, inventory []string) error {
+	retained := make([]string, 0, len(active.IntendedUntracked))
+	for _, path := range active.IntendedUntracked {
+		if slices.Contains(inventory, path) {
+			retained = append(retained, path)
+		}
+	}
+	slices.Sort(retained)
+	retained = slices.Compact(retained)
+	return &RuntimeUntrackedRecoveryError{
+		ExpectedUntrackedInventory: digest,
+		RetainedIntendedUntracked:  retained,
+	}
+}
 
 // settlementUntrackedSelection answers which untracked paths this settlement
 // overlays onto the begin tree, and returns the inventory digest the caller
@@ -1031,15 +1064,15 @@ func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, acti
 		if len(undecided) == 0 || digest == active.EligibleUntrackedInventory {
 			return active.IntendedUntracked, "", nil
 		}
-		return nil, "", runtimeBornDuringUntrackedRefusal(undecided, digest)
+		return nil, "", runtimeUntrackedRecovery(digest, active, inventory)
 	}
 	if request.ExpectedUntrackedInventory != digest {
-		return nil, "", fmt.Errorf("%w: this declaration was made against untracked inventory %s but the workspace now holds %s; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --expected-untracked-inventory=%s", ErrRuntimeUndeclaredUntracked, request.ExpectedUntrackedInventory, digest, digest)
+		return nil, "", runtimeUntrackedRecovery(digest, active, inventory)
 	}
 	selection := *request.IntendedUntracked
 	for _, path := range selection {
 		if !slices.Contains(inventory, path) {
-			return nil, "", fmt.Errorf("%w: intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition` to see what is eligible, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with only those paths", ErrRuntimeUndeclaredUntracked, path)
+			return nil, "", runtimeUntrackedRecovery(digest, active, inventory)
 		}
 	}
 	// A path selected at begin is already in the begin tree. Dropping it here
@@ -1047,24 +1080,10 @@ func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, acti
 	// settlement may widen the selection but never narrow it.
 	for _, path := range active.IntendedUntracked {
 		if slices.Contains(inventory, path) && !slices.Contains(selection, path) {
-			return nil, "", fmt.Errorf("%w: this attempt began with %q in its candidate, and a settlement cannot take it back out; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --intended-untracked=%s included", ErrRuntimeUndeclaredUntracked, path, path)
+			return nil, "", runtimeUntrackedRecovery(digest, active, inventory)
 		}
 	}
 	return selection, digest, nil
-}
-
-// runtimeBornDuringUntrackedRefusal names the eligible untracked paths nobody
-// has ruled on yet, and both ways to rule on them. Selecting one makes it
-// candidate bytes and charges its lines; excluding it leaves it out, which is
-// what today's settlement does silently and what this refusal exists to put on
-// the record instead.
-func runtimeBornDuringUntrackedRefusal(undecided []string, digest string) error {
-	listed, remainder := undecided, ""
-	if len(listed) > runtimeUndeclaredUntrackedListLimit {
-		remainder = fmt.Sprintf(" and %d more", len(listed)-runtimeUndeclaredUntrackedListLimit)
-		listed = listed[:runtimeUndeclaredUntrackedListLimit]
-	}
-	return fmt.Errorf("%w: this attempt left eligible untracked files its candidate does not include, so settling now would record them as no change at all: %s%s; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s to account them, or --untracked-scope=exclude --expected-untracked-inventory=%s to leave them out on the record", ErrRuntimeUndeclaredUntracked, strings.Join(listed, ", "), remainder, digest, digest)
 }
 
 // captureFinalVerifyReport derives the final verification attestation from the

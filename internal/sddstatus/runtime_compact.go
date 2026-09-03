@@ -57,11 +57,12 @@ const (
 // never silently reduced to a bare Reason. Both stay empty on every happy
 // path (proceed, complete-with-no-error).
 type CompactAttemptResult struct {
-	State  CompactAttemptState `json:"state"`
-	Reason CompactBlockReason  `json:"reason,omitempty"`
-	Token  string              `json:"token,omitempty"`
-	Exit   string              `json:"exit,omitempty"`
-	Detail string              `json:"detail,omitempty"`
+	State    CompactAttemptState       `json:"state"`
+	Reason   CompactBlockReason        `json:"reason,omitempty"`
+	Token    string                    `json:"token,omitempty"`
+	Exit     string                    `json:"exit,omitempty"`
+	Detail   string                    `json:"detail,omitempty"`
+	Recovery *CompactUntrackedRecovery `json:"recovery,omitempty"`
 	// SettleObligation names what this attempt's passing settle will already
 	// be bound to, at the moment the token is issued rather than after the
 	// work is done (#2912). An attempt is a bounded, spendable resource, and
@@ -70,6 +71,14 @@ type CompactAttemptResult struct {
 	// the token is real. Empty whenever the chain holds nothing, because a
 	// field that is always populated is noise.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+}
+
+// CompactUntrackedRecovery is the delta a caller needs to retry a refused
+// settlement against the live inventory. RetainedIntendedUntracked is a floor,
+// not a complete selection.
+type CompactUntrackedRecovery struct {
+	ExpectedUntrackedInventory string   `json:"expected_untracked_inventory"`
+	RetainedIntendedUntracked  []string `json:"retained_intended_untracked"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -504,6 +513,16 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	// runnable continuation inline (see runtimeRemediationExitRefusal), and
 	// there is no reliable field-agnostic way to shorten that further.
 	detail := err.Error()
+	var recovery *RuntimeUntrackedRecoveryError
+	if settle && errors.As(err, &recovery) {
+		return CompactAttemptResult{
+			State: CompactStateBlocked, Reason: CompactBlockUndeclaredUntracked, Exit: detail, Detail: detail,
+			Recovery: &CompactUntrackedRecovery{
+				ExpectedUntrackedInventory: recovery.ExpectedUntrackedInventory,
+				RetainedIntendedUntracked:  slices.Clone(recovery.RetainedIntendedUntracked),
+			},
+		}
+	}
 	reason := CompactBlockAuthorityFailure
 	switch {
 	case errors.Is(err, ErrRuntimeObjectiveDone):

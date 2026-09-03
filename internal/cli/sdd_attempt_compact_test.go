@@ -16,12 +16,18 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
+type compactAttemptRecovery struct {
+	ExpectedUntrackedInventory string   `json:"expected_untracked_inventory"`
+	RetainedIntendedUntracked  []string `json:"retained_intended_untracked"`
+}
+
 type compactAttemptOutput struct {
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
-	Token  string `json:"token,omitempty"`
-	Exit   string `json:"exit,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	State    string                  `json:"state"`
+	Reason   string                  `json:"reason,omitempty"`
+	Token    string                  `json:"token,omitempty"`
+	Exit     string                  `json:"exit,omitempty"`
+	Detail   string                  `json:"detail,omitempty"`
+	Recovery *compactAttemptRecovery `json:"recovery,omitempty"`
 	// SettleObligation rides the proceed envelope (#2912): what this attempt's
 	// passing settle will already owe, named while the attempt is still
 	// unspent.
@@ -156,7 +162,7 @@ func TestRunSDDAttemptCompactBlocksWithoutMutation(t *testing.T) {
 			before := snapshotRuntimeAuthorityFiles(t, store.Dir)
 			result, payload := runCompactSDDAttempt(t, args)
 			after := snapshotRuntimeAuthorityFiles(t, store.Dir)
-			if result.State != "blocked" || result.Reason != wantReason || result.Token != wantToken {
+			if result.State != "blocked" || result.Reason != wantReason || result.Token != wantToken || result.Recovery != nil {
 				t.Fatalf("blocked result = %#v, want reason=%q token=%q", result, wantReason, wantToken)
 			}
 			if !reflect.DeepEqual(before, after) {

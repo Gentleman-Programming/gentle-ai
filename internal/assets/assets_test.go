@@ -449,6 +449,25 @@ func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
 	}
 }
 
+func TestSDDCompactUntrackedRecoveryUsesNativeDelta(t *testing.T) {
+	orchestrator := MustRead("skills/_shared/sdd-orchestrator-sections.md")
+	status := MustRead("skills/_shared/sdd-status-contract.md")
+	for _, content := range []string{orchestrator, status} {
+		for _, want := range []string{
+			"recovery.expected_untracked_inventory",
+			"recovery.retained_intended_untracked",
+			"Review STATUS",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("managed SDD contract missing native compact recovery rule %q", want)
+			}
+		}
+	}
+	if strings.Contains(orchestrator, "Settle defines no other flag") {
+		t.Fatal("managed orchestrator still falsely claims settle has no recovery flags")
+	}
+}
+
 func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
 	for _, want := range []string{
