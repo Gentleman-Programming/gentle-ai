@@ -2,10 +2,23 @@ package update
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+// isBrewOwnedSymlink reports whether the path exists and is a symlink. The
+// bin-root ownership rule (Rule 2) only applies to symlinks because a regular
+// file dropped into <brew-root>/bin/ is a user-managed binary that
+// `gentle-ai update` must not hand to `brew upgrade` for replacement.
+func isBrewOwnedSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
 
 var homebrewPackageInstalled = defaultHomebrewPackageInstalled
 var homebrewOwnershipDetector = DetectHomebrewOwnership
@@ -83,10 +96,13 @@ func pathWithinPrefix(path, prefix, binRoot string) bool {
 		}
 	}
 
-	// Rule 2: the symlink itself lives under <brew-root>/bin. Resolving the
-	// symlink's parent puts both sides in the same resolved namespace, which
-	// matters on macOS where /var/folders resolves to /private/var/folders.
-	if binRoot != "" {
+	// Rule 2: a symlink whose parent lives under <brew-root>/bin. The symlink
+	// is required (not a regular file) so that user-managed binaries dropped
+	// into <brew-root>/bin are not classified as Homebrew-owned and
+	// inadvertently replaced by `brew upgrade`. Resolving the symlink's parent
+	// puts both sides in the same resolved namespace, which matters on macOS
+	// where /var/folders resolves to /private/var/folders.
+	if binRoot != "" && isBrewOwnedSymlink(cleanPath) {
 		resolvedBin, err := filepath.EvalSymlinks(binRoot)
 		if err == nil {
 			binRoot = resolvedBin
@@ -248,14 +264,19 @@ func pathWithinResolvedPrefix(path, prefix, binRoot string) (bool, error) {
 			return true, nil
 		}
 	} else {
-		// Surface a stable error so the caller can distinguish "not within
-		// prefix" from "could not resolve symlink", but only after the cheap
-		// path-prefix check has already failed.
-		return false, fmt.Errorf("resolve symlink for %q: %w", path, err)
+		// The target could not be resolved. That does not prove the symlink
+		// is not Homebrew-owned: `brew install` placed it, and `brew upgrade`
+		// will replace it. Fall through to Rule 2 (the symlink itself lives
+		// under <brew-root>/bin) before deciding the prefix check failed.
+		// Rule 2 below still applies the symlink-only restriction so a broken
+		// user-managed binary is not misclassified.
+		_ = err
 	}
 
-	// Rule 2 fallback: the symlink itself lives under <brew-root>/bin.
-	if binRoot != "" {
+	// Rule 2 fallback: a symlink whose parent lives under <brew-root>/bin.
+	// The symlink restriction prevents regular files dropped into
+	// <brew-root>/bin by the user from being treated as Homebrew-owned.
+	if binRoot != "" && isBrewOwnedSymlink(cleanPath) {
 		resolvedBin, binErr := filepath.EvalSymlinks(binRoot)
 		if binErr == nil {
 			binRoot = resolvedBin

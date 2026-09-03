@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,10 @@ func pathWithinPrefix(path, prefix, binRoot string) bool {
 		}
 	}
 
-	if binRoot != "" {
+	// Rule 2 fallback: a symlink whose parent lives under <brew-root>/bin.
+	// The symlink restriction prevents regular files dropped into
+	// <brew-root>/bin by the user from being treated as Homebrew-owned.
+	if binRoot != "" && isBrewOwnedSymlink(cleanPath) {
 		resolvedBin, err := filepath.EvalSymlinks(binRoot)
 		if err == nil {
 			binRoot = resolvedBin
@@ -95,4 +99,14 @@ func pathWithinPrefix(path, prefix, binRoot string) bool {
 	}
 
 	return false
+}
+
+// isBrewOwnedSymlink mirrors the helper in internal/update so the upgrade
+// predicate applies the same symlink-only restriction to <brew-root>/bin.
+func isBrewOwnedSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
 }

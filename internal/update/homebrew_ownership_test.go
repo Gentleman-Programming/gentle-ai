@@ -183,6 +183,79 @@ func TestPathWithinPrefixBrewSymlinkTargetOutsidePrefix(t *testing.T) {
 	}
 }
 
+// TestPathWithinPrefixRejectsRegularFileInBrewBin locks in the symlink-only
+// restriction on Rule 2. A user-managed regular file dropped into
+// <brew-root>/bin must NOT be classified as Homebrew-owned, otherwise
+// `gentle-ai update` would let `brew upgrade` silently replace it.
+func TestPathWithinPrefixRejectsRegularFileInBrewBin(t *testing.T) {
+	// On macOS /var/folders is a symlink to /private/var/folders; the helper
+	// resolves both prefix and the candidate path, so the brew root must
+	// already exist for EvalSymlinks to succeed on both sides.
+	brew := t.TempDir()
+	bin := filepath.Join(brew, "bin")
+	mustMkdir(t, bin)
+	prefix := filepath.Join(brew, "opt", "gentle-ai")
+	mustMkdir(t, prefix)
+
+	// Regular file (not a symlink) under <brew-root>/bin.
+	regular := filepath.Join(bin, "gentle-ai")
+	mustWrite(t, regular, []byte("user-managed binary"))
+
+	if pathWithinPrefix(regular, prefix, bin) {
+		t.Fatalf("pathWithinPrefix(%q, %q, %q) = true; want false (regular file in brew/bin must not be classified as Homebrew-owned)", regular, prefix, bin)
+	}
+}
+
+// TestPathWithinResolvedPrefixAcceptsBrokenSymlinkUnderBrewBin locks in the
+// fallback for a symlink whose external target cannot be resolved. Even when
+// `EvalSymlinks` fails, a Homebrew-placed symlink in <brew-root>/bin is still
+// Homebrew-owned because `brew install` placed it and `brew upgrade` will
+// replace it.
+func TestPathWithinResolvedPrefixAcceptsBrokenSymlinkUnderBrewBin(t *testing.T) {
+	// Create both the prefix and the bin directory so EvalSymlinks can
+	// resolve the prefix without error (the helper short-circuits on that
+	// failure before reaching Rule 2).
+	brew := t.TempDir()
+	bin := filepath.Join(brew, "bin")
+	mustMkdir(t, bin)
+	prefix := filepath.Join(brew, "opt", "gentle-ai")
+	mustMkdir(t, prefix)
+
+	// Symlink pointing at a target that does not exist. EvalSymlinks on the
+	// symlink will fail; Rule 2 must still recognize the symlink.
+	broken := filepath.Join(bin, "gentle-ai")
+	mustSymlink(t, filepath.Join(t.TempDir(), "does-not-exist"), broken)
+
+	owned, err := pathWithinResolvedPrefix(broken, prefix, bin)
+	if err != nil {
+		t.Fatalf("pathWithinResolvedPrefix returned error: %v (broken symlink in brew/bin must still be Homebrew-owned)", err)
+	}
+	if !owned {
+		t.Fatalf("pathWithinResolvedPrefix = false; want true (broken symlink in brew/bin must be Homebrew-owned)")
+	}
+}
+
+// TestPathWithinPrefixAcceptsBrokenSymlinkUnderBrewBin locks in the Rule 2
+// fallback for the non-error-returning helper. A symlink whose external
+// target cannot be resolved must still be reported as Homebrew-owned.
+func TestPathWithinPrefixAcceptsBrokenSymlinkUnderBrewBin(t *testing.T) {
+	// Ensure both the prefix and the bin directory exist so EvalSymlinks
+	// resolves them consistently on macOS (where /var/folders is a symlink
+	// to /private/var/folders).
+	brew := t.TempDir()
+	bin := filepath.Join(brew, "bin")
+	mustMkdir(t, bin)
+	prefix := filepath.Join(brew, "opt", "gentle-ai")
+	mustMkdir(t, prefix)
+
+	broken := filepath.Join(bin, "gentle-ai")
+	mustSymlink(t, filepath.Join(t.TempDir(), "does-not-exist"), broken)
+
+	if !pathWithinPrefix(broken, prefix, bin) {
+		t.Fatalf("pathWithinPrefix = false; want true (broken symlink in brew/bin must be Homebrew-owned)")
+	}
+}
+
 func mustMkdir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

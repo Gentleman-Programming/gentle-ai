@@ -504,6 +504,21 @@ func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
 	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("true") }, func(string) (string, error) { return "", errors.New("not found") }, "gentle-ai") {
 		t.Fatal("expected active path lookup failure to avoid Homebrew")
 	}
+
+	// Negative control: a regular file (not a symlink) dropped into
+	// <brew-root>/bin/<tool> must NOT be classified as Homebrew-owned, or
+	// `gentle-ai upgrade` would hand a user-managed binary to `brew upgrade`
+	// for replacement.
+	brewRegular := filepath.Join(brewRoot, "bin", "gentle-ai")
+	if err := os.MkdirAll(filepath.Dir(brewRegular), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brewRegular, []byte("user-managed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if homebrewPackageInstalledWith(run, func(string) (string, error) { return brewRegular, nil }, "gentle-ai") {
+		t.Fatal("expected regular file in brew/bin to avoid Homebrew")
+	}
 }
 
 func TestRunStrategyOpenCodePluginManualFallback(t *testing.T) {
