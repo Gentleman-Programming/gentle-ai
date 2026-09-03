@@ -202,9 +202,12 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 		// Load persisted state so the TUI pre-selects the agents the user
 		// previously chose instead of re-selecting every detected config dir.
-		// A missing or unreadable state file is not an error — NewModel falls
-		// back to filesystem detection for first-time installs.
-		installedState, _ := state.Read(homeDir)
+		// Missing state preserves the first-time filesystem fallback; unreadable
+		// state cannot safely be treated as an empty selection.
+		installedState, err := state.Read(homeDir)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read install state: %w", err)
+		}
 
 		// Deferred sync: if a previous gentle-ai self-upgrade set PendingSync=true,
 		// run sync now with the new binary before entering the TUI. On success,

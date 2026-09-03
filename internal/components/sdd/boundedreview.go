@@ -11,7 +11,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-const boundedReviewContractAsset = "skills/_shared/review-ledger-contract.md"
+const (
+	boundedReviewContractAsset   = "skills/_shared/review-ledger-contract.md"
+	boundedPiReviewContractAsset = "skills/_shared/review-ledger-contract-pi.md"
+)
 
 // reviewerBindingEnvironmentVariable is the prefix the orchestrator contract
 // tells the parent to assemble before running a lens. Naming it inside the lens
@@ -113,6 +116,9 @@ func ReviewExecutionContractFor(agent model.AgentID) (string, error) {
 }
 
 func boundedReviewContractFor(agent model.AgentID) string {
+	if agent == model.AgentPi {
+		return strings.TrimSpace(assets.MustRead(boundedPiReviewContractAsset))
+	}
 	contract := selectReviewerCaptureTransport(boundedReviewContractSource(), agent)
 	switch {
 	case agent == model.AgentOpenCode:

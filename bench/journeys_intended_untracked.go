@@ -322,6 +322,41 @@ func validateUnbornIntendedStagedDelivery(r *journeyRun) error {
 	return requireGateForLineage(observation, r.sandbox.Lineage, false)
 }
 
+const selectedUntrackedTerminalPath = "internal/selected.go"
+
+func selectedUntrackedTerminalCandidate(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedTerminalPath), "package selected\n\nfunc Value() int { return 1 }\n")
+}
+
+func selectUntrackedCaptureAndResumeTerminal(r *journeyRun) error {
+	start, _, err := frozenLineageSelectedStatus(r, "", selectedUntrackedTerminalPath)
+	if err != nil || start.NextTransition.Kind != "execute" || start.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("selected untracked START = %+v, %v", start.NextTransition, err)
+	}
+	if err := startFrozenLineageWithConsent(r, start); err != nil {
+		return err
+	}
+	active, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil || active.Authority.LineageID != r.sandbox.Lineage || active.Authority.State != "reviewing" ||
+		active.NextTransition.Kind != "collect" || active.NextTransition.ReasonCode != "reviewer_results_required" ||
+		len(active.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("selected untracked reviewer STATUS = authority=%+v transition=%+v err=%v", active.Authority, active.NextTransition, err)
+	}
+	if err := captureFrozenReviewerResult(r, active); err != nil {
+		return err
+	}
+	resumed, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil || resumed.TargetIdentity != active.TargetIdentity || resumed.Authority.LineageID != r.sandbox.Lineage ||
+		resumed.Authority.State != "approved" || resumed.NextTransition.Kind != "execute" ||
+		resumed.NextTransition.ReasonCode != "approved_acknowledgement_required" ||
+		resumed.NextTransition.Execute.Operation != "review.acknowledge-approved" ||
+		resumed.executeArgument("lineage") != r.sandbox.Lineage || resumed.executeArgument("target") != active.TargetIdentity ||
+		resumed.executeArgument("expected-revision") != resumed.Authority.Revision {
+		return fmt.Errorf("selected untracked terminal resume = authority=%+v target=%q transition=%+v err=%v", resumed.Authority, resumed.TargetIdentity, resumed.NextTransition, err)
+	}
+	return nil
+}
+
 func intendedUntrackedJourneys() []Journey {
 	return []Journey{
 		{
@@ -333,6 +368,17 @@ func intendedUntrackedJourneys() []Journey {
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: mixed tracked and intended/unrelated untracked files", Fixture: mixedIntendedUntrackedCandidate},
 				{Name: "STATUS collects selection and printed START freezes only chosen paths", Requires: intendedUntrackedStatusCapability, Composite: selectIntendedUntrackedAndRunPrintedStart},
+			},
+		},
+		{
+			ID:     "j126-selected-untracked-terminal-status-resumes-without-flags",
+			Review: reviewOptedIn,
+			Title:  "#4018: selected untracked reviewer closure resumes its terminal acknowledgement without selection flags",
+			Source: "#4018: an explicit occupied lineage owns its immutable intended-untracked selection through terminal continuation",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: selected untracked Go review candidate", Fixture: selectedUntrackedTerminalCandidate},
+				{Name: "select untracked candidate, close its actual reviewer slot, and resume the acknowledgement through lineage STATUS without flags", Requires: frozenLineageStatusCapability, Composite: selectUntrackedCaptureAndResumeTerminal},
 			},
 		},
 		{

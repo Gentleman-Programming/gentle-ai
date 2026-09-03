@@ -804,15 +804,47 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// the nested selector here would make fresh target freezing reject a
 		// valid foreign repository before START can bind its lifecycle root.
 		builder := reviewtransaction.SnapshotBuilder{Repo: root}
+		requestedLineage := strings.TrimSpace(*lineage)
+		requestedLineageOccupied := false
+		if *nextTransition && requestedLineage != "" {
+			requestedLineageOccupied, err = reviewtransaction.ExactReviewLineageOccupied(ctx, root, requestedLineage)
+			if err != nil {
+				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
+			}
+		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
+		hydratedIntendedScope := false
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
 			}
 		} else {
-			intendedScope, err = reviewIntendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, untrackedScope, intendedUntracked, expectedUntrackedInventory)
-			if err != nil {
-				return reviewPreflightError(err)
+			if !reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) && requestedLineageOccupied {
+				store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, requestedLineage)
+				if storeErr != nil {
+					return fmt.Errorf("open explicit review lineage: %w", storeErr)
+				}
+				record, loadErr := store.LoadContext(ctx)
+				if loadErr == nil {
+					// Only an approved compact authority that still owns its
+					// acknowledgement can resume its immutable terminal target. Every
+					// other occupied lineage must derive live scope so correction and
+					// recovery detect new untracked artifacts and target changes.
+					if _, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); pending {
+						intendedScope = reviewIntendedUntrackedScope{
+							Intended: append([]string{}, record.State.InitialSnapshot.IntendedUntracked...), Declared: true,
+						}
+						hydratedIntendedScope = true
+					}
+				} else if reviewtransaction.IsCompactAuthorityOperationalFailure(loadErr) {
+					return fmt.Errorf("load explicit review lineage: %w", loadErr)
+				}
+			}
+			if !intendedScope.Declared {
+				intendedScope, err = reviewIntendedUntrackedScopeForTarget(ctx, builder, untrackedScope, intendedUntracked, expectedUntrackedInventory)
+				if err != nil {
+					return reviewPreflightError(err)
+				}
 			}
 		}
 		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: []string{}}
@@ -846,14 +878,6 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		var native reviewtransaction.TargetStatusResult
 		var liveSnapshot reviewtransaction.Snapshot
-		requestedLineage := strings.TrimSpace(*lineage)
-		requestedLineageOccupied := false
-		if *nextTransition && requestedLineage != "" {
-			requestedLineageOccupied, err = reviewtransaction.ExactReviewLineageOccupied(ctx, root, requestedLineage)
-			if err != nil {
-				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
-			}
-		}
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -907,6 +931,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		if selectedBaseTree != "" && native.Projection.BaseTree != selectedBaseTree {
 			return errors.New("--base-tree does not identify an exact Git tree object")
+		}
+		if hydratedIntendedScope && (native.Applicability != reviewtransaction.TargetApplicabilityCurrent || native.LineageID != requestedLineage) {
+			intendedScope, err = reviewIntendedUntrackedScopeForTarget(ctx, builder, untrackedScope, intendedUntracked, expectedUntrackedInventory)
+			if err != nil {
+				return reviewPreflightError(err)
+			}
+			target.IntendedUntracked = intendedScope.Intended
+			native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
+				Target: target, LineageID: *lineage, PrePR: prePR,
+			})
+			if err != nil {
+				return fmt.Errorf("reassess negotiated review target: %w", err)
+			}
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope

@@ -14,6 +14,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
@@ -540,8 +543,17 @@ func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
 	if strings.Contains(text, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
 		t.Fatal("orchestration/pi.md left the runtime identity placeholder unbound")
 	}
-	if count := strings.Count(text, "--agent pi"); count != 1 {
-		t.Fatalf("orchestration/pi.md contains %d occurrences of `--agent pi`, want 1", count)
+	for _, want := range []string{
+		"`gentle_review` with {\"operation\":\"inspect\"}",
+		"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
+		"`gentle_review_capture_group`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("orchestration/pi.md missing Pi facade route %q", want)
+		}
+	}
+	if strings.Contains(text, "gentle-ai review status") {
+		t.Fatal("orchestration/pi.md exposes raw STATUS")
 	}
 	if !strings.Contains(text, "## Entry rule") {
 		t.Fatal("orchestration/pi.md is missing the `## Entry rule` heading")
@@ -552,6 +564,38 @@ func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
 // generate-then-verify roundtrip strict TDD requires: the manifest must carry
 // a sorted orchestration entry naming pi and its file reference, and Verify
 // must accept the archive built from exactly those bytes.
+func TestPiFacadeLifecycleValidation(t *testing.T) {
+	valid, err := sdd.ReviewExecutionContractFor(model.AgentPi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		content string
+		valid   bool
+	}{
+		{name: "complete facade lifecycle", content: valid, valid: true},
+		{name: "missing facade status", content: strings.Replace(valid, "`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed", "", 1)},
+		{name: "missing single capture", content: strings.ReplaceAll(valid, "`gentle_review_capture`", "")},
+		{name: "missing group capture", content: strings.ReplaceAll(valid, "`gentle_review_capture_group`", "")},
+		{name: "missing approved acknowledgement", content: strings.Replace(valid, "Only the exact provider-issued acknowledgement continuation burns approved authority.", "", 1)},
+		{name: "missing public facade acknowledgement operation", content: strings.Replace(valid, "`acknowledge-approved` continuation", "`replacement` continuation", 1), valid: false},
+		{name: "missing answer-consent route", content: strings.Replace(valid, "`gentle_review` with operation `answer-consent` and the exact `consentBinding`", "", 1), valid: false},
+		{name: "missing forecast acknowledgement", content: strings.Replace(valid, "resubmit the same exact binding with `reviewerRunAcknowledged: true`", "", 1), valid: false},
+		{name: "user-owned mode switch is allowed", content: valid + "\ngentle-ai review mode enable --scope global\n", valid: true},
+		{name: "raw status", content: valid + "\ngentle-ai review status\n"},
+		{name: "raw capture", content: valid + "\ngentle-ai review capture-result\n"},
+		{name: "raw acknowledgement", content: valid + "\ngentle-ai review acknowledge-approved\n"},
+		{name: "raw recover", content: valid + "\ngentle-ai review recover --lineage x\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validPiFacadeLifecycle(test.content); got != test.valid {
+				t.Fatalf("validPiFacadeLifecycle() = %t, want %t", got, test.valid)
+			}
+		})
+	}
+}
+
 func TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry(t *testing.T) {
 	directory := t.TempDir()
 	if err := Generate(directory, "1.2.0"); err != nil {

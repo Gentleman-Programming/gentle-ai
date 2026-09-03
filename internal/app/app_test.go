@@ -1598,6 +1598,37 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestRunArgs_TUIFailsClosedOnUnreadableState(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	origDetect, origEnsure, origRunTUI := detectSystem, ensureCurrentOSSupported, runTUI
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	runTUI = func(tea.Model, ...tea.ProgramOption) (tea.Model, error) {
+		t.Fatal("runTUI called with unreadable state")
+		return nil, nil
+	}
+
+	if err := RunArgs(nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "read install state") {
+		t.Fatalf("RunArgs(TUI) error = %v, want unreadable state error", err)
+	}
+}
+
 func TestIsExplicitUpdateFlow(t *testing.T) {
 	tests := []struct {
 		name string
