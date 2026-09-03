@@ -7121,11 +7121,10 @@ func TestEnsureClaudeSkillRegistryHookRejectsUnexpectedHookSchema(t *testing.T) 
 	}
 }
 
-// TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand verifies that
-// the UserPromptSubmit hook command literal in settings.json matches the
-// platform-aware expectation: PowerShell-safe on Windows, POSIX elsewhere.
-// The exact literal is recomputed inside the test so the test and the
-// production code are independent (no shared helper to drift).
+// TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand asserts the
+// UserPromptSubmit command literal is platform-aware: PowerShell on Windows,
+// POSIX elsewhere. The literal is recomputed inside the test so the test
+// and production are independent.
 func TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -7179,11 +7178,10 @@ func TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand(t *testing.T) {
 	}
 }
 
-// TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand verifies the
-// Windows-only migration: a settings.json with the pre-fix POSIX literal gets
-// replaced by the canonical PowerShell literal without leaving a duplicate.
-// Skipped on non-Windows because the legacy IS the canonical there, so the
-// no-duplicate invariant is exercised by the AppendsIdempotently test above.
+// TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand is the Windows
+// migration: a settings.json with the pre-fix POSIX literal gets replaced by
+// the canonical PowerShell literal without leaving a duplicate. Skipped on
+// non-Windows where the legacy IS the canonical.
 func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
@@ -7391,29 +7389,21 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 }
 
 // TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars
-// runs the canonical Windows UserPromptSubmit hook command through pwsh
-// (PowerShell Core) against a fake gentle-ai on PATH, capturing argv,
-// env, and exit code. It exercises a CLAUDE_PROJECT_DIR with the
-// characters that historically broke the legacy POSIX literal under
-// Windows PowerShell 5.1: spaces, an apostrophe, and a path-traversal
-// segment.
+// exercises the canonical Windows hook command against a fake gentle-ai on
+// PATH with a CLAUDE_PROJECT_DIR that contains spaces, an apostrophe, and
+// a path-traversal segment.
 //
-// CI caveat: this test runs on pwsh (PowerShell Core 7.x) under Linux,
-// not on Windows PowerShell 5.1 where the original bug was filed. PS 5.1
-// and pwsh 7.x have different argument-parsing rules for some edge
-// cases (notably $ expansion inside double-quoted strings, backtick
-// escaping). The canonical literal avoids PS-5.1-only constructs (no
-// ${VAR:-DEFAULT}, no || true), so pwsh coverage is a strong sanity check,
-// not a proof of PS 5.1 correctness. A maintainer with a Windows host can
-// rerun the same harness against powershell.exe (5.1) to close that gap.
-//
-// Skipped when pwsh is unavailable, or on Windows hosts where /bin/sh
-// (the fake gentle-ai interpreter) is not present.
+// CI caveat: this test runs on pwsh (PowerShell Core 7.x) under Linux, not
+// Windows PowerShell 5.1 where the original bug was filed. PS 5.1 and pwsh
+// 7.x have different argument-parsing rules (notably $ expansion inside
+// double-quoted strings, backtick escaping). The canonical literal avoids
+// PS-5.1-only constructs (no ${VAR:-DEFAULT}, no || true), so pwsh coverage
+// is a sanity check, not a proof of PS 5.1 correctness. Skipped when pwsh
+// is unavailable, or on Windows hosts without /bin/sh.
 
 // TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem verifies that when
 // an outer UserPromptSubmit entry contains the legacy literal alongside a
-// non-legacy sibling, only the legacy entry is removed. The hook kind and the
-// non-legacy sibling must survive intact.
+// non-legacy sibling, only the legacy entry is removed.
 func TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem(t *testing.T) {
 	legacy := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	keeper := `some-other-tool --flag value`
@@ -7449,14 +7439,9 @@ func TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem(t *testing.T) {
 	}
 }
 
-// TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned
-// documents the destructive edge case: if every inner hook under every outer
-// UserPromptSubmit entry matches the legacy literal, the prune removes all of
-// them and deletes the UserPromptSubmit key entirely. A user whose only
-// reason to have a UserPromptSubmit block was the legacy skill-registry hook
-// will see the whole key disappear. This is intentional — an empty
-// UserPromptSubmit block is semantically equivalent to no block — but the test
-// guards against silent behavioral drift.
+// TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned pins
+// the edge case where every inner hook matches the legacy literal: the prune
+// deletes the UserPromptSubmit key entirely.
 func TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned(t *testing.T) {
 	legacy := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	root := map[string]any{
@@ -7489,9 +7474,8 @@ func TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars(t *
 		t.Skip("pwsh (PowerShell Core) is not installed; cannot exercise the PowerShell command literal")
 	}
 	if runtime.GOOS == "windows" {
-		// The fake gentle-ai below uses POSIX /bin/sh. On Windows this
-		// requires git-bash or WSL; skip cleanly otherwise instead of
-		// failing the whole suite.
+		// The fake gentle-ai below uses POSIX /bin/sh; skip on Windows hosts
+		// without git-bash or WSL.
 		if _, statErr := os.Stat("/bin/sh"); statErr != nil {
 			t.Skip("/bin/sh not available on this Windows host; cannot run the fake gentle-ai")
 		}
@@ -7503,7 +7487,6 @@ func TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars(t *
 		t.Fatal(err)
 	}
 	fakeLogPath := filepath.Join(root, "fake-gentle-ai.log")
-	// POSIX shell fake. Records argv, env (CLAUDE_PROJECT_DIR + PWD), and exit 0.
 	fakeScript := `#!/bin/sh
 {
   echo "argc=$#"
@@ -7521,17 +7504,11 @@ exit 0
 		t.Fatal(err)
 	}
 
-	// CLAUDE_PROJECT_DIR with spaces, an embedded apostrophe, and a
-	// directory that contains a space + path traversal segment.
 	projectDir := filepath.Join(root, "Weird Path", "John's project", "..", "John's project")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Write settings.json containing ONLY the canonical PowerShell command,
-	// as produced by ensureClaudeSkillRegistryHook on Windows. We bypass the
-	// Go function and exercise the command literal directly here so the test
-	// stays focused on argument reconstruction across pwsh versions.
 	settingsPath := filepath.Join(root, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -7542,8 +7519,6 @@ exit 0
 		t.Fatal(err)
 	}
 
-	// Run pwsh exactly the way the hook would, with FAKE_LOG pointing at our
-	// capture file and CLAUDE_PROJECT_DIR pointing at the special-chars path.
 	pwshCmd := exec.Command(pwshPath, "-NoProfile", "-Command", canonicalCmd)
 	pwshCmd.Env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -7561,10 +7536,6 @@ exit 0
 	}
 	log := string(logBytes)
 
-	// The command under test must:
-	//   1. Reach gentle-ai (argv is non-empty).
-	//   2. Pass skill-registry, refresh, --quiet, --no-gitignore, --cwd <dir>
-	//      where <dir> is the exact value of CLAUDE_PROJECT_DIR.
 	if !strings.Contains(log, "argc=") || !strings.Contains(log, "argv[1]=skill-registry") {
 		t.Fatalf("fake gentle-ai was not invoked with the expected argv:\n%s\npwsh output:\n%s", log, pwshOutput)
 	}

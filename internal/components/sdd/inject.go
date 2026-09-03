@@ -1829,26 +1829,18 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	// command is platform-aware: PowerShell-safe on Windows (where the legacy
-	// POSIX `|| true` form fails to parse under Windows PowerShell 5.1), POSIX
-	// form elsewhere.
+	// command is platform-aware so the legacy POSIX `|| true` form does not
+	// reach Windows PowerShell 5.1, which fails to parse it.
 	var command string
 	if runtime.GOOS == "windows" {
-		// Quote $dir so paths containing spaces (common on Windows: e.g.
-		// "C:\Users\John Doe\project", "OneDrive - Company Name") survive
-		// PowerShell's native-command argument reconstruction instead of being
-		// split or corrupted before reaching gentle-ai. Single quotes around the
-		// whole -Command argument keep the embedded double quotes literal.
 		command = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
 	} else {
 		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	}
 
-	// Legacy migration: on Windows, the canonical command differs from the
-	// pre-fix POSIX literal. Pruning must run BEFORE the canonical-existence
-	// early return; otherwise a settings file that already has the canonical
-	// entry but still carries the legacy would never get cleaned up, leaving
-	// both hooks active and triggering two refresh runs.
+	// On Windows, prune the pre-fix POSIX literal before the canonical-existence
+	// early return so a settings file that already carries the canonical entry
+	// still gets the legacy cleaned up.
 	if runtime.GOOS == "windows" {
 		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 		pruneLegacyClaudeHook(root, legacy)
@@ -2014,11 +2006,6 @@ func claudeHookExists(root map[string]any, command string) bool {
 // in place. Called from ensureClaudeSkillRegistryHook before the canonical-
 // existence early return so a settings file that already has the canonical
 // entry but still carries the legacy gets cleaned up.
-//
-// Scope is UserPromptSubmit only, matching the original inline pruning
-// block before the helper extraction. The helper must not silently widen
-// to other hook kinds; the issue that motivates a SessionStart extension
-// (if any) lands in its own PR.
 func pruneLegacyClaudeHook(root map[string]any, legacy string) {
 	hooksRaw, ok := root["hooks"].(map[string]any)
 	if !ok {
@@ -2058,12 +2045,9 @@ func pruneLegacyClaudeHook(root map[string]any, legacy string) {
 			continue
 		}
 		if len(kept) == 0 {
-			// Every inner hook in this item was legacy; drop the whole
-			// item. Falling through with `continue` (instead of `return`)
-			// is what lets the post-loop `len(pruned) == 0` check below
-			// delete the UserPromptSubmit key entirely when no outer
-			// entries survive. An early `return` here skips that branch
-			// and leaves a half-pruned, empty entry on disk.
+			// Drop the whole item. Falling through (not `return`) is what
+			// lets the post-loop `len(pruned) == 0` check delete the
+			// UserPromptSubmit key entirely when no outer entries survive.
 			continue
 		}
 		copyMap := make(map[string]any, len(itemMap))
