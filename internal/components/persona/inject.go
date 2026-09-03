@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -438,9 +439,12 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		}
 
 		for _, retiredPath := range stylePaths.Remove {
-			styleRemoved, err := removeFileAtomic(retiredPath)
+			removeRetiredOutputStyleMu.RLock()
+			remover := removeRetiredOutputStyle
+			removeRetiredOutputStyleMu.RUnlock()
+			styleRemoved, err := remover(retiredPath)
 			if err != nil {
-				return InjectionResult{}, fmt.Errorf("remove retired output style: %w", err)
+				return InjectionResult{}, fmt.Errorf("remove retired output style: %w", &RetiredOutputStyleRemovalError{Path: retiredPath, Cause: err})
 			}
 			if styleRemoved {
 				changed = true
@@ -730,6 +734,44 @@ func legacyVSCodePersonaPaths(homeDir string) []string {
 	return []string{
 		// v1 path: wrote raw persona to ~/.github/copilot-instructions.md
 		filepath.Join(homeDir, ".github", "copilot-instructions.md"),
+	}
+}
+
+// RetiredOutputStyleRemovalError identifies the retired output-style path that
+// could not be removed while preserving the underlying filesystem cause.
+type RetiredOutputStyleRemovalError struct {
+	Path  string
+	Cause error
+}
+
+func (err *RetiredOutputStyleRemovalError) Error() string {
+	return fmt.Sprintf("remove retired output style %q: %v", err.Path, err.Cause)
+}
+
+func (err *RetiredOutputStyleRemovalError) Unwrap() error { return err.Cause }
+
+// removeRetiredOutputStyle is the narrow removal seam used by persona injection.
+// The setter is exported so CLI pipeline tests can force a post-write removal
+// failure and prove that the outer transaction restores every snapshotted file.
+var (
+	removeRetiredOutputStyleMu sync.RWMutex
+	removeRetiredOutputStyle   = removeFileAtomic
+)
+
+// SetRetiredOutputStyleRemoverForTest swaps the retired-style removal seam and
+// returns a function that restores its previous implementation.
+var SetRetiredOutputStyleRemoverForTest = func(remover func(string) (bool, error)) func() {
+	if remover == nil {
+		remover = removeFileAtomic
+	}
+	removeRetiredOutputStyleMu.Lock()
+	previous := removeRetiredOutputStyle
+	removeRetiredOutputStyle = remover
+	removeRetiredOutputStyleMu.Unlock()
+	return func() {
+		removeRetiredOutputStyleMu.Lock()
+		removeRetiredOutputStyle = previous
+		removeRetiredOutputStyleMu.Unlock()
 	}
 }
 
