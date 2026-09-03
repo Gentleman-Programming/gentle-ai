@@ -5723,6 +5723,7 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	}
 	expected := before
 	expected.InstalledBinaryVersion = AppVersion
+	expected.ManagedAssetDigests = []string{writer} // #3848: a real sync claims the digest set for its writer
 	if !reflect.DeepEqual(after, expected) {
 		t.Fatalf("CLI sync changed persisted state beyond the version stamp:\nafter:  %#v\nbefore: %#v", after, expected)
 	}

@@ -1585,6 +1585,24 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 
 	result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
 	if err != nil || noOp {
+		if err == nil {
+			// #3848: a zero-agent no-op used to return before the managed-asset
+			// persistence step, so a stale recorded digest survived a successful
+			// sync and the review START preflight refused forever with the exact
+			// remediation it had already run. There are no agent asset files to
+			// write here, so persistence is the whole remaining sync — but it
+			// converges ADDITIVELY: it joins this binary's digest to the
+			// managed_asset_digests set and leaves the scalar untouched, so a
+			// second binary sharing this home keeps its own authorization
+			// instead of the two syncs revoking each other alternately.
+			writer, digestErr := managedAssetDigest()
+			if digestErr != nil {
+				return result, fmt.Errorf("derive managed asset writer identity: %w", digestErr)
+			}
+			if persistErr := persistSyncManagedAssetState(homeDir, selection, writer, background.Persist, piBackground.Persist, true); persistErr != nil {
+				return result, fmt.Errorf("persist sync managed asset state: %w", persistErr)
+			}
+		}
 		return result, err
 	}
 
@@ -1676,6 +1694,15 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 }
 
 func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent) error {
+	return persistSyncManagedAssetState(homeDir, selection, writer, background, piBackground, false)
+}
+
+// persistSyncManagedAssetState records which binary's managed assets this home
+// is converged with. A full sync (additiveDigest false) owns the asset files it
+// just wrote, so it claims the scalar digest and resets the set to itself; a
+// zero-agent sync (additiveDigest true) wrote nothing, so it only joins the
+// set and must not clobber another binary's scalar authorization (#3848).
+func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, additiveDigest bool) error {
 	return withInstallStateLock(homeDir, func() error {
 		latest, err := state.Read(homeDir)
 		if errors.Is(err, os.ErrNotExist) {
@@ -1694,9 +1721,24 @@ func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.
 			latest.InstalledBinaryVersion = AppVersion
 			shouldWrite = true
 		}
-		if latest.ManagedAssetDigest != writer {
-			latest.ManagedAssetDigest = writer
-			shouldWrite = true
+		if additiveDigest {
+			if !slices.Contains(latest.ManagedAssetDigests, writer) {
+				latest.ManagedAssetDigests = append(append([]string(nil), latest.ManagedAssetDigests...), writer)
+				sort.Strings(latest.ManagedAssetDigests)
+				shouldWrite = true
+			}
+		} else {
+			if latest.ManagedAssetDigest != writer {
+				latest.ManagedAssetDigest = writer
+				shouldWrite = true
+			}
+			// A real sync just rewrote the asset files, so digests other
+			// binaries converged against them are stale: reset the set to
+			// exactly this writer instead of accumulating history.
+			if !slices.Equal(latest.ManagedAssetDigests, []string{writer}) {
+				latest.ManagedAssetDigests = []string{writer}
+				shouldWrite = true
+			}
 		}
 		if !latest.CommunityToolsConfigured && selection.CommunityTools != nil {
 			latest.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
