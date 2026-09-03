@@ -34,6 +34,9 @@ This project follows a strict issue-first workflow:
 
 PRs that are not linked to an approved issue will be **automatically rejected** by CI.
 
+For suspected security vulnerabilities, follow the [security policy](.github/SECURITY.md)
+instead of opening a public Issue or Discussion.
+
 ---
 
 ## Looking for something to work on?
