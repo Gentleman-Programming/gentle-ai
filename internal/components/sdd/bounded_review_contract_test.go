@@ -41,6 +41,15 @@ func captureTransportClausesFor(agent model.AgentID) []string {
 }
 
 func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+	if agent == model.AgentPi {
+		return []string{
+			"`gentle_review` with {\"operation\":\"inspect\"}",
+			"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
+			"`gentle_review_capture` for one current returned slot",
+			"`gentle_review_capture_group` for the complete current reviewer group",
+			"Pi never reconstructs lineage, target, revision, repository context, lens, order, or commands",
+		}
+	}
 	return append(captureTransportClausesFor(agent), []string{
 		"Native Compact Review Orchestration",
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
@@ -292,7 +301,11 @@ func TestSharedReviewLifecycleRendersOnlyForAdvertisedRuntimes(t *testing.T) {
 				agent.ID == model.AgentOpenCode ||
 				agent.ID == model.AgentCodex ||
 				agent.ID == model.AgentPi
-			if got := strings.Contains(content, lifecycleSentinel); got != want {
+			if agent.ID == model.AgentPi {
+				if !strings.Contains(content, "`gentle_review` with {\"operation\":\"inspect\"}") {
+					t.Fatal("Pi lifecycle did not render its facade entry route")
+				}
+			} else if got := strings.Contains(content, lifecycleSentinel); got != want {
 				t.Fatalf("shared review lifecycle rendered = %t, want %t", got, want)
 			}
 			if !want {
@@ -331,6 +344,12 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClausesFor(agent.ID))
+			if agent.ID == model.AgentPi {
+				if strings.Contains(content, "gentle-ai review status") {
+					t.Fatal("Pi lifecycle exposes raw STATUS")
+				}
+				return
+			}
 			if strings.Count(content, researchLifecycleContract()) != 1 {
 				t.Fatal("rendered orchestrator must contain one canonical research lifecycle")
 			}
@@ -391,7 +410,7 @@ func TestOpenCodeOrchestratorAddsOnlyOneConcurrentReviewerGroupContract(t *testi
 		{name: "claude", agent: model.AgentClaudeCode, genericCount: 1},
 		{name: "codex", agent: model.AgentCodex, genericCount: 1},
 		{name: "kilocode", agent: model.AgentKilocode},
-		{name: "generic", agent: model.AgentPi, genericCount: 1},
+		{name: "pi", agent: model.AgentPi},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rendered := renderSDDOrchestratorAsset(test.agent)
@@ -600,8 +619,14 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 		}
 		rendered++
 		t.Run(string(agent.ID), func(t *testing.T) {
-			procedure := bindRuntimeAgentIdentity(authorityFirstTerminalProcedure(), agent.ID)
 			content := renderSDDOrchestratorAsset(agent.ID)
+			if agent.ID == model.AgentPi {
+				if !strings.Contains(content, "Only the exact provider-issued acknowledgement continuation burns approved authority") {
+					t.Fatal("Pi lifecycle lost its facade acknowledgement rule")
+				}
+				return
+			}
+			procedure := bindRuntimeAgentIdentity(authorityFirstTerminalProcedure(), agent.ID)
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
 			}

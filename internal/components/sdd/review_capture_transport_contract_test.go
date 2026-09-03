@@ -28,6 +28,17 @@ func TestInstalledContractNamesTheTransportEachRuntimeActuallyUses(t *testing.T)
 	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex, model.AgentOpenCode, model.AgentPi} {
 		t.Run(string(agent), func(t *testing.T) {
 			contract := boundedReviewContractFor(agent)
+			if agent == model.AgentPi {
+				for _, want := range []string{"`gentle_review_capture`", "`gentle_review_capture_group`", "Never run raw shell STATUS"} {
+					if !strings.Contains(contract, want) {
+						t.Errorf("Pi contract missing facade transport clause %q", want)
+					}
+				}
+				if strings.Contains(contract, "gentle-ai review status") {
+					t.Error("Pi contract exposes raw STATUS")
+				}
+				return
+			}
 			compiled := reviewerprovider.CapturesInProcess(agent)
 
 			if compiled {

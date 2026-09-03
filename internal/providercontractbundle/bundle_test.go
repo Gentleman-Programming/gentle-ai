@@ -540,8 +540,17 @@ func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
 	if strings.Contains(text, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
 		t.Fatal("orchestration/pi.md left the runtime identity placeholder unbound")
 	}
-	if count := strings.Count(text, "--agent pi"); count != 1 {
-		t.Fatalf("orchestration/pi.md contains %d occurrences of `--agent pi`, want 1", count)
+	for _, want := range []string{
+		"`gentle_review` with {\"operation\":\"inspect\"}",
+		"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
+		"`gentle_review_capture_group`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("orchestration/pi.md missing Pi facade route %q", want)
+		}
+	}
+	if strings.Contains(text, "gentle-ai review status") {
+		t.Fatal("orchestration/pi.md exposes raw STATUS")
 	}
 	if !strings.Contains(text, "## Entry rule") {
 		t.Fatal("orchestration/pi.md is missing the `## Entry rule` heading")

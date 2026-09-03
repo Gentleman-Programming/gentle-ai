@@ -126,9 +126,15 @@ func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
 		if strings.Contains(content, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
 			return nil, fmt.Errorf("%w: orchestration runtime %q left the runtime identity placeholder unbound", errInvalidBundle, runtime)
 		}
-		wantCommand := "--agent " + runtime
-		if count := strings.Count(content, wantCommand); count != 1 {
-			return nil, fmt.Errorf("%w: orchestration runtime %q contract names %q %d times, want 1", errInvalidBundle, runtime, wantCommand, count)
+		if runtime == string(model.AgentPi) {
+			if !strings.Contains(content, "`gentle_review` with {\"operation\":\"inspect\"}") || strings.Contains(content, "gentle-ai review status") {
+				return nil, fmt.Errorf("%w: orchestration runtime %q does not use the facade-only lifecycle", errInvalidBundle, runtime)
+			}
+		} else {
+			wantCommand := "--agent " + runtime
+			if count := strings.Count(content, wantCommand); count != 1 {
+				return nil, fmt.Errorf("%w: orchestration runtime %q contract names %q %d times, want 1", errInvalidBundle, runtime, wantCommand, count)
+			}
 		}
 		entries = append(entries, orchestrationEntry{runtime: runtime, content: []byte(strings.TrimSpace(content) + "\n")})
 	}
