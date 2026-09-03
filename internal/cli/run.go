@@ -45,15 +45,16 @@ import (
 )
 
 type InstallResult struct {
-	Selection    model.Selection
-	Resolved     planner.ResolvedPlan
-	Review       planner.ReviewPayload
-	Plan         pipeline.StagePlan
-	Execution    pipeline.ExecutionResult
-	Verify       verify.Report
-	Dependencies system.DependencyReport
-	PiCodeGraph  *communitytool.PiCodeGraphResult
-	DryRun       bool
+	Selection           model.Selection
+	Resolved            planner.ResolvedPlan
+	Review              planner.ReviewPayload
+	Plan                pipeline.StagePlan
+	Execution           pipeline.ExecutionResult
+	Verify              verify.Report
+	Dependencies        system.DependencyReport
+	PiCodeGraph         *communitytool.PiCodeGraphResult
+	ReviewModeOperation string
+	DryRun              bool
 
 	Background              OpenCodeBackgroundResolution
 	BackgroundPolicyEnabled bool
@@ -175,14 +176,15 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 
 	result := InstallResult{
-		Selection:    input.Selection,
-		Resolved:     resolved,
-		Review:       review,
-		Plan:         stagePlan,
-		Dependencies: detection.Dependencies,
-		DryRun:       input.DryRun,
-		Background:   background,
-		PiBackground: piBackground,
+		Selection:           input.Selection,
+		Resolved:            resolved,
+		Review:              review,
+		Plan:                stagePlan,
+		Dependencies:        detection.Dependencies,
+		ReviewModeOperation: input.ReviewModeOperation,
+		DryRun:              input.DryRun,
+		Background:          background,
+		PiBackground:        piBackground,
 	}
 	result.Background.activationPlan = backgroundActivation
 	if backgroundActivation != nil {
@@ -300,6 +302,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 			persistErr = errors.Join(persistErr, rollback.Err)
 		}
 		return result, persistErr
+	}
+	if input.ReviewModeOperation != "" {
+		if err := writeGlobalRDDMode(input.ReviewModeOperation); err != nil {
+			return result, fmt.Errorf("persist global review mode: %w", err)
+		}
 	}
 
 	return result, nil

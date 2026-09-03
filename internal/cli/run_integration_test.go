@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -49,6 +50,176 @@ func stringSliceContains(items []string, want string) bool {
 }
 
 const engramInitCommandForTest = "npm exec --yes --package gentle-engram@latest -- pi-engram init"
+
+func configureInstallReviewModeTest(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	return home
+}
+
+func TestRunInstallReviewModePersistsOnlyExplicitRequest(t *testing.T) {
+	home := configureInstallReviewModeTest(t)
+	installArgs := []string{"--agent", "opencode", "--component", "permissions"}
+
+	if _, err := RunInstall(installArgs, system.DetectionResult{}); err != nil {
+		t.Fatalf("fresh install without review mode: %v", err)
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read fresh install state: %v", err)
+	}
+	if persisted.RDDMode != "" || persisted.RDDModeRecordedAt != nil {
+		t.Fatalf("fresh omitted review mode = %q at %v, want unconfigured", persisted.RDDMode, persisted.RDDModeRecordedAt)
+	}
+
+	if _, err := RunInstall(append(installArgs, "--review-mode", "on"), system.DetectionResult{}); err != nil {
+		t.Fatalf("install with review mode on: %v", err)
+	}
+	persisted, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("read enabled review mode: %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) || persisted.RDDModeRecordedAt == nil {
+		t.Fatalf("enabled review mode = %q at %v, want on with timestamp", persisted.RDDMode, persisted.RDDModeRecordedAt)
+	}
+
+	if _, err := RunInstall(installArgs, system.DetectionResult{}); err != nil {
+		t.Fatalf("reinstall without review mode: %v", err)
+	}
+	persisted, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("read preserved review mode: %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("reinstall without review mode = %q, want on preserved", persisted.RDDMode)
+	}
+
+	if _, err := RunInstall(append(installArgs, "--review-mode", "off"), system.DetectionResult{}); err != nil {
+		t.Fatalf("install with review mode off: %v", err)
+	}
+	persisted, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("read disabled review mode: %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOff) || persisted.RDDModeRecordedAt == nil {
+		t.Fatalf("disabled review mode = %q at %v, want off with timestamp", persisted.RDDMode, persisted.RDDModeRecordedAt)
+	}
+}
+
+func TestRunInstallReviewModeDryRunDoesNotPersist(t *testing.T) {
+	installArgs := []string{"--agent", "opencode", "--component", "permissions", "--dry-run"}
+
+	t.Run("omitted request is not rendered", func(t *testing.T) {
+		configureInstallReviewModeTest(t)
+		result, err := RunInstall(installArgs, system.DetectionResult{})
+		if err != nil {
+			t.Fatalf("dry-run without review mode: %v", err)
+		}
+		if output := RenderDryRun(result); strings.Contains(output, "Global Review Mode:") {
+			t.Fatalf("dry-run output claimed a global review mode change without a request:\n%s", output)
+		}
+	})
+
+	t.Run("fresh install remains unconfigured", func(t *testing.T) {
+		home := configureInstallReviewModeTest(t)
+		result, err := RunInstall(append(installArgs, "--review-mode", "on"), system.DetectionResult{})
+		if err != nil {
+			t.Fatalf("dry-run with review mode on: %v", err)
+		}
+		if output := RenderDryRun(result); !strings.Contains(output, "Global Review Mode: on (would be persisted globally after a successful non-dry-run install)") {
+			t.Fatalf("dry-run output missing requested global review mode on:\n%s", output)
+		}
+		if _, err := os.Stat(state.Path(home)); !os.IsNotExist(err) {
+			t.Fatalf("state after fresh dry-run stat error = %v, want absent", err)
+		}
+	})
+
+	t.Run("existing mode is preserved", func(t *testing.T) {
+		home := configureInstallReviewModeTest(t)
+		if err := writeGlobalRDDMode("enable"); err != nil {
+			t.Fatalf("enable initial review mode: %v", err)
+		}
+		before, err := state.Read(home)
+		if err != nil {
+			t.Fatalf("read review mode before dry-run: %v", err)
+		}
+
+		result, err := RunInstall(append(installArgs, "--review-mode", "off"), system.DetectionResult{})
+		if err != nil {
+			t.Fatalf("dry-run with review mode off: %v", err)
+		}
+		if output := RenderDryRun(result); !strings.Contains(output, "Global Review Mode: off (would be persisted globally after a successful non-dry-run install)") {
+			t.Fatalf("dry-run output missing requested global review mode off:\n%s", output)
+		}
+		after, err := state.Read(home)
+		if err != nil {
+			t.Fatalf("read review mode after dry-run: %v", err)
+		}
+		if after.RDDMode != before.RDDMode || !after.RDDModeRecordedAt.Equal(*before.RDDModeRecordedAt) {
+			t.Fatalf("review mode after dry-run = %q at %v, want %q at %v", after.RDDMode, after.RDDModeRecordedAt, before.RDDMode, before.RDDModeRecordedAt)
+		}
+	})
+}
+
+func TestRunInstallReviewModeRejectsInvalidOrMissingValueBeforeMutation(t *testing.T) {
+	for _, args := range [][]string{
+		{"--review-mode", "invalid"},
+		{"--review-mode"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			home := configureInstallReviewModeTest(t)
+
+			if _, err := RunInstall(args, system.DetectionResult{}); err == nil {
+				t.Fatal("RunInstall() error = nil, want invalid review mode error")
+			}
+			if _, err := os.Stat(state.Path(home)); !os.IsNotExist(err) {
+				t.Fatalf("state after invalid review mode stat error = %v, want absent", err)
+			}
+			configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+				t.Fatalf("config after invalid review mode stat error = %v, want absent", err)
+			}
+		})
+	}
+}
+
+func TestRunInstallReviewModePreservesPriorValueOnInstallationFailure(t *testing.T) {
+	home := configureInstallReviewModeTest(t)
+	if err := writeGlobalRDDMode("enable"); err != nil {
+		t.Fatalf("enable initial review mode: %v", err)
+	}
+	runCommand = func(name string, args ...string) error {
+		if name == "brew" && len(args) == 2 && args[0] == "install" && args[1] == "engram" {
+			return os.ErrPermission
+		}
+		return nil
+	}
+
+	if _, err := RunInstall([]string{"--agent", "opencode", "--component", "engram", "--review-mode", "off"}, macOSDetectionResult()); err == nil {
+		t.Fatal("RunInstall() error = nil, want installation failure")
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read review mode after failed install: %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("review mode after failed install = %q, want on preserved", persisted.RDDMode)
+	}
+}
 
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	home := t.TempDir()

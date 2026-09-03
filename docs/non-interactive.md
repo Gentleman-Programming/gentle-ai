@@ -16,6 +16,7 @@ go run ./cmd/gentle-ai install [flags]
 - `--persona`: explicit persona id.
 - `--preset`: explicit preset id.
 - `--sdd-mode`: `single` or `multi`.
+- `--review-mode`: `on` or `off`; after a successful install, persists the global review mode.
 - `--scope`: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes agent-scoped files to the current project root `./`).
 - `--dry-run`: render plan without executing.
 
@@ -26,6 +27,8 @@ go run ./cmd/gentle-ai install [flags]
 | `GENTLE_AI_INSTALL_SCOPE` | `global` \| `workspace` | Sets the install scope without a flag. Useful in CI. Equivalent to `--scope`. Default: `global`. |
 
 `workspace` scope is not Claude-only: it applies to the selected agents' agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations, like package installs or agent settings that must live in the tool's global config, remain global.
+
+Omitting `--review-mode` preserves the existing global setting; a fresh install leaves it unconfigured and effectively off. The flag does not change clone-local review mode or review authority state, and `--dry-run` never persists it.
 
 ## Platform behavior
 
