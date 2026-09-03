@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -914,6 +915,65 @@ func TestInstallRoutingGuidanceSecondRunIsByteIdentical(t *testing.T) {
 	}
 }
 
+// TestInstallCodexRoutingIsIdempotentInBothScopes verifies byte-stable Codex routing in both scopes.
+func TestInstallCodexRoutingIsIdempotentInBothScopes(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		scope InstallScope
+	}{
+		{name: "global", scope: ScopeGlobal},
+		{name: "workspace", scope: ScopeWorkspace},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			target := filepath.Join(home, ".codex", "AGENTS.md")
+			if tt.scope == ScopeWorkspace {
+				target = filepath.Join(workspace, "AGENTS.md")
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			const userContent = "# User instructions\n"
+			if err := os.WriteFile(target, []byte(userContent), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			changed := []string{}
+			step := agentRoutingGuidanceStep{
+				id: "agent-guidance:codex", agent: model.AgentCodex,
+				homeDir: home, workspaceDir: workspace, scope: tt.scope,
+				changedFiles: &changed,
+			}
+			if err := step.Run(); err != nil {
+				t.Fatalf("first Run() error = %v", err)
+			}
+			first, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(first, []byte(userContent)) {
+				t.Fatalf("first routing removed user content: %q", first)
+			}
+
+			changed = nil
+			if err := step.Run(); err != nil {
+				t.Fatalf("second Run() error = %v", err)
+			}
+			second, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(first, second) || len(changed) != 0 {
+				t.Fatalf("second routing changed bytes or reported changes: bytesEqual=%v changed=%v", bytes.Equal(first, second), changed)
+			}
+			if _, err := os.Stat(filepath.Join(workspace, ".codex", "AGENTS.md")); !os.IsNotExist(err) {
+				t.Fatalf("workspace routing created undiscoverable %q (stat err = %v)", filepath.Join(workspace, ".codex", "AGENTS.md"), err)
+			}
+		})
+	}
+}
+
 // ─── Workspace scope must not strand orchestrator-prompt guidance ──────────
 //
 // OpenCode and Kilocode only ever load the home-level settings document, so a
@@ -1100,6 +1160,27 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		if !containsPath(targets, path) {
 			t.Fatalf("backupTargets missing routing guidance path %q\ntargets = %v", path, targets)
 		}
+	}
+}
+
+// TestBackupTargetsWorkspaceCodexUsesRootAGENTS verifies workspace Codex
+// backups target the root AGENTS.md file.
+func TestBackupTargetsWorkspaceCodexUsesRootAGENTS(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents}
+
+	targets, err := backupTargets(home, workspace, ScopeWorkspace, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	want := filepath.Join(workspace, "AGENTS.md")
+	if !containsPath(targets, want) {
+		t.Fatalf("backupTargets missing workspace Codex route %q; targets=%v", want, targets)
+	}
+	if containsPath(targets, filepath.Join(workspace, ".codex", "AGENTS.md")) {
+		t.Fatal("backupTargets included the undiscoverable workspace Codex route")
 	}
 }
 

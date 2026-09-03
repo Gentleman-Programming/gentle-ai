@@ -445,6 +445,7 @@ var readyAgentRunCommands = []struct {
 }{
 	{model.AgentClaudeCode, "claude"},
 	{model.AgentOpenCode, "opencode"},
+	{model.AgentCodex, "codex"},
 }
 
 // withReadyAgentRunNote replaces the generic verify.ReadyMessage with one
@@ -863,6 +864,8 @@ type agentRoutingGuidanceStep struct {
 
 func (s agentRoutingGuidanceStep) ID() string { return s.id }
 
+// Run removes retired routing rules and installs current guidance for the
+// configured agent and scope.
 func (s agentRoutingGuidanceStep) Run() error {
 	adapter, err := agents.NewAdapter(s.agent)
 	if err != nil {
@@ -882,12 +885,16 @@ func (s agentRoutingGuidanceStep) Run() error {
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
 	// agent two conflicting sets of instructions.
-	stripped, err := stripLegacyTriggerRules(targetDir, adapter)
+	stripped, err := stripLegacyTriggerRules(targetDir, adapter, s.scope == ScopeWorkspace && s.agent == model.AgentCodex)
 	if err != nil {
 		return err
 	}
 
-	injected, err := agentguidance.InjectRouting(targetDir, s.agent)
+	inject := agentguidance.InjectRouting
+	if s.scope == ScopeWorkspace && s.agent == model.AgentCodex {
+		inject = agentguidance.InjectRoutingForWorkspace
+	}
+	injected, err := inject(targetDir, s.agent)
 	if err != nil {
 		return fmt.Errorf("inject routing guidance for %q: %w", s.agent, err)
 	}
@@ -910,14 +917,24 @@ func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {
 // Removal reuses filemerge.InjectMarkdownSection with empty content, which is
 // already the defined "delete this section" operation, so no second merge
 // implementation exists that could drift from the injector.
-func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter) (agentguidance.Result, error) {
+func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter, workspaceCodex bool) (agentguidance.Result, error) {
 	switch {
 	case adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode:
 		return stripLegacyTriggerRulesFromOrchestrator(adapter.SettingsPath(targetDir))
 	case adapter.SystemPromptStrategy() == model.StrategyJinjaModules:
 		return removeLegacyTriggerRulesModule(filepath.Join(adapter.GlobalConfigDir(targetDir), legacyTriggerRulesSection+".md"))
 	default:
-		return stripLegacyTriggerRulesFromPrompt(adapter.SystemPromptFile(targetDir))
+		promptPath := adapter.SystemPromptFile(targetDir)
+		if workspaceCodex {
+			paths, err := agentguidance.RoutingPathsForWorkspace(targetDir, adapter.Agent())
+			if err != nil {
+				return agentguidance.Result{}, err
+			}
+			if len(paths) > 0 {
+				promptPath = paths[0]
+			}
+		}
+		return stripLegacyTriggerRulesFromPrompt(promptPath)
 	}
 }
 
@@ -2164,6 +2181,9 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
 		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
+		if scope == ScopeWorkspace && adapter.Agent() == model.AgentCodex {
+			routing, err = agentguidance.RoutingPathsForWorkspace(targetDir, adapter.Agent())
+		}
 		if err != nil {
 			// The guidance step resolves the same delivery and fails loudly when
 			// it runs. Declaring a target we could not resolve would only add a
@@ -2563,6 +2583,7 @@ type postApplyVerificationInput struct {
 	State        *runtimeState
 }
 
+// runPostApplyVerification builds checks for files expected after installation.
 func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(input.Resolved.Agents)
@@ -2587,6 +2608,16 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			seenPath[path] = struct{}{}
 			uniqueFilePaths = append(uniqueFilePaths, path)
 		}
+	}
+	for _, path := range routingGuidancePaths(input.HomeDir, input.WorkspaceDir, input.Scope, adapters) {
+		if path == "" {
+			continue
+		}
+		if _, dup := seenPath[path]; dup {
+			continue
+		}
+		seenPath[path] = struct{}{}
+		uniqueFilePaths = append(uniqueFilePaths, path)
 	}
 
 	for _, currentPath := range uniqueFilePaths {
