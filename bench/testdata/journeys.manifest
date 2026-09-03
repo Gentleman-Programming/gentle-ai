@@ -23,6 +23,7 @@ j122-global-review-mode-from-non-git-cwd
 j123-rejected-provider-validator-starts-fresh-high-risk-review
 j124-sdd-attempt-reset-after-selected-untracked-lands
 j125-claude-code-stop-hook-reminds-once-per-candidate
+j126-selected-untracked-terminal-status-resumes-without-flags
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
 j17-bare-repository
