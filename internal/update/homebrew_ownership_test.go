@@ -47,6 +47,10 @@ func (p ownershipProbe) run(_ string, args ...string) ([]byte, error) {
 	return []byte(outputs[command]), nil
 }
 
+// firstArtifact returns the first non-empty line of a `brew list
+// --full-name` output. The detection helper consumes the whole list,
+// but several tests only need a single representative artifact to
+// wire up the probe; this helper centralises the trim/skip logic.
 func firstArtifact(list string) string {
 	for _, line := range strings.Split(list, "\n") {
 		candidate := strings.TrimSpace(line)
@@ -270,6 +274,10 @@ func mustWrite(t *testing.T, path string, data []byte) {
 	}
 }
 
+// mustSymlink creates target as a symlink pointing at link and fails
+// the test on error. It mirrors mustMkdir/mustWrite so a single
+// t.Fatal in the test scaffold surfaces the actual error string
+// without burying it in a t.Helper() stack.
 func mustSymlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {

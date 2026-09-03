@@ -20,6 +20,13 @@ func defaultHomebrewPackageInstalled(toolName string) bool {
 	return err == nil && kind != update.HomebrewNone
 }
 
+// homebrewPackageInstalledWith reports whether the active executable
+// for toolName is owned by Homebrew for the upgrade executor's
+// purposes. It mirrors the detection helper in internal/update but
+// keeps its own copy so the upgrade package can be tested without
+// pulling the full update surface. The shape and rules match
+// internal/update.homebrewPackageInstalledWith so the two callers
+// always agree on ownership for the same machine.
 func homebrewPackageInstalledWith(run commandRunner, resolvePath pathResolver, toolName string) bool {
 	if toolName == "" {
 		return false

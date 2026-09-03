@@ -31,6 +31,16 @@ func defaultHomebrewPackageInstalled(toolName string) bool {
 	return err == nil && kind != HomebrewNone
 }
 
+// homebrewPackageInstalledWith reports whether the active executable for
+// toolName is owned by Homebrew. It first verifies that the formula is
+// installed (via `brew list --formula <tool>`), then resolves the formula
+// prefix and the Homebrew root (via `brew --prefix <tool>` and `brew
+// --prefix`, respectively) and delegates the path comparison to
+// pathWithinPrefix. The check tolerates symlinks in
+// <brew-root>/bin/<tool> that resolve outside the formula prefix because
+// `brew install` placed those symlinks and `brew upgrade` will replace
+// them; a user-managed regular file in that directory is rejected so
+// it is not silently handed to `brew upgrade`.
 func homebrewPackageInstalledWith(run commandRunner, resolvePath pathResolver, toolName string) bool {
 	if toolName == "" {
 		return false
@@ -159,6 +169,16 @@ func DetectHomebrewOwnership(toolName string) (HomebrewOwnership, error) {
 	}, lookPath, toolName)
 }
 
+// detectHomebrewOwnershipWith classifies the active executable for
+// toolName as Homebrew formula, Homebrew cask, or none. It enumerates
+// the installed formulae and casks with `brew list --full-name` and
+// matches the active path against each artifact's path-prefix. The
+// Homebrew root is also resolved so the helper can accept a symlink
+// in <brew-root>/bin/<tool> whose target lies outside any individual
+// artifact prefix; this matches what `brew install` placed there and
+// what `brew upgrade` will replace. The helper returns an error when
+// the active executable is outside every installed Homebrew path so
+// the caller can surface a remediation hint to the user.
 func detectHomebrewOwnershipWith(run outputRunner, resolvePath pathResolver, toolName string) (HomebrewOwnership, error) {
 	toolName = strings.TrimSpace(toolName)
 	formulaOutput, err := run("brew", "list", "--formula", "--full-name")
@@ -230,6 +250,11 @@ func detectHomebrewOwnershipWith(run outputRunner, resolvePath pathResolver, too
 	return match, nil
 }
 
+// matchingHomebrewArtifact returns the first line of a `brew list
+// --full-name` output that names toolName, either as a bare token or
+// as a path-like suffix (e.g. `Cellar/foo/1.0/bin/foo`). It is used
+// to confirm that the formula/cask for toolName is actually
+// installed before the caller commits to the ownership verdict.
 func matchingHomebrewArtifact(output, toolName string) string {
 	for _, line := range strings.Split(output, "\n") {
 		candidate := strings.TrimSpace(line)
