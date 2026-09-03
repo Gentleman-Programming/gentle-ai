@@ -78,6 +78,7 @@ internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
 internal/reviewtransaction/authority_repair.go	AssessAuthorityRepair
+internal/reviewtransaction/candidate_content_facts.go	SnapshotBuilder.CandidateContentFacts
 internal/reviewtransaction/candidate_decline.go	CandidateDeclineAuthorization.validate
 internal/reviewtransaction/candidate_decline.go	candidateDeclineDigest
 internal/reviewtransaction/candidate_decline.go	canonicalCandidateDeclinePayload
