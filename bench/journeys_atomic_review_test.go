@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+func TestDecodeAtomicStartContinuationIgnoresStringProjection(t *testing.T) {
+	observation := Observation{Stdout: `{"action":"created","lineage_id":"atomic-four-lens-correction","state":"reviewing","projection":"compact","next_transition":{"kind":"execute","reason_code":"start_completed","execute":{"operation":"review.status","command":"gentle-ai review status --next-transition --token=abc","arguments":[{"name":"cwd","value":"/repo","token":"abc"}]}}}`}
+
+	continuation, err := decodeAtomicStartContinuation(observation)
+	if err != nil {
+		t.Fatalf("decode START continuation: %v", err)
+	}
+	if continuation.NextTransition.Kind != "execute" || continuation.NextTransition.Execute.Operation != "review.status" ||
+		continuation.NextTransition.Execute.Command == "" || len(continuation.NextTransition.Execute.Arguments) != 1 {
+		t.Fatalf("continuation = %+v, want provider-issued review.status transition", continuation.NextTransition)
+	}
+	argument := continuation.NextTransition.Execute.Arguments[0]
+	if argument.Name != "cwd" || argument.Value != "/repo" || argument.Token != "abc" {
+		t.Fatalf("continuation argument = %+v, want ordered token argument", argument)
+	}
+}
+
 func TestCorpusJourneysDeclareReviewMode(t *testing.T) {
 	for _, journey := range allDeclaredJourneys() {
 		if journey.Review != reviewOptedIn && journey.Review != reviewUntouched {
@@ -167,6 +184,40 @@ func TestCurrentTerminalJourneysRequireAcknowledgementBeforeBurn(t *testing.T) {
 		}
 		if !strings.Contains(declaration, "acknowledgement") {
 			t.Errorf("terminal journey %q omits the pending acknowledgement continuation: %s", id, declaration)
+		}
+	}
+}
+
+func TestJ60UsesProviderIssuedStartContinuation(t *testing.T) {
+	var journey *Journey
+	for _, candidate := range Journeys() {
+		if candidate.ID == "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow" {
+			copy := candidate
+			journey = &copy
+			break
+		}
+	}
+	if journey == nil {
+		t.Fatal("j60 must remain registered")
+	}
+	var startStep *Step
+	for index := range journey.Steps {
+		step := &journey.Steps[index]
+		if strings.Contains(strings.ToLower(step.Name), "start") {
+			startStep = step
+			break
+		}
+	}
+	if startStep == nil || startStep.Composite == nil || startStep.Args != nil {
+		t.Fatal("j60 START/continuation must be one Composite, not direct Args")
+	}
+	declaration := strings.ToLower(journey.Source + " " + journey.Title)
+	for _, step := range journey.Steps {
+		declaration += " " + strings.ToLower(step.Name)
+	}
+	for _, phrase := range []string{"#2423", "#3914", "provider-issued", "review.status", "ordered", "token"} {
+		if !strings.Contains(declaration, strings.ToLower(phrase)) {
+			t.Fatalf("j60 declaration must name %q: %s", phrase, declaration)
 		}
 	}
 }

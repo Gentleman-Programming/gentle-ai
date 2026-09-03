@@ -94,6 +94,32 @@ func decodeAtomicReviewStart(observation Observation, wantLineage string) (atomi
 	return started, nil
 }
 
+// decodeAtomicStartContinuation extracts only START's transition. START and
+// STATUS use different projection shapes, so decoding the whole START into a
+// statusEnvelope would reject an otherwise valid provider-issued continuation.
+func decodeAtomicStartContinuation(observation Observation) (statusEnvelope, error) {
+	var start struct {
+		NextTransition json.RawMessage `json:"next_transition"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &start); err != nil {
+		return statusEnvelope{}, fmt.Errorf("parse successful START continuation: %w", err)
+	}
+	if len(start.NextTransition) == 0 || string(start.NextTransition) == "null" {
+		return statusEnvelope{}, fmt.Errorf("parse successful START continuation: missing next_transition")
+	}
+	wrapped, err := json.Marshal(struct {
+		NextTransition json.RawMessage `json:"next_transition"`
+	}{NextTransition: start.NextTransition})
+	if err != nil {
+		return statusEnvelope{}, fmt.Errorf("wrap successful START continuation: %w", err)
+	}
+	var continuation statusEnvelope
+	if err := json.Unmarshal(wrapped, &continuation); err != nil {
+		return statusEnvelope{}, fmt.Errorf("parse successful START continuation: %w", err)
+	}
+	return continuation, nil
+}
+
 // resolveAtomicStartConsentAt executes the granted invocation emitted by the
 // product only after the exact rendered START has returned its consent envelope.
 // The benchmark never substitutes --consent itself or hand-assembles a START.
@@ -209,6 +235,10 @@ func requireExplicitAtomicFourLensStatus(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
+	return requireExplicitAtomicFourLensStatusEnvelope(status)
+}
+
+func requireExplicitAtomicFourLensStatusEnvelope(status statusEnvelope) error {
 	if status.Authority.LineageID != atomicCorrectionLineage || status.Authority.State != "reviewing" ||
 		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "reviewer_results_required" ||
 		len(status.NextTransition.Collect.Inputs) != 4 {
@@ -610,6 +640,58 @@ func captureAtomicCorrectableFinding(r *journeyRun) error {
 	return captureAtomicReviewerSlots(r, atomicCorrectionLineage, true)
 }
 
+func startAndContinueAtomicCorrection(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, atomicCorrectionLineage)
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "execute" || status.NextTransition.Execute.Operation != "review.start" ||
+		status.executeArgument("lineage") != atomicCorrectionLineage || status.NextTransition.Execute.Command == "" {
+		return fmt.Errorf("negotiated v2 STATUS = %+v, want a runnable START bound to %q", status.NextTransition, atomicCorrectionLineage)
+	}
+	for index, argument := range status.NextTransition.Execute.Arguments {
+		if argument.Name == "" || argument.Value == "" || argument.Token == "" {
+			return fmt.Errorf("START argument %d = %+v, want non-empty value and token", index, argument)
+		}
+	}
+	started, err := runPrintedTransition(r, status)
+	if err != nil {
+		return err
+	}
+	started, err = resolveAtomicStartConsentAt(r, r.sandbox.Repo, status, started)
+	if err != nil {
+		return err
+	}
+	if _, err := decodeAtomicReviewStart(started, atomicCorrectionLineage); err != nil {
+		return err
+	}
+	continuation, err := decodeAtomicStartContinuation(started)
+	if err != nil {
+		return err
+	}
+	if continuation.NextTransition.Kind != "execute" || continuation.NextTransition.Execute.Operation != "review.status" ||
+		continuation.NextTransition.Execute.Command == "" || len(continuation.NextTransition.Execute.Arguments) == 0 {
+		return fmt.Errorf("successful START continuation = %+v, want provider-issued review.status", continuation.NextTransition)
+	}
+	for index, argument := range continuation.NextTransition.Execute.Arguments {
+		if argument.Name == "" || argument.Value == "" || argument.Token == "" {
+			return fmt.Errorf("provider-issued STATUS argument %d = %+v, want ordered non-empty value and token", index, argument)
+		}
+	}
+	statusObservation, err := runPrintedTransition(r, continuation)
+	if err != nil {
+		return err
+	}
+	if statusObservation.ExitCode != 0 {
+		return fmt.Errorf("provider-issued STATUS exited %d: %s", statusObservation.ExitCode, firstLine(statusObservation.Stderr))
+	}
+	var returned statusEnvelope
+	if err := json.Unmarshal([]byte(statusObservation.Stdout), &returned); err != nil {
+		return fmt.Errorf("parse provider-issued STATUS: %w", err)
+	}
+	return requireExplicitAtomicFourLensStatusEnvelope(returned)
+}
+
 func waveThreeJourneys() []Journey {
 	return []Journey{
 		{
@@ -626,13 +708,12 @@ func waveThreeJourneys() []Journey {
 		{
 			ID:     "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 			Review: reviewOptedIn,
-			Title:  "#3587: explicit active lineage keeps its exact four lenses through correction and validator flow",
-			Source: "#3587: active compact authority continues only through its bound four-lens correction plan and terminal validator capture",
+			Title:  "#3587/#2423/#3914: explicit active lineage executes provider-issued post-START STATUS before its four lenses, correction, and validator flow",
+			Source: "#3587/#2423/#3914: negotiated v2 STATUS binds START, consent, and the provider-issued ordered-token review.status continuation",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
-				{Name: "START the compact high-risk transaction", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", atomicCorrectionLineage)},
-				{Name: "explicit active STATUS exposes exactly four compact lenses", Requires: atomicReviewStatusCapability, Composite: requireExplicitAtomicFourLensStatus},
+				{Name: "execute provider-issued START then ordered-token review.status continuation and apply the four-lens assertion", Requires: atomicReviewStatusCapability, Composite: startAndContinueAtomicCorrection},
 				{Name: "capture a correction finding and every remaining compact lens", Requires: captureResultCapability, Composite: captureAtomicCorrectableFinding},
 				{Name: "capture the status-bound bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
 					return captureCorrectionPlanFor(r, atomicCorrectionLineage, 2)
