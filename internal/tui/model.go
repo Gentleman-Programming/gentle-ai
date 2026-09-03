@@ -4834,7 +4834,7 @@ func (m Model) shouldShowStrictTDDScreen() bool {
 }
 
 func (m Model) shouldShowClaudeModelPickerScreen() bool {
-	return m.Selection.HasAgent(model.AgentClaudeCode) &&
+	return (m.Selection.HasAgent(model.AgentClaudeCode) || m.Selection.HasAgent(model.AgentOpenCode)) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
 
