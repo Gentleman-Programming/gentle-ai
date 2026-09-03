@@ -32,7 +32,7 @@ func modelPickerJourneys() []Journey {
 	return []Journey{{
 		ID:     "j97-opencode-custom-agent-model-picker-runtime",
 		Review: reviewUntouched,
-		Title:  "Runtime model picker preserves a user-owned custom native agent's variant on empty Effort",
+		Title:  "Runtime model picker discovers and persists a custom native agent assignment",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2098",
 		Steps: []Step{
 			{Name: "fixture: unconfigured custom agent and selectable model", Fixture: modelPickerFixture},
@@ -89,11 +89,8 @@ func modelPickerAfter(sandbox *Sandbox, observation Observation) error {
 	if result.PersistedModel != result.SelectedAssignment {
 		return fmt.Errorf("persisted model = %q, want %q", result.PersistedModel, result.SelectedAssignment)
 	}
-	// Issue #3262 ownership-boundary: a user-owned custom agent with an empty-Effort
-	// assignment keeps its existing variant. The fixture starts with no variant key,
-	// so an absent key IS the preserved state.
 	if result.VariantPresent {
-		return fmt.Errorf("persisted variant = %q present, want absent (issue #3262: user-owned custom agents preserve variant on empty Effort)", result.PersistedVariant)
+		return fmt.Errorf("persisted variant present = %q, want absent", result.PersistedVariant)
 	}
 	if !result.DescriptionPreserved {
 		return fmt.Errorf("custom-agent description was not preserved: %+v", result)

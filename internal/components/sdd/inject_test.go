@@ -3460,12 +3460,8 @@ func TestInjectOpenCodeMultiModeWithCustomAgentModelAssignment(t *testing.T) {
 	if custom["description"] != "preserve me" || custom["mode"] != "subagent" {
 		t.Fatalf("custom-refactor settings were not preserved: %v", custom)
 	}
-	// Ownership-boundary contract (issue #3262): a user-owned custom agent
-	// keeps its existing variant when the assignment carries no Effort. The
-	// minimal custom-agent overlay omits "variant" so the deep merge preserves
-	// "high". Managed definitions still clear stale variants on empty effort.
 	if variant, _ := custom["variant"].(string); variant != "high" {
-		t.Fatalf("custom-refactor variant = %v, want %q (user-owned custom agents preserve variant on empty effort)", custom["variant"], "high")
+		t.Fatalf("custom-refactor variant = %v, want %q", custom["variant"], "high")
 	}
 	if _, exists := agents["missing-custom"]; exists {
 		t.Fatal("inject must not create a missing custom agent definition")
