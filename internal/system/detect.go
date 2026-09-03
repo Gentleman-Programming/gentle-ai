@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -74,7 +75,7 @@ type DetectionResult struct {
 }
 
 func IsSupportedOS(goos string) bool {
-	return goos == "darwin" || goos == "linux" || goos == "windows"
+	return goos == "darwin" || goos == "linux" || goos == "windows" || goos == "android"
 }
 
 func Detect(ctx context.Context) (DetectionResult, error) {
@@ -135,6 +136,15 @@ func detectFromInputs(goos, arch, shell, linuxOSRelease string, tools map[string
 }
 
 func osReleaseContent(goos string) (string, error) {
+	if goos == "android" {
+		prefix := os.Getenv("PREFIX")
+		if prefix != "" {
+			if data, err := os.ReadFile(filepath.Join(prefix, "etc", "os-release")); err == nil {
+				return string(data), nil
+			}
+		}
+		return "", nil
+	}
 	if goos != "linux" {
 		return "", nil
 	}
@@ -160,9 +170,11 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		profile.PackageManager = "brew"
 		profile.Supported = true
 		return profile
-	case "linux":
+	case "linux", "android":
 		// The distro is reported, never gated on. It is what the machine
 		// calls itself, for humans reading logs and error messages.
+		// On Android/Termux, osReleaseContent reads $PREFIX/etc/os-release
+		// (typically ID=debian), so the distro name is accurate here too.
 		profile.LinuxDistro = osReleaseID(linuxOSRelease)
 
 		for _, manager := range linuxPackageManagers {

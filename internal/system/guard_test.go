@@ -28,7 +28,7 @@ func TestEnsureSupportedOSRejectsUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrUnsupportedOS, got %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "only macOS, Linux, and Windows are supported") {
+	if !strings.Contains(err.Error(), "only macOS, Linux, Windows, and Android are supported") {
 		t.Fatalf("expected explicit OS support message, got %q", err.Error())
 	}
 }
