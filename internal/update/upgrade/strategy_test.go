@@ -469,7 +469,8 @@ func TestEffectiveMethod(t *testing.T) {
 }
 
 func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
-	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewRoot := t.TempDir()
+	brewPrefix := filepath.Join(brewRoot, "opt", "gentle-ai")
 	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
 	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
 
@@ -482,6 +483,11 @@ func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
 		}
 		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
 			return mockCmd("echo", brewPrefix)
+		}
+		// `brew --prefix` (no args) returns the Homebrew root used to derive
+		// the bin directory the package owns symlinks under.
+		if len(args) == 1 && args[0] == "--prefix" {
+			return mockCmd("echo", brewRoot)
 		}
 		return mockCmd("false")
 	}
@@ -497,6 +503,38 @@ func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
 	}
 	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("true") }, func(string) (string, error) { return "", errors.New("not found") }, "gentle-ai") {
 		t.Fatal("expected active path lookup failure to avoid Homebrew")
+	}
+
+	// Negative control: a regular file (not a symlink) dropped into
+	// <brew-root>/bin/<tool> must NOT be classified as Homebrew-owned, or
+	// `gentle-ai upgrade` would hand a user-managed binary to `brew upgrade`
+	// for replacement.
+	brewRegular := filepath.Join(brewRoot, "bin", "gentle-ai")
+	if err := os.MkdirAll(filepath.Dir(brewRegular), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brewRegular, []byte("user-managed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if homebrewPackageInstalledWith(run, func(string) (string, error) { return brewRegular, nil }, "gentle-ai") {
+		t.Fatal("expected regular file in brew/bin to avoid Homebrew")
+	}
+
+	// Positive control: a symlink in <brew-root>/bin/<tool> whose target
+	// lies outside the artifact-specific prefix (the user pattern that
+	// triggered the original bug). Rule 2 must accept the symlink because
+	// `brew install` placed it and `brew upgrade` will replace it.
+	externalDir := t.TempDir()
+	externalBin := filepath.Join(externalDir, "gentle-ai")
+	if err := os.WriteFile(externalBin, []byte("dev build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brewSymlink := filepath.Join(brewRoot, "bin", "gentle-ai-symlink")
+	if err := os.Symlink(externalBin, brewSymlink); err != nil {
+		t.Fatal(err)
+	}
+	if !homebrewPackageInstalledWith(run, func(string) (string, error) { return brewSymlink, nil }, "gentle-ai") {
+		t.Fatal("expected symlink in brew/bin pointing to external binary to be Homebrew-owned")
 	}
 }
 
