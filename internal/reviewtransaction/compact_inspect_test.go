@@ -299,6 +299,68 @@ func inspectedEdge(t *testing.T, report CompactRecoveryInspectionReport, success
 	t.Fatalf("edge %q was omitted: %#v", successor, report.Edges)
 	return CompactRecoveryEdgeInspection{}
 }
+
+func TestSanctionedCompactRecoveryExitsDamagedStoreBlockedContainsDisableExit(t *testing.T) {
+	ctx := context.Background()
+	repo := initSnapshotRepo(t)
+	// Create a graph with root -> child -> grandchild where child and grandchild are invalid edges.
+	// Removing grandchild is fine, but removing child would orphan grandchild, so child's exit is Blocked!
+	_, _, child, _ := inspectRecoveryPair(t, repo, "child", true, "legacy malformed authorization")
+	_, _ = inspectRecoverySuccessor(t, repo, child, "grandchild", "legacy malformed authorization")
+
+	report, err := InspectCompactRecoveryEdges(ctx, repo)
+	inspectNoError(t, err)
+
+	exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
+	inspectNoError(t, err)
+
+	foundBlocked := false
+	for _, exit := range exits {
+		if exit.SuccessorLineageID == "child-successor" {
+			if exit.Operation != "" {
+				t.Fatalf("child exit operation = %q, want empty (Blocked)", exit.Operation)
+			}
+			if !strings.Contains(exit.Blocked, "gentle-ai review mode disable --scope clone --cwd .") {
+				t.Fatalf("exit.Blocked does not name runnable disable exit: %q", exit.Blocked)
+			}
+			foundBlocked = true
+		}
+	}
+	if !foundBlocked {
+		t.Fatalf("did not find child-successor in exits: %#v", exits)
+	}
+}
+
+func TestSanctionedCompactRecoveryExitsUnchangedTargetOnlyBlockedContainsDisableExit(t *testing.T) {
+	ctx := context.Background()
+	repo := initSnapshotRepo(t)
+	// Create unchanged_target edge with valid authorization: root -> child -> grandchild
+	_, _, child, _ := inspectRecoveryPair(t, repo, "child-unchanged", true, "")
+	_, _ = inspectRecoverySuccessor(t, repo, child, "grandchild-unchanged", "")
+
+	report, err := InspectCompactRecoveryEdges(ctx, repo)
+	inspectNoError(t, err)
+
+	exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
+	inspectNoError(t, err)
+
+	foundBlocked := false
+	for _, exit := range exits {
+		if exit.SuccessorLineageID == "child-unchanged-successor" {
+			if exit.Operation != "" {
+				t.Fatalf("child exit operation = %q, want empty (Blocked)", exit.Operation)
+			}
+			if !strings.Contains(exit.Blocked, "gentle-ai review mode disable --scope clone --cwd .") {
+				t.Fatalf("exit.Blocked does not name runnable disable exit: %q", exit.Blocked)
+			}
+			foundBlocked = true
+		}
+	}
+	if !foundBlocked {
+		t.Fatalf("did not find child-unchanged-successor in exits: %#v", exits)
+	}
+}
+
 func inspectNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
