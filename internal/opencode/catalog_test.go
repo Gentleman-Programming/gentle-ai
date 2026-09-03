@@ -423,6 +423,75 @@ func main() {
 	}
 }
 
+// TestProcessStreamReaderWaitErrorJoinsStdoutDrain pins the os/exec pipe
+// lifecycle contract: when parsing fails early while the child is still alive
+// and writing, WaitError must join the stdout drain before reaping the child
+// instead of calling Wait under a concurrent pipe reader. The helper emits a
+// malformed record first (so the parse fails fast) and keeps writing noise
+// for ~2s before exiting non-zero; discovery must complete promptly with
+// command_failed (the child's exit wins over the parse classification) and
+// must never panic or deadlock on the pipe.
+func TestProcessStreamReaderWaitErrorJoinsStdoutDrain(t *testing.T) {
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "earlyfail-helper")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+)
+
+func main() {
+	fmt.Println("custom/model")
+	fmt.Println("{broken json")
+	for i := 0; i < 200; i++ {
+		fmt.Println("noise line", i)
+		time.Sleep(10 * time.Millisecond)
+	}
+	os.Exit(4)
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
+	}
+	if closer, ok := r.(io.Closer); ok {
+		defer closer.Close()
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, discoverErr := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+			return r, nil
+		})
+		done <- discoverErr
+	}()
+
+	select {
+	case discoverErr := <-done:
+		var catalogErr *CatalogError
+		if !errors.As(discoverErr, &catalogErr) || catalogErr.Kind != CatalogErrorCommandFailed {
+			t.Fatalf("err = %v, want command_failed (child exit must win over early parse failure)", discoverErr)
+		}
+	case <-time.After(12 * time.Second):
+		t.Fatal("DiscoverCatalogWithRunner blocked; WaitError did not join the stdout drain before reaping")
+	}
+}
+
 // slowReader throttles consumption so the parser runs far slower than the
 // child writes. OpenCode's catalog writer aborts when its stdout pipe drains
 // too slowly, so discovery must drain the pipe in the background and let the

@@ -399,9 +399,15 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 
 	stream := newBoundedPipeBuffer(maxCatalogOutput, cancel)
 	stderrDone := make(chan struct{})
+	stdoutDone := make(chan struct{})
 
-	// Drain stdout at full speed into the bounded buffer.
+	// Drain stdout at full speed into the bounded buffer. The drain owns
+	// stdoutDone: it is closed after the read loop ends so closeAndReap can
+	// join the drain before calling cmd.Wait (os/exec forbids Wait while a
+	// pipe read is in flight). The deferred close also runs on the overflow
+	// path, where cancel drives the pipe to EOF and the loop exits.
 	go func() {
+		defer close(stdoutDone)
 		var chunk [8192]byte
 		for {
 			n, readErr := stdoutPipe.Read(chunk[:])
@@ -430,6 +436,7 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 		cmd:        cmd,
 		stream:     stream,
 		stderrDone: stderrDone,
+		stdoutDone: stdoutDone,
 		cancel:     cancel,
 	}, nil
 }
@@ -512,6 +519,7 @@ type processStreamReader struct {
 	cmd        *exec.Cmd
 	stream     *boundedPipeBuffer
 	stderrDone chan struct{}
+	stdoutDone chan struct{}
 	cancel     context.CancelFunc
 	closed     bool
 	waitErr    error
@@ -554,9 +562,13 @@ func (p *processStreamReader) WaitError() error {
 	return p.waitErr
 }
 
-// closeAndReap performs the idempotent shutdown sequence: reap the child and
-// only afterwards wait for the stderr drain. The stdout drain goroutine ends
-// on its own once the child's pipe is closed by Wait. Cancellation is not
+// closeAndReap performs the idempotent shutdown sequence: join the stdout
+// drain, reap the child, and only afterwards wait for the stderr drain.
+// Joining stdoutDone before cmd.Wait honors the os/exec contract — "Wait will
+// close the pipe after seeing the command exit, so it is incorrect to call
+// Wait before all reads from the pipe have completed" — which an early parse
+// failure (DiscoverCatalogWithRunner → WaitError) would otherwise violate by
+// reaping while the drain is still blocked in Read. Cancellation is not
 // called here: the context that owns the child (Close or the deadline) drives
 // it, and cancelling before Wait would make Wait report context cancellation
 // instead of the child's real exit status.
@@ -564,14 +576,27 @@ func (p *processStreamReader) WaitError() error {
 // Concurrency note: the consumer side (Read, Close, WaitError) is expected to
 // run on a single goroutine, as DiscoverCatalogWithRunner does. The stdout
 // and stderr drain goroutines synchronize through boundedPipeBuffer's lock
-// and stderrDone; they never touch p.closed or p.waitErr.
+// and stdoutDone/stderrDone; they never touch p.closed or p.waitErr.
+//
+// Deadlock note: closeAndReap is only reachable on a reader whose stdout
+// drain goroutine was started (runCatalogCommand always starts it after a
+// successful Start), and that goroutine always closes stdoutDone — on natural
+// EOF, on read error, and on overflow (where cancel drives the pipe to EOF).
+// Waiting here is therefore bounded by the child's lifetime, exactly like the
+// cmd.Wait below it. Nil channels are skipped defensively so a zero-value
+// reader fails closed instead of hanging.
 func (p *processStreamReader) closeAndReap() {
 	if p.closed {
 		return
 	}
 	p.closed = true
+	if p.stdoutDone != nil {
+		<-p.stdoutDone
+	}
 	p.waitErr = p.cmd.Wait()
-	<-p.stderrDone
+	if p.stderrDone != nil {
+		<-p.stderrDone
+	}
 }
 
 // countingLimitReader enforces the defensive stdout ceiling: a stream of at
