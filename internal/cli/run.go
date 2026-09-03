@@ -227,6 +227,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
+	result.Execution.DeferredComponents = append(result.Execution.DeferredComponents, runtime.state.deferredComponents...)
+	result.Execution.ManualActions = append(result.Execution.ManualActions, runtime.state.manualActions...)
 	result.PiCodeGraph = runtime.state.piCodeGraph
 	result.Verify = runPostApplyVerification(postApplyVerificationInput{
 		HomeDir:      homeDir,
@@ -236,7 +238,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Resolved:     resolved,
 		State:        runtime.state,
 	})
-	result.Verify = withPostInstallNotes(result.Verify, resolved)
+	result.Verify = withPostInstallNotesForDeferredComponents(result.Verify, resolved, result.Execution.DeferredComponents)
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, runtime.runtimeReady, resolved.Agents)
 	result.Verify = withOpenCodeBackgroundActivationNote(result.Verify, background, resolved.Agents)
 	if plan := piBackground.projectionPlan; plan != nil && plan.skipReason != "" {
@@ -422,13 +424,26 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 }
 
 func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	return withPostInstallNotesForDeferredComponents(report, resolved, nil)
+}
+
+func withPostInstallNotesForDeferredComponents(report verify.Report, resolved planner.ResolvedPlan, deferredComponents []string) verify.Report {
 	report = withReadyAgentRunNote(report, resolved)
 	report = withFailedVerificationNote(report, resolved)
-	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready {
+	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && !containsDeferredComponent(deferredComponents, string(model.ComponentGGA)) && report.Ready {
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
 	return report
+}
+
+func containsDeferredComponent(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // readyAgentRunCommands is the fixed, ordered set of installable agents that
@@ -661,6 +676,8 @@ type runtimeState struct {
 	rollbackSnapshotDir      string
 	piCodeGraph              *communitytool.PiCodeGraphResult
 	compatibilityTransaction compatibilityRefreshTransaction
+	deferredComponents       []string
+	manualActions            []string
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -1702,28 +1719,20 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentGGA:
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
-			if s.profile.OS == "windows" {
+			if s.profile.OS == "darwin" && s.profile.PackageManager == "brew" {
+				if _, err := cmdLookPath("brew"); err != nil {
+					s.deferGGAForMissingHomebrew()
+				} else if err := s.installGGA(); err != nil {
+					return err
+				}
+			} else if s.profile.OS == "windows" {
 				if err := cleanupGGAInstallDir(); err != nil {
 					return err
 				}
 			}
-			commands, err := gga.InstallCommand(s.profile)
-			if err != nil {
-				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
-			}
-			installErr := runCommandSequence(commands)
-			if installErr != nil {
-				if ggaAvailable(s.profile) {
-					// The GGA install script uses `set -e` and `read -p` for
-					// the "already installed" confirmation. Without a TTY
-					// (common in automated/re-run scenarios), `read` fails
-					// with exit code 1 and `set -e` kills the script before
-					// it can exit 0. If GGA is actually available after the
-					// script ran, the install succeeded functionally — treat
-					// as success but warn the user.
-					fmt.Fprintf(os.Stderr, "WARNING: gga install command reported an error but gga is available — continuing. Error was: %v\n", installErr)
-				} else {
-					return installErr
+			if s.profile.OS != "darwin" || s.profile.PackageManager != "brew" {
+				if err := s.installGGA(); err != nil {
+					return err
 				}
 			}
 		}
@@ -1771,6 +1780,34 @@ func (s componentApplyStep) Run() error {
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
 	}
+}
+
+func (s componentApplyStep) installGGA() error {
+	commands, err := gga.InstallCommand(s.profile)
+	if err != nil {
+		return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
+	}
+	installErr := runCommandSequence(commands)
+	if installErr == nil {
+		return nil
+	}
+	if ggaAvailable(s.profile) {
+		// The GGA install script uses `set -e` and `read -p` for the
+		// "already installed" confirmation. Without a TTY, `read` fails
+		// even though the binary is already usable.
+		fmt.Fprintf(os.Stderr, "WARNING: gga install command reported an error but gga is available — continuing. Error was: %v\n", installErr)
+		return nil
+	}
+	return installErr
+}
+
+func (s componentApplyStep) deferGGAForMissingHomebrew() {
+	if s.state == nil || containsDeferredComponent(s.state.deferredComponents, string(model.ComponentGGA)) {
+		return
+	}
+	s.state.deferredComponents = append(s.state.deferredComponents, string(model.ComponentGGA))
+	s.state.manualActions = append(s.state.manualActions,
+		"GGA installation deferred because Homebrew is unavailable. Install it manually with: brew tap Gentleman-Programming/homebrew-tap && brew install gga. Then retry: gentle-ai install --component gga.")
 }
 
 func ensureGoAvailableAfterInstall(profile system.PlatformProfile) error {
@@ -1849,6 +1886,8 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
 	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
 	runtime.state.cleanupRollbackSnapshot()
+	result.DeferredComponents = append(result.DeferredComponents, runtime.state.deferredComponents...)
+	result.ManualActions = append(result.ManualActions, runtime.state.manualActions...)
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
@@ -1858,10 +1897,14 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 // RenderInstallManualActions renders non-fatal completion actions after the
 // normal verification report so CLI users receive the same drift guidance.
 func RenderInstallManualActions(result InstallResult) string {
-	if result.PiCodeGraph == nil || len(result.PiCodeGraph.ManualActions) == 0 {
+	actions := append([]string(nil), result.Execution.ManualActions...)
+	if result.PiCodeGraph != nil {
+		actions = append(actions, result.PiCodeGraph.ManualActions...)
+	}
+	if len(actions) == 0 {
 		return ""
 	}
-	return "\nManual actions required:\n- " + strings.Join(result.PiCodeGraph.ManualActions, "\n- ") + "\n"
+	return "\nManual actions required:\n- " + strings.Join(actions, "\n- ") + "\n"
 }
 
 // ResolveInstallProfile returns the platform profile from detection, defaulting to darwin/brew.
