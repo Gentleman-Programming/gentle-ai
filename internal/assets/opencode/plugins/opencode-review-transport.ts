@@ -133,14 +133,18 @@ function relayRefusedOutput(reason: string): string {
 // so a swap of the symlink target surfaces as an mtime drift on the same
 // path.
 function resolveGentleAiPath(): { path: string; mtime: number } | null {
+  const isWindows = process.platform === "win32"
+  const extensions = isWindows ? [".exe", ".cmd", ".bat", ""] : [""]
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (dir === "") continue
-    const candidate = join(dir, "gentle-ai")
-    try {
-      const stat = statSync(candidate)
-      if (stat.isFile()) return { path: candidate, mtime: stat.mtimeMs }
-    } catch {
-      continue
+    for (const ext of extensions) {
+      const candidate = join(dir, `gentle-ai${ext}`)
+      try {
+        const stat = statSync(candidate)
+        if (stat.isFile()) return { path: candidate, mtime: stat.mtimeMs }
+      } catch {
+        continue
+      }
     }
   }
   return null
