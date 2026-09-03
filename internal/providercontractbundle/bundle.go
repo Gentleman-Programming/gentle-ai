@@ -149,12 +149,18 @@ func validPiFacadeLifecycle(content string) bool {
 		"`gentle_review_capture_group` for the complete current reviewer group",
 		"On `approved`, use bound facade STATUS to obtain or replay the exact provider-issued `acknowledge-approved` continuation, then execute it unchanged.",
 		"Only the exact provider-issued acknowledgement continuation burns approved authority.",
+		"`gentle_review` with operation `answer-consent` and the exact `consentBinding`",
+		"resubmit the same exact binding with `reviewerRunAcknowledged: true`",
 	} {
 		if !strings.Contains(content, required) {
 			return false
 		}
 	}
-	return !strings.Contains(content, "gentle-ai review ")
+	// The user-owned kill switch (`gentle-ai review mode ...`) is ordinary CLI
+	// with no facade operation, so the contract may legitimately name it; every
+	// other raw "gentle-ai review " lifecycle route is still forbidden.
+	stripped := strings.ReplaceAll(content, "gentle-ai review mode ", "")
+	return !strings.Contains(stripped, "gentle-ai review ")
 }
 
 var bundleREADME = []byte(`# Gentle AI review provider contract

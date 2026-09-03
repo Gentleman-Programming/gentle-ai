@@ -48,6 +48,12 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 			"`gentle_review_capture` for one current returned slot",
 			"`gentle_review_capture_group` for the complete current reviewer group",
 			"Pi never reconstructs lineage, target, revision, repository context, lens, order, or commands",
+			"`gentle_review` with operation `answer-consent` and the exact `consentBinding`",
+			"relay it losslessly in the user's language",
+			"Forecast is informational; route only from the returned transition.",
+			"The final reviewer, refuter, or targeted-validator capture owns closure.",
+			"A validator that cannot inspect the immutable trees produced no verdict",
+			"`rdd_disabled`",
 		}
 	}
 	return append(captureTransportClausesFor(agent), []string{
@@ -348,7 +354,6 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 				if strings.Contains(content, "gentle-ai review status") {
 					t.Fatal("Pi lifecycle exposes raw STATUS")
 				}
-				return
 			}
 			if strings.Count(content, researchLifecycleContract()) != 1 {
 				t.Fatal("rendered orchestrator must contain one canonical research lifecycle")
@@ -623,6 +628,11 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 			if agent.ID == model.AgentPi {
 				if !strings.Contains(content, "Only the exact provider-issued acknowledgement continuation burns approved authority") {
 					t.Fatal("Pi lifecycle lost its facade acknowledgement rule")
+				}
+				for _, want := range []string{"Forecast is informational; route only from the returned transition.", "The final reviewer, refuter, or targeted-validator capture owns closure.", "relay it as a Lossless Blocking Prompt"} {
+					if !strings.Contains(content, want) {
+						t.Errorf("Pi lifecycle missing %q", want)
+					}
 				}
 				return
 			}

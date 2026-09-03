@@ -91,6 +91,9 @@ func TestReviewExecutionContractForPiUsesFacadeLifecycleRoutes(t *testing.T) {
 		"`gentle_review_capture` for one current returned slot",
 		"`gentle_review_capture_group` for the complete current reviewer group",
 		"Pi never reconstructs lineage, target, revision, repository context, lens, order, or commands",
+		"`gentle_review` with operation `answer-consent` and the exact `consentBinding`",
+		"resubmit the same exact binding with `reviewerRunAcknowledged: true`",
+		"`gentle-ai review mode enable --scope global`",
 	} {
 		if !strings.Contains(contract, want) {
 			t.Errorf("Pi review contract missing facade route %q", want)

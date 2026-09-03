@@ -576,13 +576,17 @@ func TestPiFacadeLifecycleValidation(t *testing.T) {
 	}{
 		{name: "complete facade lifecycle", content: valid, valid: true},
 		{name: "missing facade status", content: strings.Replace(valid, "`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed", "", 1)},
-		{name: "missing single capture", content: strings.Replace(valid, "`gentle_review_capture`", "", 1)},
-		{name: "missing group capture", content: strings.Replace(valid, "`gentle_review_capture_group`", "", 1)},
+		{name: "missing single capture", content: strings.ReplaceAll(valid, "`gentle_review_capture`", "")},
+		{name: "missing group capture", content: strings.ReplaceAll(valid, "`gentle_review_capture_group`", "")},
 		{name: "missing approved acknowledgement", content: strings.Replace(valid, "Only the exact provider-issued acknowledgement continuation burns approved authority.", "", 1)},
 		{name: "missing public facade acknowledgement operation", content: strings.Replace(valid, "`acknowledge-approved` continuation", "`replacement` continuation", 1), valid: false},
+		{name: "missing answer-consent route", content: strings.Replace(valid, "`gentle_review` with operation `answer-consent` and the exact `consentBinding`", "", 1), valid: false},
+		{name: "missing forecast acknowledgement", content: strings.Replace(valid, "resubmit the same exact binding with `reviewerRunAcknowledged: true`", "", 1), valid: false},
+		{name: "user-owned mode switch is allowed", content: valid + "\ngentle-ai review mode enable --scope global\n", valid: true},
 		{name: "raw status", content: valid + "\ngentle-ai review status\n"},
 		{name: "raw capture", content: valid + "\ngentle-ai review capture-result\n"},
 		{name: "raw acknowledgement", content: valid + "\ngentle-ai review acknowledge-approved\n"},
+		{name: "raw recover", content: valid + "\ngentle-ai review recover --lineage x\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := validPiFacadeLifecycle(test.content); got != test.valid {
