@@ -1572,9 +1572,22 @@ func TestConfigPathsForBackup_ConfiguredEmptySelectionExcludesDetectedAgents(t *
 		t.Fatalf("state.Write: %v", err)
 	}
 
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("agents.NewDefaultRegistry: %v", err)
+	}
+	claudeAdapter, ok := reg.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("default registry does not contain Claude Code")
+	}
+
+	actual := make(map[string]struct{})
 	for _, path := range configPathsForBackup(homeDir) {
-		if path == claudeSettings {
-			t.Fatalf("configPathsForBackup() included %q for a configured empty selection", claudeSettings)
+		actual[path] = struct{}{}
+	}
+	for _, path := range managedAgentBackupPaths(homeDir, claudeAdapter, &bytes.Buffer{}) {
+		if _, found := actual[path]; found {
+			t.Errorf("configPathsForBackup() included Claude-managed path %q for a configured empty selection", path)
 		}
 	}
 }
