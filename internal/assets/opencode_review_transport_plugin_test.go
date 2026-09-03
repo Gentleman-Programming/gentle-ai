@@ -764,6 +764,22 @@ lines.on("line", (line) => {
 	}
 }
 
+// overridePATH replaces any PATH entries in parent with pathValue and appends
+// the harness log pointers. The harness needs to override PATH, not append
+// to it, because getenv(3) returns the first matching entry — appending
+// leaves the parent's PATH first and the controlled pathValue shadowed.
+func overridePATH(parent []string, pathValue, logPath, probePath string) []string {
+	env := make([]string, 0, len(parent)+3)
+	for _, entry := range parent {
+		if strings.HasPrefix(entry, "PATH=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env, "PATH="+pathValue, "GENTLE_AI_RELAY_LOG="+logPath, "GENTLE_AI_PROBE_LOG="+probePath)
+	return env
+}
+
 func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, harness, relay string, extraPath ...string) (string, string, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -799,8 +815,10 @@ func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, 
 	for _, entry := range extraPath {
 		pathValue = entry + string(os.PathListSeparator) + pathValue
 	}
-	pathValue = pathValue + string(os.PathListSeparator) + os.Getenv("PATH")
-	command.Env = append(os.Environ(), "PATH="+pathValue, "GENTLE_AI_RELAY_LOG="+logPath, "GENTLE_AI_PROBE_LOG="+probePath)
+	if relay != "" {
+		pathValue = pathValue + string(os.PathListSeparator) + os.Getenv("PATH")
+	}
+	command.Env = overridePATH(os.Environ(), pathValue, logPath, probePath)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("transport plugin harness failed: %v\n%s", err, output)
