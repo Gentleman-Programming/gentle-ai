@@ -245,6 +245,14 @@ func matchingHomebrewArtifact(output, toolName string) string {
 // even when their targets are external. It only surfaces EvalSymlinks failures
 // for the prefix itself; the active path is checked as-given first, then
 // followed when that fails.
+//
+// A regular file under <brew-root>/bin is never accepted: a user-managed
+// binary dropped there must not be classified as Homebrew-owned, otherwise
+// `gentle-ai update` would hand it to `brew upgrade` for replacement. This
+// guard is checked before Rule 1 because the prefix argument can, in theory,
+// coincide with the bin directory; the symlink check below is the canonical
+// path and would also reject, but doing the check first gives a clearer
+// negative result.
 func pathWithinResolvedPrefix(path, prefix, binRoot string) (bool, error) {
 	resolvedPrefix, err := filepath.EvalSymlinks(prefix)
 	if err != nil {
@@ -253,6 +261,27 @@ func pathWithinResolvedPrefix(path, prefix, binRoot string) (bool, error) {
 	resolvedPrefix = filepath.Clean(resolvedPrefix)
 
 	cleanPath := filepath.Clean(path)
+
+	// Pre-Rule-1 guard: a regular file under <brew-root>/bin is never
+	// Homebrew-owned, even if some of the prefix arguments below would
+	// otherwise match. Reject before any prefix check.
+	if binRoot != "" && !isBrewOwnedSymlink(cleanPath) {
+		resolvedBin, binErr := filepath.EvalSymlinks(binRoot)
+		if binErr == nil {
+			binRoot = resolvedBin
+		}
+		binRoot = filepath.Clean(binRoot)
+		if resolvedParent, parentErr := filepath.EvalSymlinks(filepath.Dir(cleanPath)); parentErr == nil {
+			resolvedParent = filepath.Clean(resolvedParent)
+			if resolvedParent == binRoot || strings.HasPrefix(resolvedParent, binRoot+string(filepath.Separator)) {
+				return false, nil
+			}
+		}
+		if parent := filepath.Dir(cleanPath); parent == binRoot || strings.HasPrefix(parent, binRoot+string(filepath.Separator)) {
+			return false, nil
+		}
+	}
+
 	if cleanPath == resolvedPrefix || strings.HasPrefix(cleanPath, resolvedPrefix+string(filepath.Separator)) {
 		return true, nil
 	}

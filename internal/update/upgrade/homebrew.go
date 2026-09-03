@@ -59,6 +59,14 @@ func homebrewPackageInstalledWith(run commandRunner, resolvePath pathResolver, t
 // target lies outside the Homebrew prefix, because brew install placed the
 // symlink and brew upgrade will replace it. See internal/update/homebrew.go for
 // the full rationale.
+//
+// A regular file under <brew-root>/bin is never accepted: a user-managed
+// binary dropped there must not be classified as Homebrew-owned, otherwise
+// `gentle-ai upgrade` would hand it to `brew upgrade` for replacement. This
+// guard is checked before Rule 1 because the prefix argument can, in theory,
+// coincide with the bin directory; the symlink check below is the canonical
+// path and would also reject, but doing the check first gives a clearer
+// negative result.
 func pathWithinPrefix(path, prefix, binRoot string) bool {
 	resolvedPrefix, err := filepath.EvalSymlinks(prefix)
 	if err == nil {
@@ -67,6 +75,26 @@ func pathWithinPrefix(path, prefix, binRoot string) bool {
 	prefix = filepath.Clean(prefix)
 
 	cleanPath := filepath.Clean(path)
+
+	// Pre-Rule-1 guard: a regular file under <brew-root>/bin is never
+	// Homebrew-owned, even if some of the prefix arguments below would
+	// otherwise match. Reject before any prefix check.
+	if binRoot != "" && !isBrewOwnedSymlink(cleanPath) {
+		resolvedBin, binErr := filepath.EvalSymlinks(binRoot)
+		if binErr == nil {
+			binRoot = resolvedBin
+		}
+		binRoot = filepath.Clean(binRoot)
+		if resolvedParent, parentErr := filepath.EvalSymlinks(filepath.Dir(cleanPath)); parentErr == nil {
+			resolvedParent = filepath.Clean(resolvedParent)
+			if resolvedParent == binRoot || strings.HasPrefix(resolvedParent, binRoot+string(filepath.Separator)) {
+				return false
+			}
+		}
+		if parent := filepath.Dir(cleanPath); parent == binRoot || strings.HasPrefix(parent, binRoot+string(filepath.Separator)) {
+			return false
+		}
+	}
 
 	if cleanPath == prefix || strings.HasPrefix(cleanPath, prefix+string(filepath.Separator)) {
 		return true
