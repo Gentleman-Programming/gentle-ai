@@ -14,6 +14,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
@@ -561,6 +564,33 @@ func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
 // generate-then-verify roundtrip strict TDD requires: the manifest must carry
 // a sorted orchestration entry naming pi and its file reference, and Verify
 // must accept the archive built from exactly those bytes.
+func TestPiFacadeLifecycleValidation(t *testing.T) {
+	valid, err := sdd.ReviewExecutionContractFor(model.AgentPi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		content string
+		valid   bool
+	}{
+		{name: "complete facade lifecycle", content: valid, valid: true},
+		{name: "missing facade status", content: strings.Replace(valid, "`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed", "", 1)},
+		{name: "missing single capture", content: strings.Replace(valid, "`gentle_review_capture`", "", 1)},
+		{name: "missing group capture", content: strings.Replace(valid, "`gentle_review_capture_group`", "", 1)},
+		{name: "missing approved acknowledgement", content: strings.Replace(valid, "Only the exact provider-issued acknowledgement continuation burns approved authority.", "", 1)},
+		{name: "raw status", content: valid + "\ngentle-ai review status\n"},
+		{name: "raw capture", content: valid + "\ngentle-ai review capture-result\n"},
+		{name: "raw acknowledgement", content: valid + "\ngentle-ai review acknowledge-approved\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validPiFacadeLifecycle(test.content); got != test.valid {
+				t.Fatalf("validPiFacadeLifecycle() = %t, want %t", got, test.valid)
+			}
+		})
+	}
+}
+
 func TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry(t *testing.T) {
 	directory := t.TempDir()
 	if err := Generate(directory, "1.2.0"); err != nil {

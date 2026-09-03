@@ -127,8 +127,8 @@ func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
 			return nil, fmt.Errorf("%w: orchestration runtime %q left the runtime identity placeholder unbound", errInvalidBundle, runtime)
 		}
 		if runtime == string(model.AgentPi) {
-			if !strings.Contains(content, "`gentle_review` with {\"operation\":\"inspect\"}") || strings.Contains(content, "gentle-ai review status") {
-				return nil, fmt.Errorf("%w: orchestration runtime %q does not use the facade-only lifecycle", errInvalidBundle, runtime)
+			if !validPiFacadeLifecycle(content) {
+				return nil, fmt.Errorf("%w: orchestration runtime %q does not use the complete facade-only lifecycle", errInvalidBundle, runtime)
 			}
 		} else {
 			wantCommand := "--agent " + runtime
@@ -139,6 +139,21 @@ func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
 		entries = append(entries, orchestrationEntry{runtime: runtime, content: []byte(strings.TrimSpace(content) + "\n")})
 	}
 	return entries, nil
+}
+
+func validPiFacadeLifecycle(content string) bool {
+	for _, required := range []string{
+		"`gentle_review` with {\"operation\":\"inspect\"}",
+		"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
+		"`gentle_review_capture` for one current returned slot",
+		"`gentle_review_capture_group` for the complete current reviewer group",
+		"Only the exact provider-issued acknowledgement continuation burns approved authority.",
+	} {
+		if !strings.Contains(content, required) {
+			return false
+		}
+	}
+	return !strings.Contains(content, "gentle-ai review ")
 }
 
 var bundleREADME = []byte(`# Gentle AI review provider contract
