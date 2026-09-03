@@ -2466,8 +2466,8 @@ func TestRunInstallWorkspaceScopeVerification(t *testing.T) {
 // TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace verifies that executing
 // a real workspace operation with --scope workspace and Context7 component:
 //  1. Returns a successful result with verification ready.
-//  2. Persists Context7 MCP configuration into <project-root>/.mcp.json, the file
-//     Claude Code loads project-scoped MCP servers from (issue #2213).
+//  2. Persists Context7 MCP configuration into <workspace>/.mcp.json, the
+//     project-scoped file Claude Code loads MCP servers from (issue #2213).
 //  3. Leaves the user's home directory settings untouched.
 func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 	home := t.TempDir()
@@ -2516,16 +2516,18 @@ func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 		t.Fatalf("post-apply verification failed for Context7 workspace scope: %#v", result.Verify)
 	}
 
-	// Context7 MCP configuration must persist to <project-root>/.mcp.json, the
-	// file Claude Code loads project-scoped MCP servers from (issue #2213).
+	// Assert that Context7 MCP configuration was persisted to the workspace
+	// project-scoped .mcp.json file Claude Code actually loads.
 	workspaceMCPFile := filepath.Join(workspace, ".mcp.json")
 	assertFileContains(t, workspaceMCPFile, "context7")
 
-	// The legacy .claude/settings.json key is inert for MCP discovery and must
-	// not carry the managed context7 entry after install.
-	if settingsRaw, err := os.ReadFile(filepath.Join(workspace, ".claude", "settings.json")); err == nil {
-		if strings.Contains(string(settingsRaw), `"mcpServers"`) {
-			t.Errorf("workspace .claude/settings.json must not carry mcpServers; got %s", settingsRaw)
+	// Assert that no inert managed mcpServers block was left in the
+	// workspace .claude/settings.json (Claude Code ignores it).
+	workspaceSettingsFile := filepath.Join(workspace, ".claude", "settings.json")
+	if _, err := os.Stat(workspaceSettingsFile); err == nil {
+		content, _ := os.ReadFile(workspaceSettingsFile)
+		if strings.Contains(string(content), "context7") {
+			t.Errorf("unexpected inert Context7 MCP config found in workspace settings file: %q", workspaceSettingsFile)
 		}
 	}
 
@@ -2540,8 +2542,9 @@ func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 }
 
 // TestRunInstall_Context7WorkspaceScope_FailurePath verifies that executing
-// Context7 workspace installation when workspace target is unwriteable fails gracefully,
-// returning an error and reporting verification failure.
+// Context7 workspace installation when the workspace .mcp.json target is
+// unwriteable fails gracefully, returning an error and reporting verification
+// failure.
 func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -2573,12 +2576,10 @@ func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 		t.Fatalf("failed to change working directory to temp workspace: %v", err)
 	}
 
-	// Block the <project-root>/.mcp.json write by making it a directory, so the
-	// atomic file write fails. The primary workspace-scope target is .mcp.json
-	// (issue #2213), not .claude/settings.json.
-	blockingPath := filepath.Join(workspace, ".mcp.json")
-	if err := os.Mkdir(blockingPath, 0o755); err != nil {
-		t.Fatalf("failed to create blocking .mcp.json directory: %v", err)
+	// Create .mcp.json as a directory so the Context7 merge cannot read it.
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.MkdirAll(mcpPath, 0o755); err != nil {
+		t.Fatalf("failed to block workspace .mcp.json path: %v", err)
 	}
 
 	args := []string{
