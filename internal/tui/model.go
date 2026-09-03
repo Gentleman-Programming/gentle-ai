@@ -3961,6 +3961,9 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 }
 
 func (m *Model) setScreen(next Screen) {
+	if (m.Screen == ScreenProfiles || m.Screen == ScreenProfileCreate) && next != ScreenProfiles && next != ScreenProfileCreate {
+		m.Selection.ModelAssignments = nil
+	}
 	m.PreviousScreen = m.Screen
 	m.Screen = next
 	m.Cursor = 0
@@ -3974,6 +3977,7 @@ func (m *Model) setScreen(next Screen) {
 		m.PinErr = nil
 	}
 	if next == ScreenProfiles {
+		m.Selection.ModelAssignments = nil
 		// Refresh on entry without replacing valid data with an empty error state.
 		profiles, err := readProfilesFn(currentOpenCodeSettingsPath())
 		if err != nil {

@@ -4937,6 +4937,76 @@ func TestModelConfigOpenCodeNoPrePopulationWhenFileEmpty(t *testing.T) {
 	}
 }
 
+// TestModelConfigOpenCodeIsolatedFromCustomSDDProfiles verifies that accessing
+// or editing a custom SDD profile does not bleed profile assignments into the
+// default gentle-orchestrator / Configure OpenCode models screen.
+func TestModelConfigOpenCodeIsolatedFromCustomSDDProfiles(t *testing.T) {
+	defaultAssignment := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
+	profileAssignment := model.ModelAssignment{ProviderID: "openai", ModelID: "o3"}
+
+	orig := readCurrentAssignmentsFn
+	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+		return map[string]model.ModelAssignment{
+			"gentle-orchestrator": defaultAssignment,
+		}, nil
+	}
+	t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+	origProfiles := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{
+			{
+				Name:              "high-performance",
+				OrchestratorModel: profileAssignment,
+				PhaseAssignments: map[string]model.ModelAssignment{
+					"sdd-apply": profileAssignment,
+				},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = origProfiles })
+
+	origStat := osStatModelCache
+	osStatModelCache = func(name string) (os.FileInfo, error) { return nil, nil }
+	t.Cleanup(func() { osStatModelCache = origStat })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	// 1. Enter ScreenProfiles
+	m.setScreen(ScreenProfiles)
+
+	// 2. Select the custom profile (cursor 0) to edit
+	m.Cursor = 0
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenProfileCreate {
+		t.Fatalf("expected ScreenProfileCreate, got %v", state.Screen)
+	}
+
+	// 3. Exit profile creation back to ScreenProfiles and then ScreenWelcome
+	state.setScreen(ScreenProfiles)
+	state.setScreen(ScreenWelcome)
+
+	// 4. Open ScreenModelConfig -> Configure OpenCode models
+	state.setScreen(ScreenModelConfig)
+	state.Cursor = 1 // Configure OpenCode models
+	updatedModelConfig, _ := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	finalState := updatedModelConfig.(Model)
+
+	if finalState.Screen != ScreenModelPicker {
+		t.Fatalf("expected ScreenModelPicker, got %v", finalState.Screen)
+	}
+
+	if finalState.Selection.ModelAssignments == nil {
+		t.Fatal("expected pre-populated ModelAssignments from default gentle-orchestrator, got nil")
+	}
+
+	got := finalState.Selection.ModelAssignments["gentle-orchestrator"]
+	if got != defaultAssignment {
+		t.Errorf("gentle-orchestrator loaded profile assignment %+v, want default %+v", got, defaultAssignment)
+	}
+}
+
 // TestCustomSkillPickerBackGoesToStrictTDD verifies that in the custom preset,
 // with OpenCode + SDD + Skills, pressing Back on ScreenSkillPicker goes to ScreenStrictTDD
 // and NOT directly to ScreenSDDMode. StrictTDD must come before SDDMode in the back chain.
