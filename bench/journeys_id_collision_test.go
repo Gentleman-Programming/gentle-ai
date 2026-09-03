@@ -21,7 +21,7 @@ type journeySource struct {
 // TestJourneySourcesCoverTheWholeCorpus fails until it is registered, so a
 // new file cannot bypass the collision check silently.
 func journeySources() []journeySource {
-	return []journeySource{
+	sources := []journeySource{
 		{"journeys.go", coreJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_sdd.go", sddJourneys()},
@@ -29,11 +29,15 @@ func journeySources() []journeySource {
 		{"journeys_issue2696.go", issue2696Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_issue3094.go", issue3094Journeys()},
+		{"journeys_issue_3065.go", issue3065Journeys()},
 		{"journeys_handoff.go", handoffJourneys()},
+		{"journeys_stop_hook.go", stopHookJourneys()},
+		{"journeys_sdd_untracked.go", selectedUntrackedSDDJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
 		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
 		{"journeys_wave1.go", waveOneJourneys()},
 		{"journeys_wave3.go", waveThreeJourneys()},
+		{"journeys_atomic_review.go", atomicReviewJourneys()},
 		{"journeys_wave5.go", waveFiveJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
 		{"journeys_lens_context_budget.go", lensContextBudgetJourneys()},
@@ -54,12 +58,27 @@ func journeySources() []journeySource {
 		{"journeys_issue2906.go", issue2906Journeys()},
 		{"journeys_issue_2138.go", issue2138Journeys()},
 		{"journeys_issue_3043.go", issue3043Journeys()},
+		{"journeys_issue_3557.go", issue3557Journeys()},
+		{"journeys_issue_3561.go", issue3561Journeys()},
 		{"journeys_repository_context.go", repositoryContextJourneys()},
 		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
 		{"journeys_captured_provider_validator.go", capturedProviderValidatorJourneys()},
 		{"journeys_sdd_shared_scaffolding.go", sddSharedScaffoldingJourneys()},
 		{"journeys_sdd_post_review_verify_report.go", sddPostReviewVerifyReportJourneys()},
+		{"journeys_issue3564.go", issue3564Journeys()},
+		{"journeys_issue3321.go", issue3321Journeys()},
+		{"journeys_issue3587.go", issue3587Journeys()},
+		{"journeys_issue3748.go", issue3748Journeys()},
+		{"journeys_issue3772.go", issue3772Journeys()},
+		{"journeys_issue3776.go", issue3776Journeys()},
+		{"journeys_issue3766.go", issue3766Journeys()},
+		{"journeys_issue3813.go", issue3813Journeys()},
+		{"journeys_issue3842.go", issue3842Journeys()},
 	}
+	for index := range sources {
+		sources[index].Journeys = removeRetiredAtomicJourneys(sources[index].Journeys)
+	}
+	return sources
 }
 
 // TestJourneyIDsAreUniqueAcrossSourceFiles is the focused duplicate-ID check.

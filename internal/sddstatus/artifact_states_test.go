@@ -26,10 +26,10 @@ func engramWorkspaceWithArchivedChangesOnly(t *testing.T, changes ...string) str
 	return workspace
 }
 
-// TestEmptyWorkspaceStatusProjectsV1 pins issue #2346 property 1: a workspace
+// TestEmptyWorkspaceStatusProjectsV2 pins issue #2346 property 1: a workspace
 // with nothing but archive/ must return a usable status on both the JSON and
 // the markdown path, for every artifact store the resolver can land on.
-func TestEmptyWorkspaceStatusProjectsV1(t *testing.T) {
+func TestEmptyWorkspaceStatusProjectsV2(t *testing.T) {
 	tests := []struct {
 		name      string
 		workspace func(t *testing.T) string
@@ -37,19 +37,21 @@ func TestEmptyWorkspaceStatusProjectsV1(t *testing.T) {
 		wantNext  string
 	}{
 		{
-			name: "openspec store with no engram changes",
+			name: "declared hybrid store with no engram changes",
 			workspace: func(t *testing.T) string {
 				return engramWorkspaceWithArchivedChangesOnly(t)
 			},
-			wantStore: ArtifactStoreOpenSpec,
+			// #3636: this fixture declares artifact_store: hybrid. Reporting it
+			// as openspec was the defect, not the contract.
+			wantStore: ArtifactStoreHybrid,
 			wantNext:  "sdd-new",
 		},
 		{
-			name: "engram store with only archived engram changes",
+			name: "declared hybrid store with only archived engram changes",
 			workspace: func(t *testing.T) string {
 				return engramWorkspaceWithArchivedChangesOnly(t, "alpha-change", "beta-change")
 			},
-			wantStore: ArtifactStoreEngram,
+			wantStore: ArtifactStoreHybrid,
 			wantNext:  "select-change",
 		},
 	}
@@ -70,9 +72,9 @@ func TestEmptyWorkspaceStatusProjectsV1(t *testing.T) {
 				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, tt.wantNext)
 			}
 
-			projected, err := ProjectStatusV1(status)
+			projected, err := ProjectStatusV2(status)
 			if err != nil {
-				t.Fatalf("ProjectStatusV1() error = %v", err)
+				t.Fatalf("ProjectStatusV2() error = %v", err)
 			}
 			payload, err := json.Marshal(projected)
 			if err != nil {
@@ -96,21 +98,21 @@ func TestEmptyWorkspaceStatusProjectsV1(t *testing.T) {
 	}
 }
 
-// TestEveryArtifactMapBuilderSatisfiesTheV1Projection pins issue #2346
+// TestEveryArtifactMapBuilderSatisfiesTheV2Projection pins issue #2346
 // property 2. It names no artifact key: each case hands the projection the map
 // a production builder actually produced for the store that same builder was
 // asked for, and then proves the projection genuinely demands every key in it
 // by deleting one at a time. A builder that forgets a key its store declares,
 // or a status whose store no longer matches the map it carries, fails here
 // rather than at a user's terminal.
-func TestEveryArtifactMapBuilderSatisfiesTheV1Projection(t *testing.T) {
+func TestEveryArtifactMapBuilderSatisfiesTheV2Projection(t *testing.T) {
 	for _, built := range artifactMapsFromEveryBuilder(t) {
 		t.Run(built.builder, func(t *testing.T) {
 			if len(built.artifacts) == 0 {
 				t.Fatal("builder produced no artifact states")
 			}
-			if _, err := projectArtifactsV1(built.store, built.artifacts); err != nil {
-				t.Fatalf("projectArtifactsV1(%q, <%s output>) error = %v", built.store, built.builder, err)
+			if _, err := projectArtifactsV2(built.store, built.artifacts); err != nil {
+				t.Fatalf("projectArtifactsV2(%q, <%s output>) error = %v", built.store, built.builder, err)
 			}
 			for key := range built.artifacts {
 				withhold := make(map[string]ArtifactState, len(built.artifacts))
@@ -119,8 +121,8 @@ func TestEveryArtifactMapBuilderSatisfiesTheV1Projection(t *testing.T) {
 						withhold[existing] = state
 					}
 				}
-				if _, err := projectArtifactsV1(built.store, withhold); err == nil {
-					t.Fatalf("projectArtifactsV1(%q) accepted a map missing %q, so the builder and the projection do not agree on the key set", built.store, key)
+				if _, err := projectArtifactsV2(built.store, withhold); err == nil {
+					t.Fatalf("projectArtifactsV2(%q) accepted a map missing %q, so the builder and the projection do not agree on the key set", built.store, key)
 				}
 			}
 		})

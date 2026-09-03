@@ -1,6 +1,6 @@
 # Release signing and key rotation
 
-Gentle AI releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
+Gentle AI™ releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
 
 ## User verification
 
@@ -105,8 +105,8 @@ Restore Windows distribution only after all of these conditions are enforced:
 1. Provision publicly trusted RSA Authenticode signing, preferably managed OIDC
    with Azure Artifact Signing; self-signed or mock credentials are not acceptable.
 2. Sign both amd64 and arm64 executables before archive and checksum generation.
-3. Add pre-publication and remote-release verification that fails if either
-   executable is unsigned or its signature is not publicly trusted.
+3. Add pre-publication and remote-release verification that
+   fails if either executable is unsigned or its signature is not publicly trusted.
 4. Restore the Windows GoReleaser targets and Scoop publisher together, with
    regression coverage proving no unsigned artifact can be emitted.
 

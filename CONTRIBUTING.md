@@ -1,4 +1,4 @@
-# Contributing to Gentle AI
+# Contributing to Gentle AI™
 
 Thank you for your interest in contributing to **Gentle AI** (`gentle-ai`) — a Go CLI/TUI ecosystem configurator for AI coding agents.
 
@@ -28,7 +28,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 This project follows a strict issue-first workflow:
 
 1. **Open an issue** using the appropriate template ([Bug Report](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml) or [Feature Request](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml))
-2. **Wait for approval** — a maintainer will add the `status:approved` label when the issue is ready to be worked on
+2. **Wait for approval** — work may begin only when the issue has `status:approved` under the canonical issue-creation workflow contract. Without a current direct instruction and target-host capability granting the exact action, comment and wait.
 3. **Comment on the issue** to let others know you're working on it
 4. **Open a PR** referencing the approved issue
 
@@ -194,17 +194,10 @@ go vet ./...
 go test ./...
 ```
 
-The portable core includes `j52` through `j56` and `j58` under a normal product
-binary. `j57` is source-coupled, so build its tagged product binary from the
-repository root, then run it from `bench/`:
-
-```bash
-# From the repository root.
-go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
-
-# From bench/, after building gentle-ai-bench above.
-./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed
-```
+The `model-picker` axis (`j97`) and damaged-store crash-recovery journeys use
+the `bench_fixture` product build tag. Build that product binary from the
+repository root only when running those opt-in axes; their exact driven commands
+are documented in [`bench/README.md`](bench/README.md).
 
 Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
 
@@ -379,7 +372,7 @@ All PRs go through automated checks:
 |-------|-----------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
-| **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
+| **Check Issue Has status:approved** | The linked issue has `status:approved` under the canonical issue-creation workflow contract |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |
 | **Unit Tests** | `go test ./...` passes |
 | **E2E Tests** | `cd e2e && ./docker-test.sh` passes |

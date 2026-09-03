@@ -16,30 +16,13 @@ import (
 // agent prompts, and the admission logic cannot describe different envelopes.
 const reviewReviewerSchema = reviewtransaction.ReviewerResultSchema
 
-const reviewVerificationEvidenceSchemaID = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
-
-// reviewVerificationEvidenceSchema describes the input review capture-evidence
-// actually accepts and readCapturedFinalEvidence actually enforces: raw,
-// non-empty final test/verification evidence content, not a structured JSON
-// object, bounded by the same native artifact limit every captured artifact
-// uses (reviewResultArtifactLimit).
-var reviewVerificationEvidenceSchema = fmt.Sprintf(
-	`{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"`+reviewVerificationEvidenceSchemaID+`","title":"Gentle AI captured final verification evidence","description":"Raw final test or verification evidence content captured by review capture-evidence. It is not a structured JSON document: any non-empty content up to the native artifact bound is accepted.","type":"string","minLength":1,"maxLength":%d}`,
-	reviewResultArtifactLimit,
-)
-
-const reviewVerificationEvidenceRecordSchema = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/contracts/review-integration/v1/schemas/verification-evidence.schema.json","title":"Gentle AI outcome-bearing verification evidence record","type":"object","additionalProperties":false,"required":["schema","version","lineage_id","authority_revision","target_identity","candidate_tree","paths_digest","paths","ledger_ids","raw_payload_sha256","raw_payload_bytes","outcome","record_digest"],"properties":{"schema":{"const":"gentle-ai.review-verification-evidence/v2"},"version":{"const":2},"lineage_id":{"type":"string","maxLength":128,"pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"authority_revision":{"$ref":"#/$defs/sha256"},"target_identity":{"$ref":"#/$defs/sha256"},"candidate_tree":{"type":"string","pattern":"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},"paths_digest":{"$ref":"#/$defs/sha256"},"paths":{"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},"ledger_ids":{"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},"raw_payload_sha256":{"$ref":"#/$defs/sha256"},"raw_payload_bytes":{"type":"integer","minimum":1,"maximum":4194304},"outcome":{"enum":["passed","verification_failed","procedural_tooling_failed"]},"record_digest":{"$ref":"#/$defs/sha256"}},"$defs":{"sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}`
-
 const reviewResultDryRunResponseSchema = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/contracts/review-integration/v2/schemas/capture-result-dry-run.schema.json","title":"Gentle AI capture-result admission dry run","type":"object","additionalProperties":false,"required":["schema","operation","validation","lineage_id","lens","selected_order","subject_hash"],"properties":{"schema":{"const":"gentle-ai.review-capture-result-dry-run/v1"},"operation":{"const":"review/capture-result"},"validation":{"const":"accepted"},"lineage_id":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"lens":{"enum":["risk","resilience","readability","reliability","review-risk","review-resilience","review-readability","review-reliability"]},"selected_order":{"type":"integer","minimum":0,"maximum":3},"subject_hash":{"$ref":"#/$defs/sha256"},"admission_decision":{"const":"completed"}},"$defs":{"sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}`
 
 var reviewInputSchemas = map[string]json.RawMessage{
-	"reviewer":                     json.RawMessage(reviewReviewerSchema),
-	"capture-result-dry-run":       json.RawMessage(reviewResultDryRunResponseSchema),
-	"verification-evidence":        json.RawMessage(reviewVerificationEvidenceSchema),
-	"verification-evidence-record": json.RawMessage(reviewVerificationEvidenceRecordSchema),
-	"final-verification-incident":  json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/contracts/review-integration/v1/schemas/final-verification-incident.schema.json","title":"Gentle AI final-verification tooling incident","type":"object","additionalProperties":false,"required":["schema","class","lineage_id","terminal_revision","validating_revision","target_identity","failed_evidence_hash","finalize_request_digest"],"properties":{"schema":{"const":"gentle-ai.review-final-verification-incident/v1"},"class":{"const":"procedural_tooling_failure"},"lineage_id":{"type":"string","maxLength":128,"pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"terminal_revision":{"$ref":"#/$defs/sha256"},"validating_revision":{"$ref":"#/$defs/sha256"},"target_identity":{"$ref":"#/$defs/sha256"},"failed_evidence_hash":{"$ref":"#/$defs/sha256"},"finalize_request_digest":{"$ref":"#/$defs/sha256"}},"$defs":{"sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}`),
-	"refuter":                      json.RawMessage(reviewerprovider.RefuterResultSchema),
-	"validator":                    json.RawMessage(reviewerprovider.TargetedValidatorResultSchema),
+	"reviewer":               json.RawMessage(reviewReviewerSchema),
+	"capture-result-dry-run": json.RawMessage(reviewResultDryRunResponseSchema),
+	"refuter":                json.RawMessage(reviewerprovider.RefuterResultSchema),
+	"validator":              json.RawMessage(reviewerprovider.TargetedValidatorResultSchema),
 }
 
 // reviewSchemaNames lists the accepted values in a stable order, derived from

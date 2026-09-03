@@ -32,6 +32,7 @@ var lstatCompatibilityDestination = os.Lstat
 
 type compatibilityDirectoryWriter interface {
 	Write(string, []byte, fs.FileMode) (filemerge.WriteResult, error)
+	Remove(string) (bool, error)
 	Close() error
 }
 
@@ -204,7 +205,7 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 	}
 
 	if slices.Contains(s.components, model.ComponentSDD) {
-		result, injectErr := sdd.InjectSkillDirectoryWithWriter(skillDir, "", writer.Write)
+		result, injectErr := sdd.InjectSkillDirectoryWithCompatibilityWriter(skillDir, "", writer.Write, writer.Remove)
 		if injectErr != nil {
 			return fmt.Errorf("refresh compatibility SDD skills: %w", injectErr)
 		}

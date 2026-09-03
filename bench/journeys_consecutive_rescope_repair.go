@@ -120,7 +120,7 @@ func rc1ConsecutiveRescopeStore(sandbox *Sandbox) error {
 	if err := sandbox.write(filepath.Join(sandbox.Repo, "README.md"), "# RC fixture\n"); err != nil {
 		return err
 	}
-	if err := sandbox.git(sandbox.Repo, "add", "README.md"); err != nil {
+	if err := sandbox.git(sandbox.Repo, "add", "README.md", ".gitignore"); err != nil {
 		return err
 	}
 	if err := sandbox.git(sandbox.Repo, "commit", "-qm", "fixture baseline"); err != nil {

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +29,7 @@ func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 	wantNames := []string{
 		"README.md",
 		"manifest.json",
+		"orchestration/pi.md",
 		"schemas/lens.schema.json",
 		"schemas/refuter.schema.json",
 		"schemas/targeted-validator.schema.json",
@@ -516,4 +518,135 @@ func cloneFiles(files map[string][]byte) map[string][]byte {
 
 func equalStrings(left, right []string) bool {
 	return slices.Equal(left, right)
+}
+
+// TestGeneratedOrchestrationEntryCarriesTheBoundPiContract locks the content
+// gentle-pi mirrors (issue #4056): the orchestration file must be Pi's exact
+// bound review execution contract, with the runtime placeholder resolved and
+// its capture command named exactly once.
+func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, found := files["orchestration/pi.md"]
+	if !found {
+		t.Fatal("generated files are missing orchestration/pi.md")
+	}
+	text := string(content)
+	if !strings.HasSuffix(text, "\n") {
+		t.Fatal("orchestration/pi.md does not end with a trailing newline")
+	}
+	if strings.Contains(text, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
+		t.Fatal("orchestration/pi.md left the runtime identity placeholder unbound")
+	}
+	if count := strings.Count(text, "--agent pi"); count != 1 {
+		t.Fatalf("orchestration/pi.md contains %d occurrences of `--agent pi`, want 1", count)
+	}
+	if !strings.Contains(text, "## Entry rule") {
+		t.Fatal("orchestration/pi.md is missing the `## Entry rule` heading")
+	}
+}
+
+// TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry is the
+// generate-then-verify roundtrip strict TDD requires: the manifest must carry
+// a sorted orchestration entry naming pi and its file reference, and Verify
+// must accept the archive built from exactly those bytes.
+func TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry(t *testing.T) {
+	directory := t.TempDir()
+	if err := Generate(directory, "1.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	files := readGeneratedFiles(t, directory)
+	var decoded manifest
+	if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Orchestration) != 1 {
+		t.Fatalf("manifest orchestration entries = %d, want 1", len(decoded.Orchestration))
+	}
+	entry := decoded.Orchestration[0]
+	if entry.Runtime != "pi" {
+		t.Fatalf("manifest orchestration runtime = %q, want %q", entry.Runtime, "pi")
+	}
+	if entry.File.Path != "orchestration/pi.md" || hash(files["orchestration/pi.md"]) != entry.File.SHA256 {
+		t.Fatalf("manifest orchestration file reference = %+v, does not match generated content", entry.File)
+	}
+
+	archive := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	writeArchive(t, archive, files, nil, false)
+	if err := VerifyArchive(archive); err != nil {
+		t.Fatalf("VerifyArchive: %v", err)
+	}
+	if err := VerifyStaging(directory); err != nil {
+		t.Fatalf("VerifyStaging: %v", err)
+	}
+}
+
+// TestVerifyArchiveRejectsATamperedOrchestrationFile proves the orchestration
+// entry is protected by the same sha256 binding as every other bundle file.
+func TestVerifyArchiveRejectsATamperedOrchestrationFile(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := cloneFiles(files)
+	tampered["orchestration/pi.md"] = append(tampered["orchestration/pi.md"], '\n')
+	archive := filepath.Join(t.TempDir(), "tampered-orchestration.tar.gz")
+	writeArchive(t, archive, tampered, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted a tampered orchestration/pi.md byte")
+	}
+}
+
+// TestVerifyArchiveRejectsAManifestMissingTheOrchestrationEntry proves an old
+// 1.1.0-shaped manifest (no orchestration section) is refused once the bundle
+// carries orchestration/pi.md: VerifyArchive is only ever run against the
+// archive generated from the same commit's CONTRACT_SEMVER (release preflight
+// and the README's manual-inspection instructions), so there is no caller
+// depending on the older layout staying acceptable.
+func TestVerifyArchiveRejectsAManifestMissingTheOrchestrationEntry(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped := cloneFiles(files)
+	delete(stripped, "orchestration/pi.md")
+	var decoded map[string]any
+	if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	delete(decoded, "orchestration")
+	payload, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped["manifest.json"] = append(payload, '\n')
+	archive := filepath.Join(t.TempDir(), "missing-orchestration.tar.gz")
+	writeArchive(t, archive, stripped, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted a manifest without the orchestration entry")
+	}
+}
+
+// TestVerifyArchiveRejectsAnUnregisteredOrchestrationRuntime proves the
+// orchestration runtime is checked against the closed registered-runtime
+// identity list, the same way every other runtime-scoped claim in this bundle
+// is, rather than trusted from the manifest bytes alone.
+func TestVerifyArchiveRejectsAnUnregisteredOrchestrationRuntime(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := cloneFiles(files)
+	payload := bytes.Replace(tampered["manifest.json"], []byte(`"runtime": "pi"`), []byte(`"runtime": "not-a-runtime"`), 1)
+	if bytes.Equal(payload, tampered["manifest.json"]) {
+		t.Fatal("could not rewrite the orchestration runtime identity")
+	}
+	tampered["manifest.json"] = payload
+	archive := filepath.Join(t.TempDir(), "unregistered-orchestration-runtime.tar.gz")
+	writeArchive(t, archive, tampered, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted an unregistered orchestration runtime")
+	}
 }

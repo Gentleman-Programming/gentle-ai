@@ -54,7 +54,7 @@ func TestReviewNextTransitionDispositionCollectThenExecute(t *testing.T) {
 	status := corruptedDispositionStatus()
 
 	t.Run("collect when authorization inputs are missing", func(t *testing.T) {
-		got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
+		got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{})
 		if got.Kind != reviewNextTransitionCollect {
 			t.Fatalf("next transition kind = %q, want %q: %#v", got.Kind, reviewNextTransitionCollect, got)
 		}
@@ -77,7 +77,7 @@ func TestReviewNextTransitionDispositionCollectThenExecute(t *testing.T) {
 
 	t.Run("execute once actor/reason/authorization are supplied", func(t *testing.T) {
 		input := reviewNextTransitionInput{RepairActor: "maintainer@example.com", RepairReason: "quarantine forged recovery authorization", RepairAuthorization: "sha256:real-disposition-authorization-bytes-never-emitted"}
-		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute {
 			t.Fatalf("next transition kind = %q, want %q: %#v", got.Kind, reviewNextTransitionExecute, got)
 		}
@@ -127,7 +127,7 @@ func TestReviewNextTransitionClassifiedRepairTakesPriorityOverDisposition(t *tes
 		Candidate: &reviewtransaction.AuthorityRepairCandidate{LineageID: "classified-candidate", Revision: "sha256:" + strings.Repeat("f", 64)},
 	}
 
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionCollect || got.Collect == nil || len(got.Collect.Inputs) != 1 {
 		t.Fatalf("next transition = %#v, want a single classified collect", got)
 	}
@@ -147,7 +147,7 @@ func TestReviewNextTransitionCorruptedWithNeitherRepairNorDispositionStops(t *te
 		Applicability: reviewtransaction.TargetApplicabilityCorrupted, Action: reviewtransaction.TargetStatusActionRepairAuthority,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired, TargetIdentity: "sha256:" + strings.Repeat("b", 64),
 	}
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionStop || got.ReasonCode != "corrupted_or_unverifiable_authority" {
 		t.Fatalf("next transition = %#v, want stop/corrupted_or_unverifiable_authority (unchanged pre-Wave-6 behavior)", got)
 	}
@@ -166,7 +166,7 @@ func TestReviewDispositionTransitionTokensCarryNoAuthorizationBytes(t *testing.T
 	status := corruptedDispositionStatus()
 	secretAuthorization := "sha256:top-secret-disposition-authorization-must-never-appear-in-output"
 	input := reviewNextTransitionInput{RepairActor: "maintainer@example.com", RepairReason: "quarantine forged recovery authorization", RepairAuthorization: secretAuthorization}
-	got := newReviewNextTransition(status, nil, nil, nil, nil, input)
+	got := newReviewNextTransition(status, nil, nil, nil, input)
 	if got.Execute == nil {
 		t.Fatalf("expected an execute transition, got %#v", got)
 	}
@@ -233,50 +233,15 @@ func writeNonPristineDispositionRepairFixture(t *testing.T, repo, prefix string)
 		Disposition: reviewtransaction.RecoveryEscalated, Reason: "retry", Actor: "maintainer@example.com",
 		RecoveredAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC), MaintainerAuthorization: dispositionForgedAuthorization,
 	}
-	results := make([]reviewtransaction.LensResult, 0, len(successor.SelectedLenses))
-	for _, lens := range successor.SelectedLenses {
-		results = append(results, reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"reviewed once"}})
+	view, err := successor.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := successor.CompleteReview(reviewtransaction.CompactReviewInput{
-		LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{},
-	}); err != nil {
+	if err := successor.CompleteReview(compactReviewInputFromView(view)); err != nil {
 		t.Fatal(err)
 	}
 	writeReconcileCLIRecord(t, repo, successor)
 	if err := os.Remove(absolute); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// TestCompactStartInvalidGraphRefusalNamesAbandonExit satisfies
-// tasks.md 4.3/4.4: SanctionedCompactRecoveryExits (the exact seam
-// compactStartInvalidGraphRefusal's continuation prose renders through)
-// names abandonment for a non-terminal content-mismatched recovery successor.
-// The V2 binding records its exact discarded-work summary rather than routing
-// the operator through an unrelated repair transaction.
-func TestCompactStartInvalidGraphRefusalNamesAbandonExit(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	writeNonPristineDispositionRepairFixture(t, repo, "s4-repair-exit")
-
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, err := reviewtransaction.InspectCompactRecoveryEdges(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exits, err := reviewtransaction.SanctionedCompactRecoveryExits(context.Background(), repo, report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sawAbandonExit := false
-	for _, exit := range exits {
-		if exit.Operation == reviewtransaction.CompactRecoveryEdgeExitAbandon {
-			sawAbandonExit = true
-		}
-	}
-	if !sawAbandonExit {
-		t.Fatalf("no sanctioned exit named %q for a non-terminal content-mismatched-recovery-authorization successor: %#v", reviewtransaction.CompactRecoveryEdgeExitAbandon, exits)
 	}
 }

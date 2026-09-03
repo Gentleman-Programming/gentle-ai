@@ -72,9 +72,6 @@ func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
 		{name: "capture-result-preflight", run: func(t *testing.T, args []string, _ string) error {
 			return RunReviewCaptureResult(append(append([]string{}, args...), "--preflight"), io.Discard)
 		}},
-		{name: "preserve-result", run: func(t *testing.T, args []string, input string) error {
-			return RunReviewPreserveResult(append(append([]string{}, args...), "--input", input), io.Discard)
-		}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
 			args, input, repo := startedOpaqueCaptureBinding(t, "git-trust-"+operation.name)
@@ -129,15 +126,15 @@ func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
 }
 
 // startedOpaqueCaptureBinding starts one negotiated review and returns the
-// opaque repository-context binding arguments for its single selected lens,
+// opaque repository-context binding arguments for its first selected lens,
 // a reviewer-result input path, and the repository root.
 func startedOpaqueCaptureBinding(t *testing.T, lineage string) ([]string, string, string) {
 	t.Helper()
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc trust() {}\n", 0o644)
+	writeReviewStartCandidate(t, repo, "internal/auth/session.go", "package auth\n\nfunc Trust() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, lineage)
-	if started.RepositoryContext == nil || len(started.SelectedLenses) != 1 {
+	if started.RepositoryContext == nil || len(started.SelectedLenses) == 0 {
 		t.Fatalf("START result = %#v", started)
 	}
 	input := filepath.Join(t.TempDir(), "reviewer.json")
@@ -146,6 +143,7 @@ func startedOpaqueCaptureBinding(t *testing.T, lineage string) ([]string, string
 	}
 	t.Chdir(t.TempDir())
 	return []string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

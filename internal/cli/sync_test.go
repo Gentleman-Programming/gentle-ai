@@ -885,6 +885,68 @@ func TestComponentSyncStepRunsSDDInject(t *testing.T) {
 	}
 }
 
+func TestSyncRollbackRestoresOpenCodeSettingsAfterManagedToolsCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// keep this exact JSONC before-image\n{\"agent\":{\"gentle-orchestrator\":{\"tools\":{\"read\":true}},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	mustWriteFile(t, settingsPath, before)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentID("later-failure")},
+		SDDMode:    model.SDDModeSingle,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, settingsPath) {
+		t.Fatalf("sync backup targets omit OpenCode settings mutated by managed-tools cleanup: %v", targets)
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read restored OpenCode settings: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("OpenCode settings after rollback = %q, want exact before-image %q", after, before)
+	}
+}
+
+func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
+	mustWriteFile(t, settingsPath, before)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentID("later-failure")},
+		Persona:    model.PersonaGentleman,
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPath(targets, settingsPath) {
+		t.Fatalf("sync backup targets omit OpenCode settings mutated by Gentleman cleanup: %v", targets)
+	}
+
+	if _, err := RunSyncWithSelection(home, selection); err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want later pipeline failure")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("persona-only sync rollback settings = %q, want exact before-image %q", after, before)
+	}
+}
+
 func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 	home := t.TempDir()
 	restoreCommand := runCommand
@@ -931,7 +993,15 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 }
 
 func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
-	home := t.TempDir()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(workspace) error = %v", err)
+	}
+	t.Chdir(workspace)
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(home) error = %v", err)
+	}
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents:     []string{"claude-code", "opencode"},
 		SelectionConfigured: true,
@@ -958,6 +1028,9 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	// a first sync of a purely visual selection still delivers it (issue #1794).
 	wantFiles := []string{
 		filepath.Join(home, ".claude", "themes", "gentleman.json"),
+		filepath.Join(home, ".claude", "themes", "gentleman-cute.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman-cute.json"),
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 		filepath.Join(home, ".config", "opencode", "tui.json"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
@@ -3101,16 +3174,19 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read synced OpenCode apply command: %v", err)
 	}
+	orchestrator := settings.Agent["gentle-orchestrator"].Prompt
+	postApply := string(applyPayload)
+	canonicalStatus := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition"
+
+	// Only the parent orchestrator owns canonical STATUS negotiation. It must
+	// declare OpenCode's own identity, never Claude Code's.
+	if !strings.Contains(orchestrator, canonicalStatus) {
+		t.Error("synced OpenCode orchestrator does not use canonical STATUS routing under its own runtime identity")
+	}
 	for name, content := range map[string]string{
-		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
-		"post-apply":   string(applyPayload),
+		"orchestrator": orchestrator,
+		"post-apply":   postApply,
 	} {
-		// The identity must be OpenCode's own: these are the exact bytes an
-		// OpenCode user installs, and telling them to declare claude-code is
-		// what let a false identity through the transport gate (issue #2440).
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
-			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing under its own runtime identity", name)
-		}
 		if strings.Contains(content, "--agent "+string(model.AgentClaudeCode)) {
 			t.Errorf("synced OpenCode %s controller tells an OpenCode user to declare Claude Code's identity", name)
 		}
@@ -3123,6 +3199,20 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 				t.Errorf("synced OpenCode %s controller restored direct START route %q", name, stale)
 			}
 		}
+	}
+
+	// post-apply leaves review to the parent after independent verification. It
+	// must not negotiate canonical STATUS or retain review authority itself.
+	for _, required := range []string{
+		"fresh `reviewOffer` block",
+		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
+	} {
+		if !strings.Contains(postApply, required) {
+			t.Errorf("synced OpenCode post-apply controller is missing parent-owned routing clause %q", required)
+		}
+	}
+	if strings.Contains(postApply, canonicalStatus) {
+		t.Error("synced OpenCode post-apply controller repeats canonical STATUS instead of consuming parent routing")
 	}
 }
 
@@ -3937,6 +4027,86 @@ func setSyncTestHome(t *testing.T, home string) {
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 }
 
+func TestSyncBackupManifestIncludesCodexHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	mustWriteFile(t, hooksPath, []byte("{\"hooks\":{\"SessionStart\":[]}}\n"))
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentCodex},
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+	if !containsPath(targets, hooksPath) {
+		t.Fatalf("sync backup targets missing %q\ntargets=%v", hooksPath, targets)
+	}
+
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(home, "snapshot"), targets)
+	if err != nil {
+		t.Fatalf("Snapshotter.Create() error = %v", err)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.OriginalPath == hooksPath {
+			if !entry.Existed {
+				t.Fatalf("hooks.json manifest entry marked absent: %#v", entry)
+			}
+			return
+		}
+	}
+	t.Fatalf("snapshot manifest omitted %q: %#v", hooksPath, manifest.Entries)
+}
+
+func TestSyncCodexGentlemanConvergesWithHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentCodex},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD},
+		Persona:    model.PersonaGentleman,
+		SDDMode:    model.SDDModeSingle,
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.5",
+			"sdd-mid":    "gpt-5.5",
+			"sdd-cheap":  "gpt-5.4-mini",
+		},
+	}
+	run := func() (int, []string) {
+		rt, err := newSyncRuntime(home, selection)
+		if err != nil {
+			t.Fatalf("newSyncRuntime() error = %v", err)
+		}
+		plan := rt.stagePlan()
+		before, err := snapshotSyncFiles(rt.managedPaths)
+		if err != nil {
+			t.Fatalf("snapshotSyncFiles() error = %v", err)
+		}
+		execution := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+		if execution.Err != nil {
+			t.Fatalf("sync stage plan error = %v", execution.Err)
+		}
+		changed, err := changedSyncFiles(rt.changedFiles, before)
+		if err != nil {
+			t.Fatalf("changedSyncFiles() error = %v", err)
+		}
+		return len(changed), changed
+	}
+	firstFiles, _ := run()
+	if firstFiles == 0 {
+		t.Fatal("first sync reported no managed changes")
+	}
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	firstHooks := readTextFile(t, hooksPath)
+
+	secondFiles, changed := run()
+	if secondFiles != 0 || len(changed) != 0 {
+		t.Fatalf("second sync changed %d files: %v; want no changes", secondFiles, changed)
+	}
+	if got := readTextFile(t, hooksPath); got != firstHooks {
+		t.Fatalf("hooks.json changed between converged syncs")
+	}
+}
+
 // TestBuildSyncSelectionDoesNotHardcodePersona verifies that BuildSyncSelection
 // leaves Persona empty so RunSync can resolve it from state.
 func TestBuildSyncSelectionDoesNotHardcodePersona(t *testing.T) {
@@ -4326,6 +4496,120 @@ func TestRunSyncWithSelectionPiCustomPersistedPersonaIsByteStable(t *testing.T) 
 	}
 	if got := readTextFile(t, piPath); got != string(originalPi) {
 		t.Fatalf("custom Pi persona config changed: got %q, want %q", got, originalPi)
+	}
+}
+
+// TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks covers issue #4057:
+// a Pi install made before the capability manifest flipped
+// SupportsSystemPrompt()==false for Pi left gentle-ai managed blocks in
+// ~/.pi/agent/APPEND_SYSTEM.md. Nothing reads or rewrites that file for Pi
+// anymore, so sync must retire those stale blocks directly.
+func TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\n" +
+		"SDD body\n" +
+		"<!-- /gentle-ai:sdd-orchestrator -->\n" +
+		"\n" +
+		"<!-- gentle-ai:persona -->\n" +
+		"persona body\n" +
+		"<!-- /gentle-ai:persona -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	// Routing guidance is scheduled per agent too, but the step is a no-op for
+	// Pi (issue #4063: gentle-pi owns the Pi system prompt), so nothing writes
+	// an agent-routing block back into the file. Only the leading and trailing
+	// user content must survive, byte-exact.
+	want := "user text before\n\nuser text after\n"
+	got := readTextFile(t, appendSystemPath)
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "sdd-orchestrator") || strings.Contains(got, "gentle-ai:persona") {
+		t.Fatalf("APPEND_SYSTEM.md still carries a stale managed block: %q", got)
+	}
+	if result.FilesChanged < 1 {
+		t.Fatalf("FilesChanged = %d, want >= 1", result.FilesChanged)
+	}
+}
+
+// TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten covers issue #4063:
+// a sync with Pi selected must not write, or leave behind, a
+// gentle-ai:agent-routing block in ~/.pi/agent/APPEND_SYSTEM.md. Before the
+// fix, agentRoutingGuidanceStep ran for every agent unconditionally, so a
+// pre-existing agent-routing block was rewritten instead of stripped and
+// left alone.
+func TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	stale := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"stale routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, appendSystemPath, []byte(stale))
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	got := readTextFile(t, appendSystemPath)
+	if strings.Contains(got, "gentle-ai:agent-routing") {
+		t.Fatalf("APPEND_SYSTEM.md still carries an agent-routing block: %q", got)
+	}
+	want := "user text before\n\nuser text after\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+}
+
+// TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents guards against
+// the Pi-only stale-block cleanup leaking to other agents' prompt files
+// selected in the same sync run.
+func TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents(t *testing.T) {
+	home := t.TempDir()
+	appendSystemPath := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, appendSystemPath, []byte(
+		"<!-- gentle-ai:sdd-orchestrator -->\nSDD body\n<!-- /gentle-ai:sdd-orchestrator -->\n"))
+
+	claudePath := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	claudeContent := "user preamble\n\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\nKEEP-CLAUDE-SDD\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	mustWriteFile(t, claudePath, []byte(claudeContent))
+
+	mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi","claude-code"]}`))
+
+	if _, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentPi, model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+	}); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	if got := readTextFile(t, appendSystemPath); strings.Contains(got, "sdd-orchestrator") {
+		t.Fatalf("Pi APPEND_SYSTEM.md still carries a stale block: %q", got)
+	}
+	if got := readTextFile(t, claudePath); !strings.Contains(got, "KEEP-CLAUDE-SDD") {
+		t.Fatalf("Claude system prompt lost unrelated content: %q", got)
 	}
 }
 
@@ -5363,7 +5647,7 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{
-		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi},
+		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi, model.AgentCodex},
 		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentPersona},
 		SDDMode:    model.SDDModeSingle,
 	}

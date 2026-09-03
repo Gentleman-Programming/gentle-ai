@@ -37,6 +37,11 @@ archives=(
   "gentle-ai_${version}_linux_amd64.tar.gz"
   "gentle-ai_${version}_linux_arm64.tar.gz"
   "gentle-ai-review-provider-contract-${contract_semver}.tar.gz"
+  # The deterministic provenance manifest (#3854) is a signed, checksummed
+  # archive like the others: the publication policy requires it, so the
+  # verifier must expect it too, or every stable after v2.4.0 fails here
+  # before a single byte is checked (#4016).
+  "gentle-ai-release-provenance-v1.tar.gz"
 )
 expected_assets=("${archives[@]}" checksums.txt checksums.txt.minisig)
 

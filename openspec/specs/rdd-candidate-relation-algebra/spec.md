@@ -16,11 +16,11 @@ The relation function MUST return exactly one of `exact`, `compatible_base_advan
 - WHEN the relation function evaluates them
 - THEN it returns `exact`
 
-#### Scenario: No governing lineage resolves to unrelated
+#### Scenario: No matching lineage resolves to unrelated
 
-- GIVEN live content with no prior candidate authority
+- GIVEN live content with no prior matching candidate authority
 - WHEN the relation function evaluates it
-- THEN it returns `unrelated`
+- THEN it returns `unrelated` as review-lifecycle context only
 
 ### Requirement: `compatible_base_advance` Delegation (Amendment A)
 
@@ -67,23 +67,25 @@ The relation function MUST degrade `provable_contraction` to `changed` when any 
 - THEN direct characterization tests for all seven conditions already exist and pass
 - AND no seam refactor of `deriveBaseAdvanceCompatibility` occurs before those tests exist
 
-### Requirement: Read-Only at Legacy Call Sites, Deciding Authority at New-Lineage Call Sites
+### Requirement: Read-Only at Legacy Call Sites, Review-Lifecycle Input at New-Lineage Call Sites
 
-The relation function MUST NOT mutate authority state, consume a correction budget, or alter any live decision at any legacy call site it observes. At a new-lineage call site gated by the activation switch (`rdd-new-lineage-activation`), the identical function MAY be consumed by `ReviewCore` as the deciding input for `start`, `finalize`, `validate`, and gate authorization — no separate or re-derived implementation is permitted for that purpose.
-(Previously: stated the function is read-only at every call site with no live-lifecycle exception; Wave 3 introduces the first live consumer, `ReviewCore`, so the boundary between legacy observation and new-lineage decision is now explicit.)
+The relation function MUST NOT mutate authority state, consume a correction budget, or alter any live decision at any legacy call site it observes. At a new-lineage call site gated by the activation switch (`rdd-new-lineage-activation`), the identical function MAY be consumed by `ReviewCore` as the deciding input for review `start`, `finalize`, `validate`, and read-only review-context evaluation — no separate or re-derived implementation is permitted for that purpose. It never authorizes, denies, blocks, or routes delivery.
+(Previously: stated the function is read-only at every call site with no live-lifecycle exception; Wave 3 introduces the first live consumer, `ReviewCore`, so the boundary between legacy observation and new-lineage review decision is now explicit.)
 
 #### Scenario: Shadow evaluation changes nothing observable
 
-- GIVEN the relation function runs alongside a live gate decision at a legacy call site
+- GIVEN the relation function runs alongside review-context evaluation at a legacy call site
 - WHEN it computes a relation
-- THEN the live gate's outcome is unchanged and byte-identical to the shadow-off baseline
+- THEN the reported review context is unchanged and byte-identical to the shadow-off baseline
+- AND ordinary delivery policy is unchanged
 
-#### Scenario: New-lineage call site consumes the same function as deciding authority
+#### Scenario: New-lineage call site consumes the same function as review-lifecycle input
 
 - GIVEN a new-lineage `start` with the activation switch on
 - WHEN the relation function evaluates the live candidate against the frozen `CandidateIdentity`
-- THEN its output determines the live transition decision
+- THEN its output determines the review transition decision
 - AND `ReviewCore` invokes the same function used by the shadow harness at legacy sites, not a re-derived copy
+- AND the output does not govern delivery
 
 ### Requirement: `ambiguous` and `unknown` Have No Fabricated Live Counterpart
 
@@ -96,22 +98,24 @@ When the relation function returns `ambiguous` or `unknown` for a fixture with n
 - THEN it is labeled "no live decision"
 - AND it is never recorded as agreement
 
-### Requirement: Gate Boundary Descriptor Is A First-Class Algebra Input
+### Requirement: Review-Context Boundary Descriptor Is A First-Class Algebra Input
 
-The relation function MUST accept an explicit per-gate boundary descriptor (current candidate, staged candidate, delivery range/remote boundary, candidate/base relationship, or release target/publication boundary) as an input parameter. It MUST NOT infer the boundary implicitly from call-site state.
+The relation function MUST accept an explicit per-hook boundary descriptor (current candidate, staged candidate, candidate range/remote boundary, candidate/base relationship, or release target/publication boundary) as an input parameter. It MUST NOT infer the boundary implicitly from call-site state. The descriptor supports review-context evaluation only and never creates delivery authority.
 
 #### Scenario: Distinct boundary descriptors produce comparable relations
 
 - GIVEN pre-PR's candidate/base descriptor and post-apply's current-candidate descriptor for equivalent underlying content
 - WHEN the relation function evaluates each
-- THEN both produce relation outputs comparable within the same 35-cell gate boundary matrix
+- THEN both produce relation outputs comparable within the same 35-cell review-context boundary matrix
+- AND neither output changes delivery policy
 
-### Requirement: Verdict Is A Total Function Of Relation × Gate
+### Requirement: Review Context Is A Total Function Of Relation × Hook
 
-For every pairing among the 5 gates and the 7 relations, a verdict MUST be defined; no pairing may be left unhandled. (Assumption, pending maintainer confirmation, Wave-1-owned: #2126's self-loop exclusion belongs to the Wave 1 algebra; this wave only consumes it — no algebra change is required here beyond the boundary-descriptor and total-function additions above.)
+For every pairing among the five review-context hooks and the seven relations, a review-context result MUST be defined; no pairing may be left unhandled. (Assumption, pending maintainer confirmation, Wave-1-owned: #2126's self-loop exclusion belongs to the Wave 1 algebra; this wave only consumes it — no algebra change is required here beyond the boundary-descriptor and total-function additions above.) Every result is review evidence, not delivery authority.
 
 #### Scenario: 35-cell matrix has zero unexplained divergences
 
-- GIVEN the 5-gate x 7-relation boundary matrix
+- GIVEN the 5-hook x 7-relation review-context boundary matrix
 - WHEN it is generated from the algebra
-- THEN every cell resolves to a defined verdict, and pre-PR's `compatible_base_advance` AND `changed` cells (grounded at `compact_gate.go:97-100`, where `baseMatches` is forced `true` and admits a current-changes boundary proof) are pinned as named, explained divergences from the other four gates
+- THEN every cell resolves to a defined result, and pre-PR's `compatible_base_advance` and `changed` cells are pinned as named, explained divergences from the other four hooks
+- AND no result authorizes or blocks delivery

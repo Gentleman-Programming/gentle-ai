@@ -18,83 +18,6 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-func TestNegotiatedStatusPublishesClassifiedRepairAuthorizationTransition(t *testing.T) {
-	repo, lineage, head := classifiedRepairCLIFixture(t, "status-classified-repair")
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", repo}
-	var unauthorized bytes.Buffer
-	if err := RunReview(args, &unauthorized); err != nil {
-		t.Fatal(err)
-	}
-	var status ReviewTargetStatusResult
-	decoder := json.NewDecoder(bytes.NewReader(unauthorized.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&status); err != nil {
-		t.Fatal(err)
-	}
-	if err := status.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if status.Applicability != reviewtransaction.TargetApplicabilityCorrupted ||
-		status.Repair.Status != reviewtransaction.AuthorityRepairEligible || status.Repair.Candidate == nil ||
-		status.Repair.Candidate.LineageID != lineage || status.Repair.Candidate.Revision != head ||
-		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-		status.NextTransition.ReasonCode != "repair_authorization_required" || status.NextTransition.Collect == nil ||
-		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "external.authorize_repair" ||
-		status.NextTransition.Collect.Inputs[0].Schema != reviewtransaction.AuthorityRepairAuthorizationSchema {
-		t.Fatalf("unauthorized classified repair status = %#v\n%s", status, unauthorized.String())
-	}
-	if status.Eligibility == nil || len(status.Eligibility.AllowedActions) != 1 ||
-		status.Eligibility.AllowedActions[0].Action != "review.repair" ||
-		!reflect.DeepEqual(status.Eligibility.AllowedActions[0].RequiredInputs, []string{"actor", "reason", "maintainer_authorization"}) {
-		t.Fatalf("classified repair eligibility = %#v", status.Eligibility)
-	}
-	if strings.Contains(unauthorized.String(), repo) || strings.Contains(unauthorized.String(), "maintainer@example.com") {
-		t.Fatalf("repair collection leaked private path or invented authorization: %s", unauthorized.String())
-	}
-
-	actor, reason := "maintainer@example.com", "quarantine the approved historical alias"
-	authorization := classifiedRepairAuthorization(status.Repair, actor, reason)
-	authorizedArgs := append(append([]string{}, args...),
-		"--repair-actor", actor, "--repair-reason", reason, "--repair-authorization", authorization,
-	)
-	var authorized bytes.Buffer
-	if err := RunReview(authorizedArgs, &authorized); err != nil {
-		t.Fatal(err)
-	}
-	status = ReviewTargetStatusResult{}
-	decoder = json.NewDecoder(bytes.NewReader(authorized.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&status); err != nil {
-		t.Fatal(err)
-	}
-	if err := status.Validate(); err != nil {
-		t.Fatalf("authorized status validation: %v\n%s\n%#v", err, authorized.String(), status.NextTransition)
-	}
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
-		status.NextTransition.ReasonCode != "repair_authorized" || status.NextTransition.Execute == nil ||
-		status.NextTransition.Execute.Operation != "review.repair" ||
-		status.NextTransition.Execute.Binding.LineageID != lineage || status.NextTransition.Execute.Binding.Revision != head {
-		t.Fatalf("authorized classified repair status = %#v", status.NextTransition)
-	}
-	if strings.Contains(authorized.String(), authorization) {
-		t.Fatalf("authorized classified repair status leaked completed authorization: %s", authorized.String())
-	}
-	unsafe := status
-	unsafeTransition := *status.NextTransition
-	unsafeExecution := *status.NextTransition.Execute
-	unsafeExecution.Arguments = append([]ReviewTransitionArgument{}, unsafeExecution.Arguments...)
-	for index := range unsafeExecution.Arguments {
-		if unsafeExecution.Arguments[index].Name == "maintainer-authorization" {
-			unsafeExecution.Arguments[index].Value = authorization
-		}
-	}
-	unsafeTransition.Execute = &unsafeExecution
-	unsafe.NextTransition = &unsafeTransition
-	if err := unsafe.Validate(); err == nil {
-		t.Fatal("classified repair status accepted a completed public authorization")
-	}
-}
-
 func TestNegotiatedStatusKeepsExplicitHealthyTargetIsolatedFromUnrelatedRepair(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	appendClassifiedRepairCLIFixture(t, repo, "unrelated-repair-alias")
@@ -474,6 +397,150 @@ func authorityDispositionAuthorization(plan reviewtransaction.AuthorityDispositi
 // content_mismatched_recovery_authorization class rather than the
 // pre-contract malformed_recovery_authorization AnomalyClasses class.
 const dispositionForgedAuthorization = "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=impossible-mismatch\npredecessor_revision=impossible\ntarget_identity=impossible\nactor=maintainer@example.com\nreason=impossible"
+
+func TestReviewRepairPreflightBlocksHistoricalPlanForAdditionalAuthorityDiagnostic(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		problem string
+		prepare func(t *testing.T, statePath string)
+	}{
+		{
+			name: "malformed", problem: "malformed_compact_state",
+			prepare: func(t *testing.T, statePath string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(statePath, []byte("{\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "missing", problem: "missing_compact_state",
+			prepare: func(t *testing.T, statePath string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "unreadable", problem: "unreadable_compact_state",
+			prepare: func(t *testing.T, statePath string) {
+				t.Helper()
+				if err := os.MkdirAll(statePath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, _, store, record := newArtifactReview(t, true)
+			historicalLineage := record.State.LineageID
+			fixture := retireCompactAuthorityForReviewRepairTest(t, store, record)
+			historicalPath := store.StatePath()
+			unrelatedPath := filepath.Join(filepath.Dir(filepath.Dir(historicalPath)), "z-unrelated", "review-state.json")
+			test.prepare(t, unrelatedPath)
+
+			var inspectionOutput bytes.Buffer
+			if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspectionOutput); err != nil {
+				t.Fatal(err)
+			}
+			var inspection ReviewInspectAuthorityResult
+			decodeStrictReviewJSON(t, inspectionOutput.Bytes(), &inspection)
+			wantDiagnostics := []reviewtransaction.CompactRecoveryEntryDiagnostic{
+				{LineageID: historicalLineage, Problem: "outdated_compact_state"},
+				{LineageID: "z-unrelated", Problem: test.problem},
+			}
+			if !reflect.DeepEqual(inspection.EntryDiagnostics, wantDiagnostics) {
+				t.Fatalf("inspection diagnostics = %#v, want %#v", inspection.EntryDiagnostics, wantDiagnostics)
+			}
+
+			var preflightOutput bytes.Buffer
+			if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &preflightOutput); err != nil {
+				t.Fatal(err)
+			}
+			var preflight ReviewRepairResult
+			decodeStrictReviewJSON(t, preflightOutput.Bytes(), &preflight)
+			if err := preflight.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if preflight.DispositionProviderInputs != nil || len(preflight.DispositionSelectors) != 0 ||
+				preflight.ProviderInputs != nil || len(preflight.RequiredInputs) != 0 || preflight.Execution != nil || preflight.DispositionExecution != nil {
+				t.Fatalf("additional %s diagnostic published a repair plan or mutation: %#v", test.problem, preflight)
+			}
+			if after, err := os.ReadFile(historicalPath); err != nil || !bytes.Equal(after, fixture) {
+				t.Fatalf("historical authority changed after read-only preflight: %v, %v", err, after)
+			}
+			info, err := os.Stat(unrelatedPath)
+			switch test.problem {
+			case "missing_compact_state":
+				if !os.IsNotExist(err) {
+					t.Fatalf("missing authority state changed after preflight: info=%v err=%v", info, err)
+				}
+			case "unreadable_compact_state":
+				if err != nil || !info.IsDir() {
+					t.Fatalf("unreadable authority state changed after preflight: info=%v err=%v", info, err)
+				}
+			default:
+				if after, readErr := os.ReadFile(unrelatedPath); readErr != nil || !bytes.Equal(after, []byte("{\n")) {
+					t.Fatalf("malformed authority state changed after preflight: %v, %v", readErr, after)
+				}
+			}
+		})
+	}
+}
+
+func retireCompactAuthorityForReviewRepairTest(t *testing.T, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord) []byte {
+	t.Helper()
+	state := record.State
+	for _, snapshot := range []*reviewtransaction.Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot} {
+		snapshot.Identity = retiredReviewSnapshotIdentityForRepairTest(*snapshot)
+	}
+	statePayload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+	record.State = state
+	record.Revision = "sha256:" + hex.EncodeToString(sum[:])
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func retiredReviewSnapshotIdentityForRepairTest(snapshot reviewtransaction.Snapshot) string {
+	hash := sha256.New()
+	if snapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if snapshot.Projection == reviewtransaction.ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(snapshot.Kind), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	if snapshot.Projection == reviewtransaction.ProjectionStaged {
+		values = []string{string(snapshot.Kind), string(snapshot.Projection), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	}
+	write := func(value string) { _, _ = fmt.Fprintf(hash, "%d\x00%s\x00", len(value), value) }
+	for _, value := range values {
+		write(value)
+	}
+	for _, value := range snapshot.IntendedUntracked {
+		write(value)
+	}
+	for _, value := range snapshot.LedgerIDs {
+		write(value)
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
 
 // TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf
 // satisfies tasks.md 3.1: review repair --preflight emits the derived plan's

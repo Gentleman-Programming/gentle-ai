@@ -24,7 +24,7 @@ func TestRuntimeRemediationSettlesWhenCorrectionPredatesAcquire(t *testing.T) {
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: "predates-begin-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestRuntimeRemediationSettlesWhenCorrectionPredatesAcquire(t *testing.T) {
 	appendRuntimeLedgerFile(t, repo, "expect(emptyState).toBeVisible()\n")
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: reset.Revision, RequestID: "predates-begin-correction", WorkUnit: "correction",
-		EvidenceGoal: "focused remediation", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "focused remediation", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestRuntimeRemediationSettlesWhenCorrectionPredatesAcquire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("correction changed against the failed evidence was refused: %v", err)
 	}
-	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil {
+	if !completed.Complete || completed.ActiveAttempt != nil {
 		t.Fatalf("pre-acquire correction settle = %#v", completed)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]
@@ -102,7 +102,7 @@ func TestRuntimeRemediationRevertToFailedBytesStaysRefused(t *testing.T) {
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: "", RequestID: "revert-begin-verification", WorkUnit: "verify",
-		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestRuntimeRemediationRevertToFailedBytesStaysRefused(t *testing.T) {
 		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
 		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	})
-	if err == nil || !strings.Contains(err.Error(), "unmanaged remediation requires a changed correction candidate") {
+	if err == nil || !strings.Contains(err.Error(), "failed-evidence remediation requires a changed correction candidate") {
 		t.Fatalf("revert to the failed bytes = %v, want the changed-candidate refusal", err)
 	}
 	status, statusErr := store.Status()

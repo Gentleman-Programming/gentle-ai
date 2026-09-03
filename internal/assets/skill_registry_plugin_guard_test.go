@@ -53,13 +53,15 @@ import { appendFileSync } from "node:fs"
 appendFileSync(process.env.GENTLE_AI_RELAY_LOG, JSON.stringify(process.argv.slice(2)) + "\n")
 `
 	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, relay)
-	// The plugin's console.info skip notices share stdout with the harness
-	// result; the result is the final line.
+	// The plugin's stderr skip notices share the combined harness output with
+	// the stdout result; the result is the final line. Skip notices must stay
+	// off stdout so `opencode models --verbose` parsing never sees them, and
+	// must stay calm notices, never refresh errors.
 	trimmed := strings.Split(strings.TrimSpace(output), "\n")
 	last := trimmed[len(trimmed)-1]
 	for _, line := range trimmed[:len(trimmed)-1] {
 		if !strings.HasPrefix(line, "[skill-registry] skipping refresh:") {
-			t.Fatalf("unexpected plugin output line %q (skips must be console.info notices, never errors)", line)
+			t.Fatalf("unexpected plugin output line %q (skips must be calm notices, never errors)", line)
 		}
 	}
 	var result struct {

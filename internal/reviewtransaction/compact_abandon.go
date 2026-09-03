@@ -64,9 +64,8 @@ const (
 )
 
 type CompactDiscardedWorkSummary struct {
-	CapturedLensResults    []string `json:"captured_lens_results"`
-	FindingsPresent        bool     `json:"findings_present"`
-	EvidenceRecordsPresent bool     `json:"evidence_records_present"`
+	CapturedLensResults []string `json:"captured_lens_results"`
+	FindingsPresent     bool     `json:"findings_present"`
 }
 
 type CompactAbandonmentProof struct {
@@ -87,7 +86,7 @@ func compactAbandonAuthorizationBindingV2(lineage, revision, snapshotIdentity, a
 	return CompactAbandonAuthorizationSchema + "\nlineage=" + lineage + "\nrevision=" + revision +
 		"\nsnapshot_identity=" + snapshotIdentity + "\nreason=" + reason +
 		"\ncaptured_lens_results=" + strings.Join(discarded.CapturedLensResults, ",") +
-		fmt.Sprintf("\nfindings_present=%t\nevidence_records_present=%t", discarded.FindingsPresent, discarded.EvidenceRecordsPresent) +
+		fmt.Sprintf("\nfindings_present=%t", discarded.FindingsPresent) +
 		"\nactor=" + strings.TrimSpace(actor)
 }
 
@@ -96,57 +95,51 @@ func validCompactAbandonReason(reason string) bool {
 }
 
 func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record CompactRecord) (CompactDiscardedWorkSummary, error) {
-	captured, err := compactCapturedReviewerResults(store.Dir)
+	view, err := record.State.CompactReviewView()
 	if err != nil {
-		return CompactDiscardedWorkSummary{}, err
+		return CompactDiscardedWorkSummary{}, fmt.Errorf("derive admitted discarded work: %w", err)
 	}
-	summary := CompactDiscardedWorkSummary{
-		CapturedLensResults: captured, FindingsPresent: len(record.State.Findings) > 0,
-		EvidenceRecordsPresent: record.State.EvidenceRecordDigest != "",
+	captured := make([]string, 0, len(record.State.AdmittedRoleResults))
+	for _, entry := range record.State.AdmittedRoleResults {
+		if !record.State.IsAccountingOnlyAdmittedRoleResult(entry) && entry.Role == CompactRoleLens {
+			captured = append(captured, fmt.Sprintf("%02d-%s", entry.SelectedOrder, entry.Lens))
+		}
 	}
+	sort.Strings(captured)
+	summary := CompactDiscardedWorkSummary{CapturedLensResults: captured, FindingsPresent: len(view.Findings) > 0}
 	if len(captured) == 0 {
 		return summary, nil
 	}
 	if store.repo == "" {
-		// refusal:by-design world-action: only a repository-backed store can re-admit captured reviewer artifacts
-		return CompactDiscardedWorkSummary{}, errors.New("reviewer result store has no repository")
+		return CompactDiscardedWorkSummary{}, errors.New("reviewer result store has no repository") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 	}
 	builder := SnapshotBuilder{Repo: store.repo}
 	frozen, err := builder.FrozenCandidateContext(ctx, record.State.InitialSnapshot)
 	if err != nil {
 		return CompactDiscardedWorkSummary{}, fmt.Errorf("derive frozen reviewer context: %w", err)
 	}
-	for _, name := range captured {
-		payload, _, err := readCompactReviewerArtifact(filepath.Join(store.Dir, CompactReviewerResultsDir, name))
-		if err != nil {
-			return CompactDiscardedWorkSummary{}, fmt.Errorf("read captured reviewer result %q: %w", name, err)
+	for _, entry := range record.State.AdmittedRoleResults {
+		if entry.Role != CompactRoleLens {
+			continue
+		}
+		value, err := canonicalCompactRoleValue(entry.Value)
+		if err != nil || compactPreservedPayloadDigest(append(value, '\n')) != entry.ArtifactDigest {
+			return CompactDiscardedWorkSummary{}, errors.New("admitted reviewer record value is invalid") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 		var envelope compactAdmittedReviewerResult
-		decoder := json.NewDecoder(bytes.NewReader(payload))
+		decoder := json.NewDecoder(bytes.NewReader(value))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&envelope); err != nil {
-			return CompactDiscardedWorkSummary{}, fmt.Errorf("decode captured reviewer result %q: %w", name, err)
+		if err := decoder.Decode(&envelope); err != nil || decoder.Decode(new(struct{})) != io.EOF {
+			return CompactDiscardedWorkSummary{}, errors.New("decode admitted reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
-		if err := decoder.Decode(new(struct{})); err != io.EOF ||
-			envelope.Subject.SelectedOrder < 0 || envelope.Subject.SelectedOrder >= len(record.State.SelectedLenses) ||
-			record.State.SelectedLenses[envelope.Subject.SelectedOrder] != envelope.Subject.Lens ||
-			name != fmt.Sprintf("%02d-%s.json", envelope.Subject.SelectedOrder, envelope.Subject.Lens) {
-			// refusal:by-design world-action: malformed persisted reviewer bytes cannot be safely discarded as admitted work
-			return CompactDiscardedWorkSummary{}, fmt.Errorf("decode captured reviewer result %q", name)
-		}
-		nativeFrozen, expected, err := artifactSubjectForSchema(ctx, builder, record.State, envelope.Subject.AuthorityRevision,
-			frozen, envelope.Subject.Lens, envelope.Subject.SelectedOrder, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
+		nativeFrozen, expected, err := artifactSubjectForSchema(ctx, builder, record.State, entry.CapturePhaseRevision,
+			frozen, entry.Lens, entry.SelectedOrder, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
 		if err != nil || envelope.Schema != admittedReviewerResultSchemaForSubject(expected) || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
-			// refusal:by-design world-action: an artifact without a valid native admission cannot authorize its own discard
-			return CompactDiscardedWorkSummary{}, fmt.Errorf("admit captured reviewer result %q", name)
+			return CompactDiscardedWorkSummary{}, errors.New("admit captured reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 		result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen)
-		if !admitted {
-			// refusal:by-design world-action: an artifact that fails native re-admission cannot authorize its own discard
-			return CompactDiscardedWorkSummary{}, fmt.Errorf("admit captured reviewer result %q", name)
-		}
-		if len(result.Findings) > 0 {
-			summary.FindingsPresent = true
+		if !admitted || result.ResultHash != entry.ResultHash {
+			return CompactDiscardedWorkSummary{}, errors.New("admit captured reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 	}
 	return summary, nil

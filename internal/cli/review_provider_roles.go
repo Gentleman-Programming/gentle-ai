@@ -6,11 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -18,15 +14,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-var errReviewProviderRefuterNotRequired = errors.New("provider refuter request has no inferential findings; continue with `gentle-ai review finalize --captured-results`")
+var errReviewProviderRefuterNotRequired = errors.New("provider refuter request has no inferential findings; continue through the remaining capture route") // refusal:by-design operator-knowledge: the native closure branch consumes this sentinel and derives the remaining capture transition; no caller-selected command exists
 
 // errReviewProviderRefuterResultNotCaptured and its targeted-validator twin
-// are typed absence, not damage: finalize discovery distinguishes an
+// are typed absence, not damage: last-event closure distinguishes an
 // unoccupied slot (continue on the ordinary route) from unverifiable captured
 // bytes (fail closed).
-var errReviewProviderRefuterResultNotCaptured = errors.New("provider refuter result is not captured") // refusal:by-design operator-knowledge: capture the Go-issued provider refuter batch before finalizing
+var errReviewProviderRefuterResultNotCaptured = errors.New("provider refuter result is not captured") // refusal:by-design operator-knowledge: capture the Go-issued provider refuter batch before closure
 
-var errReviewProviderTargetedValidatorResultNotCaptured = errors.New("provider targeted validator result is not captured") // refusal:by-design operator-knowledge: capture the Go-issued validator result before finalizing
+var errReviewProviderTargetedValidatorResultNotCaptured = errors.New("provider targeted validator result is not captured") // refusal:by-design operator-knowledge: capture the Go-issued validator result before closure
+
+const maxInconclusiveTargetedValidations = 3
 
 type reviewProviderRole = reviewerprovider.Role
 
@@ -112,6 +110,18 @@ type reviewProviderRefuterRequest struct {
 	Invocation       reviewerprovider.Invocation      `json:"-"`
 }
 
+// compactProviderRoleResult is the transaction-owned durable shape after Go
+// admits provider transport bytes. It intentionally excludes provider wire
+// fields such as request hashes and proof-ref arrays.
+type compactProviderRefuterResult struct {
+	Results []reviewtransaction.EvidenceResult `json:"results"`
+}
+
+type compactProviderTargetedValidatorResult struct {
+	Outcome  string                                             `json:"outcome"`
+	Evidence reviewtransaction.CompactTargetedValidatorEvidence `json:"evidence"`
+}
+
 type reviewProviderEvidence struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -128,19 +138,14 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 	if state.State != reviewtransaction.StateReviewing {
 		return reviewProviderRefuterRequest{}, errors.New("provider refuter request requires reviewing authority") // refusal:by-design operator-knowledge: refresh the current provider request from reviewing authority before invoking a refuter
 	}
-	wantRevision, err := reviewtransaction.CompactRevisionForState(state)
-	if err != nil || revision != wantRevision {
-		return reviewProviderRefuterRequest{}, errors.New("provider refuter request requires the current compact authority revision") // refusal:by-design operator-knowledge: refresh the exact current authority revision before materializing a refuter request
+	if revision != state.CapturePhaseRevision {
+		return reviewProviderRefuterRequest{}, errors.New("provider refuter request requires the current compact capture phase") // refusal:by-design operator-knowledge: refresh the exact current capture phase before materializing a refuter request
 	}
-	results, err := readCapturedReviewerResults(ctx, repo, storeDir, state, revision)
+	view, _, err := capturedCompactReviewView(ctx, repo, storeDir, state, revision)
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
-	input, err := prepareCompactReviewerResults(state, results, facadeRefuterResult{}, facadeRepositoryEvidence{ctx: ctx, repo: repo})
-	if err != nil {
-		return reviewProviderRefuterRequest{}, err
-	}
-	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, input)
+	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, compactReviewInputFromView(view))
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
@@ -167,6 +172,12 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 }
 
 func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.CompactReviewInput) ([]reviewtransaction.RefuterClaim, error) {
+	claimText := map[string]string{}
+	for _, result := range input.LensResults {
+		for _, finding := range result.Findings {
+			claimText[finding.ID] = finding.Claim
+		}
+	}
 	claims := make([]reviewtransaction.RefuterClaim, 0)
 	for _, classification := range input.Classifications {
 		if classification.Class != reviewtransaction.EvidenceInferential {
@@ -174,7 +185,7 @@ func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.Compac
 		}
 		switch classification.Causality {
 		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
-			claims = append(claims, reviewtransaction.RefuterClaim{FindingID: classification.FindingID, SnapshotIdentity: snapshot, Proof: classification.Proof})
+			claims = append(claims, reviewtransaction.RefuterClaim{FindingID: classification.FindingID, SnapshotIdentity: snapshot, Proof: classification.Proof, Claim: claimText[classification.FindingID]})
 		}
 	}
 	if len(claims) == 0 {
@@ -228,12 +239,35 @@ type providerValidationCheckWire struct {
 	Evidence []string `json:"evidence"`
 }
 
+// reviewProviderTargetedValidatorKnownTopLevelJSON allows providers to add
+// advisory top-level metadata without weakening strict decoding of the result's
+// admitted fields or any nested object.
+func reviewProviderTargetedValidatorKnownTopLevelJSON(payload []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return nil, err
+	}
+	for name := range fields {
+		switch name {
+		case "targeted_validation_request_hash", "correction_target_identity", "original_criteria", "correction_regression", "follow_ups":
+		default:
+			delete(fields, name)
+		}
+	}
+	return json.Marshal(fields)
+}
+
 func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, correction reviewtransaction.Snapshot) (reviewProviderTargetedValidatorRequest, error) {
 	contract, err := reviewProviderRoleContractFor(reviewProviderRoleTargetedValidator)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, correction)
+	var request reviewtransaction.TargetedValidationRequest
+	if state.State == reviewtransaction.StateEscalated {
+		request, err = reviewtransaction.RebuildAdmittedTargetedValidationRequest(state, revision)
+	} else {
+		request, err = reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, state, revision, correction)
+	}
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
@@ -245,7 +279,7 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	// validator is handed is byte-identical to the one the orchestrator holds
 	// and the derivation stays deterministic for the transport's re-interception
 	// byte comparison.
-	repositoryContext, err := reviewtransaction.PublishReviewRepositoryContext(ctx, repo, reviewtransaction.ReviewRepositoryContextBinding{
+	repositoryContext, err := reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
 	})
 	if err != nil {
@@ -304,7 +338,14 @@ func reviewProviderRolePrompt(contract reviewProviderRoleContract, request any) 
 	if err != nil {
 		return nil, err
 	}
-	prompt := []byte(fmt.Sprintf("%s\n\nInput:\n%s\n\nOutput schema:\n%s", contract.PromptInstruction, payload, contract.ResultSchema))
+	instruction := contract.PromptInstruction
+	if targeted, ok := request.(reviewProviderTargetedValidatorRequest); ok {
+		// JSON necessarily escapes policy line breaks. Materialize the same
+		// request-bound bytes before the machine-readable input so the validator
+		// can inspect the exact frozen policy text without a second policy model.
+		instruction += "\n\nFrozen policy:\n" + targeted.ValidationRequest.PolicyContent
+	}
+	prompt := []byte(fmt.Sprintf("%s\n\nInput:\n%s\n\nOutput schema:\n%s", instruction, payload, contract.ResultSchema))
 	if len(prompt) > contract.ResultLimit {
 		return nil, fmt.Errorf("provider %s prompt exceeds the native %d byte limit", contract.Role, contract.ResultLimit) // refusal:by-design operator-knowledge: provider evidence is never truncated; split the candidate
 	}
@@ -371,12 +412,24 @@ func reviewProviderCaptureRefuterRaw(ctx context.Context, repo string, store rev
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
-	payload, err := canonicalProviderRoleResult(result)
+	return reviewProviderCaptureAdmittedRefuterResult(ctx, repo, store, state, revision, request, result, raw)
+}
+
+// reviewProviderCaptureAdmittedRefuterResult durably captures a refuter
+// result the caller already admitted from raw provider bytes. It stays split
+// from admission so a caller that grants the compiled runtime a corrective
+// re-invocation on a rejected result (issue #4061) can retry admission alone
+// and only ever durably capture the one payload that was actually admitted.
+func reviewProviderCaptureAdmittedRefuterResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, request reviewProviderRefuterRequest, result facadeRefuterResult, raw []byte) (facadeRefuterResult, error) {
+	if request.TargetIdentity != state.InitialSnapshot.Identity {
+		return facadeRefuterResult{}, errors.New("provider refuter request target identity does not match the reviewing authority's initial snapshot identity") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	payload, err := canonicalProviderRoleResult(compactProviderRefuterResult{Results: result.native()})
 	if err != nil {
 		return facadeRefuterResult{}, err
 	}
 	err = store.CaptureAdmittedRefuterResult(ctx, reviewtransaction.CompactAdmittedRefuterResultRequest{
-		ExpectedRevision: revision, TargetIdentity: state.InitialSnapshot.Identity, Payload: payload,
+		ExpectedRevision: revision, TargetIdentity: state.InitialSnapshot.Identity, RequestHash: request.RequestHash, Payload: payload,
 		PreparePublication: func(current reviewtransaction.CompactState) error {
 			currentRequest, err := reviewProviderNewRefuterRequest(ctx, repo, store.Dir, current, revision)
 			if err != nil {
@@ -386,7 +439,7 @@ func reviewProviderCaptureRefuterRaw(ctx context.Context, repo string, store rev
 			if err != nil {
 				return err
 			}
-			currentPayload, err := canonicalProviderRoleResult(currentResult)
+			currentPayload, err := canonicalProviderRoleResult(compactProviderRefuterResult{Results: currentResult.native()})
 			if err != nil || !bytes.Equal(currentPayload, payload) {
 				return errors.New("provider refuter result changed while capture was pending") // refusal:by-design operator-knowledge: refresh captured lenses and rerun the provider
 			}
@@ -419,27 +472,19 @@ func reviewProviderCaptureRefuter(ctx context.Context, repo string, store review
 	return result, err == nil, err
 }
 
-func readCapturedProviderRefuterResult(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) (facadeRefuterResult, error) {
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(storeDir)
-	if err != nil {
-		return facadeRefuterResult{}, err
-	}
-	if !slot.Occupied {
-		return facadeRefuterResult{}, errReviewProviderRefuterResultNotCaptured
-	}
+func readCapturedProviderRefuterResult(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) ([]reviewtransaction.EvidenceResult, error) {
 	request, err := reviewProviderNewRefuterRequest(ctx, repo, storeDir, state, revision)
 	if err != nil {
-		return facadeRefuterResult{}, err
+		return nil, err
 	}
-	result, err := reviewProviderAdmitRefuterRaw(request, slot.Payload)
+	if _, found := state.AdmittedRoleResult(reviewtransaction.CompactRoleRefuter, revision, state.InitialSnapshot.Identity, request.RequestHash); !found {
+		return nil, errReviewProviderRefuterResultNotCaptured
+	}
+	view, err := state.CompactReviewView()
 	if err != nil {
-		return facadeRefuterResult{}, fmt.Errorf("captured provider refuter result is no longer admitted: %w", err)
+		return nil, fmt.Errorf("captured provider refuter result is no longer admitted: %w", err)
 	}
-	payload, err := canonicalProviderRoleResult(result)
-	if err != nil || !bytes.Equal(payload, slot.Payload) {
-		return facadeRefuterResult{}, errors.New("captured provider refuter result is not canonical") // refusal:by-design human-authority: immutable provider bytes require maintainer inspection
-	}
-	return result, nil
+	return append([]reviewtransaction.EvidenceResult(nil), view.RefuterOutcomes...), nil
 }
 
 func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValidatorRequest, raw []byte) (facadeValidationResult, reviewtransaction.ScopedValidationResult, error) {
@@ -455,6 +500,10 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleTargetedValidator, raw)
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	payload, err = reviewProviderTargetedValidatorKnownTopLevelJSON(payload)
+	if err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, fmt.Errorf("decode provider targeted validator result: %w", err)
 	}
 	var result facadeValidationResult
 	var wire providerValidationResultWire
@@ -488,250 +537,138 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	return result, native, nil
 }
 
-func reviewProviderCaptureTargetedValidatorRaw(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, raw []byte) (facadeValidationResult, reviewtransaction.ScopedValidationResult, error) {
+func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, raw []byte) (facadeValidationResult, reviewtransaction.ScopedValidationResult, *reviewLastEventClosureResult, error) {
 	correction, err := reviewProviderTargetedValidatorCorrection(ctx, repo, state)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
 	request, err := reviewProviderNewTargetedValidatorRequest(ctx, repo, state, revision, correction)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
 	result, native, err := reviewProviderAdmitTargetedValidatorRaw(request, raw)
 	if err != nil {
-		// Every host-mediated capture entry point funnels through here, so this
-		// is where a recapture that is itself a non-verdict spends its attempt.
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{},
-			reviewRecordInconclusiveTargetedValidation(store.Dir, request.ValidationRequest, raw, err)
+		// An incomplete inspection remains a retryable non-verdict. Persist only a
+		// hash-only attempt descriptor; rejected bytes, paths, and evidence bodies
+		// never enter durable authority.
+		if errors.Is(err, errReviewTargetedValidationInconclusive) {
+			if _, ledgerErr := store.RecordInconclusiveTargetedValidatorAttempt(ctx, request.ValidationRequest, facadePayloadHash(raw)); ledgerErr != nil {
+				return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, ledgerErr
+			}
+		}
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
 	}
-	// The new bytes are an admitted verdict. If the slot is still held by a
-	// non-verdict captured before this build could refuse one, archive it and
-	// vacate the slot so the immutable publication below sees an empty slot
-	// rather than a conflict it must refuse (#3378). A real verdict is never
-	// archived: the occupant has to be inadmissible for inconclusiveness and
-	// nothing else, and its exact bytes and digest are preserved first.
-	if err := reviewArchiveInconclusiveTargetedValidatorSlot(store.Dir, request); err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
-	}
-	payload, err := canonicalProviderRoleResult(result)
-	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
-	}
-	err = store.CaptureAdmittedTargetedValidatorResult(ctx, reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
-		ExpectedRequest: request.ValidationRequest, Payload: payload,
-		PreparePublication: func(current reviewtransaction.CompactState, authoritative reviewtransaction.TargetedValidationRequest) error {
-			currentCorrection, err := reviewProviderTargetedValidatorCorrection(ctx, repo, current)
-			if err != nil {
-				return err
-			}
-			currentRequest, err := reviewProviderNewTargetedValidatorRequest(ctx, repo, current, revision, currentCorrection)
-			if err != nil {
-				return err
-			}
-			currentResult, _, err := reviewProviderAdmitTargetedValidatorRaw(currentRequest, raw)
-			if err != nil {
-				return err
-			}
-			currentPayload, err := canonicalProviderRoleResult(currentResult)
-			if err != nil || !reflect.DeepEqual(currentRequest.ValidationRequest, authoritative) || currentCorrection.Identity != authoritative.CorrectionTargetIdentity || !bytes.Equal(currentPayload, payload) {
-				return errors.New("provider targeted validator result changed while capture was pending") // refusal:by-design operator-knowledge: refresh the correction target and invoke the provider again
-			}
-			return nil
-		},
+	closure, err := reviewProviderCaptureAdmittedTargetedValidatorResult(ctx, repo, store, state, correction, request, result, native)
+	return result, native, closure, err
+}
+
+// reviewProviderCaptureAdmittedTargetedValidatorResult durably captures a
+// targeted validator verdict the caller already admitted from raw provider
+// bytes. It stays split from admission and from the inconclusive-attempt
+// ledger recording above so a caller that grants the compiled runtime a
+// corrective re-invocation on a rejected result (issue #4061) can retry
+// admission alone and only ever durably capture the one verdict that was
+// actually admitted.
+func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, correction reviewtransaction.Snapshot, request reviewProviderTargetedValidatorRequest, result facadeValidationResult, native reviewtransaction.ScopedValidationResult) (*reviewLastEventClosureResult, error) {
+	evidence := reviewProviderTargetedValidatorEvidence(result)
+	payload, err := canonicalProviderRoleResult(compactProviderTargetedValidatorResult{
+		Outcome: reviewProviderTargetedValidatorOutcome(native), Evidence: evidence,
 	})
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		return nil, err
 	}
-	return result, native, nil
+	capture := reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
+		ExpectedRequest: request.ValidationRequest, Payload: payload, Evidence: &evidence, Validation: &native,
+	}
+	if reviewProviderTargetedValidatorOutcome(native) == "failed" {
+		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
+		if err != nil {
+			return nil, err
+		}
+		complete, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildCorrectedCandidate(ctx, state.InitialSnapshot, correction)
+		if err != nil {
+			return nil, err
+		}
+		capture.Complete = func(next *reviewtransaction.CompactState) error {
+			return next.CompleteCorrectionVerification(correction, actual, native, complete)
+		}
+	}
+	if err := store.CaptureAdmittedTargetedValidatorResult(ctx, capture); err != nil {
+		return nil, err
+	}
+	current, err := store.LoadContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if reviewProviderTargetedValidatorOutcome(native) == "passed" {
+		return closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
+	}
+	return newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
 }
 
-func reviewProviderCaptureTargetedValidator(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, agent model.AgentID) (facadeValidationResult, reviewtransaction.ScopedValidationResult, error) {
+func reviewProviderTargetedValidatorEvidence(result facadeValidationResult) reviewtransaction.CompactTargetedValidatorEvidence {
+	return reviewtransaction.CompactTargetedValidatorEvidence{
+		TargetedValidationRequestHash: result.TargetedValidationRequestHash,
+		CorrectionTargetIdentity:      result.CorrectionTargetIdentity,
+		OriginalCriteria: reviewtransaction.CompactTargetedValidatorCheckEvidence{
+			Passed: result.OriginalCriteria.Passed, Evidence: append([]string(nil), result.OriginalCriteria.Evidence...),
+		},
+		CorrectionRegression: reviewtransaction.CompactTargetedValidatorCheckEvidence{
+			Passed: result.CorrectionRegression.Passed, Evidence: append([]string(nil), result.CorrectionRegression.Evidence...),
+		},
+		FollowUps: append([]reviewtransaction.FollowUp{}, result.FollowUps...),
+	}
+}
+
+func reviewProviderTargetedValidatorOutcome(validation reviewtransaction.ScopedValidationResult) string {
+	if validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
+		return "passed"
+	}
+	return "failed"
+}
+
+func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, _ string, state reviewtransaction.CompactState, revision string) (string, error) {
 	correction, err := reviewProviderTargetedValidatorCorrection(ctx, repo, state)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		return "", err
 	}
 	request, err := reviewProviderNewTargetedValidatorRequest(ctx, repo, state, revision, correction)
 	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		return "", err
 	}
-	adapter, err := reviewProviderAdapter(reviewProviderRoleTargetedValidator, agent)
-	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
-	}
-	raw, err := adapter.Review(ctx, request.Invocation)
-	if err != nil {
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, fmt.Errorf("invoke provider targeted validator: %w", err)
-	}
-	return reviewProviderCaptureTargetedValidatorRaw(ctx, repo, store, state, revision, raw)
-}
-
-// reviewTargetedValidatorSlotPath is the one place the correction-bound
-// validator slot layout is spelled out on this side of the store boundary.
-func reviewTargetedValidatorSlotPath(storeDir string, request reviewtransaction.TargetedValidationRequest) string {
-	return filepath.Join(storeDir, "targeted-validator-results",
-		strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
-}
-
-// maxInconclusiveTargetedValidations bounds the non-verdicts one correction may
-// accumulate: one "I could not inspect it" deserves a re-run, a validator still
-// blind after that reports an environmental failure no recapture resolves.
-const maxInconclusiveTargetedValidations = 3
-
-// reviewQuarantinedTargetedValidatorPath names one preserved validator result
-// under the store's existing quarantine root. The empty suffix is the single
-// superseded legacy occupant, whose fixed name keeps the supersede publish
-// content-idempotent; "-attempt-<n>" is one rejected recapture.
-func reviewQuarantinedTargetedValidatorPath(storeDir string, request reviewtransaction.TargetedValidationRequest, suffix string) string {
-	return filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir,
-		strings.TrimPrefix(request.ExpectedRevision, "sha256:")[:16],
-		"targeted-validator-"+strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:")[:16]+suffix+".json")
-}
-
-func reviewInconclusiveTargetedValidationAttempt(attempt int) string {
-	return "-attempt-" + strconv.Itoa(attempt)
-}
-
-// reviewInconclusiveTargetedValidationAttempts is the persisted retry ledger. It
-// counts rejected recaptures, the only event a repeatedly blind validator can
-// produce: this build refuses to publish a non-verdict, so the occupied slot
-// never changes, and the supersede archive is written only once an admitted
-// verdict has already ended this route.
-func reviewInconclusiveTargetedValidationAttempts(storeDir string, request reviewtransaction.TargetedValidationRequest) int {
-	attempts := 0
-	for attempts < maxInconclusiveTargetedValidations {
-		if _, err := os.Lstat(reviewQuarantinedTargetedValidatorPath(storeDir, request, reviewInconclusiveTargetedValidationAttempt(attempts+1))); err != nil {
-			break
+	if _, found := state.AdmittedRoleResult(reviewtransaction.CompactRoleTargetedValidator, revision, request.ValidationRequest.CorrectionTargetIdentity, request.ValidationRequest.RequestHash); !found {
+		if len(state.TargetedValidatorAttempts) >= maxInconclusiveTargetedValidations {
+			return "", reviewtransaction.ErrCompactTargetedValidatorAttemptsExhausted
 		}
-		attempts++
-	}
-	return attempts
-}
-
-// reviewRecordInconclusiveTargetedValidation appends one rejected non-verdict to
-// that ledger and returns the refusal unchanged, so every capture route records
-// the attempt by wrapping its own admission error. Each record takes a fresh
-// ordinal and content is never deduplicated: identical bytes are the expected
-// shape of a deterministically blind validator, so reading them as a crash
-// replay would swallow real attempts. The record is one atomic publish with
-// nothing else to reconcile, so a crash before it leaves an attempt uncounted,
-// which errs toward more retries rather than fewer.
-func reviewRecordInconclusiveTargetedValidation(storeDir string, request reviewtransaction.TargetedValidationRequest, rejected []byte, err error) error {
-	if !errors.Is(err, errReviewTargetedValidationInconclusive) {
-		return err
-	}
-	path := reviewQuarantinedTargetedValidatorPath(storeDir, request,
-		reviewInconclusiveTargetedValidationAttempt(reviewInconclusiveTargetedValidationAttempts(storeDir, request)+1))
-	for _, dir := range []string{filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir), filepath.Dir(path)} {
-		if dirErr := ensureReviewerArtifactDir(dir); dirErr != nil {
-			return errors.Join(err, dirErr)
+		if len(state.TargetedValidatorAttempts) > 0 {
+			return "", errReviewTargetedValidationInconclusive
 		}
+		return "", errReviewProviderTargetedValidatorResultNotCaptured
 	}
-	if publishErr := publishImmutableReviewerFile(path, rejected); publishErr != nil {
-		return errors.Join(err, publishErr)
-	}
-	return err
-}
-
-// reviewArchiveInconclusiveTargetedValidatorSlot vacates a correction-bound
-// validator slot occupied by a captured non-verdict, preserving its exact
-// bytes and digest under the store's existing quarantine root first. It is a
-// no-op for an empty slot and for any occupant that is admissible or that
-// fails admission for any reason other than inconclusiveness, so an immutable
-// verdict -- passed or failed -- can never be replaced through this path.
-// Archive-then-remove converges on retry: a crash after the archive leaves the
-// preserved copy, and the next attempt finds it already published.
-func reviewArchiveInconclusiveTargetedValidatorSlot(storeDir string, request reviewProviderTargetedValidatorRequest) error {
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(storeDir, request.ValidationRequest)
-	if err != nil || !slot.Occupied {
-		// A slot this build cannot even read back is corruption, not a
-		// non-verdict: leave it exactly as it is for maintainer inspection.
-		return nil
-	}
-	occupant, _, admitErr := reviewProviderAdmitTargetedValidatorRaw(request, slot.Payload)
-	if !errors.Is(admitErr, errReviewTargetedValidationInconclusive) {
-		_ = occupant
-		return nil
-	}
-	path := reviewTargetedValidatorSlotPath(storeDir, request.ValidationRequest)
-	digestPath := path + ".sha256"
-	payload, payloadInfo, payloadErr := readPrivateReviewerFile(path, reviewResultArtifactLimit)
-	if payloadErr != nil {
-		return fmt.Errorf("read superseded targeted validator result: %w", payloadErr)
-	}
-	_, digestInfo, digestErr := readPrivateReviewerFile(digestPath, 256)
-	if digestErr != nil {
-		return fmt.Errorf("read superseded targeted validator result digest: %w", digestErr)
-	}
-	archiveRoot := filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir)
-	if err := ensureReviewerArtifactDir(archiveRoot); err != nil {
-		return err
-	}
-	archivePath := reviewQuarantinedTargetedValidatorPath(storeDir, request.ValidationRequest, "")
-	if err := ensureReviewerArtifactDir(filepath.Dir(archivePath)); err != nil {
-		return err
-	}
-	if err := publishImmutableReviewerFile(archivePath, payload); err != nil {
-		return fmt.Errorf("archive superseded targeted validator result: %w", err)
-	}
-	if err := publishImmutableReviewerFile(archivePath+".sha256", []byte(slot.Digest+"\n")); err != nil {
-		return fmt.Errorf("archive superseded targeted validator result digest: %w", err)
-	}
-	for _, owned := range []struct {
-		path string
-		info os.FileInfo
-	}{{path: path, info: payloadInfo}, {path: digestPath, info: digestInfo}} {
-		removeOwnedArtifact(owned.path, owned.info)
-		if _, err := os.Lstat(owned.path); !os.IsNotExist(err) {
-			return errors.New("superseded targeted validator result changed before removal") // refusal:by-design human-authority: a validator slot that changes mid-supersede requires maintainer inspection
-		}
-	}
-	return syncReviewerArtifactDirectoryCompatible(filepath.Dir(path))
-}
-
-func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) (facadeValidationResult, error) {
-	correction, err := reviewProviderTargetedValidatorCorrection(ctx, repo, state)
+	view, err := state.CompactReviewView()
 	if err != nil {
-		return facadeValidationResult{}, err
+		return "", fmt.Errorf("captured provider targeted validator result is no longer admitted: %w", err)
 	}
-	request, err := reviewProviderNewTargetedValidatorRequest(ctx, repo, state, revision, correction)
-	if err != nil {
-		return facadeValidationResult{}, err
+	if view.TargetedValidatorOutcome == "" {
+		return "", errors.New("captured provider targeted validator result has no admitted outcome") // refusal:by-design world-action: an occupied validator slot must expose one transaction-owned outcome
 	}
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(storeDir, request.ValidationRequest)
-	if err != nil {
-		return facadeValidationResult{}, err
-	}
-	if !slot.Occupied {
-		return facadeValidationResult{}, errReviewProviderTargetedValidatorResultNotCaptured
-	}
-	result, _, err := reviewProviderAdmitTargetedValidatorRaw(request, slot.Payload)
-	if err != nil {
-		// A non-verdict stays retryable only while the ledger has room. Once it
-		// does not, this slot is what captured_artifacts_unverifiable already
-		// names -- a captured artifact no routing can turn into a result -- so
-		// the exhausted error drops the retryable sentinel and the caller's
-		// default branch reaches that terminal instead of recapturing forever.
-		if errors.Is(err, errReviewTargetedValidationInconclusive) &&
-			reviewInconclusiveTargetedValidationAttempts(storeDir, request.ValidationRequest)+1 >= maxInconclusiveTargetedValidations {
-			return facadeValidationResult{}, fmt.Errorf("captured provider targeted validator produced no verdict on %d consecutive attempts: %s", maxInconclusiveTargetedValidations, err) // refusal:by-design human-authority: the captured_artifacts_unverifiable stop this routes to names the continuation, and a permanently blind validator needs maintainer inspection
-		}
-		return facadeValidationResult{}, fmt.Errorf("captured provider targeted validator result is no longer admitted: %w", err)
-	}
-	payload, err := canonicalProviderRoleResult(result)
-	if err != nil || !bytes.Equal(payload, slot.Payload) {
-		return facadeValidationResult{}, errors.New("captured provider targeted validator result is not canonical") // refusal:by-design human-authority: immutable provider bytes require maintainer inspection
-	}
-	return result, nil
+	return view.TargetedValidatorOutcome, nil
 }
 
 func reviewProviderTargetedValidatorCorrection(ctx context.Context, repo string, state reviewtransaction.CompactState) (reviewtransaction.Snapshot, error) {
+	if state.State == reviewtransaction.StateEscalated && len(state.CorrectionAttempts) > 0 {
+		return state.CorrectionAttempts[len(state.CorrectionAttempts)-1].Snapshot, nil
+	}
 	if state.State != reviewtransaction.StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() {
 		return reviewtransaction.Snapshot{}, errors.New("provider targeted validator request requires an open correction") // refusal:by-design world-action: validator evidence applies only to one open forecasted correction
 	}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return reviewtransaction.Snapshot{}, fmt.Errorf("derive provider targeted validator scope from admitted authority: %w", err)
+	}
 	return (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree,
-		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: view.FixFindingIDs,
 	})
 }
 

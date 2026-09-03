@@ -11,7 +11,7 @@ const (
 	captureEvidenceDescriptorNormalLineage     = "capture-evidence-v5-normal"
 	captureEvidenceDescriptorCorrectionLineage = "capture-evidence-v5-correction"
 	targetedInspectionLineage                  = "targeted-validator-inspection"
-	statusSchemaV5                             = "gentle-ai.review-integration.status/v5"
+	statusSchemaV6                             = "gentle-ai.review-integration.status/v6"
 	verificationEvidenceSchemaV1               = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
 	verificationEvidenceRecordSchemaV2         = "gentle-ai.review-verification-evidence/v2"
 )
@@ -29,34 +29,36 @@ func captureEvidenceDescriptorJourneys() []Journey {
 		{
 			ID:     "j66-v5-capture-evidence-descriptors-execute",
 			Review: reviewOptedIn,
-			Title:  "STATUS v5 capture-evidence descriptor executes normal verification without caller-built bindings",
-			Source: "issue #2248: provider-owned capture-evidence descriptors must advance ordinary verification",
+			Title:  "#3417: a normal STATUS v5 evidence descriptor captures the full selected lens set for its exact active lineage",
+			Source: "issue #2248 under #3417: provider-owned capture-evidence advances normal verification, then finalization burns the exact transaction",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage normal code candidate", Fixture: stageWaveCandidate},
-				{Name: "start normal review", Requires: startNamedCapability,
+				{Name: "start normal review with an exact active lineage", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", captureEvidenceDescriptorNormalLineage)},
-				{Name: "capture every normal-review lens", Requires: captureResultCapability, Composite: captureAllLenses},
-				{Name: "finalize normal reviewer results into validation", Requires: finalizeResultsCapability,
+				{Name: "capture the full selected lens set in STATUS order for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, captureEvidenceDescriptorNormalLineage, false)
+				}},
+				{Name: "finalize exact active-lineage reviewer results into validation", Requires: finalizeResultsCapability,
 					Args:  productArgs("review", "finalize", "--lineage", captureEvidenceDescriptorNormalLineage, "--captured-results=true"),
 					After: requireReviewState("validating", captureEvidenceDescriptorNormalLineage)},
-				{Name: "execute the normal STATUS v5 capture-evidence descriptor", Requires: captureEvidenceDescriptorCapability, Composite: captureV5NormalEvidenceDescriptor},
-				{Name: "finalize the advanced normal review", Requires: finalizeEvidenceCapability,
-					Args:  productArgs("review", "finalize", "--lineage", captureEvidenceDescriptorNormalLineage, "--captured-evidence=true"),
-					After: requireReviewState("approved", captureEvidenceDescriptorNormalLineage)},
+				{Name: "execute the exact active-lineage normal STATUS v5 capture-evidence descriptor", Requires: captureEvidenceDescriptorCapability, Composite: captureV5NormalEvidenceDescriptor},
+				{Name: "final evidence burns the advanced normal transaction", Requires: finalizeEvidenceCapability, Composite: finalizeV5NormalReview},
 			},
 		},
 		{
 			ID:     "j67-v5-capture-evidence-correction-descriptor-executes",
 			Review: reviewOptedIn,
-			Title:  "STATUS v5 capture-evidence descriptor executes corrected verification without caller-built bindings",
-			Source: "issue #2248: provider-owned capture-evidence descriptors must advance correction verification",
+			Title:  "#3417: a STATUS v5 correction evidence descriptor continues only the exact active lineage",
+			Source: "issue #2248 under #3417: provider-owned capture-evidence advances correction verification without selectorless authority reuse",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage correction candidate", Fixture: stageCaptureEvidenceDescriptorCorrection},
-				{Name: "start correction review", Requires: startNamedCapability,
+				{Name: "start correction review with an exact active lineage", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", captureEvidenceDescriptorCorrectionLineage)},
-				{Name: "capture correction finding and complete lenses", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "capture correction finding and the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, captureEvidenceDescriptorCorrectionLineage, true)
+				}},
 				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
 					Args:  productArgs("review", "finalize", "--lineage", captureEvidenceDescriptorCorrectionLineage, "--captured-results=true"),
 					After: requireReviewState("correction_required", captureEvidenceDescriptorCorrectionLineage)},
@@ -70,13 +72,15 @@ func captureEvidenceDescriptorJourneys() []Journey {
 		{
 			ID:     "j95-targeted-validator-inspects-provider-bound-corrected-tree",
 			Review: reviewOptedIn,
-			Title:  "Targeted validator inspects STATUS-bound corrected trees through live worktree drift",
-			Source: "issue #2945: corrected targeted validation must inspect only the provider-bound immutable candidate",
+			Title:  "#3417: a targeted validator inspects an exact active-lineage corrected tree through live worktree drift",
+			Source: "issue #2945 under #3417: corrected targeted validation inspects only the provider-bound immutable candidate of its exact active lineage",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage correction candidate", Fixture: stageCaptureEvidenceDescriptorCorrection},
-				{Name: "start correction review", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", targetedInspectionLineage)},
-				{Name: "capture correction finding and complete lenses", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "start correction review with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", targetedInspectionLineage)},
+				{Name: "capture correction finding and the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, targetedInspectionLineage, true)
+				}},
 				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", targetedInspectionLineage, "--captured-results=true")},
 				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", targetedInspectionLineage, "--correction-lines", "2")},
 				{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
@@ -101,6 +105,17 @@ func stageCaptureEvidenceDescriptorCorrection(sandbox *Sandbox) error {
 		return fmt.Errorf("v5 correction fixture paths = %q, %v", paths, err)
 	}
 	return nil
+}
+
+func finalizeV5NormalReview(r *journeyRun) error {
+	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", captureEvidenceDescriptorNormalLineage, "--captured-evidence=true"), false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("finalize normal v5 evidence: %s", firstLine(observation.Stderr))
+	}
+	if err := requirePendingApproval(captureEvidenceDescriptorNormalLineage)(r.sandbox, observation); err != nil {
+		return err
+	}
+	return requireAtomicLineageAcknowledged(r, captureEvidenceDescriptorNormalLineage)
 }
 
 func captureV5NormalEvidenceDescriptor(r *journeyRun) error {
@@ -142,7 +157,7 @@ func executeV5CaptureEvidenceDescriptor(r *journeyRun, lineage, evidenceName str
 	if err != nil {
 		return waveCorrectionStatus{}, err
 	}
-	if status.Schema != statusSchemaV5 || status.Authority == nil || status.NextTransition == nil ||
+	if status.Schema != statusSchemaV6 || status.Authority == nil || status.NextTransition == nil ||
 		status.NextTransition.Kind != "collect" || status.NextTransition.Collect == nil ||
 		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-evidence" {
 		return waveCorrectionStatus{}, fmt.Errorf("v5 status did not publish capture-evidence: %+v", status)
@@ -220,11 +235,18 @@ func captureEvidenceDescriptorArguments(status waveCorrectionStatus, outcome, in
 }
 
 func completeV5DescriptorCorrection(r *journeyRun) error {
-	return completeV5DescriptorCorrectionFor(r, captureEvidenceDescriptorCorrectionLineage)
+	return completeBurnedV5DescriptorCorrectionFor(r, captureEvidenceDescriptorCorrectionLineage)
 }
 
 func completeJ95Correction(r *journeyRun) error {
-	return completeV5DescriptorCorrectionFor(r, targetedInspectionLineage)
+	return completeBurnedV5DescriptorCorrectionFor(r, targetedInspectionLineage)
+}
+
+func completeBurnedV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {
+	if err := completeV5DescriptorCorrectionFor(r, lineage); err != nil {
+		return err
+	}
+	return requireAtomicLineageAcknowledged(r, lineage)
 }
 
 func completeV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {

@@ -47,16 +47,6 @@ func (err *directorySyncError) Error() string {
 
 func (err *directorySyncError) Unwrap() error { return err.cause }
 
-// ImmutablePublicationConflictError requires maintainer action because replay
-// cannot replace a conflicting immutable artifact.
-type ImmutablePublicationConflictError struct{ Cause error }
-
-func (err *ImmutablePublicationConflictError) Error() string {
-	return fmt.Sprintf("immutable review publication conflict: %v", err.Cause)
-}
-
-func (err *ImmutablePublicationConflictError) Unwrap() error { return err.Cause }
-
 // SyncReviewDirectory persists a directory entry when the platform supports it.
 // Windows filesystems may reject directory handles; in that case the file rename
 // remains atomic, but power-loss durability of the directory entry is not claimed.
@@ -111,32 +101,6 @@ func AuthoritativeStore(ctx context.Context, repo, lineageID string) (Store, err
 	}
 	_, statErr := os.Stat(filepath.Join(dir, "HEAD"))
 	return Store{Dir: dir, lineageID: lineageID, repo: root, maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: statErr == nil}, nil
-}
-
-// DiscoverAuthoritativeStores returns every canonical lineage rooted in the
-// repository Git common directory. Callers still validate each chain before
-// treating it as review authority.
-func DiscoverAuthoritativeStores(ctx context.Context, repo string) ([]Store, error) {
-	authorityRoot, root, err := authoritativeStoreRoot(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(authorityRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []Store{}, nil
-		}
-		return nil, err
-	}
-	stores := make([]Store, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() || validateLineageID(entry.Name()) != nil {
-			continue
-		}
-		stores = append(stores, Store{Dir: filepath.Join(authorityRoot, entry.Name()), lineageID: entry.Name(), repo: root,
-			maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: true})
-	}
-	return stores, nil
 }
 
 func authoritativeStoreRoot(ctx context.Context, repo string) (string, string, error) {
@@ -947,61 +911,6 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := SyncReviewDirectory(filepath.Dir(path)); err != nil {
-		return &directorySyncError{path: path, cause: err}
-	}
-	return nil
-}
-
-func publishImmutable(path string, payload []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(dir, ".publish-*")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(mode); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if _, err := temp.Write(payload); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := publishNoReplace(tempPath, path); err != nil {
-		if !os.IsExist(err) {
-			return err
-		}
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			return statErr
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return &ImmutablePublicationConflictError{Cause: errors.New("non-regular existing path")}
-		}
-		existing, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		if !bytes.Equal(existing, payload) {
-			return &ImmutablePublicationConflictError{Cause: errors.New("existing content differs")}
-		}
-		if err := SyncReviewDirectory(dir); err != nil {
-			return &directorySyncError{path: path, cause: err}
-		}
-		return nil
-	}
-	if err := SyncReviewDirectory(dir); err != nil {
 		return &directorySyncError{path: path, cause: err}
 	}
 	return nil

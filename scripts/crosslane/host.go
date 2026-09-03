@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 )
 
 // hostCommandTimeout bounds every command a --with-host lane runs: real
@@ -18,8 +19,8 @@ import (
 const hostCommandTimeout = 12 * time.Minute
 
 // hostStepBudget bounds the negotiated transition follower. A full medium
-// lifecycle is start -> capture -> finalize -> evidence -> finalize; the
-// budget leaves room for refuter/validator legs without permitting a loop.
+// lifecycle is start -> capture -> final capture closure; the budget leaves
+// room for refuter/validator legs without permitting a loop.
 const hostStepBudget = 10
 
 // mergeEnvironment overlays overrides onto the inherited environment,
@@ -52,8 +53,22 @@ func (b *battery) runEnv(dir string, env []string, args ...string) (string, stri
 	// processes holding them open cannot block past the context cancel.
 	command.WaitDelay = 30 * time.Second
 	command.Dir = dir
-	if len(env) > 0 {
-		command.Env = mergeEnvironment(env)
+	overrides := append([]string(nil), env...)
+	if b.sandboxHome != "" {
+		supplied := make(map[string]bool, len(overrides))
+		for _, entry := range overrides {
+			if name, _, found := strings.Cut(entry, "="); found {
+				supplied[name] = true
+			}
+		}
+		for _, name := range []string{"HOME", "USERPROFILE"} {
+			if !supplied[name] {
+				overrides = append(overrides, name+"="+b.sandboxHome)
+			}
+		}
+	}
+	if len(overrides) > 0 {
+		command.Env = mergeEnvironment(overrides)
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -83,19 +98,23 @@ func (b *battery) runJSONEnv(source, dir string, env []string, args ...string) (
 	return doc, stderr, code
 }
 
-// statusEnv queries the negotiated next transition with lane environment.
+// statusEnv mirrors status with the lane's isolated environment.
 func (b *battery) statusEnv(repo, agent string, env []string) (map[string]any, string, int) {
-	return b.runJSONEnv("status", repo, env,
-		"review", "status", "--cwd", repo, "--contract", reviewContract, "--agent", agent, "--next-transition")
+	doc, stderr, code := b.runJSONEnv("status", repo, env, b.statusArgs(repo, agent)...)
+	if err := b.admitStatusScope(repo, doc); err != nil {
+		return nil, err.Error(), 1
+	}
+	return doc, stderr, code
 }
 
-// runCommandLineEnv mirrors runCommandLine over runEnv.
+// runCommandLineEnv mirrors runCommandLine over runEnv with the product's
+// quoting-aware splitter. Structured closures use runTransitionExecution instead.
 func (b *battery) runCommandLineEnv(source, dir string, env []string, command string) (map[string]any, string, int) {
-	fields := strings.Fields(command)
-	if len(fields) < 2 || fields[0] != "gentle-ai" {
+	words, err := cli.SplitPrintedCommandWords(command)
+	if err != nil || len(words) < 2 || words[0] != "gentle-ai" {
 		return nil, fmt.Sprintf("unexpected provider command %q", command), 1
 	}
-	return b.runJSONEnv(source, dir, env, fields[1:]...)
+	return b.runJSONEnv(source, dir, env, words[1:]...)
 }
 
 // argumentTokens returns a collect input's provider-rendered argument tokens
@@ -152,6 +171,10 @@ func (b *battery) hostNegotiatedMediumStart(lane, repo, agent string, env []stri
 			code, getString(startDoc, "state"), getString(startDoc, "risk_level"), firstLine(stderr)))
 		return false
 	}
+	if err := b.rememberStarted(repo, getString(statusDoc, "target_identity"), startDoc); err != nil {
+		b.fail(lane, "consent granted round-trip", err.Error())
+		return false
+	}
 	b.pass(lane, "consent granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage")
 	return true
 }
@@ -187,33 +210,45 @@ func (b *battery) hostMediumCandidate(lane, name string) (string, bool) {
 // host lane. Compiled runtimes (codex) run the provider-rendered argv, which
 // makes Go spawn the real reviewer process; the pi host relay routes through
 // the installed gentle-pi relay implementation instead.
-func (b *battery) hostCaptureLens(lane, repo string, env []string, input map[string]any) bool {
+func (b *battery) hostCaptureLens(lane, repo, agent string, env []string, input map[string]any) bool {
 	if hasArgument(input, "materialize") {
 		return b.runPiRelaySlot(lane, repo, input)
 	}
 	b.noteHostCost(lane, "1 compiled reviewer subprocess run (capture-result --agent)")
 	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,
 		append([]string{"review", "capture-result"}, argumentTokens(input)...)...)
-	if code != 0 || getString(capture, "schema") != "gentle-ai.review-result-artifact/v2" || getString(capture, "admission_decision") != "completed" {
+	if code != 0 || !admittedCapture(capture) {
 		b.fail(lane, "reviewer capture admitted", fmt.Sprintf("exit=%d schema=%q admission=%q %s",
 			code, getString(capture, "schema"), getString(capture, "admission_decision"), firstLine(stderr)))
 		return false
 	}
-	b.pass(lane, "reviewer capture admitted", "real reviewer process produced a native result artifact")
+	b.pass(lane, "reviewer capture admitted", "real reviewer process produced an admitted native capture")
+	switch operationState(capture) {
+	case "approved":
+		b.acknowledgeApproved(lane, "lifecycle acknowledged and burned", repo, agent, env, capture)
+		return false
+	case "correction_required":
+		b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, capture)
+		return false
+	}
 	return true
 }
 
-// hostFollowToReceipt follows negotiated transitions to the terminal receipt.
-// A correction_required terminal is a legitimate real-model outcome and is
-// reported as such, mirroring the claude --with-model lane.
-func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
-	const check = "lifecycle to approved receipt"
-	evidencePath := filepath.Join(b.workRoot, lane+"-evidence.txt")
-	evidence := fmt.Sprintf("crosslane battery %s: node --check passed on the frozen candidate\n", timestamp())
-	if err := os.WriteFile(evidencePath, []byte(evidence), 0o644); err != nil {
-		b.fail(lane, check, err.Error())
-		return
+// hostCorrectionReentry follows the provider-owned status continuation from a
+// final correction_required capture. Hosts must never rebuild its selectors.
+func (b *battery) hostCorrectionReentry(lane, check, repo string, env []string, closure map[string]any) bool {
+	status, stderr, code := b.statusFromClosureEnv(repo, env, closure)
+	if code != 0 || getString(status, "next_transition", "reason_code") != "correction_plan_required" {
+		b.fail(lane, check, fmt.Sprintf("closure continuation exit=%d reason=%q %s", code, getString(status, "next_transition", "reason_code"), firstLine(stderr)))
+		return false
 	}
+	b.pass(lane, check, "provider closure status_continuation re-entered correction planning without host selector reconstruction")
+	return true
+}
+
+// hostFollowToReceipt follows negotiated transitions to the terminal burn.
+func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
+	const check = "lifecycle acknowledged and burned"
 	for step := 0; step < hostStepBudget; step++ {
 		statusDoc, statusStderr, _ := b.statusEnv(repo, agent, env)
 		kind := getString(statusDoc, "next_transition", "kind")
@@ -227,13 +262,10 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 			}
 			switch operationState(doc) {
 			case "approved":
-				b.pass(lane, check, "real-host reviewed lineage reached the approved receipt")
+				b.acknowledgeApproved(lane, check, repo, agent, env, doc)
 				return
 			case "correction_required":
-				// A real model finding against scratch code is a legitimate
-				// outcome; transport, admission, and lifecycle are proven, and
-				// the bounded correction flow is not automated in this tier.
-				b.pass(lane, check, "real reviewer reported candidate-causal findings (correction_required); transport and admission proven")
+				b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, doc)
 				return
 			}
 		case "collect":
@@ -241,15 +273,7 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 			operation, _ := input["capture_operation"].(string)
 			switch operation {
 			case "review.capture-result":
-				if !b.hostCaptureLens(lane, repo, env, input) {
-					return
-				}
-			case "review.capture-evidence":
-				tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"outcome": "passed", "input": evidencePath})
-				captureArgs := append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)
-				record, captureStderr, code := b.runJSONEnv("verification-evidence", repo, env, captureArgs...)
-				if code != 0 || getString(record, "outcome") != "passed" {
-					b.fail(lane, check, fmt.Sprintf("evidence capture exit=%d %s", code, firstLine(captureStderr)))
+				if !b.hostCaptureLens(lane, repo, agent, env, input) {
 					return
 				}
 			case "review.capture-refuter", "review.capture-validation":
@@ -258,9 +282,16 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 				b.noteHostCost(lane, "1 Go-owned pi role process run ("+operation+")")
 				roleDoc, roleStderr, code := b.runJSONEnv("provider-role", repo, env,
 					append([]string{"review", strings.TrimPrefix(operation, "review.")}, argumentTokens(input)...)...)
-				captured, _ := roleDoc["captured"].(bool)
-				if code != 0 || !captured {
-					b.fail(lane, check, fmt.Sprintf("%s exit=%d captured=%v %s", operation, code, captured, firstLine(roleStderr)))
+				if code != 0 || !admittedCapture(roleDoc) {
+					b.fail(lane, check, fmt.Sprintf("%s exit=%d state=%q %s", operation, code, operationState(roleDoc), firstLine(roleStderr)))
+					return
+				}
+				switch operationState(roleDoc) {
+				case "approved":
+					b.acknowledgeApproved(lane, check, repo, agent, env, roleDoc)
+					return
+				case "correction_required":
+					b.hostCorrectionReentry(lane, "lifecycle correction re-entry", repo, env, roleDoc)
 					return
 				}
 			default:
@@ -284,7 +315,7 @@ func (b *battery) noteHostCost(lane, note string) {
 func (b *battery) runHostLanes() {
 	if !b.withHost {
 		b.skip(hostCodexLane, "real codex host tier", "pass --with-host to spawn real host applications (dev subscription)")
-		b.skip(hostPiLane, "real pi host tier", "pass --with-host to spawn real host applications (dev subscription)")
+		b.skip(hostPiLane, "typed SKIP: separate gentle-pi dev-binary evidence contract", "default battery does not fake/copy the relay; --with-host is independent live-host proof")
 		b.skip(hostOpenCodeLane, "real opencode host tier", "pass --with-host to spawn real host applications (dev subscription)")
 		return
 	}
