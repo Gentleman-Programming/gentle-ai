@@ -47,6 +47,7 @@ Golden rule: **agent-specific paths belong in adapters; reusable behavior belong
 | [Dashboard](codebase/dashboard.md) | Know what dashboard code is absent from this repo and how to avoid inventing it. |
 | [Integrations](codebase/integrations.md) | Change agent adapters, plugins, and setup boundaries safely. |
 | [Maintainer playbook](codebase/maintainer-playbook.md) | Use checklists by change type and PR review guardrails. |
+| [CI policy](ci-policy.md) | Maintain merge-blocking status contexts and verify ruleset drift. |
 | [Reference map](codebase/reference-map.md) | Trace docs and source files to responsibilities. |
 
 ## Recommended reading path

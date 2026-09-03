@@ -1,0 +1,65 @@
+name: Merge Policy Drift
+
+# pull_request_target runs this workflow from the trusted base revision. The
+# fork's manifest is read as data through the Contents API; it is never checked
+# out or executed. Only the final checker step receives the repository-admin
+# read credential, and that step performs GET requests only.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Merge Policy Drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted policy checker
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Materialize source-controlled policy manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          PR_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/merge-blocking-status-contexts.json"
+          if [[ "$EVENT_NAME" == pull_request_target ]]; then
+            if ! [[ "$PR_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+              ! [[ "$PR_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              printf 'policy_unverifiable: pull request identity is invalid\n' >&2
+              exit 2
+            fi
+            if ! gh api \
+              --method GET \
+              "repos/$PR_REPOSITORY/contents/scripts/merge-blocking-status-contexts.json?ref=$PR_SHA" \
+              --jq '.content' 2>/dev/null \
+              | tr -d '\n' \
+              | base64 --decode >"$manifest"; then
+              printf 'policy_unverifiable: could not read proposed policy manifest\n' >&2
+              exit 2
+            fi
+          else
+            cp -- scripts/merge-blocking-status-contexts.json "$manifest"
+          fi
+          printf 'POLICY_MANIFEST=%s\n' "$manifest" >>"$GITHUB_ENV"
+
+      - name: Check active ruleset without mutation
+        env:
+          GH_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/check-ruleset-drift.sh
