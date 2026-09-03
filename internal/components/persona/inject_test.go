@@ -2335,6 +2335,7 @@ func TestPersonaContentResidualDispatchAllAgents(t *testing.T) {
 		model.AgentPi,
 		model.AgentTrae,
 		model.AgentHermes,
+		model.AgentGitHubCopilotCLI,
 	}
 
 	isResidualCapable := func(agent model.AgentID) bool {
@@ -2414,6 +2415,7 @@ func TestResidualChannelAllAgents(t *testing.T) {
 		model.AgentPi,
 		model.AgentTrae,
 		model.AgentHermes,
+		model.AgentGitHubCopilotCLI,
 	}
 
 	for _, agentID := range allAgentIDs {

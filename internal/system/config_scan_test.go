@@ -86,6 +86,7 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"trae-ide":       false,
 		"hermes":         false,
 	}
+	knownAgents["github-copilot-cli"] = false
 
 	for _, c := range configs {
 		if _, known := knownAgents[c.Agent]; known {
@@ -165,6 +166,58 @@ func TestScanConfigs_IsDirectorySetForExistingDirs(t *testing.T) {
 	if !opencodeFound {
 		t.Error("ScanConfigs() missing opencode entry")
 	}
+}
+
+func TestScanConfigs_CopilotCLIAndVSCodeDoNotCollide(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".copilot"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.copilot): %v", err)
+	}
+	for _, ext := range []string{"ms-python.python", "github.copilot-chat-0.12.0"} {
+		if err := os.MkdirAll(filepath.Join(home, ".vscode", "extensions", ext), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", ext, err)
+		}
+	}
+
+	configs := ScanConfigs(home)
+	if !configStateFor(t, configs, "github-copilot-cli").Exists {
+		t.Errorf("github-copilot-cli Exists = false, want true")
+	}
+	if configStateFor(t, configs, "vscode-copilot").Exists {
+		t.Errorf("vscode-copilot Exists = true, want false for copilot-chat")
+	}
+
+	if err := os.MkdirAll(filepath.Join(home, ".vscode", "extensions", "github.copilot-1.2.3"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(github.copilot-1.2.3): %v", err)
+	}
+	if !configStateFor(t, ScanConfigs(home), "vscode-copilot").Exists {
+		t.Errorf("vscode-copilot Exists = false, want true for github.copilot-1.2.3")
+	}
+}
+
+func TestScanConfigs_UsesCopilotHome(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "custom-copilot")
+	t.Setenv("COPILOT_HOME", root)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(COPILOT_HOME): %v", err)
+	}
+
+	config := configStateFor(t, ScanConfigs(t.TempDir()), "github-copilot-cli")
+	if config.Path != root || !config.Exists || !config.IsDirectory {
+		t.Fatalf("github-copilot-cli = %+v, want path %q present directory", config, root)
+	}
+}
+
+func configStateFor(t *testing.T, configs []ConfigState, agent string) ConfigState {
+	t.Helper()
+	for _, config := range configs {
+		if config.Agent == agent {
+			return config
+		}
+	}
+	t.Fatalf("ScanConfigs() missing %s entry", agent)
+	return ConfigState{}
 }
 
 // agentNames extracts agent name strings for error messages.
