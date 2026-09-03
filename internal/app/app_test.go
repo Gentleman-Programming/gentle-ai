@@ -1599,6 +1599,7 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 }
 
 func TestRunArgs_TUIFailsClosedOnUnreadableState(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
