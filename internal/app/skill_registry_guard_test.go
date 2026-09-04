@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -182,5 +183,90 @@ func TestSkillRegistryRefreshProceedsWithProjectSkillDir(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(project, ".atl", "skill-registry.md")); statErr != nil {
 		t.Fatalf("refresh in a skills workspace must write the registry: %v", statErr)
+	}
+}
+
+// TestSkillRegistryRefreshLiteralDotCWDProceedsInGitProject proves --cwd . reaches the project refresh path.
+func TestSkillRegistryRefreshLiteralDotCWDProceedsInGitProject(t *testing.T) {
+	home := t.TempDir()
+	setFakeHome(t, home)
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+
+	var buf bytes.Buffer
+	err := runSkillRegistryRefresh([]string{"--quiet", "--no-gitignore", "--cwd", "."}, &buf)
+	if err != nil {
+		t.Fatalf("refresh --cwd . in a git project must proceed, got error: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(project, ".atl", "skill-registry.md")); statErr != nil {
+		t.Fatalf("refresh --cwd . in a git project must write the registry instead of skipping as filesystem-root: %v", statErr)
+	}
+}
+
+// TestSkillRegistryListLiteralDotCWDReportsProjectSkill proves --cwd . preserves project skill identity.
+func TestSkillRegistryListLiteralDotCWDReportsProjectSkill(t *testing.T) {
+	home := t.TempDir()
+	setFakeHome(t, home)
+	project := t.TempDir()
+	writeSkillFile(t, filepath.Join(project, "skills", "project-local", "SKILL.md"), `---
+name: project-local
+description: project skill visible from literal dot cwd
+---
+
+Use the project skill.
+`)
+	t.Chdir(project)
+
+	var buf bytes.Buffer
+	err := runSkillRegistryList([]string{"--json", "--cwd", "."}, &buf)
+	if err != nil {
+		t.Fatalf("list --json --cwd . must succeed, got error: %v", err)
+	}
+
+	var rows []struct {
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
+		Path  string `json:"path"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
+		t.Fatalf("list --json --cwd . emitted invalid JSON: %v\n%s", err, buf.String())
+	}
+	if len(rows) != 1 {
+		t.Fatalf("list --json --cwd . rows = %#v, want exactly the project skill", rows)
+	}
+	if rows[0].Name != "project-local" {
+		t.Fatalf("skill name = %q, want project-local", rows[0].Name)
+	}
+	if rows[0].Scope != "project" {
+		t.Fatalf("skill scope = %q, want project for literal --cwd .", rows[0].Scope)
+	}
+	if !filepath.IsAbs(rows[0].Path) {
+		t.Fatalf("skill path = %q, want an absolute project skill path", rows[0].Path)
+	}
+	wantPath := filepath.Join(project, "skills", "project-local", "SKILL.md")
+	gotInfo, err := os.Stat(rows[0].Path)
+	if err != nil {
+		t.Fatalf("stat skill path %q: %v", rows[0].Path, err)
+	}
+	wantInfo, err := os.Stat(wantPath)
+	if err != nil {
+		t.Fatalf("stat expected skill path %q: %v", wantPath, err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("skill path = %q, want same file as %q", rows[0].Path, wantPath)
+	}
+}
+
+// writeSkillFile writes a skill file fixture, creating parent directories as needed.
+func writeSkillFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
