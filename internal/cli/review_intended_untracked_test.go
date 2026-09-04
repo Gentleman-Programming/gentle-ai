@@ -7,11 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
+
+// reviewCapabilitySHA256Pattern is the exact wire shape a digest must match
+// per contracts/review-integration/v2/schemas/status-v5.schema.json's
+// $defs/sha256, reused by status-v7. Kept local to the test package: the
+// production schema is the sole shape authority (design decision 6), this is
+// only the test's own independent proof that the emitted value conforms.
+var reviewCapabilitySHA256Pattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func intendedUntrackedStatus(t *testing.T, repo string, args ...string) ReviewTargetStatusResult {
 	t.Helper()
@@ -166,7 +174,7 @@ func TestIntendedUntrackedSelectionSubmissionExecutesSelectedStatusThenPrintedSt
 	}
 	var selected ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &selected)
-	if selected.Schema != ReviewIntegrationStatusSchemaV6 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
+	if selected.Schema != ReviewIntegrationStatusSchemaV7 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("selected STATUS = %#v", selected)
 	}
 	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command))
@@ -365,6 +373,7 @@ func TestIntendedUntrackedRefusalsNameARunnableStatusInvocation(t *testing.T) {
 	undeclared := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "runnable-inventory-undeclared"}, &bytes.Buffer{})
 	writeUndeclaredWorkspaceFile(t, repo, "added-after-status.txt", "added\n", 0o644)
 	stale := RunReviewFacadeStart(append([]string{"--cwd", repo, "--lineage", "runnable-inventory-stale"}, intendedUntrackedSelectArgs(digest, "candidate.txt")...), &bytes.Buffer{})
+	recoveredDigests := map[string]string{}
 	for name, err := range map[string]error{"undeclared selection": undeclared, "stale inventory": stale} {
 		if err == nil || !strings.Contains(err.Error(), "--contract "+ReviewIntegrationContractV2) {
 			t.Fatalf("%s START = %v, want a refusal naming the negotiated STATUS form", name, err)
@@ -379,6 +388,109 @@ func TestIntendedUntrackedRefusalsNameARunnableStatusInvocation(t *testing.T) {
 		if runErr := RunReview(tokens, &output); runErr != nil {
 			t.Fatalf("%s refusal named `gentle-ai review %s`, which the parser refuses: %v\n%s", name, strings.Join(tokens, " "), runErr, output.String())
 		}
+		// Issue #4040: naming a command that only PARSES is not enough — the
+		// recovery route must publish a digest the same refusal's required
+		// flag actually accepts, closing the loop on retry.
+		var recovered ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &recovered)
+		if !reviewCapabilitySHA256Pattern.MatchString(recovered.EligibleUntrackedInventory) {
+			t.Fatalf("%s named recovery STATUS eligible_untracked_inventory = %q, want a sha256 digest usable on retry", name, recovered.EligibleUntrackedInventory)
+		}
+		recoveredDigests[name] = recovered.EligibleUntrackedInventory
 	}
 	assertNoUntrackedSelectionAuthority(t, repo)
+	for name, digest := range recoveredDigests {
+		retryLineage := "runnable-inventory-" + strings.ReplaceAll(name, " ", "-") + "-retry"
+		retryErr := RunReviewFacadeStart([]string{
+			"--cwd", repo, "--lineage", retryLineage,
+			"--untracked-scope=select", "--intended-untracked=candidate.txt",
+			"--expected-untracked-inventory=" + digest,
+		}, &bytes.Buffer{})
+		if retryErr != nil {
+			t.Fatalf("%s retry with the recovered digest = %v, want the named recovery route to close the loop", name, retryErr)
+		}
+	}
+}
+
+// TestEligibleUntrackedInventoryPublishedUnconditionally is design.md's R2:
+// the top-level eligible_untracked_inventory digest is present regardless of
+// declaration state or RDD mode, and equals an independently computed
+// SnapshotBuilder{Repo}.IntendedUntrackedInventory digest. R2's fifth
+// scenario, compact_reviewing, is covered by extending
+// TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope in
+// review_frozen_status_test.go rather than duplicating a frozen-authority
+// fixture here (design.md's compact_reviewer_capture_test.go:152 citation is
+// stale; the frozen status test already writes both a frozen and a live
+// untracked file).
+func TestEligibleUntrackedInventoryPublishedUnconditionally(t *testing.T) {
+	for _, scenario := range []string{"undeclared", "declared_select", "declared_exclude", "rdd_disabled"} {
+		t.Run(scenario, func(t *testing.T) {
+			var repo string
+			var status ReviewTargetStatusResult
+			switch scenario {
+			case "undeclared":
+				reviewEnabledHome(t)
+				repo = initReviewCLIRepo(t)
+				writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+				status = intendedUntrackedStatus(t, repo)
+			case "declared_select":
+				reviewEnabledHome(t)
+				repo = initReviewCLIRepo(t)
+				writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+				digest, _ := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+				status = intendedUntrackedStatus(t, repo, intendedUntrackedSelectArgs(digest, "candidate.txt")...)
+			case "declared_exclude":
+				reviewEnabledHome(t)
+				repo = initReviewCLIRepo(t)
+				writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+				digest, _ := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+				status = intendedUntrackedStatus(t, repo, "--untracked-scope=exclude", "--expected-untracked-inventory="+digest)
+			case "rdd_disabled":
+				reviewModeHome(t)
+				repo = initReviewCLIRepo(t)
+				if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+				status = intendedUntrackedStatus(t, repo)
+				if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "rdd_disabled" {
+					t.Fatalf("rdd_disabled fixture transition = %#v, want stop rdd_disabled", status.NextTransition)
+				}
+			}
+			builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+			_, wantDigest, err := builder.IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wantDigest == "" || status.EligibleUntrackedInventory != wantDigest {
+				t.Fatalf("%s eligible_untracked_inventory = %q, want independently computed %q", scenario, status.EligibleUntrackedInventory, wantDigest)
+			}
+		})
+	}
+}
+
+// TestStagedProjectionOmitsEligibleUntrackedInventoryKey is design.md's R3:
+// staged does not inspect untracked files by design, so the key must be
+// structurally absent from the serialized envelope, not present with an
+// empty value — a struct field check cannot distinguish the two and would
+// pass on the exact defect this change fixes.
+func TestStagedProjectionOmitsEligibleUntrackedInventoryKey(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc staged() {}\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--projection", "staged",
+	}, &output); err != nil {
+		t.Fatalf("staged STATUS: %v\n%s", err, output.String())
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["eligible_untracked_inventory"]; ok {
+		t.Fatalf("staged STATUS carries eligible_untracked_inventory, want the key structurally absent: %s", output.String())
+	}
 }

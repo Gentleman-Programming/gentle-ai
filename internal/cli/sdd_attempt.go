@@ -128,14 +128,29 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// may be refused before any authority exists. A settlement resolves a
 	// declaration when the caller makes one, and lets the ledger -- the only
 	// reader of what the attempt began against -- decide whether one was owed.
+	//
+	// Unlike begin/acquire, finish/settle do NOT read the workspace here: the
+	// runtime ledger already recomputes the current live inventory and
+	// performs pairing, canonicalization, freshness, and eligibility checks
+	// better than a duplicate CLI-side read could (design decision 7). Only
+	// the flag-shape is validated here, because the ledger only receives
+	// `IntendedUntracked *[]string` and cannot recover the declared mode on
+	// its own -- silently dropping it would turn `--untracked-scope=exclude
+	// --intended-untracked=x` into a select, or accept `--untracked-scope=bogus`.
 	var settlementUntracked *[]string
 	settlementInventory := ""
 	if (operation == "finish" || operation == "settle") && declaredUntracked {
-		scope, scopeErr := intendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: *cwd}, untrackedScope, intendedUntracked, expectedUntrackedInventory, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation)
-		if scopeErr != nil {
-			return scopeErr
+		if shapeErr := intendedUntrackedDeclarationShape(untrackedScope, intendedUntracked, expectedUntrackedInventory, expectedUntrackedInventory.value, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation); shapeErr != nil {
+			return shapeErr
 		}
-		settlementUntracked, settlementInventory = &scope.Intended, scope.Digest
+		switch untrackedScope.value {
+		case "exclude":
+			settlementUntracked = &[]string{}
+		case "select":
+			selected := []string(intendedUntracked)
+			settlementUntracked = &selected
+		}
+		settlementInventory = expectedUntrackedInventory.value
 	}
 	var result any
 	switch operation {

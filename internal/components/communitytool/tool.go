@@ -395,7 +395,7 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		return nil
 	}
 	supported := codeGraphSupportedAgents()
-	installed := agents.DiscoverInstalled(reg, homeDir)
+	installed := agents.DiscoverSelected(reg, homeDir)
 	installedByID := make(map[model.AgentID]string, len(installed))
 	for _, agent := range installed {
 		installedByID[agent.ID] = agent.ConfigDir
@@ -478,7 +478,7 @@ func hasDetectedCodeGraphToolWiring(homeDir string) bool {
 	if err != nil {
 		return false
 	}
-	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+	for _, installedAgent := range agents.DiscoverSelected(reg, homeDir) {
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
 			continue

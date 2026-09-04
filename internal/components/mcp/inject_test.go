@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -415,6 +416,30 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 				t.Fatal("Inject() second changed = true")
 			}
 		})
+	}
+}
+
+func TestInjectOpenCodeRejectsMalformedJSONCSettingsWithoutReplacingBytes(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	original := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.jsonc) error = %v", err)
+	}
+
+	if _, err := Inject(home, home, adapter); err == nil {
+		t.Fatal("Inject() error = nil, want refusal for malformed opencode.jsonc")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.jsonc) error = %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("malformed opencode.jsonc was replaced:\n got: %q\nwant: %q", after, original)
 	}
 }
 

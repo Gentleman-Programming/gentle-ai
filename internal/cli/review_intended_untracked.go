@@ -75,6 +75,37 @@ func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtr
 	return intendedUntrackedScopeForTarget(ctx, builder, mode, selected, expectedDigest, reviewIntendedUntrackedInventoryCommand, "gentle-ai review start")
 }
 
+// intendedUntrackedDeclarationShape validates the flag-shape of an untracked
+// declaration (a mode is present, the mode is exclude or select, exclude
+// takes no selected paths, select takes at least one) without reading the
+// workspace. It is the sole shape authority shared by the pre-attempt scope
+// builder and the finish/settle settlement path (design decision 7): the
+// runtime ledger already performs the workspace-dependent pairing,
+// canonicalization, freshness, and eligibility checks, and does so better
+// than a duplicate CLI-side workspace read could.
+func intendedUntrackedDeclarationShape(mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag, digest, inventoryCommand, selectionCommand string) error {
+	if !mode.set || !expectedDigest.set {
+		// refusal:by-design operator-knowledge: only the caller can choose whether to exclude or select the current untracked population.
+		return fmt.Errorf("untracked selection requires --untracked-scope and --expected-untracked-inventory; run `%s` to obtain the canonical inventory, then rerun `%s`", inventoryCommand, selectionCommand)
+	}
+	switch mode.value {
+	case "exclude":
+		if len(selected) != 0 {
+			// refusal:by-design operator-knowledge: only the caller can decide whether the named paths should be selected or the population excluded.
+			return fmt.Errorf("--untracked-scope=exclude does not accept --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=select`", inventoryCommand, selectionCommand)
+		}
+	case "select":
+		if len(selected) == 0 {
+			// refusal:by-design operator-knowledge: only the caller knows which eligible paths it intends to include.
+			return fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s`", inventoryCommand, selectionCommand, digest)
+		}
+	default:
+		// refusal:by-design operator-knowledge: only the caller can choose the intended selection mode for its workspace.
+		return fmt.Errorf("--untracked-scope must be exclude or select, got %q; run `%s` to obtain the canonical inventory, then rerun `%s`", mode.value, inventoryCommand, selectionCommand)
+	}
+	return nil
+}
+
 func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, expectedDigest reviewSingleValueFlag, inventoryCommand, selectionCommand string) (reviewIntendedUntrackedScope, error) {
 	inventory, digest, err := builder.IntendedUntrackedInventory(ctx)
 	if err != nil {
@@ -88,24 +119,8 @@ func intendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransact
 		scope.NeedsSelection = true
 		return scope, nil
 	}
-	if !mode.set || !expectedDigest.set {
-		// refusal:by-design operator-knowledge: only the caller can choose whether to exclude or select the current untracked population.
-		return reviewIntendedUntrackedScope{}, fmt.Errorf("untracked selection requires --untracked-scope and --expected-untracked-inventory; run `%s` to obtain the canonical inventory, then rerun `%s`", inventoryCommand, selectionCommand)
-	}
-	switch mode.value {
-	case "exclude":
-		if len(selected) != 0 {
-			// refusal:by-design operator-knowledge: only the caller can decide whether the named paths should be selected or the population excluded.
-			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=exclude does not accept --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=select`", inventoryCommand, selectionCommand)
-		}
-	case "select":
-		if len(selected) == 0 {
-			// refusal:by-design operator-knowledge: only the caller knows which eligible paths it intends to include.
-			return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope=select requires at least one --intended-untracked; run `%s` to refresh the canonical inventory, then rerun `%s --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s`", inventoryCommand, selectionCommand, digest)
-		}
-	default:
-		// refusal:by-design operator-knowledge: only the caller can choose the intended selection mode for its workspace.
-		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q; run `%s` to obtain the canonical inventory, then rerun `%s`", mode.value, inventoryCommand, selectionCommand)
+	if err := intendedUntrackedDeclarationShape(mode, selected, expectedDigest, digest, inventoryCommand, selectionCommand); err != nil {
+		return reviewIntendedUntrackedScope{}, err
 	}
 	intended, err := builder.ValidateIntendedUntrackedSelection(ctx, expectedDigest.value, selected)
 	if err != nil {

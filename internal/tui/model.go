@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
@@ -121,6 +122,22 @@ var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
 }
 var removeProfileAgentsFn = sdd.RemoveProfileAgents
 var discoverCodexModels = model.DiscoverCodexModels
+
+func currentOpenCodeSettingsPath() string {
+	projectDir, err := modelPickerWorkingDir()
+	if err != nil {
+		return modelPickerSettingsPath()
+	}
+	if snapshot, err := opencode.ResolveEffectiveConfig(projectDir); err == nil {
+		if snapshot.Path != "" {
+			return snapshot.Path
+		}
+		if snapshot.WritePath != "" {
+			return snapshot.WritePath
+		}
+	}
+	return modelPickerSettingsPath()
+}
 
 func sanitizeKnownModelEfforts(assignments map[string]model.ModelAssignment, sddModels map[string][]opencode.Model) map[string]model.ModelAssignment {
 	if assignments == nil {
@@ -1186,7 +1203,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Refresh profile list after sync (profile create/delete/edit flows use sync).
 		// On failure, keep the existing list — this is a non-critical background refresh.
 		// Do NOT set m.Err: ScreenSync never renders it and it would leak to other screens.
-		if profiles, err := readProfilesFn(opencode.DefaultSettingsPath()); err == nil {
+		if profiles, err := readProfilesFn(currentOpenCodeSettingsPath()); err == nil {
 			m.ProfileList = profiles
 			// Clamp cursor to avoid out-of-bounds access when list shrinks after a delete.
 			if m.Cursor >= len(m.ProfileList) {
@@ -2295,7 +2312,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenProfileDelete:
 		switch m.Cursor {
 		case 0: // "Delete & Sync"
-			if err := removeProfileAgentsFn(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
+			if err := removeProfileAgentsFn(currentOpenCodeSettingsPath(), m.ProfileDeleteTarget); err != nil {
 				// Store the error so it can be displayed on ScreenProfiles.
 				m.ProfileDeleteErr = err
 				m.setScreen(ScreenProfiles)
@@ -2325,7 +2342,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// Only when there are no in-session assignments yet — the nil guard
 			// ensures we don't overwrite changes the user already made this session.
 			if m.Selection.ModelAssignments == nil {
-				settingsPath := opencode.DefaultSettingsPath()
+				settingsPath := currentOpenCodeSettingsPath()
 				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
 					// Sanitize loaded assignments: clear any stale effort values for
 					// models that no longer report variants (e.g. provider refreshed
@@ -3494,7 +3511,7 @@ func (m *Model) refreshUninstallProfiles() {
 		return
 	}
 
-	profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+	profiles, err := readProfilesFn(currentOpenCodeSettingsPath())
 	if err != nil {
 		m.UninstallProfilesAvailable = nil
 		m.UninstallProfilesToRemove = nil
@@ -3958,7 +3975,7 @@ func (m *Model) setScreen(next Screen) {
 	}
 	if next == ScreenProfiles {
 		// Refresh on entry without replacing valid data with an empty error state.
-		profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+		profiles, err := readProfilesFn(currentOpenCodeSettingsPath())
 		if err != nil {
 			m.Err = err
 			m.ProfileDeleteErr = err
@@ -4655,29 +4672,20 @@ func (m *Model) buildDependencyPlan() {
 }
 
 // agentsToManage returns the canonical list of agents gentle-ai should manage.
-//
-// Priority:
-//  1. state.InstalledAgents is non-empty → use those (persisted user selection).
-//  2. detectedIDs is non-empty          → use those (filesystem detection fallback).
-//  3. Both empty                         → return all catalog agents (first-time install default).
-//
-// This is the single source of truth for both the TUI pre-selection and the
-// pre-upgrade backup scope. It ensures that a user who deliberately un-selected
-// an agent in the TUI does not see it re-selected or backed-up on the next run.
+// A persisted selection is authoritative, including a deliberately configured
+// empty selection. Only state without an install selection falls back to detected
+// agents, then to the first-install catalog default.
 func agentsToManage(installState state.InstallState, detectedIDs []model.AgentID) []model.AgentID {
-	if len(installState.InstalledAgents) > 0 {
-		ids := make([]model.AgentID, 0, len(installState.InstalledAgents))
-		for _, a := range installState.InstalledAgents {
-			ids = append(ids, model.AgentID(a))
-		}
-		return ids
+	scope := agents.SelectionScopeFromInstallState(installState)
+	if scope.Mode == agents.SelectionScopeConfigured {
+		return scope.AgentIDs
 	}
 	if len(detectedIDs) > 0 {
 		return detectedIDs
 	}
-	agents := catalog.AllAgents()
-	all := make([]model.AgentID, 0, len(agents))
-	for _, agent := range agents {
+	catalogAgents := catalog.AllAgents()
+	all := make([]model.AgentID, 0, len(catalogAgents))
+	for _, agent := range catalogAgents {
 		all = append(all, agent.ID)
 	}
 	return all
@@ -4949,14 +4957,26 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 func (m *Model) initializeModelPicker() tea.Cmd {
 	m.runtimeCatalogDiscoveryRequest++
 	requestID := m.runtimeCatalogDiscoveryRequest
-	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
 	projectDir, err := modelPickerWorkingDir()
 	if err != nil {
+		m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(modelPickerSettingsPath(), modelPickerCatalogDiscoverer)
 		m.ModelPicker.CatalogRequestID = requestID
 		return func() tea.Msg {
 			return screens.RuntimeCatalogDiscoveryMsg{RequestID: requestID, Err: errors.New("working directory unavailable")}
 		}
 	}
+	settingsPath := modelPickerSettingsPath()
+	var configuredProviders map[string]opencode.Provider
+	if snapshot, err := opencode.ResolveEffectiveConfig(projectDir); err == nil {
+		configuredProviders = snapshot.Providers
+		if snapshot.Path != "" {
+			settingsPath = snapshot.Path
+		} else if snapshot.WritePath != "" {
+			settingsPath = snapshot.WritePath
+		}
+	}
+	m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(settingsPath, modelPickerCatalogDiscoverer)
+	m.ModelPicker.ConfiguredProviders = configuredProviders
 	return m.ModelPicker.StartRuntimeCatalogDiscovery(requestID, projectDir)
 }
 

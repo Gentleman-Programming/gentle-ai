@@ -28,6 +28,9 @@ type InjectionResult struct {
 
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
+	// OpenCodeSettingsPath is the resolver-selected effective config path. When
+	// empty, injection preserves the adapter's global-path fallback.
+	OpenCodeSettingsPath string
 	// IncludeOpenCodeBackgroundPolicy includes the resolved OpenCode-only
 	// background-task policy in rendered prompts. The zero value is false. The
 	// caller MUST set this only after a later intent/capability resolution step;
@@ -382,18 +385,18 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if err := validateOpenClawWorkspacePath(homeDir, adapter); err != nil {
 		return InjectionResult{}, err
 	}
-	var defaultPlan *opencodedefault.InstallPlan
-	if adapter.Agent() == model.AgentOpenCode {
-		var err error
-		defaultPlan, err = opencodedefault.PrepareInstall(adapter.SettingsPath(homeDir))
-		if err != nil {
-			return InjectionResult{}, err
-		}
-	}
-
 	var opts InjectOptions
 	if len(options) > 0 {
 		opts = options[0]
+	}
+	settingsPath := openCodeSettingsPath(homeDir, adapter, opts.OpenCodeSettingsPath)
+	var defaultPlan *opencodedefault.InstallPlan
+	if adapter.Agent() == model.AgentOpenCode {
+		var err error
+		defaultPlan, err = opencodedefault.PrepareInstall(settingsPath)
+		if err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	files := make([]string, 0)
@@ -544,7 +547,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
@@ -854,7 +856,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// opposite failure mode can also occur (in-memory buffer stale but
 	// disk has the correct content).
 	if adapter.Agent() == model.AgentOpenCode {
-		settingsPath := adapter.SettingsPath(homeDir)
 		settingsText := string(mergedSettingsBytes)
 
 		// Fallback: if in-memory bytes are empty but the merge succeeded
@@ -928,6 +929,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func openCodeSettingsPath(homeDir string, adapter agents.Adapter, effectivePath string) string {
+	if effectivePath != "" {
+		return effectivePath
+	}
+	return adapter.SettingsPath(homeDir)
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -1672,8 +1680,10 @@ func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
 	}
 
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(data); err != nil {
 		return "", nil
+	} else {
+		root = parsedRoot
 	}
 
 	agentsRaw, ok := root["agent"]
@@ -1710,8 +1720,10 @@ func readMisnamedOpenCodeGentlemanSDDPrompt(settingsPath string) (string, error)
 	}
 
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(data); err != nil {
 		return "", nil
+	} else {
+		root = parsedRoot
 	}
 	agentsRaw, ok := root["agent"]
 	if !ok {
@@ -2293,7 +2305,9 @@ func readAndMigrateOpenCodeCompatibleJSON(path string) ([]byte, error) {
 }
 
 func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResult, error) {
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	var merged []byte
+	var err error
+	merged, err = filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
@@ -2381,8 +2395,8 @@ func openCodeSettingsHasShare(settingsPath string) bool {
 		return false
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(content, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
 		return false
 	}
 	_, exists := root["share"]
@@ -2403,8 +2417,10 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(baseJSON); err != nil {
 		return baseJSON, nil
+	} else {
+		root = parsedRoot
 	}
 
 	agentsRaw, ok := root["agent"]
@@ -2435,11 +2451,11 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 		delete(agentsMap, "gentleman")
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agentsMap}})
 	if err != nil {
 		return nil, err
 	}
-	return append(encoded, '\n'), nil
+	return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
 }
 
 func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
@@ -2471,8 +2487,8 @@ func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
 }
 
 func hasOpenCodeAgentKey(settingsText, agentKey string) bool {
-	root := map[string]any{}
-	if err := json.Unmarshal([]byte(settingsText), &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject([]byte(settingsText))
+	if err != nil {
 		return false
 	}
 	agentsRaw, ok := root["agent"]
@@ -2496,9 +2512,11 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(baseJSON); err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
+	} else {
+		root = parsedRoot
 	}
 
 	legacyRaw, hasLegacy := root["agents"]
@@ -2508,12 +2526,7 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 
 	legacy, ok := legacyRaw.(map[string]any)
 	if !ok {
-		delete(root, "agents")
-		encoded, err := json.MarshalIndent(root, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		return append(encoded, '\n'), nil
+		return filemerge.RemoveTopLevelJSONCValue(baseJSON, "agents"), nil
 	}
 
 	current := map[string]any{}
@@ -2532,12 +2545,15 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	root["agent"] = current
 	delete(root, "agents")
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": current}})
 	if err != nil {
 		return nil, err
 	}
-
-	return append(encoded, '\n'), nil
+	updated, err := filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
+	if err != nil {
+		return nil, err
+	}
+	return filemerge.RemoveTopLevelJSONCValue(updated, "agents"), nil
 }
 
 // migrateLegacyOpenCodeCommandPrompt normalizes inline OpenCode command entries
@@ -2554,8 +2570,8 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}
@@ -2588,12 +2604,11 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"command": map[string]any{"__replace__": commandsRaw}})
 	if err != nil {
 		return nil, err
 	}
-
-	return append(encoded, '\n'), nil
+	return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
 }
 
 // sddOrchestratorMarkers are used to detect if SDD content was already injected
@@ -3242,8 +3257,8 @@ func readOpenCodeRootModel(path string) (string, error) {
 		return "", fmt.Errorf("read opencode root model from %q: %w", path, err)
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return "", nil
 	}
 
@@ -3264,8 +3279,8 @@ func readExistingAgentModels(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("read existing agent keys from %q: %w", path, err)
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return map[string]bool{}, nil
 	}
 

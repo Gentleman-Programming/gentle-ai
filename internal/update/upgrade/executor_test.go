@@ -1559,6 +1559,39 @@ func TestConfigPathsForBackup_EmptyStateAgentsFallsBackToFilesystem(t *testing.T
 	}
 }
 
+func TestConfigPathsForBackup_ConfiguredEmptySelectionExcludesDetectedAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	claudeSettings := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(claudeSettings), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(claudeSettings), err)
+	}
+	if err := os.WriteFile(claudeSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", claudeSettings, err)
+	}
+	if err := state.Write(homeDir, state.InstallState{SelectionConfigured: true}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("agents.NewDefaultRegistry: %v", err)
+	}
+	claudeAdapter, ok := reg.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("default registry does not contain Claude Code")
+	}
+
+	actual := make(map[string]struct{})
+	for _, path := range configPathsForBackup(homeDir) {
+		actual[path] = struct{}{}
+	}
+	for _, path := range managedAgentBackupPaths(homeDir, claudeAdapter, &bytes.Buffer{}) {
+		if _, found := actual[path]; found {
+			t.Errorf("configPathsForBackup() included Claude-managed path %q for a configured empty selection", path)
+		}
+	}
+}
+
 func mockCmd(name string, args ...string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		if name == "echo" {

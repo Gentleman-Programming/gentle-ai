@@ -24,6 +24,14 @@ type statusEnvelope struct {
 	// journey assertions and must never be used to reconstruct that binding.
 	rawJSON string
 
+	Schema string `json:"schema"`
+	// EligibleUntrackedInventory is issue #4040's fix: the canonical
+	// untracked-inventory digest published unconditionally at the STATUS
+	// top level (design decision 2), distinct from the same digest embedded
+	// inside NextTransition.Collect.Inputs[].Arguments, which only appears
+	// while a selection is still undeclared.
+	EligibleUntrackedInventory string `json:"eligible_untracked_inventory"`
+
 	Authority struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
@@ -833,6 +841,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue3842Journeys()...)
 	journeys = append(journeys, handoffJourneys()...)
 	journeys = append(journeys, stopHookJourneys()...)
+	journeys = append(journeys, untrackedInventoryRecoveryLoopJourneys()...)
 	journeys = removeRetiredAtomicJourneys(journeys)
 	return declareCoreJourneyReviewModes(journeys)
 }

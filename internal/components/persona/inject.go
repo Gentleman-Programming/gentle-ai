@@ -590,7 +590,7 @@ func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (fi
 		}
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}

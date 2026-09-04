@@ -171,8 +171,8 @@ func TestV2TransitionSchemasAcceptProviderPayloadsAndRejectDrift(t *testing.T) {
 	}, &statusOutput); err != nil {
 		t.Fatalf("approved STATUS: %v\n%s", err, statusOutput.String())
 	}
-	statusV5Schema := compileWholeNativeStatusSchema(t, "status-v5.schema.json")
-	validatePublishedReviewSchema(t, statusV5Schema, statusOutput.Bytes())
+	statusV7Schema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+	validatePublishedReviewSchema(t, statusV7Schema, statusOutput.Bytes())
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
 	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.ReasonCode != "approved_acknowledgement_required" {

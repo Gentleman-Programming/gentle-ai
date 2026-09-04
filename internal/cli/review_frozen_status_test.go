@@ -83,6 +83,53 @@ func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {
 		status.NextTransition == nil || status.NextTransition.ReasonCode != "reviewer_results_required" {
 		t.Fatalf("explicit frozen untracked status = %#v", status)
 	}
+	// design.md R2 (compact_reviewing scenario): the compact-reviewing
+	// replacement at review_facade.go:917-924 deliberately zeros the frozen
+	// scope's Digest (the #1972 fail-closed recover read), but
+	// EligibleUntrackedInventory is assigned before that replacement runs, so
+	// it still carries the live workspace digest — not the frozen scope's
+	// empty one, and not zeroed by the replacement.
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	_, wantDigest, err := builder.IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantDigest == "" || status.EligibleUntrackedInventory != wantDigest {
+		t.Fatalf("explicit frozen untracked status eligible_untracked_inventory = %q, want independently computed live digest %q", status.EligibleUntrackedInventory, wantDigest)
+	}
+}
+
+func TestExplicitFrozenTerminalStatusRestoresUntrackedScope(t *testing.T) {
+	repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
+	captureFrozenReviewerResults(t, repo, record, len(record.State.SelectedLenses))
+	pending, err := store.Load()
+	if err != nil {
+		t.Fatalf("load approved pending authority: %v", err)
+	}
+	if pending.State.State != reviewtransaction.StateApproved {
+		t.Fatalf("terminal authority state = %q, want approved", pending.State.State)
+	}
+
+	status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+	if status.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		status.Projection.Kind != reviewtransaction.TargetCurrentChanges ||
+		status.Projection.Projection != reviewtransaction.ProjectionWorkspace ||
+		!reflect.DeepEqual(status.Projection.IntendedUntracked, record.State.InitialSnapshot.IntendedUntracked) ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+		status.NextTransition.ReasonCode != "approved_acknowledgement_required" {
+		t.Fatalf("explicit terminal STATUS = %#v", status)
+	}
+	assertApprovedAcknowledgementTransition(t, status.NextTransition.Execute, repo, record.State.LineageID,
+		record.State.InitialSnapshot.Identity, pending.Revision)
+
+	writeUndeclaredWorkspaceFile(t, repo, "frozen-untracked.txt", "changed selected bytes\n", 0o644)
+	changed := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+	live := explicitFrozenReviewingStatus(t, repo, "")
+	if changed.TargetIdentity == record.State.InitialSnapshot.Identity ||
+		changed.TargetIdentity != live.TargetIdentity ||
+		changed.NextTransition == nil || changed.NextTransition.ReasonCode == "approved_acknowledgement_required" {
+		t.Fatalf("changed selected bytes reused terminal scope: changed=%#v live=%#v", changed, live)
+	}
 }
 
 func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t *testing.T) {

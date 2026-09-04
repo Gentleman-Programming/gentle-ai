@@ -27,8 +27,10 @@ const ReviewIntegrationStatusSchemaV5 = "gentle-ai.review-integration.status/v5"
 const ReviewIntegrationStatusSchemaIDV5 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v5.schema.json"
 const ReviewIntegrationStatusSchemaV6 = "gentle-ai.review-integration.status/v6"
 const ReviewIntegrationStatusSchemaIDV6 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v6.schema.json"
-const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV5
-const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV5
+const ReviewIntegrationStatusSchemaV7 = "gentle-ai.review-integration.status/v7"
+const ReviewIntegrationStatusSchemaIDV7 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v7.schema.json"
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV7
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV7
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -61,13 +63,26 @@ type ReviewTargetStatusResult struct {
 	// ActionDisposition names the provider recovery class accepted by the
 	// selected action. Recovery remains target-scoped and independent from
 	// terminal capture closure.
-	ActionDisposition       reviewtransaction.RecoveryDisposition       `json:"action_disposition,omitempty"`
-	Replayability           reviewtransaction.Replayability             `json:"replayability"`
-	Frozen                  *ReviewTargetStatusFrozen                   `json:"frozen,omitempty"`
-	TargetIdentity          string                                      `json:"target_identity"`
-	AuthorityTargetIdentity string                                      `json:"authority_target_identity,omitempty"`
-	Projection              ReviewTargetStatusProjection                `json:"projection"`
-	Repair                  reviewtransaction.AuthorityRepairAssessment `json:"repair"`
+	ActionDisposition       reviewtransaction.RecoveryDisposition `json:"action_disposition,omitempty"`
+	Replayability           reviewtransaction.Replayability       `json:"replayability"`
+	Frozen                  *ReviewTargetStatusFrozen             `json:"frozen,omitempty"`
+	TargetIdentity          string                                `json:"target_identity"`
+	AuthorityTargetIdentity string                                `json:"authority_target_identity,omitempty"`
+	Projection              ReviewTargetStatusProjection          `json:"projection"`
+	// EligibleUntrackedInventory is the canonical digest
+	// intendedUntrackedScopeForTarget already computes over the live
+	// workspace's eligible untracked population, published unconditionally
+	// on every projection that inspects untracked files (issue #4040): a
+	// refusal that names this STATUS as its recovery route always yields a
+	// usable value. The `staged` projection does not inspect untracked
+	// files, so it leaves this at its zero value and `omitempty` drops the
+	// key entirely — absence means "not applicable", not "checked, found
+	// none". This is a top-level fact about what the live workspace could
+	// have included; it lives outside Projection (a record of the frozen
+	// candidate) because ReviewTargetStatusProjection serializes through the
+	// shared, multi-version projection.schema.json.
+	EligibleUntrackedInventory string                                      `json:"eligible_untracked_inventory,omitempty"`
+	Repair                     reviewtransaction.AuthorityRepairAssessment `json:"repair"`
 	// Disposition is Wave 6's negotiated-route provider preview (rdd-closure-
 	// disposition-execution / "Reachable Through the Negotiated Transition
 	// Route"): populated only when Repair is not eligible but a closed
@@ -296,7 +311,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 
 func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -523,7 +538,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	for _, input := range transition.Collect.Inputs {
@@ -533,7 +548,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			}
 			continue
 		}
-		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 {
+		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 {
 			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
 		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
@@ -653,7 +668,7 @@ func validateReviewProviderTaskInput(input ReviewTransitionInput, arguments map[
 }
 
 func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
-	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6) || result.Authority == nil || result.ValidationRequest == nil ||
+	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7) || result.Authority == nil || result.ValidationRequest == nil ||
 		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
 		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
@@ -780,10 +795,18 @@ func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransit
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	input := result.NextTransition.Collect.Inputs[0]
+	// The submission rule is stated on submission validity, not on an
+	// explicit per-version equality check, so it holds for v7 without a new
+	// branch: v5 forbids a submission descriptor, v6 requires one (and it
+	// must validate), and v7's next_transition admits both shapes (submission
+	// optional) — a v7 envelope satisfies both legs simply by having neither
+	// requirement force it either way.
+	submissionInvalidWhenPresent := input.Submission != nil && input.Submission.Validate() != nil
+	v5ForbidsSubmission := result.Schema == ReviewIntegrationStatusSchemaV5 && input.Submission != nil
+	v6RequiresSubmission := result.Schema == ReviewIntegrationStatusSchemaV6 && input.Submission == nil
 	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema ||
 		input.CaptureOperation != "external.select_intended_untracked" || len(input.Arguments) != 6 ||
-		(result.Schema == ReviewIntegrationStatusSchemaV5) != (input.Submission == nil) ||
-		(result.Schema == ReviewIntegrationStatusSchemaV6 && (input.Submission == nil || input.Submission.Validate() != nil)) {
+		submissionInvalidWhenPresent || v5ForbidsSubmission || v6RequiresSubmission {
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||

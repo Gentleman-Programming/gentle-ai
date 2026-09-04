@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v7.schema.json",
+  "title": "Gentle AI Review Integration native Git target status v7",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "applicability", "action", "replayability",
+    "target_identity", "projection", "repair", "candidates"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.status/v7"},
+    "contract": {"$ref": "status-v5.schema.json#/properties/contract"}, "operation": {"$ref": "status-v5.schema.json#/properties/operation"},
+    "applicability": {"$ref": "status-v5.schema.json#/properties/applicability"}, "authority": {"$ref": "status-v5.schema.json#/properties/authority"},
+    "action": {"$ref": "status-v5.schema.json#/properties/action"}, "action_disposition": {"$ref": "status-v5.schema.json#/properties/action_disposition"},
+    "replayability": {"$ref": "status-v5.schema.json#/properties/replayability"}, "frozen": {"$ref": "status-v5.schema.json#/properties/frozen"},
+    "target_identity": {"$ref": "status-v5.schema.json#/properties/target_identity"}, "authority_target_identity": {"$ref": "status-v5.schema.json#/properties/authority_target_identity"},
+    "projection": {"$ref": "status-v5.schema.json#/properties/projection"}, "repair": {"$ref": "status-v5.schema.json#/properties/repair"},
+    "candidates": {"$ref": "status-v5.schema.json#/properties/candidates"}, "reconciliation": {"$ref": "status-v5.schema.json#/properties/reconciliation"},
+    "eligibility": {"$ref": "status-v5.schema.json#/properties/eligibility"}, "forecast": {"$ref": "status-v5.schema.json#/properties/forecast"},
+    "next_transition": {"$ref": "#/$defs/next_transition"}, "validation_request": {"$ref": "status-v5.schema.json#/properties/validation_request"},
+    "repository_context": {"$ref": "status-v5.schema.json#/properties/repository_context"}, "disposition": {"$ref": "status-v5.schema.json#/properties/disposition"},
+    "eligible_untracked_inventory": {"$ref": "status-v5.schema.json#/$defs/sha256"}
+  },
+  "dependentRequired": {"forecast": ["next_transition"]},
+  "$defs": {
+    "next_transition": {"oneOf": [
+      {"allOf": [
+        {"$ref": "status-v5.schema.json#/$defs/next_transition"},
+        {"not": {"properties": {"reason_code": {"const": "intended_untracked_selection_required"}}, "required": ["reason_code"]}}
+      ]},
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
+        "properties": {
+          "kind": {"const": "collect"},
+          "reason_code": {"const": "intended_untracked_selection_required"},
+          "collect": {
+            "type": "object", "additionalProperties": false, "required": ["inputs"],
+            "properties": {"inputs": {
+              "type": "array", "minItems": 1, "maxItems": 1,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["name", "schema", "capture_operation", "arguments"],
+                "properties": {
+                  "name": {"const": "intended_untracked_selection"},
+                  "schema": {"const": "gentle-ai.review-intended-untracked-selection/v1"},
+                  "capture_operation": {"const": "external.select_intended_untracked"},
+                  "arguments": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [
+                    {"$ref": "status-v6.schema.json#/$defs/contract_argument"}, {"$ref": "status-v6.schema.json#/$defs/next_transition_argument"},
+                    {"$ref": "status-v6.schema.json#/$defs/agent_argument"}, {"$ref": "status-v6.schema.json#/$defs/workspace_projection_argument"},
+                    {"$ref": "status-v6.schema.json#/$defs/eligible_paths_argument"}, {"$ref": "status-v6.schema.json#/$defs/untracked_inventory_argument"}
+                  ], "items": false},
+                  "submission": {"$ref": "status-v6.schema.json#/$defs/intended_untracked_submission"}
+                }
+              }
+            }}
+          }
+        }
+      }
+    ]}
+  },
+  "allOf": [
+    {"$ref": "status-v5.schema.json#/allOf/0"}, {"$ref": "status-v5.schema.json#/allOf/1"},
+    {"$ref": "status-v5.schema.json#/allOf/2"}, {"$ref": "status-v5.schema.json#/allOf/3"},
+    {"$ref": "status-v5.schema.json#/allOf/4"}
+  ]
+}

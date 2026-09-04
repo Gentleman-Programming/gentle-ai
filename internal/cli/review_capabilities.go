@@ -40,6 +40,8 @@ const ReviewIntegrationCapabilitiesSchemaV23 = "gentle-ai.review-integration.cap
 const ReviewIntegrationCapabilitiesSchemaIDV23 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.3.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV24 = "gentle-ai.review-integration.capabilities/v2.4"
 const ReviewIntegrationCapabilitiesSchemaIDV24 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.4.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV25 = "gentle-ai.review-integration.capabilities/v2.5"
+const ReviewIntegrationCapabilitiesSchemaIDV25 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.5.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -287,8 +289,8 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV24, ReviewIntegrationContractV2
-		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 4}
+		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV25, ReviewIntegrationContractV2
+		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 5}
 		for index, schema := range result.Schemas {
 			switch schema {
 			case reviewtransaction.AdmittedReviewerResultSchemaV1:
@@ -296,7 +298,7 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			case reviewtransaction.ArtifactSubjectSchemaV1:
 				result.Schemas[index] = reviewtransaction.ArtifactSubjectSchema
 			case ReviewIntegrationCapabilitiesSchema:
-				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV24
+				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV25
 			case ReviewIntegrationFailureSchema:
 				result.Schemas[index] = ReviewIntegrationFailureSchemaV2
 			case ReviewIntegrationConsentSchema:
@@ -311,7 +313,9 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 				result.Schemas[index] = ReviewIntegrationStatusSchemaV5
 			}
 		}
-		result.Schemas = append(result.Schemas, ReviewIntegrationStatusSchemaV6, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema)
+		// issue #4040: status/v7 publishes eligible_untracked_inventory
+		// unconditionally at the STATUS top level (design decision 5).
+		result.Schemas = append(result.Schemas, ReviewIntegrationStatusSchemaV6, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema, ReviewIntegrationStatusSchemaV7)
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_bound_native_git_context", Supported: true,
 			Requires: []string{"native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"},

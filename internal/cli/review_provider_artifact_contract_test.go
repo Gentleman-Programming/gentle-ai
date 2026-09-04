@@ -211,6 +211,28 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	}
 }
 
+// TestReviewProviderArtifactStatusV7ContractsArePinned pins the schemas issue
+// #4040's fix first published: status/v7, which publishes
+// eligible_untracked_inventory unconditionally at the top level, and
+// capabilities-v2.5, which advertises status/v7 (design decision 5).
+func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"schemas/status-v7.schema.json":         "5a5e4a7052689f97767d02625ad7572628cc4d5a62677497f569fb2d78608aa2",
+		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
 func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas")
 	tests := []struct {
@@ -315,11 +337,13 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaIDV4},
 		{name: "status-v5.schema.json", id: ReviewIntegrationStatusSchemaIDV5},
 		{name: "status-v6.schema.json", id: ReviewIntegrationStatusSchemaIDV6},
+		{name: "status-v7.schema.json", id: ReviewIntegrationStatusSchemaIDV7},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
 		{name: "capabilities-v2.3.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV23},
 		{name: "capabilities-v2.4.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV24},
+		{name: "capabilities-v2.5.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV25},
 		{name: "intended-untracked-selection.schema.json", id: reviewIntendedUntrackedSelectionSchema},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
