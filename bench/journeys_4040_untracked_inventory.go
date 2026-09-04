@@ -22,10 +22,10 @@ var sdd4040FinishCapability = &Capability{
 var untrackedRecoveryLoopDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // untrackedRecoveryLoopStatusRoute is the recovery route the refusals name.
-const untrackedRecoveryLoopStatusRoute = "gentle-ai review status --next-transition"
+const untrackedRecoveryLoopStatusRoute = "--untracked-scope"
 
 // driveUntrackedInventoryRecoveryLoop reproduces issue #4040. Refusals from
-// intendedUntrackedScopeForTarget and the runtime ledger name
+// historical untracked scope handling required callers to query
 // `gentle-ai review status --next-transition` as the recovery route for the
 // digest they demand, but before this fix that route only ever published the
 // digest inside next_transition.collect.inputs[].arguments -- a slot that
@@ -51,8 +51,7 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 
 	// #4040's entry point, driven before the recovery route is read: a
 	// settlement that declares nothing must refuse, and the refusal must be
-	// the ledger's -- the one that names the unaccounted candidate and the
-	// exact rerun flags. Before Fix B the finish/settle CLI preflight refused
+	// native CLI's scope guidance and current inventory digest, without candidate disclosure. Before Fix B the finish/settle CLI preflight refused
 	// first with a message naming no digest at all, hiding this one. Reading
 	// STATUS without first proving this refusal would still pass if the
 	// product stopped demanding a declaration.
@@ -64,9 +63,8 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 	if undeclared.ExitCode == 0 {
 		return fmt.Errorf("#4040 undeclared finish accepted an unaccounted untracked candidate; it must refuse")
 	}
-	if !strings.Contains(undeclared.Stderr, untrackedRecoveryLoopCandidatePath) ||
-		!strings.Contains(undeclared.Stderr, "--expected-untracked-inventory=") {
-		return fmt.Errorf("#4040 undeclared finish refusal named neither the candidate nor the exact rerun: %s", firstLine(undeclared.Stderr))
+	if strings.Contains(undeclared.Stderr, untrackedRecoveryLoopCandidatePath) || !strings.Contains(undeclared.Stderr, untrackedRecoveryLoopStatusRoute) || !regexp.MustCompile(`--expected-untracked-inventory=sha256:[0-9a-f]{64}`).MatchString(undeclared.Stderr) {
+		return fmt.Errorf("#4040 undeclared finish refusal did not provide scope guidance and inventory without candidate disclosure: %s", firstLine(undeclared.Stderr))
 	}
 
 	// Read the recovery route while the file exists, then remove it before the
@@ -109,7 +107,7 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 	if !strings.Contains(stale.Stderr, untrackedRecoveryLoopStatusRoute) ||
 		!strings.Contains(stale.Stderr, refreshed.EligibleUntrackedInventory) ||
 		!strings.Contains(stale.Stderr, "--expected-untracked-inventory="+refreshed.EligibleUntrackedInventory) {
-		return fmt.Errorf("#4040 stale-digest refusal did not disclose recovery route and current digest: %s", firstLine(stale.Stderr))
+		return fmt.Errorf("#4040 stale-digest refusal did not provide scope guidance and current digest: %s", firstLine(stale.Stderr))
 	}
 	if status, err = readRuntimeStatus(r); err != nil || status.ActiveAttempt == nil {
 		return fmt.Errorf("#4040 stale-digest refusal did not preserve the active attempt: status=%#v err=%v", status, err)
@@ -121,8 +119,8 @@ func driveUntrackedInventoryRecoveryLoop(r *journeyRun) error {
 			"--intended-untracked", untrackedRecoveryLoopCandidatePath,
 			"--expected-untracked-inventory", refreshed.EligibleUntrackedInventory,
 		}, sddTerminalEvidence...)...), false)
-	if deleted.ExitCode == 0 || !strings.Contains(deleted.Stderr, untrackedRecoveryLoopCandidatePath) {
-		return fmt.Errorf("#4040 deleted-file selection did not refuse with its ineligible path: %s", firstLine(deleted.Stderr))
+	if deleted.ExitCode == 0 || !strings.Contains(deleted.Stderr, untrackedRecoveryLoopStatusRoute) {
+		return fmt.Errorf("#4040 deleted-file selection did not provide scope guidance: %s", firstLine(deleted.Stderr))
 	}
 	if status, err = readRuntimeStatus(r); err != nil || status.ActiveAttempt == nil {
 		return fmt.Errorf("#4040 deleted-file selection did not preserve the active attempt: status=%#v err=%v", status, err)
