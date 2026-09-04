@@ -4937,6 +4937,221 @@ func TestModelConfigOpenCodeNoPrePopulationWhenFileEmpty(t *testing.T) {
 	}
 }
 
+// ─── Issue #2771: Per-phase 4-tier model assignment precedence ────────────────
+
+func TestModelConfigOpenCodePerPhasePrecedence(t *testing.T) {
+	deepseekExplore := model.ModelAssignment{ProviderID: "deepseek", ModelID: "deepseek-v4-pro"}
+	deepseekApply := model.ModelAssignment{ProviderID: "deepseek", ModelID: "deepseek-v4-pro"}
+	openaiReview := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}
+	openaiArchive := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o"}
+	anthropicExplore := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
+
+	openModelPicker := func(persisted ...state.InstallState) Model {
+		m := NewModel(system.DetectionResult{}, "dev", persisted...)
+		m.Screen, m.Cursor = ScreenModelConfig, 1
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return updated.(Model)
+	}
+
+	t.Run("unrelated in-state agent does not suppress SDD phases from config (Issue #2771)", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore, "sdd-apply": deepseekApply}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker(state.InstallState{
+			ModelAssignments: map[string]state.ModelAssignmentState{"review-refuter": {ProviderID: "openai", ModelID: "gpt-5"}},
+		})
+
+		if st.Screen != ScreenModelPicker {
+			t.Fatalf("screen = %v, want ScreenModelPicker", st.Screen)
+		}
+		if got := st.Selection.ModelAssignments["sdd-explore"]; got != deepseekExplore {
+			t.Errorf("sdd-explore = %+v, want %+v", got, deepseekExplore)
+		}
+		if got := st.Selection.ModelAssignments["sdd-apply"]; got != deepseekApply {
+			t.Errorf("sdd-apply = %+v, want %+v", got, deepseekApply)
+		}
+		if got := st.Selection.ModelAssignments["review-refuter"]; got != openaiReview {
+			t.Errorf("review-refuter = %+v, want %+v", got, openaiReview)
+		}
+		if _, exists := st.Selection.ModelAssignments["sdd-design"]; exists {
+			t.Errorf("sdd-design should be unassigned/default")
+		}
+	})
+
+	t.Run("effective config beats stale persisted state", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker(state.InstallState{
+			ModelAssignments: map[string]state.ModelAssignmentState{"sdd-explore": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}},
+		})
+		if got := st.Selection.ModelAssignments["sdd-explore"]; got != deepseekExplore {
+			t.Errorf("sdd-explore = %+v, want config %+v", got, deepseekExplore)
+		}
+	})
+
+	t.Run("persisted state fallback when config silent", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker(state.InstallState{
+			ModelAssignments: map[string]state.ModelAssignmentState{"sdd-archive": {ProviderID: "openai", ModelID: "gpt-4o"}},
+		})
+		if got := st.Selection.ModelAssignments["sdd-archive"]; got != openaiArchive {
+			t.Errorf("sdd-archive = %+v, want persisted fallback %+v", got, openaiArchive)
+		}
+	})
+
+	t.Run("session edit preserved across screen re-entry", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore, "sdd-apply": deepseekApply}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker()
+		st.recordSessionModelAssignment("sdd-explore", anthropicExplore)
+		st.Selection.ModelAssignments["sdd-explore"] = anthropicExplore
+
+		escaped, _ := st.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		stEsc := escaped.(Model)
+		stEsc.Cursor = 1
+		reentered, _ := stEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		stRe := reentered.(Model)
+
+		if got := stRe.Selection.ModelAssignments["sdd-explore"]; got != anthropicExplore {
+			t.Errorf("sdd-explore = %+v, want session edit %+v", got, anthropicExplore)
+		}
+		if got := stRe.Selection.ModelAssignments["sdd-apply"]; got != deepseekApply {
+			t.Errorf("sdd-apply = %+v, want config %+v", got, deepseekApply)
+		}
+	})
+
+	t.Run("session tombstone prevents repopulation across re-entry", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore, "sdd-apply": deepseekApply}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker(state.InstallState{
+			ModelAssignments: map[string]state.ModelAssignmentState{"sdd-explore": {ProviderID: "openai", ModelID: "gpt-4o"}},
+		})
+		st.ModelPicker.AvailableIDs = []string{"anthropic", "deepseek"}
+		st.Cursor = findRowIndex(st.ModelPicker, func(r screens.ModelPickerRow) bool { return r.AgentID == "sdd-explore" })
+
+		cleared, _ := st.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		stCl := cleared.(Model)
+
+		escaped, _ := stCl.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		stEsc := escaped.(Model)
+		stEsc.Cursor = 1
+		reentered, _ := stEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		stRe := reentered.(Model)
+
+		if got, exists := stRe.Selection.ModelAssignments["sdd-explore"]; exists {
+			t.Errorf("sdd-explore should remain cleared, got %+v", got)
+		}
+		if got := stRe.Selection.ModelAssignments["sdd-apply"]; got != deepseekApply {
+			t.Errorf("sdd-apply = %+v, want config %+v", got, deepseekApply)
+		}
+	})
+
+	t.Run("bulk clear all SDD phases creates tombstones across re-entry", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore, "sdd-apply": deepseekApply}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker()
+		st.ModelPicker.AvailableIDs = []string{"anthropic", "deepseek"}
+		st.Cursor = findRowIndex(st.ModelPicker, func(r screens.ModelPickerRow) bool { return r.Kind == screens.ModelPickerRowKindSetAllSDD })
+
+		cleared, _ := st.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		stCl := cleared.(Model)
+
+		escaped, _ := stCl.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		stEsc := escaped.(Model)
+		stEsc.Cursor = 1
+		reentered, _ := stEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		stRe := reentered.(Model)
+
+		for _, phase := range opencode.SDDPhases() {
+			if got, exists := stRe.Selection.ModelAssignments[phase]; exists {
+				t.Errorf("phase %q should remain cleared, got %+v", phase, got)
+			}
+		}
+	})
+
+	t.Run("reassigning after clear removes tombstone and preserves new model", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker()
+		st.ModelPicker.AvailableIDs = []string{"anthropic", "openai", "deepseek"}
+		st.Cursor = findRowIndex(st.ModelPicker, func(r screens.ModelPickerRow) bool { return r.AgentID == "sdd-explore" })
+
+		cleared, _ := st.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		stCl := cleared.(Model)
+
+		newAsg := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o"}
+		stCl.recordSessionModelAssignment("sdd-explore", newAsg)
+		if stCl.Selection.ModelAssignments == nil {
+			stCl.Selection.ModelAssignments = make(map[string]model.ModelAssignment)
+		}
+		stCl.Selection.ModelAssignments["sdd-explore"] = newAsg
+
+		escaped, _ := stCl.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		stEsc := escaped.(Model)
+		stEsc.Cursor = 1
+		reentered, _ := stEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		stRe := reentered.(Model)
+
+		if got := stRe.Selection.ModelAssignments["sdd-explore"]; got != newAsg {
+			t.Errorf("sdd-explore = %+v, want reassigned %+v", got, newAsg)
+		}
+	})
+
+	t.Run("screen entry remains read-only without sync or pending overrides", func(t *testing.T) {
+		orig := readCurrentAssignmentsFn
+		readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+			return map[string]model.ModelAssignment{"sdd-explore": deepseekExplore}, nil
+		}
+		t.Cleanup(func() { readCurrentAssignmentsFn = orig })
+
+		st := openModelPicker()
+
+		if st.Screen != ScreenModelPicker {
+			t.Fatalf("screen = %v, want ScreenModelPicker", st.Screen)
+		}
+		if st.PendingSyncOverrides != nil || st.OperationRunning || st.OperationMode != "" {
+			t.Errorf("entry must be read-only; overrides=%v, running=%v, mode=%q", st.PendingSyncOverrides, st.OperationRunning, st.OperationMode)
+		}
+	})
+}
+
+func findRowIndex(state screens.ModelPickerState, predicate func(screens.ModelPickerRow) bool) int {
+	for idx, r := range screens.ModelPickerRowsForStateWithIdentity(state) {
+		if predicate(r) {
+			return idx
+		}
+	}
+	return -1
+}
+
 // TestCustomSkillPickerBackGoesToStrictTDD verifies that in the custom preset,
 // with OpenCode + SDD + Skills, pressing Back on ScreenSkillPicker goes to ScreenStrictTDD
 // and NOT directly to ScreenSDDMode. StrictTDD must come before SDDMode in the back chain.

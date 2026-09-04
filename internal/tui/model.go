@@ -150,6 +150,112 @@ func sanitizeKnownModelEfforts(assignments map[string]model.ModelAssignment, sdd
 	return sanitized
 }
 
+func cloneModelAssignments(m map[string]model.ModelAssignment) map[string]model.ModelAssignment {
+	if m == nil {
+		return nil
+	}
+	cloned := make(map[string]model.ModelAssignment, len(m))
+	for k, v := range m {
+		cloned[k] = v
+	}
+	return cloned
+}
+
+func (m *Model) recordSessionModelAssignment(key string, assignment model.ModelAssignment) {
+	if m.sessionModelAssignments == nil {
+		m.sessionModelAssignments = make(map[string]model.ModelAssignment)
+	}
+	delete(m.sessionModelTombstones, key)
+	m.sessionModelAssignments[key] = assignment
+}
+
+func (m *Model) recordSessionModelTombstone(key string) {
+	if m.sessionModelTombstones == nil {
+		m.sessionModelTombstones = make(map[string]bool)
+	}
+	delete(m.sessionModelAssignments, key)
+	m.sessionModelTombstones[key] = true
+}
+
+func agentsForPickerRow(row screens.ModelPickerRow, customAgents []string) []string {
+	switch row.Kind {
+	case screens.ModelPickerRowKindSetAllSDD:
+		return opencode.SDDPhases()
+	case screens.ModelPickerRowKindSetAllCustom:
+		return customAgents
+	case screens.ModelPickerRowKindAgent:
+		if row.AgentID != "" {
+			return []string{row.AgentID}
+		}
+	}
+	return nil
+}
+
+func (m *Model) recordSessionModelNavUpdate(updated map[string]model.ModelAssignment) {
+	m.Selection.ModelAssignments = updated
+	if m.ModelPicker.Mode != screens.ModePhaseList {
+		return
+	}
+	if selectedRow, ok := screens.ModelPickerRowAt(m.ModelPicker, m.ModelPicker.SelectedPhaseIdx); ok {
+		for _, agent := range agentsForPickerRow(selectedRow, m.ModelPicker.CustomAgents) {
+			if asg, has := updated[agent]; has {
+				m.recordSessionModelAssignment(agent, asg)
+			}
+		}
+	}
+}
+
+func (m *Model) clearModelPickerAssignmentForSelectedRow() {
+	if selectedRow, ok := screens.ModelPickerRowAt(m.ModelPicker, m.ModelPicker.SelectedPhaseIdx); ok {
+		for _, agent := range agentsForPickerRow(selectedRow, m.ModelPicker.CustomAgents) {
+			m.recordSessionModelTombstone(agent)
+		}
+	}
+	m.Selection.ModelAssignments = screens.ClearModelPickerAssignment(&m.ModelPicker, m.Selection.ModelAssignments)
+}
+
+func (m *Model) resolveOpenCodeModelAssignments() {
+	var effectiveConfig map[string]model.ModelAssignment
+	if current, err := readCurrentAssignmentsFn(currentOpenCodeSettingsPath()); err == nil {
+		effectiveConfig = current
+	}
+
+	if m.sessionModelAssignments == nil {
+		m.sessionModelAssignments = make(map[string]model.ModelAssignment)
+		for k, v := range m.Selection.ModelAssignments {
+			if m.persistedModelAssignments == nil || m.persistedModelAssignments[k] != v {
+				m.sessionModelAssignments[k] = v
+			}
+		}
+	}
+	if m.sessionModelTombstones == nil {
+		m.sessionModelTombstones = make(map[string]bool)
+	}
+
+	result := make(map[string]model.ModelAssignment)
+	for k, v := range m.persistedModelAssignments {
+		result[k] = v
+	}
+	for k, v := range effectiveConfig {
+		result[k] = v
+	}
+	for k, isTombstone := range m.sessionModelTombstones {
+		if isTombstone {
+			delete(result, k)
+		}
+	}
+	for k, v := range m.sessionModelAssignments {
+		result[k] = v
+	}
+
+	sanitized := sanitizeKnownModelEfforts(result, m.ModelPicker.SDDModels)
+	if len(sanitized) == 0 {
+		m.Selection.ModelAssignments = nil
+	} else {
+		m.Selection.ModelAssignments = sanitized
+	}
+}
+
 func sanitizeKnownModelEffort(assignment model.ModelAssignment, sddModels map[string][]opencode.Model) model.ModelAssignment {
 	if assignment.Effort == "" {
 		return assignment
@@ -823,6 +929,14 @@ type Model struct {
 	CommunityToolStatusErr     error
 	CommunityToolResults       []communitytool.Result
 	CommunityToolErr           error
+
+	// OpenCode model assignment precedence state:
+	// persistedModelAssignments captures persisted Gentle AI state (Tier 3 fallback).
+	// sessionModelAssignments and sessionModelTombstones track explicit assignments and
+	// explicit clears made in the current TUI session (Tier 1 precedence).
+	persistedModelAssignments map[string]model.ModelAssignment
+	sessionModelAssignments   map[string]model.ModelAssignment
+	sessionModelTombstones    map[string]bool
 }
 
 // NewModel constructs the initial TUI model for the given detection result.
@@ -841,6 +955,8 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		components = piOnlyComponents()
 	}
 
+	persistedModelAssignments := installStateModelAssignments(s.ModelAssignments)
+
 	selection := model.Selection{
 		Agents:                 agents,
 		Persona:                model.PersonaGentleman,
@@ -849,22 +965,23 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		ClaudeModelAssignments: installStateClaudeAssignments(s.ClaudeModelAssignments),
 		ClaudePhaseAssignments: installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
 		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
-		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
+		ModelAssignments:       cloneModelAssignments(persistedModelAssignments),
 	}
 
 	return Model{
-		Screen:                ScreenWelcome,
-		Version:               version,
-		Selection:             selection,
-		Detection:             detection,
-		BackgroundIntent:      s.BackgroundIntent,
-		PiBackgroundIntent:    s.PiBackgroundIntent,
-		UninstallAgents:       agents,
-		UninstallComponents:   defaultUninstallComponents(),
-		UninstallEngramScope:  model.EngramUninstallScopeGlobal,
-		ReviewModeCwdFn:       os.Getwd,
-		ReviewModeStatusFn:    cli.ReviewModeStatus,
-		ReviewModeSetGlobalFn: cli.SetGlobalReviewMode,
+		Screen:                    ScreenWelcome,
+		Version:                   version,
+		Selection:                 selection,
+		Detection:                 detection,
+		BackgroundIntent:          s.BackgroundIntent,
+		PiBackgroundIntent:        s.PiBackgroundIntent,
+		UninstallAgents:           agents,
+		UninstallComponents:       defaultUninstallComponents(),
+		UninstallEngramScope:      model.EngramUninstallScopeGlobal,
+		ReviewModeCwdFn:           os.Getwd,
+		ReviewModeStatusFn:        cli.ReviewModeStatus,
+		ReviewModeSetGlobalFn:     cli.SetGlobalReviewMode,
+		persistedModelAssignments: persistedModelAssignments,
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -1568,7 +1685,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
 		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
 		if handled {
-			m.Selection.ModelAssignments = updated
+			m.recordSessionModelNavUpdate(updated)
 			return m, nil
 		}
 	}
@@ -1583,14 +1700,21 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1 &&
+	if (m.Screen == ScreenModelPicker || (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1)) &&
 		m.ModelPicker.Mode == screens.ModePhaseList && keyStr == "backspace" &&
 		len(m.ModelPicker.AvailableIDs) > 0 {
-		rows := screens.ModelPickerRowsForProfile()
+		rows := screens.ModelPickerRowsForState(m.ModelPicker)
+		if m.Screen == ScreenProfileCreate {
+			rows = screens.ModelPickerRowsForProfile()
+		}
 		row, ok := screens.ModelPickerRowAt(m.ModelPicker, m.Cursor)
 		if m.Cursor < len(rows) && ok && row.Kind != screens.ModelPickerRowKindSeparator {
 			m.ModelPicker.SelectedPhaseIdx = m.Cursor
-			m.Selection.ModelAssignments = screens.ClearModelPickerAssignment(&m.ModelPicker, m.Selection.ModelAssignments)
+			if m.Screen == ScreenModelPicker {
+				m.clearModelPickerAssignmentForSelectedRow()
+			} else {
+				m.Selection.ModelAssignments = screens.ClearModelPickerAssignment(&m.ModelPicker, m.Selection.ModelAssignments)
+			}
 			return m, nil
 		}
 	}
@@ -2338,20 +2462,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 1: // Configure OpenCode models
 			m.ModelConfigMode = true
 			discoveryCmd := m.initializeModelPicker()
-			// Pre-populate with existing assignments from opencode.json.
-			// Only when there are no in-session assignments yet — the nil guard
-			// ensures we don't overwrite changes the user already made this session.
-			if m.Selection.ModelAssignments == nil {
-				settingsPath := currentOpenCodeSettingsPath()
-				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
-					// Sanitize loaded assignments: clear any stale effort values for
-					// models that no longer report variants (e.g. provider refreshed
-					// their catalog since the user last synced). Without this, a stale
-					// effort would be preserved in the picker and re-injected on the
-					// next sync even if the model no longer supports that effort level.
-					m.Selection.ModelAssignments = sanitizeKnownModelEfforts(current, m.ModelPicker.SDDModels)
-				}
-			}
+			m.resolveOpenCodeModelAssignments()
 			m.setScreen(ScreenModelPicker)
 			return m, discoveryCmd
 		case 2: // Configure Kiro models
