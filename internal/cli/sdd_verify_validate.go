@@ -154,6 +154,7 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) error {
 	_, _ = fmt.Fprintln(stdout, "  a leading UTF-8 BOM is stripped; front matter, ~~~ fences, untagged fences, and content before the fence are refused.")
 	_, _ = fmt.Fprintln(stdout, "  requirements and scenarios are completed/total; each completed count must not exceed its total.")
 	_, _ = fmt.Fprintln(stdout, "  --requirements and --scenarios must exactly equal their report totals.")
+	_, _ = fmt.Fprintln(stdout, "  evidence_revision, test_output_hash, and build_output_hash must match sha256:<64 lowercase hex>.")
 	_, _ = fmt.Fprintln(stdout, "  Independent test and build execution evidence is required for a passing verification result.")
 	return nil
 }

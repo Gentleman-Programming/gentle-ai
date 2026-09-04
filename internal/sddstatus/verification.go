@@ -82,6 +82,41 @@ type verifyReport struct {
 }
 
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func diagnoseSHA256Identity(val string) string {
+	const prefix = "sha256:"
+	const expectedHexLen = 64
+	got := fmt.Sprintf("%q (length %d)", truncateSHA256Value(val, 80), len(val))
+	if !strings.HasPrefix(val, prefix) {
+		return fmt.Sprintf("expected sha256:<64 lowercase hex>, got %s: missing '%s' prefix", got, prefix)
+	}
+	hexPart := val[len(prefix):]
+	if len(hexPart) != expectedHexLen {
+		return fmt.Sprintf("expected sha256:<64 lowercase hex>, got %s: wrong length (got %d hex characters after prefix, expected %d)", got, len(hexPart), expectedHexLen)
+	}
+	for i, r := range hexPart {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			continue
+		}
+		pos := len(prefix) + i
+		if r >= 'A' && r <= 'F' {
+			return fmt.Sprintf("expected sha256:<64 lowercase hex>, got %s: non-hex character %q at position %d (must be lowercase)", got, r, pos)
+		}
+		return fmt.Sprintf("expected sha256:<64 lowercase hex>, got %s: non-hex character %q at position %d", got, r, pos)
+	}
+	return fmt.Sprintf("expected sha256:<64 lowercase hex>, got %s", got)
+}
+
+func truncateSHA256Value(val string, limit int) string {
+	if len(val) <= limit {
+		return val
+	}
+	if limit <= 3 {
+		return val[:limit]
+	}
+	return val[:limit-3] + "..."
+}
+
 var requirementHeadingPattern = regexp.MustCompile(`(?m)^### (?:Requirement|REQ-[0-9]+):\s+\S`)
 var scenarioHeadingPattern = regexp.MustCompile(`(?m)^#### Scenario:\s+\S`)
 
@@ -220,7 +255,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	}
 	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
 		if !sha256IdentityPattern.MatchString(fields[field]) {
-			return report, fmt.Sprintf("invalid %s in verify result envelope", field)
+			return report, fmt.Sprintf("invalid %s in verify result envelope: %s", field, diagnoseSHA256Identity(fields[field]))
 		}
 	}
 	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {

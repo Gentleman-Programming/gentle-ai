@@ -163,3 +163,38 @@ func (spy *sddVerifyValidateReadSpy) Read([]byte) (int, error) {
 	spy.reads++
 	return 0, errors.New("help must not read stdin")
 }
+
+func TestRunSDDVerifyValidateHelpDocumentsSHA256Grammar(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("unused"), &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
+	}
+	for _, want := range []string{
+		"evidence_revision, test_output_hash, and build_output_hash must match sha256:<64 lowercase hex>.",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help omits sha256 grammar %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestRunSDDVerifyValidateRejectsInvalidSHA256WithSelfDiagnosingError(t *testing.T) {
+	report := "```yaml\nschema: gentle-ai.verify-result/v1\nevidence_revision: invalid_revision\nverdict: fail\nblockers: 1\ncritical_findings: 0\nrequirements: 1/1\nscenarios: 1/1\ntest_command: go test ./...\ntest_exit_code: 0\ntest_output_hash: sha256:" + strings.Repeat("b", 64) + "\nbuild_command: go vet ./...\nbuild_exit_code: 0\nbuild_output_hash: sha256:" + strings.Repeat("c", 64) + "\n```"
+	var output bytes.Buffer
+	err := runSDDVerifyValidate([]string{"--input", "-", "--requirements", "1", "--scenarios", "1"}, strings.NewReader(report), &output)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	wantErrParts := []string{
+		"invalid evidence_revision in verify result envelope",
+		"expected sha256:<64 lowercase hex>",
+		`got "invalid_revision"`,
+		"length 16",
+		"missing 'sha256:' prefix",
+	}
+	for _, want := range wantErrParts {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err.Error(), want)
+		}
+	}
+}

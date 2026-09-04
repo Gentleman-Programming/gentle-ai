@@ -178,3 +178,87 @@ func itoa(value int) string {
 	}
 	return "1"
 }
+
+func TestValidateVerifyReportAdmission_SHA256Diagnostics(t *testing.T) {
+	valid := testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0)
+	expected := SpecCounts{Requirements: 2, Scenarios: 3}
+
+	tests := []struct {
+		name        string
+		report      string
+		wantField   string
+		wantGrammar string
+		wantGot     string
+		wantLength  string
+		wantDetail  string
+	}{
+		{
+			name:        "missing prefix on evidence_revision",
+			report:      strings.Replace(valid, "evidence_revision: sha256:"+strings.Repeat("a", 64), "evidence_revision: "+strings.Repeat("a", 64), 1),
+			wantField:   "invalid evidence_revision in verify result envelope",
+			wantGrammar: "expected sha256:<64 lowercase hex>",
+			wantGot:     `got "` + strings.Repeat("a", 64) + `"`,
+			wantLength:  "length 64",
+			wantDetail:  "missing 'sha256:' prefix",
+		},
+		{
+			name:        "short hash on test_output_hash",
+			report:      strings.Replace(valid, "test_output_hash: sha256:"+strings.Repeat("b", 64), "test_output_hash: sha256:1234", 1),
+			wantField:   "invalid test_output_hash in verify result envelope",
+			wantGrammar: "expected sha256:<64 lowercase hex>",
+			wantGot:     `got "sha256:1234"`,
+			wantLength:  "length 11",
+			wantDetail:  "wrong length (got 4 hex characters after prefix, expected 64)",
+		},
+		{
+			name:        "long hash on build_output_hash",
+			report:      strings.Replace(valid, "build_output_hash: sha256:"+strings.Repeat("c", 64), "build_output_hash: sha256:"+strings.Repeat("c", 65), 1),
+			wantField:   "invalid build_output_hash in verify result envelope",
+			wantGrammar: "expected sha256:<64 lowercase hex>",
+			wantGot:     `got "sha256:` + strings.Repeat("c", 65) + `"`,
+			wantLength:  "length 72",
+			wantDetail:  "wrong length (got 65 hex characters after prefix, expected 64)",
+		},
+		{
+			name:        "uppercase character on evidence_revision",
+			report:      strings.Replace(valid, "evidence_revision: sha256:"+strings.Repeat("a", 64), "evidence_revision: sha256:"+strings.Repeat("A", 64), 1),
+			wantField:   "invalid evidence_revision in verify result envelope",
+			wantGrammar: "expected sha256:<64 lowercase hex>",
+			wantGot:     `got "sha256:` + strings.Repeat("A", 64) + `"`,
+			wantLength:  "length 71",
+			wantDetail:  "non-hex character 'A' at position 7 (must be lowercase)",
+		},
+		{
+			name:        "non-hex character on test_output_hash",
+			report:      strings.Replace(valid, "test_output_hash: sha256:"+strings.Repeat("b", 64), "test_output_hash: sha256:"+strings.Repeat("b", 63)+"z", 1),
+			wantField:   "invalid test_output_hash in verify result envelope",
+			wantGrammar: "expected sha256:<64 lowercase hex>",
+			wantGot:     `got "sha256:` + strings.Repeat("b", 63) + `z"`,
+			wantLength:  "length 71",
+			wantDetail:  "non-hex character 'z' at position 70",
+		},
+		{
+			name:        "truncated echo for oversized value",
+			report:      strings.Replace(valid, "evidence_revision: sha256:"+strings.Repeat("a", 64), "evidence_revision: sha256:"+strings.Repeat("a", 100), 1),
+			wantField:   "invalid evidence_revision in verify result envelope",
+			wantGrammar: "expected sha256:<64 lowercase hex>",
+			wantGot:     `got "sha256:` + strings.Repeat("a", 70) + `..."`,
+			wantLength:  "length 107",
+			wantDetail:  "wrong length (got 100 hex characters after prefix, expected 64)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateVerifyReportAdmission(tt.report, expected)
+			if got.Valid {
+				t.Fatalf("admission = %#v, want invalid", got)
+			}
+			for _, part := range []string{tt.wantField, tt.wantGrammar, tt.wantGot, tt.wantLength, tt.wantDetail} {
+				if !strings.Contains(got.Reason, part) {
+					t.Errorf("got.Reason %q does not contain %q", got.Reason, part)
+				}
+			}
+		})
+	}
+}
