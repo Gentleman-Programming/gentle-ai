@@ -39,6 +39,50 @@ type ClaudePhaseAssignmentState struct {
 	Effort string `json:"effort,omitempty"`
 }
 
+// ExternalPathPresence records whether one exact script candidate existed before
+// a durable operation began. It is intentionally per-path: recovery must never
+// turn a pre-existing user binary into Gentle AI-owned provenance.
+type ExternalPathPresence struct {
+	Path    string `json:"path"`
+	Present bool   `json:"present"`
+}
+
+// ExternalOperation is the durable write-ahead record for an external tool
+// mutation. It remains in InstallState so recovery and user selections share
+// one atomic persistence boundary.
+type ExternalOperation struct {
+	Tool               ExternalTool           `json:"tool"`
+	Action             ExternalAction         `json:"action"`
+	Route              string                 `json:"route,omitempty"`
+	Paths              []string               `json:"paths,omitempty"`
+	PathBeforePresence []ExternalPathPresence `json:"path_before_presence,omitempty"`
+	BeforePresent      bool                   `json:"before_present"`
+	Phase              ExternalPhase          `json:"phase"`
+	Continuation       string                 `json:"continuation,omitempty"`
+}
+
+type ExternalTool string
+
+const (
+	ExternalToolGGA       ExternalTool = "gga"
+	ExternalToolCodeGraph ExternalTool = "codegraph"
+)
+
+type ExternalAction string
+
+const (
+	ExternalActionInstall ExternalAction = "install"
+	ExternalActionRemove  ExternalAction = "remove"
+)
+
+type ExternalPhase string
+
+const (
+	ExternalPhaseIntent  ExternalPhase = "intent"
+	ExternalPhaseApplied ExternalPhase = "applied"
+	ExternalPhaseManual  ExternalPhase = "manual"
+)
+
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
 	InstalledAgents        []string            `json:"installed_agents"`
@@ -55,6 +99,10 @@ type InstallState struct {
 	// state files that predate persistence of this choice.
 	CommunityTools           []string `json:"community_tools,omitempty"`
 	CommunityToolsConfigured bool     `json:"community_tools_configured,omitempty"`
+
+	// ExternalOperations is the durable external-operation journal. Its absence
+	// preserves compatibility with state written before journal support.
+	ExternalOperations []ExternalOperation `json:"external_operations,omitempty"`
 
 	// ClaudeModelAssignments maps SDD phase names (e.g. "sdd-explore") to a
 	// Claude model alias ("fable", "opus", "sonnet", "haiku"). Persisted so that
@@ -199,6 +247,65 @@ func (s InstallState) RestoreSelection(selection *model.Selection) {
 	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, s.SDDMode, s.StrictTDD
 }
 
+// MergeExternalOperation merges an external-operation record for use inside an
+// install-state coordinator critical section. The operation identity is its
+// tool, action, route, and normalized ordered path set.
+func MergeExternalOperation(operations []ExternalOperation, operation ExternalOperation) []ExternalOperation {
+	operation.Paths = uniqueExternalOperationPaths(operation.Paths)
+	for i, existing := range operations {
+		if sameExternalOperation(existing, operation) {
+			operations[i] = operation
+			return operations
+		}
+	}
+	return append(operations, operation)
+}
+
+// RemoveExternalOperation removes exactly one settled external-operation record.
+// Callers must persist the returned journal inside the shared state coordinator
+// critical section with any provenance update it settles.
+func RemoveExternalOperation(operations []ExternalOperation, operation ExternalOperation) []ExternalOperation {
+	operation.Paths = uniqueExternalOperationPaths(operation.Paths)
+	kept := make([]ExternalOperation, 0, len(operations))
+	for _, existing := range operations {
+		if !sameExternalOperation(existing, operation) {
+			kept = append(kept, existing)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+func sameExternalOperation(left, right ExternalOperation) bool {
+	if left.Tool != right.Tool || left.Action != right.Action || left.Route != right.Route || len(left.Paths) != len(right.Paths) {
+		return false
+	}
+	for i := range left.Paths {
+		if left.Paths[i] != right.Paths[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func uniqueExternalOperationPaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	unique := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		unique = append(unique, path)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	return unique
+}
+
 // MergeAgents returns a new InstallState that combines existing with the
 // provided newAgents. The new agents are appended to existing.InstalledAgents
 // with deduplication. All other persisted selections, including community
@@ -237,6 +344,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		StrictTDD:                   existing.StrictTDD,
 		CommunityTools:              existing.CommunityTools,
 		CommunityToolsConfigured:    existing.CommunityToolsConfigured,
+		ExternalOperations:          append([]ExternalOperation(nil), existing.ExternalOperations...),
 		ModelAssignments:            existing.ModelAssignments,
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
 		ClaudePhaseAssignments:      existing.ClaudePhaseAssignments,
