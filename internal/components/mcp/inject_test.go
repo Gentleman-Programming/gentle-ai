@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -681,6 +682,150 @@ func TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// claudePendingApprovalReportingFloor is the first Claude Code CLI release
+// whose piped `claude mcp list`/`get` output reports unapproved project
+// .mcp.json servers as "Pending approval" (upstream v2.1.154; issue #3969).
+var claudePendingApprovalReportingFloor = [3]int{2, 1, 154}
+
+// claudeReportingGate classifies whether the ambient Claude Code CLI's piped
+// `mcp list` output can carry the pending-approval reporting contract.
+type claudeReportingGate int
+
+const (
+	// claudeReportingGateProceed runs the native discovery assertions.
+	claudeReportingGateProceed claudeReportingGate = iota
+	// claudeReportingGateBelowFloor marks a recognized CLI older than
+	// v2.1.154, whose piped output omits unapproved project servers.
+	claudeReportingGateBelowFloor
+	// claudeReportingGateUnrecognized marks malformed or unavailable
+	// `claude --version` output.
+	claudeReportingGateUnrecognized
+)
+
+func (gate claudeReportingGate) skipReason() string {
+	switch gate {
+	case claudeReportingGateBelowFloor:
+		return "claude CLI predates v2.1.154; piped `claude mcp list` omits unapproved project servers (unsupported reporting contract)"
+	case claudeReportingGateUnrecognized:
+		return "claude --version output not recognized; cannot confirm the pending-approval reporting contract"
+	}
+	return ""
+}
+
+// parseClaudeVersion extracts the first numeric x.y.z token from
+// `claude --version` output, e.g. "2.1.114 (Claude Code)".
+func parseClaudeVersion(versionOutput string) ([3]int, bool) {
+	for field := range strings.FieldsSeq(versionOutput) {
+		parts := strings.Split(field, ".")
+		if len(parts) != 3 {
+			continue
+		}
+		version := [3]int{}
+		ok := true
+		for i, part := range parts {
+			number, err := strconv.Atoi(part)
+			if err != nil {
+				ok = false
+				break
+			}
+			version[i] = number
+		}
+		if ok {
+			return version, true
+		}
+	}
+	return [3]int{}, false
+}
+
+// versionAtLeast compares two x.y.z tuples lexicographically.
+func versionAtLeast(version, floor [3]int) bool {
+	for i := range floor {
+		if version[i] != floor[i] {
+			return version[i] > floor[i]
+		}
+	}
+	return true
+}
+
+// classifyClaudeReportingGate decides from `claude --version` output whether
+// the CLI's piped mcp list output can report unapproved project .mcp.json
+// servers ("Pending approval", upstream v2.1.154+).
+func classifyClaudeReportingGate(versionOutput string) claudeReportingGate {
+	version, ok := parseClaudeVersion(versionOutput)
+	if !ok {
+		return claudeReportingGateUnrecognized
+	}
+	if !versionAtLeast(version, claudePendingApprovalReportingFloor) {
+		return claudeReportingGateBelowFloor
+	}
+	return claudeReportingGateProceed
+}
+
+// TestClassifyClaudeReportingGate proves the deterministic version gate for
+// the native discovery test: only Claude Code CLI v2.1.154 and newer report
+// unapproved project .mcp.json servers as "Pending approval" in piped
+// `claude mcp list` output (issue #3969).
+func TestClassifyClaudeReportingGate(t *testing.T) {
+	tests := []struct {
+		name        string
+		versionOut  string
+		want        claudeReportingGate
+		wantSkipMsg bool
+	}{
+		{
+			name:        "below floor omits unapproved project servers",
+			versionOut:  "2.1.114 (Claude Code)\n",
+			want:        claudeReportingGateBelowFloor,
+			wantSkipMsg: true,
+		},
+		{
+			name:        "older major below floor",
+			versionOut:  "1.0.87 (Claude Code)",
+			want:        claudeReportingGateBelowFloor,
+			wantSkipMsg: true,
+		},
+		{
+			name:       "exact floor reports pending approval",
+			versionOut: "2.1.154 (Claude Code)",
+			want:       claudeReportingGateProceed,
+		},
+		{
+			name:       "above floor reports pending approval",
+			versionOut: "2.2.0 (Claude Code)",
+			want:       claudeReportingGateProceed,
+		},
+		{
+			name:        "two-component version is unrecognized",
+			versionOut:  "2.1 (Claude Code)",
+			want:        claudeReportingGateUnrecognized,
+			wantSkipMsg: true,
+		},
+		{
+			name:        "malformed output has no version token",
+			versionOut:  "Claude Code (unknown)",
+			want:        claudeReportingGateUnrecognized,
+			wantSkipMsg: true,
+		},
+		{
+			name:        "unavailable output is unrecognized",
+			versionOut:  "",
+			want:        claudeReportingGateUnrecognized,
+			wantSkipMsg: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyClaudeReportingGate(tt.versionOut)
+			if got != tt.want {
+				t.Fatalf("classifyClaudeReportingGate(%q) = %v; want %v", tt.versionOut, got, tt.want)
+			}
+			if tt.wantSkipMsg && !strings.Contains(got.skipReason(), "reporting contract") {
+				t.Fatalf("skipReason() for %q must name the unsupported reporting contract; got %q", tt.versionOut, got.skipReason())
+			}
+		})
+	}
+}
+
 // TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList proves the
 // project-scope contract through Claude Code itself, without approving the
 // pending project server.
@@ -695,6 +840,17 @@ func TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList(t *testing.T) {
 			t.Skip("native Claude Code CLI is not installed")
 		}
 		t.Fatalf("LookPath(claude) error = %v", err)
+	}
+
+	// The pending-approval reporting contract only exists since Claude Code
+	// v2.1.154 (issue #3969): older CLIs silently omit unapproved project
+	// servers from piped `claude mcp list` output.
+	versionOutput, versionErr := exec.Command(claudePath, "--version").CombinedOutput()
+	if versionErr != nil {
+		t.Skipf("claude --version error = %v; %s", versionErr, claudeReportingGateUnrecognized.skipReason())
+	}
+	if gate := classifyClaudeReportingGate(string(versionOutput)); gate != claudeReportingGateProceed {
+		t.Skipf("claude --version = %q: %s", strings.TrimSpace(string(versionOutput)), gate.skipReason())
 	}
 
 	home := t.TempDir()
