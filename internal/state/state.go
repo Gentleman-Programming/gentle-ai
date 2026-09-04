@@ -39,6 +39,14 @@ type ClaudePhaseAssignmentState struct {
 	Effort string `json:"effort,omitempty"`
 }
 
+// GGAProvenance records only external GGA routes this install transaction
+// created. A blank value is legacy or unknown ownership and never authorizes
+// removal of a binary, formula, or PATH entry.
+type GGAProvenance struct {
+	PackageManager     string   `json:"package_manager,omitempty"`
+	ScriptInstallPaths []string `json:"script_install_paths,omitempty"`
+}
+
 // ExternalPathPresence records whether one exact script candidate existed before
 // a durable operation began. It is intentionally per-path: recovery must never
 // turn a pre-existing user binary into Gentle AI-owned provenance.
@@ -99,6 +107,10 @@ type InstallState struct {
 	// state files that predate persistence of this choice.
 	CommunityTools           []string `json:"community_tools,omitempty"`
 	CommunityToolsConfigured bool     `json:"community_tools_configured,omitempty"`
+
+	// GGA records exact external-install provenance. Its zero value is a
+	// legacy or unknown installation and must never authorize removal.
+	GGA GGAProvenance `json:"gga,omitempty"`
 
 	// ExternalOperations is the durable external-operation journal. Its absence
 	// preserves compatibility with state written before journal support.
@@ -306,6 +318,46 @@ func uniqueExternalOperationPaths(paths []string) []string {
 	return unique
 }
 
+// MergeGGAProvenance accumulates only installer-observed external GGA routes.
+// Empty fresh provenance leaves previously recorded ownership intact so a later
+// install that found GGA already present cannot erase an earlier record.
+func MergeGGAProvenance(existing, fresh GGAProvenance) GGAProvenance {
+	merged := GGAProvenance{PackageManager: existing.PackageManager}
+	if fresh.PackageManager != "" {
+		merged.PackageManager = fresh.PackageManager
+	}
+	merged.ScriptInstallPaths = mergeGGAScriptInstallPaths(existing.ScriptInstallPaths, fresh.ScriptInstallPaths)
+	return merged
+}
+
+func mergeGGAScriptInstallPaths(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	paths := make([]string, 0)
+	for _, group := range groups {
+		for _, path := range group {
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+func cloneGGAScriptInstallPaths(paths []string) []string {
+	if paths == nil {
+		return nil
+	}
+	return append([]string{}, paths...)
+}
+
 // MergeAgents returns a new InstallState that combines existing with the
 // provided newAgents. The new agents are appended to existing.InstalledAgents
 // with deduplication. All other persisted selections, including community
@@ -333,17 +385,21 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 	}
 
 	return InstallState{
-		InstalledAgents:             merged,
-		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
-		ManagedAssetDigest:          existing.ManagedAssetDigest,
-		SelectionConfigured:         existing.SelectionConfigured,
-		Components:                  existing.Components,
-		Skills:                      existing.Skills,
-		Preset:                      existing.Preset,
-		SDDMode:                     existing.SDDMode,
-		StrictTDD:                   existing.StrictTDD,
-		CommunityTools:              existing.CommunityTools,
-		CommunityToolsConfigured:    existing.CommunityToolsConfigured,
+		InstalledAgents:          merged,
+		InstalledBinaryVersion:   existing.InstalledBinaryVersion,
+		ManagedAssetDigest:       existing.ManagedAssetDigest,
+		SelectionConfigured:      existing.SelectionConfigured,
+		Components:               existing.Components,
+		Skills:                   existing.Skills,
+		Preset:                   existing.Preset,
+		SDDMode:                  existing.SDDMode,
+		StrictTDD:                existing.StrictTDD,
+		CommunityTools:           existing.CommunityTools,
+		CommunityToolsConfigured: existing.CommunityToolsConfigured,
+		GGA: GGAProvenance{
+			PackageManager:     existing.GGA.PackageManager,
+			ScriptInstallPaths: cloneGGAScriptInstallPaths(existing.GGA.ScriptInstallPaths),
+		},
 		ExternalOperations:          append([]ExternalOperation(nil), existing.ExternalOperations...),
 		ModelAssignments:            existing.ModelAssignments,
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
