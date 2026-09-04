@@ -455,6 +455,10 @@ func TestRunSDDAttemptFinishAndSettleShareLedgerRecovery(t *testing.T) {
 				if !errors.As(err, &recovery) || recovery.ExpectedUntrackedInventory != currentDigest || len(recovery.RetainedIntendedUntracked) != 0 {
 					t.Fatalf("finish stale recovery = %#v, err=%v", recovery, err)
 				}
+				if !strings.Contains(err.Error(), "--untracked-scope=exclude --expected-untracked-inventory="+currentDigest) ||
+					!strings.Contains(err.Error(), "--untracked-scope=select --expected-untracked-inventory="+currentDigest) {
+					t.Fatalf("finish stale recovery does not give executable scope choices: %v", err)
+				}
 				return
 			}
 			result, _ := runCompactSDDAttempt(t, args)

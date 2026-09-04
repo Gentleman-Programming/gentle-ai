@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -273,6 +274,29 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 		if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || countRuntimeRecords(t, store.Dir) != beforeRecords {
 			t.Fatalf("legacy rejected continuation = %#v, err=%v records=%d", result, err, countRuntimeRecords(t, store.Dir))
 		}
+	}
+}
+
+func TestRuntimeUntrackedRecoveryErrorExplainsExecutableScope(t *testing.T) {
+	for _, test := range []struct {
+		name, reject string
+		err          *RuntimeUntrackedRecoveryError
+		want         []string
+	}{
+		{"empty floor", "", &RuntimeUntrackedRecoveryError{ExpectedUntrackedInventory: "digest"}, []string{"--untracked-scope=exclude --expected-untracked-inventory=digest", "--untracked-scope=select --expected-untracked-inventory=digest", "one --intended-untracked=<path> per newly selected path"}},
+		{"retained floor", "--untracked-scope=exclude", &RuntimeUntrackedRecoveryError{ExpectedUntrackedInventory: "digest", RetainedIntendedUntracked: []string{"a path.txt", "z.txt"}}, []string{"--untracked-scope=select --expected-untracked-inventory=digest --intended-untracked=" + pathquote.Quote("a path.txt") + " --intended-untracked=" + pathquote.Quote("z.txt"), "one --intended-untracked=<path> per newly selected path"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := test.err.Error()
+			for _, want := range test.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("recovery text %q does not contain %q", text, want)
+				}
+			}
+			if test.reject != "" && strings.Contains(text, test.reject) {
+				t.Fatalf("recovery text %q illegally offers %q", text, test.reject)
+			}
+		})
 	}
 }
 

@@ -999,15 +999,15 @@ type RuntimeUntrackedRecoveryError struct {
 }
 
 func (err *RuntimeUntrackedRecoveryError) Error() string {
-	retained := ""
-	if len(err.RetainedIntendedUntracked) > 0 {
-		quoted := make([]string, len(err.RetainedIntendedUntracked))
-		for i, path := range err.RetainedIntendedUntracked {
-			quoted[i] = pathquote.Quote(path)
-		}
-		retained = "; retain " + strings.Join(quoted, ", ")
+	expected := "--expected-untracked-inventory=" + err.ExpectedUntrackedInventory
+	if len(err.RetainedIntendedUntracked) == 0 {
+		return fmt.Sprintf("%s: retry the same settlement with --untracked-scope=exclude %s, or with --untracked-scope=select %s and one --intended-untracked=<path> per newly selected path", ErrRuntimeUndeclaredUntracked, expected, expected)
 	}
-	return fmt.Sprintf("%s: retry the same settlement with --expected-untracked-inventory=%s%s", ErrRuntimeUndeclaredUntracked, err.ExpectedUntrackedInventory, retained)
+	retained := make([]string, len(err.RetainedIntendedUntracked))
+	for i, path := range err.RetainedIntendedUntracked {
+		retained[i] = "--intended-untracked=" + pathquote.Quote(path)
+	}
+	return fmt.Sprintf("%s: retry the same settlement with --untracked-scope=select %s %s; add one --intended-untracked=<path> per newly selected path", ErrRuntimeUndeclaredUntracked, expected, strings.Join(retained, " "))
 }
 
 func (err *RuntimeUntrackedRecoveryError) Unwrap() error { return ErrRuntimeUndeclaredUntracked }
