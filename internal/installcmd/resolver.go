@@ -149,12 +149,16 @@ func validatePiInstallPreflight() error {
 func validateNpmInstallPreflight(profile system.PlatformProfile) error {
 	if _, err := cmdLookPath("npm"); err != nil {
 		hint := system.InstallHintForDep("node", profile)
-		return fmt.Errorf(
+		msg := fmt.Sprintf(
 			"Node.js / npm is required but `npm` was not found in PATH.\n"+
 				"Install Node.js (npm is included) and retry:\n"+
 				"  %s",
 			hint,
 		)
+		if profile.PackageManager == "rpm-ostree" {
+			msg += "\nIf a pending deployment prevents --apply-live, stage without it and reboot:\n  rpm-ostree install -y nodejs npm && systemctl reboot"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }

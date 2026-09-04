@@ -569,6 +569,16 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			wantErr:     true,
 			errContains: "npm",
 		},
+		{
+			name:    "silverblue missing npm returns actionable remediation and degraded path",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree", Supported: true},
+			agent:   model.AgentClaudeCode,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "rpm-ostree install -y nodejs npm && systemctl reboot",
+		},
 	}
 
 	for _, tt := range tests {
