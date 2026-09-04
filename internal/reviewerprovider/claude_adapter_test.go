@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,9 +28,6 @@ func TestClaudeAdapterReturnsNoBytesWhenUnavailable(t *testing.T) {
 }
 
 func TestClaudeAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	promptPath := filepath.Join(t.TempDir(), "prompt")
 	argumentsPath := filepath.Join(t.TempDir(), "arguments")
 	t.Setenv(claudeAdapterHelperEnvironment, "1")
@@ -99,9 +95,6 @@ func TestClaudeAdapterHelperProcess(t *testing.T) {
 // exits non-zero produced `claude reviewer transport failed: exit status 1:`
 // with nothing after the colon, because only stderr was formatted.
 func TestClaudeAdapterFailureNamesStdoutReasonWhenStderrIsEmpty(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	t.Setenv(claudeAdapterHelperEnvironment, "stdout-failure")
 	t.Setenv(claudeAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
 	t.Setenv(claudeAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
