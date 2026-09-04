@@ -25,7 +25,7 @@ The disable switch was Wave 1's rollback boundary: unsetting `GENTLE_AI_RDD_SHAD
 
 When enabled during Wave 1, each observed call site wrote exactly one line to stderr:
 
-```
+```text
 gentle-ai.rdd-shadow/v1 gate=<GateKind> live_result=<GateResult> has_relation=<bool> shadow_relation=<ShadowRelation> no_live_counterpart=<bool> authority_health=<healthy|repairable|blocked> err=<quoted string, empty when none>
 ```
 
@@ -35,6 +35,6 @@ gentle-ai.rdd-shadow/v1 gate=<GateKind> live_result=<GateResult> has_relation=<b
 
 Shadow evaluation's exit evidence, the differential matrix in `internal/reviewtransaction/testdata/shadow-differential-matrix.golden`, documented expected divergence classes and confirmed 0 unexplained divergences on `exact`, `compatible_base_advance`, and `provable_contraction`. This provided the clean exit bar required to proceed with subsequent migration waves.
 
-## Next steps
+## Current architecture reference
 
 See `docs/architecture/rdd-root-simplification-design.md` for the full target architecture and the Migration waves table.
