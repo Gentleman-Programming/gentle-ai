@@ -98,7 +98,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j82-reviewed-superset-pre-push-allows-unpublished-subset":                  reviewOptedIn,
 	"j83-pre-pr-moving-advertised-base-binds-merge-base":                        reviewOptedIn,
 	"j84-sdd-attempt-selected-untracked-lifecycle":                              reviewOptedIn,
-	"j99-sdd-attempt-born-during-untracked-lifecycle":                           reviewOptedIn,
+	"j99-sdd-attempt-born-during-untracked-lifecycle":                           reviewUntouched,
 	"j85-review-parse-refusals-are-preflight":                                   reviewOptedIn,
 	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt":      reviewOptedIn,
 	"j87-unmanaged-remediation-uses-chain-failed-evidence":                      reviewUntouched,
@@ -124,7 +124,6 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j124-sdd-attempt-reset-after-selected-untracked-lands":                     reviewOptedIn,
 	"j125-claude-code-stop-hook-reminds-once-per-candidate":                     reviewOptedIn,
 	"j126-selected-untracked-terminal-status-resumes-without-flags":             reviewOptedIn,
-	"j4040-untracked-inventory-recovery-loop":                                   reviewUntouched,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {

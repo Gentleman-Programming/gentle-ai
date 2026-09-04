@@ -350,17 +350,12 @@ func TestRunSDDAttemptSettleDeclaresUntrackedFilesBornDuringTheAttempt(t *testin
 			if blocked.State != "blocked" || blocked.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
 				t.Fatalf("undeclared born-during settlement = %#v, want blocked/%s", blocked, sddstatus.CompactBlockUndeclaredUntracked)
 			}
-			if !strings.Contains(blocked.Exit, "born.txt") ||
-				!strings.Contains(blocked.Exit, "--untracked-scope=select") ||
-				!strings.Contains(blocked.Exit, "--untracked-scope=exclude") {
-				t.Fatalf("refusal does not name the file and both exits: %#v", blocked)
+			if blocked.Recovery == nil || blocked.Recovery.ExpectedUntrackedInventory == "" ||
+				len(blocked.Recovery.RetainedIntendedUntracked) != 0 {
+				t.Fatalf("refusal does not carry the native recovery delta: %#v", blocked)
 			}
 
-			_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			declared := append(append([]string{}, settle...), "--untracked-scope", test.scope, "--expected-untracked-inventory", digest)
+			declared := append(append([]string{}, settle...), "--untracked-scope", test.scope, "--expected-untracked-inventory", blocked.Recovery.ExpectedUntrackedInventory)
 			for _, path := range test.selected {
 				declared = append(declared, "--intended-untracked", path)
 			}
@@ -434,52 +429,42 @@ func (fixture sddAttemptFinishSettleFixture) settlementArgs(operation, requestID
 // TestRunSDDAttemptFinishAndSettleSurfaceLedgerUntrackedFreshnessMessage
 // proves R6: after a declared untracked selection goes stale (the workspace
 // gains another eligible path after the declaration was made), `finish` and
-// `settle` must surface the runtime ledger's refusal -- the one naming both
-// digests and the exact rerun command (runtime_ledger.go:1037) -- not the
-// generic CLI-side "untracked inventory changed" message a duplicate
-// workspace read used to produce ahead of the ledger.
-func TestRunSDDAttemptFinishAndSettleSurfaceLedgerUntrackedFreshnessMessage(t *testing.T) {
+// TestRunSDDAttemptFinishAndSettleShareLedgerRecovery proves both terminal
+// routes expose the one ledger-owned recovery: full finish returns its typed Go
+// error while compact settle serializes the same current digest as its delta.
+func TestRunSDDAttemptFinishAndSettleShareLedgerRecovery(t *testing.T) {
 	for _, operation := range []string{"finish", "settle"} {
 		t.Run(operation, func(t *testing.T) {
 			fixture := newSDDAttemptFinishSettleFixture(t, operation, "stale-untracked-"+operation)
-
 			writeUndeclaredWorkspaceFile(t, fixture.repo, "born.txt", "one\n", 0o644)
 			_, staleDigest, err := (reviewtransaction.SnapshotBuilder{Repo: fixture.repo}).IntendedUntrackedInventory(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
 			writeUndeclaredWorkspaceFile(t, fixture.repo, "another.txt", "two\n", 0o644)
-
+			_, currentDigest, err := (reviewtransaction.SnapshotBuilder{Repo: fixture.repo}).IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
 			args := append(fixture.settlementArgs(operation, "stale-"+operation),
 				"--untracked-scope", "select", "--expected-untracked-inventory", staleDigest, "--intended-untracked", "born.txt")
 
-			// `finish` refuses through a plain Go error; `settle` (the compact
-			// lifecycle) reports the same refusal as a "blocked" JSON result
-			// with a Go error of nil (issue #2540 S1's compact output shape),
-			// so the two operations are read through different surfaces even
-			// though they refuse through the exact same ledger check.
-			var message string
 			if operation == "finish" {
 				err = RunSDDAttempt(args, &bytes.Buffer{})
-				if err == nil {
-					t.Fatalf("%s with a stale digest issued authority", operation)
+				var recovery *sddstatus.RuntimeUntrackedRecoveryError
+				if !errors.As(err, &recovery) || recovery.ExpectedUntrackedInventory != currentDigest || len(recovery.RetainedIntendedUntracked) != 0 {
+					t.Fatalf("finish stale recovery = %#v, err=%v", recovery, err)
 				}
-				if !errors.Is(err, sddstatus.ErrRuntimeUndeclaredUntracked) {
-					t.Fatalf("%s stale digest error = %v, want it to wrap ErrRuntimeUndeclaredUntracked", operation, err)
+				if !strings.Contains(err.Error(), "--untracked-scope=exclude --expected-untracked-inventory="+currentDigest) ||
+					!strings.Contains(err.Error(), "--untracked-scope=select --expected-untracked-inventory="+currentDigest) {
+					t.Fatalf("finish stale recovery does not give executable scope choices: %v", err)
 				}
-				message = err.Error()
-			} else {
-				result, _ := runCompactSDDAttempt(t, args)
-				if result.State != "blocked" || result.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
-					t.Fatalf("%s with a stale digest = %#v, want blocked/%s", operation, result, sddstatus.CompactBlockUndeclaredUntracked)
-				}
-				message = result.Exit
+				return
 			}
-			if !strings.Contains(message, "this declaration was made against untracked inventory") {
-				t.Fatalf("%s stale digest message = %q, want the ledger's provenance message", operation, message)
-			}
-			if strings.Contains(message, "untracked inventory changed") {
-				t.Fatalf("%s stale digest message = %q, want the ledger's message, not the CLI's generic preflight message", operation, message)
+			result, _ := runCompactSDDAttempt(t, args)
+			if result.State != "blocked" || result.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) || result.Recovery == nil ||
+				result.Recovery.ExpectedUntrackedInventory != currentDigest || len(result.Recovery.RetainedIntendedUntracked) != 0 {
+				t.Fatalf("settle stale recovery = %#v", result)
 			}
 		})
 	}

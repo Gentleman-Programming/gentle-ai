@@ -2,6 +2,11 @@ package sddstatus
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,6 +22,123 @@ func TestSettleWithoutActiveAttemptNamesAcquire(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSettleBlockedExit(t, result, "nothing to settle", "`gentle-ai sdd-attempt acquire --cwd <repo> --change <change>")
+}
+
+func TestCompactSettleStaleUntrackedInventoryReportsNativeRecovery(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	for _, path := range []string{"selected-a.txt", "selected-z.txt"} {
+		if err := os.WriteFile(filepath.Join(repo, path), []byte("selected\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := mustRuntimeStore(t, repo, "compact-stale-untracked-recovery")
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "stale-recovery-begin", WorkUnit: "recover stale inventory",
+		EvidenceGoal: "report the compact recovery contract", MaxAttempts: 2, MaxChangedLines: 20,
+		IntendedUntracked: []string{"selected-a.txt", "selected-z.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleInventory := currentUntrackedInventoryDigest(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("born\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	currentInventory := currentUntrackedInventoryDigest(t, repo)
+	if currentInventory == staleInventory {
+		t.Fatalf("test setup did not make the eligible inventory stale: %q", currentInventory)
+	}
+	before, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+
+	selection := []string{"born.txt", "selected-a.txt", "selected-z.txt"}
+	result, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: started.Revision, RequestID: "stale-recovery-settle", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "stale inventory needs a native recovery delta",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: staleInventory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompactStateBlocked || result.Reason != CompactBlockUndeclaredUntracked || result.Token != "" {
+		t.Fatalf("stale compact settle = %#v, want blocked(undeclared_untracked) without a receipt token", result)
+	}
+	after, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision || after.ActiveAttempt == nil || after.ActiveAttempt.Outcome != AttemptRunning || len(after.Attempts) != len(before.Attempts) || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("stale compact settle mutated attempt authority: status=%#v records=%d, want revision=%q and records=%d", after, countRuntimeRecords(t, store.Dir), before.Revision, beforeRecords)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	recoveryJSON, ok := document["recovery"]
+	if !ok {
+		t.Fatalf("compact stale-inventory refusal is missing the required recovery delta: %s", encoded)
+	}
+	var recovery map[string]json.RawMessage
+	if err := json.Unmarshal(recoveryJSON, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery) != 2 {
+		t.Fatalf("recovery fields = %v, want only expected_untracked_inventory and retained_intended_untracked", recovery)
+	}
+	var typed struct {
+		ExpectedUntrackedInventory string   `json:"expected_untracked_inventory"`
+		RetainedIntendedUntracked  []string `json:"retained_intended_untracked"`
+	}
+	if err := json.Unmarshal(recoveryJSON, &typed); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(typed.ExpectedUntrackedInventory) || typed.ExpectedUntrackedInventory != currentInventory {
+		t.Fatalf("recovery expected_untracked_inventory = %q, want current canonical digest %q", typed.ExpectedUntrackedInventory, currentInventory)
+	}
+	wantRetained := []string{"selected-a.txt", "selected-z.txt"}
+	if !slices.Equal(typed.RetainedIntendedUntracked, wantRetained) {
+		t.Fatalf("recovery retained_intended_untracked = %q, want canonical mandatory selection floor %q", typed.RetainedIntendedUntracked, wantRetained)
+	}
+
+	// The refusal wrote no receipt, so the same request ID remains available.
+	// A second inventory change must replace rather than reuse the recovery
+	// digest, and the corrected retry retains the original selected floor.
+	if err := os.WriteFile(filepath.Join(repo, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: started.Revision, RequestID: "stale-recovery-settle", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "stale inventory needs a native recovery delta",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: typed.ExpectedUntrackedInventory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentInventory = currentUntrackedInventoryDigest(t, repo)
+	if second.State != CompactStateBlocked || second.Recovery == nil || second.Recovery.ExpectedUntrackedInventory != currentInventory ||
+		!slices.Equal(second.Recovery.RetainedIntendedUntracked, wantRetained) {
+		t.Fatalf("second stale compact settle = %#v, want current recovery retaining %q", second, wantRetained)
+	}
+	corrected := []string{"born.txt", "later.txt", "selected-a.txt", "selected-z.txt"}
+	settled, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: started.Revision, RequestID: "stale-recovery-settle", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "stale inventory needs a native recovery delta",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &corrected, ExpectedUntrackedInventory: second.Recovery.ExpectedUntrackedInventory,
+	})
+	if err != nil || settled.State != CompactStateComplete {
+		t.Fatalf("same-ID corrected retry = %#v, err=%v", settled, err)
+	}
 }
 
 func TestSettlePassedWithoutRemediatesNamesTheChainEvidence(t *testing.T) {
@@ -114,7 +236,7 @@ func compactSettleFixture(requestID, token string, outcome AttemptOutcome, remed
 
 func assertSettleBlockedExit(t *testing.T, result CompactAttemptResult, wants ...string) {
 	t.Helper()
-	if result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || result.Detail != result.Exit {
+	if result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || result.Detail != result.Exit || result.Recovery != nil {
 		t.Fatalf("settle = %#v, want blocked(invalid_continuation) with detail mirroring exit", result)
 	}
 	for _, want := range append(wants, "`gentle-ai sdd-attempt status --cwd <repo> --change <change>`") {

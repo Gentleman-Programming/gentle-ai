@@ -3,12 +3,14 @@ package sddstatus
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -258,7 +260,7 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 	}, Token: revision}
 	result, err := store.Acquire(context.Background(), retry)
 	status, statusErr := store.Status()
-	if err != nil || statusErr != nil || synced || result.State != CompactStateProceed || result.Token != revision || status.Revision != revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != beforeRecords {
+	if err != nil || statusErr != nil || synced || result.State != CompactStateProceed || result.Token != revision || result.Recovery != nil || status.Revision != revision || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != beforeRecords {
 		t.Fatalf("legacy tokenized replay = %#v, status=%#v err=%v/%v records=%d", result, status, err, statusErr, countRuntimeRecords(t, store.Dir))
 	}
 	foreign := retry
@@ -272,6 +274,29 @@ func TestRuntimeLegacyEmptyPopulationStillReplays(t *testing.T) {
 		if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || countRuntimeRecords(t, store.Dir) != beforeRecords {
 			t.Fatalf("legacy rejected continuation = %#v, err=%v records=%d", result, err, countRuntimeRecords(t, store.Dir))
 		}
+	}
+}
+
+func TestRuntimeUntrackedRecoveryErrorExplainsExecutableScope(t *testing.T) {
+	for _, test := range []struct {
+		name, reject string
+		err          *RuntimeUntrackedRecoveryError
+		want         []string
+	}{
+		{"empty floor", "", &RuntimeUntrackedRecoveryError{ExpectedUntrackedInventory: "digest"}, []string{"--untracked-scope=exclude --expected-untracked-inventory=digest", "--untracked-scope=select --expected-untracked-inventory=digest", "one --intended-untracked=<path> per newly selected path"}},
+		{"retained floor", "--untracked-scope=exclude", &RuntimeUntrackedRecoveryError{ExpectedUntrackedInventory: "digest", RetainedIntendedUntracked: []string{"a path.txt", "z.txt"}}, []string{"--untracked-scope=select --expected-untracked-inventory=digest --intended-untracked=" + pathquote.Quote("a path.txt") + " --intended-untracked=" + pathquote.Quote("z.txt"), "one --intended-untracked=<path> per newly selected path"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := test.err.Error()
+			for _, want := range test.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("recovery text %q does not contain %q", text, want)
+				}
+			}
+			if test.reject != "" && strings.Contains(text, test.reject) {
+				t.Fatalf("recovery text %q illegally offers %q", text, test.reject)
+			}
+		})
 	}
 }
 
@@ -305,14 +330,10 @@ func TestRuntimeFinishRefusesUntrackedBornDuringTheAttempt(t *testing.T) {
 	if err == nil {
 		t.Fatal("settled a candidate that omits the file this attempt created")
 	}
-	if !strings.Contains(err.Error(), "born.txt") {
-		t.Fatalf("refusal does not name the omitted path: %v", err)
-	}
-	if !strings.Contains(err.Error(), "--untracked-scope=select") || !strings.Contains(err.Error(), "--untracked-scope=exclude") {
-		t.Fatalf("refusal does not name both exits: %v", err)
-	}
-	if !strings.Contains(err.Error(), currentUntrackedInventoryDigest(t, repo)) {
-		t.Fatalf("refusal does not name the inventory to declare against: %v", err)
+	var recovery *RuntimeUntrackedRecoveryError
+	if !errors.As(err, &recovery) || recovery.ExpectedUntrackedInventory != currentUntrackedInventoryDigest(t, repo) ||
+		len(recovery.RetainedIntendedUntracked) != 0 {
+		t.Fatalf("refusal did not return the current empty-floor recovery: %#v, err=%v", recovery, err)
 	}
 	// State-preserving: the caller decides, and the attempt is still theirs to
 	// close once they have.
