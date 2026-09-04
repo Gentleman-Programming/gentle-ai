@@ -30,12 +30,14 @@ Restart OpenCode after enabling managed activation. Restart the shell if the lau
 ## Fedora Silverblue (rpm-ostree) Notes
 
 - **Package Layering and Live Application:** On Fedora Silverblue hosts, system dependencies are layered with `rpm-ostree install -y --apply-live <package>`. The `--apply-live` flag creates a transient overlayfs over `/usr` so newly installed binaries are immediately available in the active session without requiring a reboot.
-- **Precedence:** When Homebrew on Linux (`brew`) is present on an `rpm-ostree` host, Homebrew takes precedence because it installs packages entirely into user space (`/home/linuxbrew`) and does not modify the immutable sysroot. When both `dnf` and `rpm-ostree` are present on `PATH`, `dnf` takes precedence.
+- **Precedence:** When Homebrew on Linux (`brew`) is present on an `rpm-ostree` host, Homebrew takes precedence because it installs packages entirely into user space (`/home/linuxbrew`) and does not modify the immutable sysroot. On mutable Fedora, `dnf` takes precedence when both managers are on `PATH`. On OSTree-booted Fedora Silverblue, `rpm-ostree` takes precedence over `dnf`.
 - **Degraded Path (Pending Deployments):** If an OS upgrade or prior package operation has already staged a pending deployment, `rpm-ostree` will refuse `--apply-live`. In this state, stage the installation without live-apply and reboot to apply the layered deployment:
+
   ```bash
   rpm-ostree install <package>
   systemctl reboot
   ```
+
   Alternatively, reboot the machine first to finalize the pending deployment before retrying the installation with `--apply-live`.
 - **Validation Evidence:** Manually tested and verified on Fedora Linux 44.20260827.0 (Silverblue) with `rpm-ostree` 2026.2 (Git: 2a87ed0ffc35fd62bf2c0040cf372f33b139afa4).
 
