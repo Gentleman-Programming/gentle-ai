@@ -110,6 +110,62 @@ If you're working outside a git repo, engram falls back to the directory name.
 
 ---
 
+## Cloud Sync (Optional)
+
+> gentle-ai ships engram, which already supports an in-process cloud sync.
+> This page shows the one-time setup; the engine itself is maintained upstream.
+>
+> - Useful if you want your memories to follow you between machines you own.
+> - Not needed for team sharing via your repo (see [Team Sharing](#team-sharing) above).
+> - Skip if you only ever work on one machine -- local memory is the default.
+
+### Pick your env-var carrier
+
+| OS / setup                            | Mechanism                                       |
+|---------------------------------------|-------------------------------------------------|
+| macOS (current session / daemons)     | `launchctl setenv KEY VALUE`                    |
+| Linux (systemd user session)          | `systemctl --user set-environment KEY=VALUE`   |
+| Shell profile (terminal sessions)     | `export KEY=VALUE` in `~/.zshrc` / `~/.bashrc`  |
+
+### Setup commands
+
+```bash
+# 1. Point engram to your cloud server
+engram cloud config --server https://your-cloud-server.example
+
+# 2. Configure credentials and enable autosync (via env vars or shell profile)
+export ENGRAM_CLOUD_TOKEN="<your-token>"
+export ENGRAM_CLOUD_AUTOSYNC=1
+```
+
+> Note: If `engram mcp` or `engram serve` is already running in your AI client, restart the agent session so it picks up the new environment variables.
+
+### Verify
+
+```bash
+engram cloud status                          # check "Auth status: ready" and "Sync readiness: ready"
+engram cloud enroll <project-name>           # once per machine and project
+engram sync --cloud --project <project-name> # test remote auth and initial sync
+```
+
+### Troubleshooting
+
+Back up your local database (`~/.engram/engram.db`) before running repairs:
+
+```bash
+engram cloud upgrade doctor --project <project-name>
+engram cloud upgrade repair --project <project-name> --dry-run  # preview changes
+engram cloud upgrade repair --project <project-name> --apply    # apply after reviewing preview
+```
+
+### Reference
+
+- Engram cloud docs: [github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/README.md](https://github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/README.md)
+- The in-process background loop: [`internal/cloud/autosync/manager.go`](https://github.com/Gentleman-Programming/engram/blob/main/internal/cloud/autosync/manager.go) (engram source)
+- Why this lives as a doc, not code, here: [docs/codebase/sync-and-cloud.md](codebase/sync-and-cloud.md)
+
+---
+
 ## Full Documentation
 
 For the complete source, configuration options, and contribution guide: [github.com/Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram)
