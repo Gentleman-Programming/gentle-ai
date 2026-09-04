@@ -42,6 +42,7 @@ import (
 // SyncFlags holds parsed CLI flags for the sync command.
 type SyncFlags struct {
 	Agents             []string
+	Scope              string
 	Skills             []string
 	SDDMode            string
 	SDDProfileStrategy string
@@ -122,6 +123,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
+	fs.StringVar(&opts.Scope, "scope", "", "sync scope: global or workspace (default: global)")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
@@ -161,6 +163,9 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	if fs.NArg() > 0 {
 		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q — pass agents with the --agent %s flag, not a positional argument", fs.Arg(0), fs.Arg(0))
 	}
+	if _, err := ResolveInstallScope(opts.Scope); err != nil {
+		return SyncFlags{}, err
+	}
 
 	strategy, err := parseProfileSyncStrategy(opts.SDDProfileStrategy)
 	if err != nil {
@@ -186,6 +191,7 @@ func PrintSyncHelp(w io.Writer) {
 
 FLAGS
   --agent, --agents <list>           Agents to sync
+  --scope global|workspace          Sync global or current workspace config
   --skill, --skills <list>           Skills to sync
   --sdd-mode single|multi            SDD orchestrator mode
   --sdd-profile-strategy <strategy>  OpenCode SDD profile sync strategy
@@ -407,6 +413,15 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 	}
 }
 
+func workspaceSyncComponent(component model.ComponentID) bool {
+	switch component {
+	case model.ComponentPersona, model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentSkills:
+		return true
+	default:
+		return false
+	}
+}
+
 func RestorePersistedSelection(selection *model.Selection, persisted state.InstallState, flags SyncFlags) {
 	if !persisted.SelectionConfigured {
 		return
@@ -483,6 +498,7 @@ func DiscoverAgents(homeDir string) []model.AgentID {
 type syncRuntime struct {
 	homeDir              string
 	workspaceDir         string
+	scope                InstallScope
 	selection            model.Selection
 	agentIDs             []model.AgentID
 	backupRoot           string
@@ -497,10 +513,19 @@ type syncRuntime struct {
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	return newSyncRuntimeScoped(homeDir, ScopeGlobal, selection)
+}
+
+func newSyncRuntimeScoped(homeDir string, scope InstallScope, selection model.Selection) (*syncRuntime, error) {
 	workspaceDir, _ := os.Getwd()
 	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
-	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
+	backupHome := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	backupRoot := filepath.Join(backupHome, ".gentle-ai", "backups")
+	var compatibilityTransaction compatibilityRefreshTransaction
+	var err error
+	if scope == ScopeGlobal {
+		compatibilityTransaction, err = newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -508,6 +533,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 	runtime := &syncRuntime{
 		homeDir:      homeDir,
 		workspaceDir: workspaceDir,
+		scope:        scope,
 		selection:    selection,
 		agentIDs:     selection.Agents,
 		backupRoot:   backupRoot,
@@ -518,7 +544,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets, targetErr := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
+	targets, targetErr := syncBackupTargetsScoped(r.homeDir, r.workspaceDir, r.scope, r.selection, adapters)
 	r.managedPaths = targets
 
 	prepare := []pipeline.Step{
@@ -547,18 +573,22 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, component := range r.selection.Components {
+		if r.scope == ScopeWorkspace && !workspaceSyncComponent(component) {
+			continue
+		}
 		apply = append(apply, componentSyncStep{
 			id:               "sync:component:" + string(component),
 			component:        component,
 			homeDir:          r.homeDir,
 			workspaceDir:     r.workspaceDir,
+			scope:            r.scope,
 			agents:           r.agentIDs,
 			selection:        r.selection,
 			changedFiles:     &r.changedFiles,
 			backgroundPolicy: r.backgroundPolicy,
 		})
 	}
-	if needsCompatibilitySkillsRefresh(r.selection.Components) {
+	if r.scope == ScopeGlobal && needsCompatibilitySkillsRefresh(r.selection.Components) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
 			id:           "sync:compatibility-skills-refresh",
 			homeDir:      r.homeDir,
@@ -581,7 +611,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			agent:        agent,
 			homeDir:      r.homeDir,
 			workspaceDir: r.workspaceDir,
-			scope:        ScopeGlobal,
+			scope:        r.scope,
 			changedFiles: &r.changedFiles,
 		})
 	}
@@ -593,7 +623,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	// (issue #1440). Refresh installed copies explicitly; the step never
 	// installs plugins that were never present. When SDD is selected, its
 	// inject step already rewrites the plugins.
-	if anyAgentReceivesManagedOpenCodePlugins(r.agentIDs) && !r.selection.HasComponent(model.ComponentSDD) {
+	if r.scope == ScopeGlobal && anyAgentReceivesManagedOpenCodePlugins(r.agentIDs) && !r.selection.HasComponent(model.ComponentSDD) {
 		apply = append(apply, openCodePluginRefreshSyncStep{
 			id:           "sync:opencode:managed-plugins",
 			homeDir:      r.homeDir,
@@ -602,7 +632,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
-	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	if r.scope == ScopeGlobal && r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		apply = append(apply, &codeGraphGuidanceSyncStep{
 			id:           "sync:community-tool:codegraph-guidance",
 			homeDir:      r.homeDir,
@@ -623,17 +653,24 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // failed persona switch can be rolled back (verification still declares only
 // the selected file).
 func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	return syncBackupTargetsScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
+}
+
+func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
+		if scope == ScopeWorkspace && !workspaceSyncComponent(component) {
+			continue
+		}
+		for _, path := range syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
 		if component == model.ComponentContext7 {
-			for _, path := range claudeMCPSettingsCleanupPaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
+			for _, path := range claudeMCPSettingsCleanupPaths(homeDir, workspaceDir, scope, adapters) {
 				paths[path] = struct{}{}
 			}
 		}
-		if component == model.ComponentEngram {
+		if component == model.ComponentEngram && scope == ScopeGlobal {
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
@@ -657,7 +694,7 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 				if !adapter.SupportsOutputStyles() {
 					continue
 				}
-				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, adapter))).Backup {
+				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))).Backup {
 					paths[path] = struct{}{}
 				}
 			}
@@ -667,30 +704,32 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	// ScopeGlobal like the step itself. A persisted selection whose components
 	// do not cover the same file would otherwise be rewritten without a
 	// snapshot and could never be rolled back (issue #1794).
-	for _, path := range routingGuidancePaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
+	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
 	// Managed OpenCode-compatible plugin paths are part of sync's
 	// backup/snapshot contract whenever a plugin-receiving agent (OpenCode,
 	// Kilocode) is synced, independent of the SDD component: the
 	// openCodePluginRefreshSyncStep may rewrite installed copies (issue #1440).
-	for _, adapter := range adapters {
-		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-			continue
-		}
-		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
-			paths[filepath.Join(pluginsDir, name)] = struct{}{}
+	if scope == ScopeGlobal {
+		for _, adapter := range adapters {
+			if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+				continue
+			}
+			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+			for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
+				paths[filepath.Join(pluginsDir, name)] = struct{}{}
+			}
 		}
 	}
-	adapterSkillPaths, err := syncAdapterSkillBackupTargets(homeDir, workspaceDir, selection, adapters)
+	adapterSkillPaths, err := syncAdapterSkillBackupTargetsScoped(homeDir, workspaceDir, scope, selection, adapters)
 	if err != nil {
 		return nil, err
 	}
 	for _, path := range adapterSkillPaths {
 		paths[path] = struct{}{}
 	}
-	if !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(selection.Components) {
+	if scope == ScopeGlobal && !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(selection.Components) {
 		skillDir, ok, err := compatibilitySkillsDir(homeDir)
 		if err != nil {
 			return nil, err
@@ -705,15 +744,17 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			}
 		}
 	}
-	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	if scope == ScopeGlobal && selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
 	}
-	for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
-		paths[path] = struct{}{}
+	if scope == ScopeGlobal {
+		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
+			paths[path] = struct{}{}
+		}
 	}
-	if containsAgent(selection.Agents, model.AgentOpenCode) {
+	if scope == ScopeGlobal && containsAgent(selection.Agents, model.AgentOpenCode) {
 		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
 			paths[path] = struct{}{}
 		}
@@ -728,13 +769,17 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 }
 
 func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	return syncAdapterSkillBackupTargetsScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
+}
+
+func syncAdapterSkillBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	var paths []string
 	for _, adapter := range adapters {
 		if !adapter.SupportsSkills() {
 			continue
 		}
 		if slices.Contains(selection.Components, model.ComponentSkills) {
-			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
+			skillDir := adapter.SkillsDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
 			if skillDir == "" {
 				continue
 			}
@@ -745,7 +790,7 @@ func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model
 			paths = append(paths, ordinary...)
 		}
 		if slices.Contains(selection.Components, model.ComponentSDD) {
-			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
+			skillDir := adapter.SkillsDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
 			if skillDir == "" {
 				continue
 			}
@@ -770,10 +815,14 @@ func syncComponentPaths(homeDir string, selection model.Selection, adapters []ag
 }
 
 func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
+	return syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters, component)
+}
+
+func syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	if component == model.ComponentPersona {
-		return syncPersonaPathsWithWorkspace(homeDir, workspaceDir, selection, adapters)
+		return syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters)
 	}
-	return componentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component)
+	return componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 }
 
 // syncPersonaPaths returns the file paths that ComponentPersona writes during
@@ -790,6 +839,10 @@ func syncPersonaPaths(homeDir string, selection model.Selection, adapters []agen
 }
 
 func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+	return syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
+}
+
+func syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) []string {
 	if selection.Persona == model.PersonaCustom {
 		return nil
 	}
@@ -803,7 +856,7 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 			paths = append(paths, persona.PiPersonaConfigPath(rootDir))
 			continue
 		}
-		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
+		targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
 		if adapter.Agent() == model.AgentOpenClaw {
 			paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
 			continue
@@ -838,6 +891,7 @@ type componentSyncStep struct {
 	component    model.ComponentID
 	homeDir      string
 	workspaceDir string
+	scope        InstallScope
 	agents       []model.AgentID
 	selection    model.Selection
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
@@ -1035,8 +1089,12 @@ func (s componentSyncStep) Run() error {
 			if adapter.Agent() == model.AgentOpenClaw {
 				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
 			} else {
-				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-				res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+				if s.scope == ScopeWorkspace {
+					res, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
+				} else {
+					res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
@@ -1047,7 +1105,7 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			res, err := mcp.Inject(s.homeDir, targetDir, adapter)
 			if err != nil {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
@@ -1092,7 +1150,7 @@ func (s componentSyncStep) Run() error {
 		}
 
 		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:           s.selection.ModelAssignments,
 				OpenCodeSettingsPath:               effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter),
@@ -1127,7 +1185,7 @@ func (s componentSyncStep) Run() error {
 			return nil
 		}
 		for _, adapter := range adapters {
-			res, err := skills.Inject(componentInjectionDir(s.homeDir, s.workspaceDir, adapter), adapter, skillIDs)
+			res, err := skills.Inject(componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter), adapter, skillIDs)
 			if err != nil {
 				return fmt.Errorf("sync skills for %q: %w", adapter.Agent(), err)
 			}
@@ -1198,7 +1256,7 @@ func (s componentSyncStep) Run() error {
 				s.countChanged(boolToInt(retireRes.Changed), retireRes.Files...)
 				continue
 			}
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
 			if err != nil {
 				return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
@@ -1543,6 +1601,10 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 }
 
 func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
+	return runSyncWithSelectionScoped(homeDir, ScopeGlobal, selection, background, piBackground)
+}
+
+func runSyncWithSelectionScoped(homeDir string, scope InstallScope, selection model.Selection, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
 	// below must not rewrite state it could not read. Managed-asset provenance
@@ -1572,8 +1634,10 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	// no-op sync and a failing pipeline must still leave state.json remapped,
 	// otherwise the one-time migration never fires for those users. State
 	// records intent — the next sync applies the neutral assets.
-	if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
-		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	if scope == ScopeGlobal {
+		if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
+			return SyncResult{Agents: agentIDs, Selection: selection}, err
+		}
 	}
 
 	result := SyncResult{
@@ -1588,7 +1652,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		return result, err
 	}
 
-	rt, err := newSyncRuntime(homeDir, selection)
+	rt, err := newSyncRuntimeScoped(homeDir, scope, selection)
 	if err != nil {
 		return result, err
 	}
@@ -1644,7 +1708,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	}
 
 	// Post-apply verification reuses the same component paths as install.
-	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
+	result.Verify = runPostSyncVerificationScoped(homeDir, rt.workspaceDir, scope, selection)
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 	if background.activationPlan != nil {
@@ -1659,17 +1723,19 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		}
 		return result, verificationErr
 	}
-	writer, err := managedAssetDigest()
-	if err != nil {
-		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
-	}
-	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
-		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
-		rollback := orchestrator.Rollback(result.Execution)
-		if rollback.Err != nil {
-			persistErr = errors.Join(persistErr, rollback.Err)
+	if scope == ScopeGlobal {
+		writer, err := managedAssetDigest()
+		if err != nil {
+			return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 		}
-		return result, persistErr
+		if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
+			persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
+			rollback := orchestrator.Rollback(result.Execution)
+			if rollback.Err != nil {
+				persistErr = errors.Join(persistErr, rollback.Err)
+			}
+			return result, persistErr
+		}
 	}
 
 	return result, nil
@@ -1733,6 +1799,10 @@ func RunSync(args []string) (SyncResult, error) {
 	homeDir, err := osUserHomeDir()
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("resolve user home directory: %w", err)
+	}
+	scope, err := ResolveInstallScope(flags.Scope)
+	if err != nil {
+		return SyncResult{}, err
 	}
 
 	// Resolve agents: explicit flag takes precedence over auto-discovery.
@@ -1838,6 +1908,17 @@ func RunSync(args []string) (SyncResult, error) {
 	// RunSyncWithSelection — that function's early-return guard prevents a second
 	// disk read on the CLI path).
 	applyResolvedPersona(&selection, persistedState.Persona)
+	if scope == ScopeWorkspace {
+		components := selection.Components[:0]
+		for _, component := range selection.Components {
+			if workspaceSyncComponent(component) {
+				components = append(components, component)
+			}
+		}
+		selection.Components = components
+		background = OpenCodeBackgroundResolution{}
+		piBackground = PiBackgroundResolution{}
+	}
 
 	if flags.DryRun {
 		// Build the plan for inspection, skip execution.
@@ -1852,12 +1933,12 @@ func RunSync(args []string) (SyncResult, error) {
 		if err != nil || noOp {
 			return result, err
 		}
-		rt, err := newSyncRuntime(homeDir, selection)
+		rt, err := newSyncRuntimeScoped(homeDir, scope, selection)
 		if err != nil {
 			return result, err
 		}
 		defer rt.state.cleanupCompatibilityTransaction()
-		backgroundActivation, activationErr := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(agentIDs, model.AgentOpenCode))
+		backgroundActivation, activationErr := prepareOpenCodeBackgroundActivation(homeDir, &background, scope == ScopeGlobal && containsAgent(agentIDs, model.AgentOpenCode))
 		if activationErr != nil {
 			return result, fmt.Errorf("prepare OpenCode background activation: %w", activationErr)
 		}
@@ -1867,7 +1948,7 @@ func RunSync(args []string) (SyncResult, error) {
 		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 		result.Background = background
 		result.BackgroundPolicyEnabled = rt.backgroundPolicy
-		rt.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
+		rt.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackground, scope == ScopeGlobal && containsAgent(agentIDs, model.AgentPi))
 		result.PiBackground = piBackground
 		result.Plan = rt.stagePlan()
 		for _, step := range result.Plan.Prepare {
@@ -1878,13 +1959,13 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, nil
 	}
 
-	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(agentIDs, model.AgentOpenCode))
+	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &background, scope == ScopeGlobal && containsAgent(agentIDs, model.AgentOpenCode))
 	if err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err)
 	}
 	background.activationPlan = backgroundActivation
-	preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
-	result, err := runSyncWithSelection(homeDir, selection, background, piBackground)
+	preparePiBackgroundProjection(homeDir, &piBackground, scope == ScopeGlobal && containsAgent(agentIDs, model.AgentPi))
+	result, err := runSyncWithSelectionScoped(homeDir, scope, selection, background, piBackground)
 	if err != nil {
 		return result, err
 	}
@@ -2094,11 +2175,18 @@ func withFailedSyncVerificationNote(report verify.Report) verify.Report {
 
 // runPostSyncVerification verifies that managed files exist after sync.
 func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selection) verify.Report {
+	return runPostSyncVerificationScoped(homeDir, workspaceDir, ScopeGlobal, selection)
+}
+
+func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
 
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
+		if scope == ScopeWorkspace && !workspaceSyncComponent(component) {
+			continue
+		}
+		for _, path := range syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			currentPath := path
 			if isRetiredManagedPath(currentPath) {
 				checks = append(checks, verify.Check{
@@ -2128,24 +2216,26 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 			})
 		}
 	}
-	for _, adapter := range adapters {
-		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-			continue
+	if scope == ScopeGlobal {
+		for _, adapter := range adapters {
+			if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+				continue
+			}
+			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+			legacyPath := filepath.Join(pluginsDir, sdd.LegacyOpenCodeReviewPluginName)
+			checks = append(checks, verify.Check{
+				ID:          "verify:sync:file:" + legacyPath,
+				Description: "legacy OpenCode review plugin removed",
+				Run: func(context.Context) error {
+					if _, err := os.Lstat(legacyPath); err == nil {
+						return fmt.Errorf("legacy OpenCode review plugin still exists; rerun `gentle-ai sync` to complete the managed plugin migration")
+					} else if !os.IsNotExist(err) {
+						return err
+					}
+					return nil
+				},
+			})
 		}
-		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		legacyPath := filepath.Join(pluginsDir, sdd.LegacyOpenCodeReviewPluginName)
-		checks = append(checks, verify.Check{
-			ID:          "verify:sync:file:" + legacyPath,
-			Description: "legacy OpenCode review plugin removed",
-			Run: func(context.Context) error {
-				if _, err := os.Lstat(legacyPath); err == nil {
-					return fmt.Errorf("legacy OpenCode review plugin still exists; rerun `gentle-ai sync` to complete the managed plugin migration")
-				} else if !os.IsNotExist(err) {
-					return err
-				}
-				return nil
-			},
-		})
 	}
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))

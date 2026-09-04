@@ -207,6 +207,81 @@ func TestParseSyncFlagsDryRun(t *testing.T) {
 	}
 }
 
+func TestRunSyncWorkspaceScopeRefreshesClaudeWithoutGlobalMutation(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	globalFiles := []struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}{
+		{filepath.Join(home, ".claude", "CLAUDE.md"), []byte("global prompt\n"), 0o640},
+		{filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"custom":{"command":"custom"}}}`), 0o600},
+		{state.Path(home), []byte(`{"installedAgents":["claude-code"],"persona":"neutral"}`), 0o600},
+	}
+	for _, file := range globalFiles {
+		mustWriteFile(t, file.path, file.data)
+		if err := os.Chmod(file.path, file.mode); err != nil {
+			t.Fatalf("Chmod(%q) error = %v", file.path, err)
+		}
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	args := []string{"--scope", "workspace", "--agent", "claude-code", "--include-permissions", "--include-theme"}
+	wantComponents := []model.ComponentID{
+		model.ComponentPersona,
+		model.ComponentSDD,
+		model.ComponentEngram,
+		model.ComponentContext7,
+		model.ComponentSkills,
+	}
+	dryResult, err := RunSync(append(args, "--dry-run"))
+	if err != nil {
+		t.Fatalf("RunSync(dry-run) error = %v", err)
+	}
+	if !reflect.DeepEqual(dryResult.Selection.Components, wantComponents) {
+		t.Fatalf("dry-run components = %v, want %v", dryResult.Selection.Components, wantComponents)
+	}
+
+	result, err := RunSync(args)
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", result.Selection.Components, wantComponents)
+	}
+	workspacePrompt := filepath.Join(workspace, ".claude", "CLAUDE.md")
+	if _, err := os.Stat(workspacePrompt); err != nil {
+		t.Fatalf("workspace prompt %q was not refreshed: %v", workspacePrompt, err)
+	}
+	if !containsPath(result.ChangedFiles, workspacePrompt) {
+		t.Fatalf("ChangedFiles = %v, want workspace prompt %q", result.ChangedFiles, workspacePrompt)
+	}
+	for _, file := range globalFiles {
+		got, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", file.path, err)
+		}
+		info, err := os.Stat(file.path)
+		if err != nil {
+			t.Fatalf("Stat(%q) error = %v", file.path, err)
+		}
+		if !bytes.Equal(got, file.data) || info.Mode().Perm() != file.mode {
+			t.Errorf("global file %q mutated: bytes=%q mode=%v, want bytes=%q mode=%v", file.path, got, info.Mode().Perm(), file.data, file.mode)
+		}
+	}
+}
+
 func TestParseSyncFlagsSkillsCSV(t *testing.T) {
 	flags, err := ParseSyncFlags([]string{"--skills", "sdd-apply,go-testing"})
 	if err != nil {
