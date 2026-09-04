@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, edited, synchronize, labeled, unlabeled]
 
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
 jobs:
   check-pr-size:
     name: Check PR Cognitive Load
@@ -55,7 +60,8 @@ jobs:
     name: Check Issue Reference
     runs-on: ubuntu-latest
     outputs:
-      issue-numbers: ${{ steps.parse.outputs.issue-numbers }}
+      references: ${{ steps.parse.outputs.references }}
+      errors: ${{ steps.parse.outputs.errors }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -64,27 +70,59 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         with:
           script: |
-            const { parseLinkedIssues } = require(
+            const { bindRenderedBody, parseLinkedIssues } = require(
               `${process.env.GITHUB_WORKSPACE}/.github/scripts/parse-linked-issues.cjs`
             );
 
-            // Parse the visible body once; HTML comments (like the PR
-            // template's `Closes #42` example) are stripped by the shared
-            // parser, and check-issue-approved reuses this exact result.
-            const issueNumbers = parseLinkedIssues(context.payload.pull_request.body);
-            core.setOutput('issue-numbers', JSON.stringify(issueNumbers));
+            let bodyText;
+            try {
+              const { data: currentPR } = await github.request(
+                'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                  headers: {
+                    accept: 'application/vnd.github.full+json',
+                  },
+                }
+              );
+              bodyText = bindRenderedBody(context.payload.pull_request, currentPR);
+            } catch {
+              core.setFailed(
+                '❌ Could not retrieve and validate the current rendered PR body. Retry the check; if it persists, update the PR body and retry.'
+              );
+              return;
+            }
 
-            if (issueNumbers.length === 0) {
+            // Parse only GitHub's bound reviewer-visible rendered text. The
+            // approval gate reuses this exact kind-tagged result.
+            const { references, errors } = parseLinkedIssues(bodyText);
+            core.setOutput('references', JSON.stringify(references));
+            core.setOutput('errors', JSON.stringify(errors));
+
+            // Parser errors fail closed; malformed/cross-repo/ambiguous refs are never ignored.
+            if (errors.length > 0) {
+              core.setFailed(
+                '❌ PR body has invalid or ambiguous issue references:\n' +
+                errors.map((e) => `  - ${e.raw}: ${e.reason}`).join('\n') +
+                '\n\nAccepted forms (reviewer-visible text only):\n' +
+                '  - Closes/Fixes/Resolves #<number> (closes the issue on merge)\n' +
+                '  - Refs #<number> (non-closing link to an issue)'
+              );
+              return;
+            }
+
+            if (references.length === 0) {
               core.setFailed(
                 '❌ PR body must reference a linked issue using one of:\n' +
-                '  - Closes #<number>\n' +
-                '  - Fixes #<number>\n' +
-                '  - Resolves #<number>\n\n' +
+                '  - Closes/Fixes/Resolves #<number> (closes the issue on merge)\n' +
+                '  - Refs #<number> (non-closing link)\n\n' +
                 'References inside HTML comments (<!-- ... -->) do not count.\n' +
                 'Every PR must be linked to an approved issue.'
               );
             } else {
-              console.log(`✅ Found issue reference(s): ${issueNumbers.map(n => `#${n}`).join(', ')}`);
+              console.log(`✅ Found issue reference(s): ${references.map((r) => `#${r.number} (${r.kind})`).join(', ')}`);
             }
 
   check-issue-approved:
@@ -95,22 +133,22 @@ jobs:
       - name: Verify linked issue(s) have status:approved label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         env:
-          ISSUE_NUMBERS: ${{ needs.check-issue-reference.outputs.issue-numbers }}
+          REFERENCES: ${{ needs.check-issue-reference.outputs.references }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // Reuse the single parse from check-issue-reference; do not
-            // re-scan the raw body here (see issue #1770).
-            const issueNumbers = JSON.parse(process.env.ISSUE_NUMBERS || '[]');
+            // Reuse the parse output; do not re-scan the raw body (see issue #1770).
+            const references = JSON.parse(process.env.REFERENCES || '[]');
 
-            if (issueNumbers.length === 0) {
+            if (references.length === 0) {
               core.setFailed('❌ Could not find issue reference in PR body.');
               return;
             }
             const failures = [];
 
-            for (const issueNumber of issueNumbers) {
-              console.log(`Checking issue #${issueNumber} for status:approved label...`);
+            // context.repo is the base repo on pull_request events; all references resolve there.
+            for (const { number: issueNumber, kind } of references) {
+              console.log(`Checking issue #${issueNumber} (${kind}) for status:approved label...`);
 
               let issue;
               try {
