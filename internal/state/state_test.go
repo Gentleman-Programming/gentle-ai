@@ -44,6 +44,70 @@ func TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError(t *testing.T) 
 	}
 }
 
+func TestExternalOperationJournalRoundTripAndLifecycle(t *testing.T) {
+	home := t.TempDir()
+	intent := ExternalOperation{
+		Tool:   ExternalToolGGA,
+		Action: ExternalActionInstall,
+		Route:  "script",
+		Paths:  []string{"/home/example/.local/bin/gga", "/home/example/.local/bin/gga"},
+		PathBeforePresence: []ExternalPathPresence{
+			{Path: "/home/example/.local/bin/gga", Present: false},
+		},
+		BeforePresent: false,
+		Phase:         ExternalPhaseIntent,
+	}
+
+	journal := MergeExternalOperation(nil, intent)
+	if len(journal) != 1 || !slices.Equal(journal[0].Paths, []string{"/home/example/.local/bin/gga"}) {
+		t.Fatalf("intent journal = %#v", journal)
+	}
+	if err := Write(home, InstallState{ExternalOperations: journal}); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(persisted.ExternalOperations, journal) {
+		t.Fatalf("persisted journal = %#v, want %#v", persisted.ExternalOperations, journal)
+	}
+
+	applied := intent
+	applied.Phase = ExternalPhaseApplied
+	applied.Continuation = "settle observed external success"
+	journal = MergeExternalOperation(persisted.ExternalOperations, applied)
+	if len(journal) != 1 || journal[0].Phase != ExternalPhaseApplied || journal[0].Continuation != applied.Continuation {
+		t.Fatalf("applied journal = %#v", journal)
+	}
+	if got := RemoveExternalOperation(journal, applied); got != nil {
+		t.Fatalf("settled journal = %#v, want nil", got)
+	}
+
+	merged := MergeAgents(InstallState{ExternalOperations: persisted.ExternalOperations}, []string{"opencode"})
+	if !reflect.DeepEqual(merged.ExternalOperations, persisted.ExternalOperations) {
+		t.Fatalf("MergeAgents journal = %#v, want %#v", merged.ExternalOperations, persisted.ExternalOperations)
+	}
+}
+
+func TestExternalOperationJournalLegacyStateIsEmpty(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(home), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	persisted, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ExternalOperations != nil {
+		t.Fatalf("legacy state journal = %#v, want nil", persisted.ExternalOperations)
+	}
+}
+
 func fullyPopulatedInstallState() InstallState {
 	lastUpdateCheck := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
 	rddModeRecordedAt := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
