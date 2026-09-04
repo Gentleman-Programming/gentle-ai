@@ -14,7 +14,7 @@
 </p>
 
 <p>
-<a href="https://gentle-ai.gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
+<a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
 <a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a> &bull;
 <a href="https://engram.gentlemanprogramming.com/"><strong>Engram</strong></a>
 </p>
@@ -683,6 +683,40 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 <a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
 </a>
+
+---
+
+## About the author
+
+Gentle-AI is built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and a simple rule for AI-assisted work: **verifying beats generating**. The goal is never speed at any cost. It is a team that learns to direct AI with process and quality, instead of depending on a consultant.
+
+### Consulting: AI adoption for development teams
+
+Most teams that reach out share the same problem: they want to adopt AI, and it is not working. Some developers resist it, everyone prompts their own way, and there is no shared process or quality bar. This is AI adoption for engineering teams, not a prompting course.
+
+Engagements run on the same open-source tools you see in this repository (Gentle-AI, Engram, the 4R review framework), applied to the team's own codebase and stack.
+
+**Adoption program**
+
+1. Team diagnosis: technical level, resistance points, and opportunities.
+2. Group session before implementation: AI as a tool, demystification, and real cases.
+3. Tech lead session before implementation: align workflows and adoption strategy.
+4. Tech lead session after implementation: follow-up and friction points.
+5. Group session after implementation: consolidate learnings and next steps.
+6. Deliverable: documentation and workflows tailored to the team's stack.
+
+**Hands-on variant**
+
+Three sessions: collect the team's real problems and assign a task, demonstrate Gentle-AI and the agentic ecosystem solving exactly those problems, then review how the developers are using it and calibrate recommendations. The team sees the full flow working on its own code.
+
+Phased engagements for longer collaborations and recorded training modules on quality, agent orchestration, and AI-assisted code review are also available.
+
+### How to contact me
+
+- **Email:** [gentleman@ohmybitz.com](mailto:gentleman@ohmybitz.com)
+- **Website:** [gentlemanprogramming.com](https://gentlemanprogramming.com/)
+- **YouTube:** [@GentlemanProgramming](https://www.youtube.com/@GentlemanProgramming)
+- **GitHub:** [Gentleman-Programming](https://github.com/Gentleman-Programming)
 
 ---
 
