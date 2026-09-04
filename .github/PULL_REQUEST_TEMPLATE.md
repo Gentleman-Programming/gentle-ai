@@ -52,7 +52,7 @@ Select exactly one option. Do not check both options.
 
 **Verification performed:**
 
-Trivial formatting, spelling, minor autocomplete, search/navigation, and trivial, non-substantive mechanical transformations do not need to be itemized. See [AI_POLICY.md](../AI_POLICY.md) for the canonical policy.
+Trivial formatting, spelling, minor autocomplete, search/navigation, and trivial, non-substantive mechanical transformations do not need to be itemized. See [AI_POLICY.md](https://github.com/Gentleman-Programming/gentle-ai/blob/main/AI_POLICY.md) for the canonical policy.
 
 ---
 
@@ -75,7 +75,7 @@ cd e2e && ./docker-test.sh
 
 **Benchmark Validation**
 
-See the [benchmark guide](../bench/README.md). Benchmark validation applies to review-lifecycle, gates, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For unrelated changes, explain `N/A` in the Test Plan.
+See the [benchmark guide](https://github.com/Gentleman-Programming/gentle-ai/blob/main/bench/README.md). Benchmark validation applies to review-lifecycle, gates, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For unrelated changes, explain `N/A` in the Test Plan.
 
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
