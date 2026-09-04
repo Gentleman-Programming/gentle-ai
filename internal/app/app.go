@@ -21,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
@@ -572,6 +573,7 @@ func updateCheckError(results []update.UpdateResult) error {
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
 var appUserHomeDir = os.UserHomeDir
+var appStateWriteReconciled = state.WriteReconciled
 
 func tuiExecuteWithBackground(
 	selection model.Selection,
@@ -598,45 +600,44 @@ func tuiExecuteWithBackground(
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
-		agentIDs := make([]string, 0, len(selection.Agents))
-		for _, a := range selection.Agents {
-			agentIDs = append(agentIDs, string(a))
-		}
-		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		installState, readErr := state.Read(homeDir)
-		if errors.Is(readErr, os.ErrNotExist) {
-			installState = state.InstallState{}
-		} else if readErr != nil {
-			execResult.Err = fmt.Errorf("read persisted install state: %w", readErr)
-			if orchestrator != nil {
-				rollback := orchestrator.Rollback(execResult)
-				if rollback.Err != nil {
-					execResult.Err = errors.Join(execResult.Err, rollback.Err)
-				}
+		persistErr := statecoord.WithLock(homeDir, func() error {
+			agentIDs := make([]string, 0, len(selection.Agents))
+			for _, a := range selection.Agents {
+				agentIDs = append(agentIDs, string(a))
 			}
-			return execResult
-		}
-		installState.InstalledAgents = agentIDs
-		installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
-		installState.CommunityToolsConfigured = true
-		installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
-		installState.ClaudePhaseAssignments = claudePhaseState
-		installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
-		installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
-		installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
-		installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
-		installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
-		installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
-		installState.Persona = string(selection.Persona)
-		installState.SetSelection(selection)
-		if backgroundPersist != "" {
-			installState.BackgroundIntent = backgroundPersist
-		}
-		if piBackgroundPersist != "" {
-			installState.PiBackgroundIntent = piBackgroundPersist
-		}
-		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
-			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+			installState, readErr := state.Read(homeDir)
+			if errors.Is(readErr, os.ErrNotExist) {
+				installState = state.InstallState{}
+			} else if readErr != nil {
+				return fmt.Errorf("read persisted install state: %w", readErr)
+			}
+			installState.InstalledAgents = agentIDs
+			installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
+			installState.CommunityToolsConfigured = true
+			installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
+			installState.ClaudePhaseAssignments = claudePhaseState
+			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+			installState.Persona = string(selection.Persona)
+			installState.SetSelection(selection)
+			if backgroundPersist != "" {
+				installState.BackgroundIntent = backgroundPersist
+			}
+			if piBackgroundPersist != "" {
+				installState.PiBackgroundIntent = piBackgroundPersist
+			}
+			if writeErr := appStateWriteReconciled(homeDir, installState); writeErr != nil {
+				return fmt.Errorf("persist install state: %w", writeErr)
+			}
+			return nil
+		})
+		if persistErr != nil {
+			execResult.Err = persistErr
 			if orchestrator != nil {
 				rollback := orchestrator.Rollback(execResult)
 				if rollback.Err != nil {
