@@ -169,12 +169,16 @@ func validateKimiInstallPreflight(profile system.PlatformProfile) error {
 	}
 
 	if _, err := cmdLookPath("uv"); err != nil {
-		return fmt.Errorf(
+		msg := fmt.Sprintf(
 			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
 				"Install uv and retry:\n"+
 				"  %s",
 			uvInstallHint(profile),
 		)
+		if profile.PackageManager == "rpm-ostree" {
+			msg += "\nIf a pending deployment prevents --apply-live, stage without it and reboot:\n  rpm-ostree install -y uv && systemctl reboot"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 
 	return nil
