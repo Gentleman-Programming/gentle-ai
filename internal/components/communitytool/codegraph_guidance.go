@@ -37,7 +37,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"",
 		"CodeGraph-aware worktree placement:",
 		"",
-		"- Create Git worktrees that may need CodeGraph under the user's home directory, preferably as a sibling such as `<repo-parent>/<repo-name>-worktrees/<worktree-name>`. Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`; generic temporary-work guidance does not override this rule.",
+		"- Create Git worktrees that may need CodeGraph under the user's home directory. For a repository rooted there, place them as a sibling of the repository root at `<repo-parent>/<repo-name>-worktrees/<worktree-name>`, where `<repo-parent>` is the immediate parent directory of the repository root (repo `~/Projects/Rust/foo` → `~/Projects/Rust/foo-worktrees/<worktree-name>`). Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`; generic temporary-work guidance does not override this rule.",
 		"- Every worktree needs its own `.codegraph/` index. Never copy, symlink, or reuse another checkout's index because its root and checked-out bytes may differ.",
 		"",
 		"CodeGraph intelligence surface:",
