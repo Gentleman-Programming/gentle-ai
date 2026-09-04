@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 var sddBornDuringUntrackedCapability = &Capability{
@@ -110,95 +114,166 @@ func driveSelectedUntrackedSDDAttempt(r *journeyRun) error {
 	return nil
 }
 
-// driveBornDuringUntrackedSDDAttempt drives #3806 end to end. The attempt
-// begins against a workspace with nothing eligible, creates its implementation
-// as untracked files while it runs, and must say what they are before it can
-// settle. The settled selection is then what the rescope successor inherits,
-// which is the half of the issue a declaration-free begin used to dead-end on.
+// driveBornDuringUntrackedSDDAttempt drives #4090 end to end. It acquires two
+// canonicalized initial selections, creates an additional candidate while the
+// attempt runs, and proves a stale compact settlement returns the retained floor
+// and current inventory needed to retry without touching Review.
+const bornDuringStaleInventory = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
 func driveBornDuringUntrackedSDDAttempt(r *journeyRun) error {
+	const (
+		bornPath      = "docs/born.md"
+		bornContents  = "born during the attempt\n"
+		retainedAPath = "docs/retained-a.md"
+		retainedZPath = "docs/retained-z.md"
+	)
+	retainedFloor := []string{retainedAPath, retainedZPath}
+	for path, contents := range map[string]string{
+		retainedAPath: "retained initial selection a\n",
+		retainedZPath: "retained initial selection z\n",
+	} {
+		if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, path), contents); err != nil {
+			return err
+		}
+	}
+	initialInventory, err := bornDuringUntrackedInventory(r.sandbox)
+	if err != nil {
+		return err
+	}
+	modeBefore, err := bornDuringReviewMode(r)
+	if err != nil {
+		return err
+	}
 	acquire := r.run([]string{
 		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-born-acquire",
-		"--work-unit", "born during lifecycle", "--evidence-goal", "account files the attempt creates",
-		"--max-attempts", "2", "--max-changed-lines", "20",
+		"--work-unit", "born during lifecycle", "--evidence-goal", "recover a stale compact settlement without review authority",
+		"--max-attempts", "2", "--max-changed-lines", "20", "--untracked-scope", "select",
+		"--expected-untracked-inventory", initialInventory, "--intended-untracked", retainedZPath, "--intended-untracked", retainedAPath,
 	}, false)
 	var claimed sddCompactAttemptResult
 	if err := json.Unmarshal([]byte(acquire.Stdout), &claimed); err != nil || acquire.ExitCode != 0 || claimed.State != "proceed" || claimed.Token == "" {
-		return fmt.Errorf("clean acquire = %#v parse=%v exit=%d", claimed, err, acquire.ExitCode)
+		return fmt.Errorf("initial selected acquire = %#v parse=%v exit=%d", claimed, err, acquire.ExitCode)
 	}
-	// The attempt's own product, created under its admitted authority.
-	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, "docs", "born.md"), "born during the attempt\n"); err != nil {
+	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, bornPath), bornContents); err != nil {
+		return err
+	}
+	currentInventory, err := bornDuringUntrackedInventory(r.sandbox)
+	if err != nil {
 		return err
 	}
 	settle := append([]string{
 		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", claimed.Token,
-		"--request-id", "bench-born-settle", "--outcome", "failed", "--evidence-revision", sddFailedEvidence,
+		"--request-id", "bench-born-settle", "--outcome", "passed", "--evidence-revision", sddCorrectedEvidence,
 	}, sddTerminalEvidence...)
-	blocked := r.run(settle, false)
-	var refusal sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(blocked.Stdout), &refusal); err != nil || refusal.State != "blocked" {
-		return fmt.Errorf("undeclared born-during settlement = %#v parse=%v exit=%d", refusal, err, blocked.ExitCode)
+	stale := r.run(append(append([]string{}, settle...),
+		"--untracked-scope", "select", "--expected-untracked-inventory", bornDuringStaleInventory, "--intended-untracked", bornPath), false)
+	var raw map[string]json.RawMessage
+	var refusal struct {
+		State    string `json:"state"`
+		Reason   string `json:"reason"`
+		Recovery *struct {
+			ExpectedUntrackedInventory string   `json:"expected_untracked_inventory"`
+			RetainedIntendedUntracked  []string `json:"retained_intended_untracked"`
+		} `json:"recovery"`
 	}
-	selection, err := readStatusForContract(r, reviewContractV2)
-	if err != nil {
-		return err
+	if err := json.Unmarshal([]byte(stale.Stdout), &raw); err != nil {
+		return fmt.Errorf("parse stale born-during compact settlement: %w", err)
 	}
-	digest := selection.argument("expected_untracked_inventory")
-	if digest == "" {
-		return fmt.Errorf("review status did not publish the canonical untracked inventory: %+v", selection.NextTransition)
+	recoveryRaw, recoveryPresent := raw["recovery"]
+	var recoveryFields map[string]json.RawMessage
+	if recoveryPresent {
+		if err := json.Unmarshal(recoveryRaw, &recoveryFields); err != nil {
+			return fmt.Errorf("parse stale born-during compact recovery: %w", err)
+		}
 	}
-	settled := r.run(append(append([]string{}, settle...),
-		"--untracked-scope", "select", "--intended-untracked", "docs/born.md", "--expected-untracked-inventory", digest), false)
+	_, retainedPresent := recoveryFields["retained_intended_untracked"]
+	if err := json.Unmarshal([]byte(stale.Stdout), &refusal); err != nil || stale.ExitCode != 0 ||
+		refusal.State != "blocked" || refusal.Reason != "undeclared_untracked" || refusal.Recovery == nil ||
+		!recoveryPresent || !retainedPresent || refusal.Recovery.ExpectedUntrackedInventory != currentInventory ||
+		len(refusal.Recovery.RetainedIntendedUntracked) != len(retainedFloor) {
+		return fmt.Errorf("stale born-during compact settlement = %#v recovery-present=%t retained-present=%t parse=%v exit=%d", refusal, recoveryPresent, retainedPresent, err, stale.ExitCode)
+	}
+	for index, path := range retainedFloor {
+		if refusal.Recovery.RetainedIntendedUntracked[index] != path {
+			return fmt.Errorf("stale born-during retained floor = %#v, want %#v", refusal.Recovery.RetainedIntendedUntracked, retainedFloor)
+		}
+	}
+
+	// The compact refusal owns the canonical retained floor and current digest.
+	// The retry preserves that floor, then explicitly adds its born-during path.
+	intended := append([]string{}, refusal.Recovery.RetainedIntendedUntracked...)
+	intended = append(intended, bornPath)
+	settledIntended := []string{bornPath, retainedAPath, retainedZPath}
+	retry := append(append([]string{}, settle...), "--untracked-scope", "select",
+		"--expected-untracked-inventory", refusal.Recovery.ExpectedUntrackedInventory)
+	for _, path := range intended {
+		retry = append(retry, "--intended-untracked", path)
+	}
+	settled := r.run(retry, false)
 	var result sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(settled.Stdout), &result); err != nil || settled.ExitCode != 0 || result.State != "proceed" {
-		return fmt.Errorf("declared born-during settlement = %#v parse=%v exit=%d", result, err, settled.ExitCode)
+	if err := json.Unmarshal([]byte(settled.Stdout), &result); err != nil || settled.ExitCode != 0 || result.State != "complete" {
+		return fmt.Errorf("same-ID native recovery settlement = %#v parse=%v exit=%d", result, err, settled.ExitCode)
 	}
+
 	var status struct {
-		Revision string `json:"revision"`
-		Attempts []struct {
-			ChangedLines      int      `json:"changed_lines"`
-			IntendedUntracked []string `json:"intended_untracked"`
+		ActiveAttempt any `json:"active_attempt"`
+		Attempts      []struct {
+			ChangedLines        int      `json:"changed_lines"`
+			FinishCandidateTree string   `json:"finish_candidate_tree"`
+			IntendedUntracked   []string `json:"intended_untracked"`
 		} `json:"attempts"`
 	}
 	if err := proveJSON(r.sandbox, &status, "sdd-attempt", "status", "--cwd", r.sandbox.Repo, "--change", sddChange); err != nil {
 		return err
 	}
-	if len(status.Attempts) != 1 || status.Attempts[0].ChangedLines != 1 ||
-		len(status.Attempts[0].IntendedUntracked) != 1 || status.Attempts[0].IntendedUntracked[0] != "docs/born.md" {
-		return fmt.Errorf("born-during settlement accounting = %#v", status)
+	if status.ActiveAttempt != nil || len(status.Attempts) != 1 || status.Attempts[0].ChangedLines != 1 ||
+		status.Attempts[0].FinishCandidateTree == "" || len(status.Attempts[0].IntendedUntracked) != len(settledIntended) {
+		return fmt.Errorf("born-during native recovery accounting = %#v", status)
 	}
-	rescoped := r.run([]string{
-		"sdd-attempt", "rescope", "--cwd", r.sandbox.Repo, "--change", sddChange, "--expected-revision", status.Revision,
-		"--request-id", "bench-born-rescope", "--work-unit", "born during continuation",
-		"--evidence-goal", "prove the successor inherits what the attempt created", "--max-attempts", "2", "--max-changed-lines", "20",
-		"--reason", "maintainer narrowed the failed born-during objective", "--actor", "bench",
-	}, false)
-	if rescoped.ExitCode != 0 {
-		return fmt.Errorf("born-during rescope = exit=%d stderr=%s", rescoped.ExitCode, firstLine(rescoped.Stderr))
+	for index, path := range settledIntended {
+		if status.Attempts[0].IntendedUntracked[index] != path {
+			return fmt.Errorf("born-during native recovery intended paths = %#v, want %#v", status.Attempts[0].IntendedUntracked, settledIntended)
+		}
 	}
-	// The half #3806 reported: this declaration-free command is the one the
-	// provider advertises, and it used to have no runnable form at all.
-	continued := r.run([]string{
-		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-born-successor",
-		"--work-unit", "born during continuation", "--evidence-goal", "prove the successor inherits what the attempt created",
-		"--max-attempts", "2", "--max-changed-lines", "20",
-	}, false)
-	var successor sddCompactAttemptResult
-	if err := json.Unmarshal([]byte(continued.Stdout), &successor); err != nil || continued.ExitCode != 0 || successor.State != "proceed" || successor.Token == "" {
-		return fmt.Errorf("declaration-free born-during successor = %#v parse=%v exit=%d", successor, err, continued.ExitCode)
+	contents, err := os.ReadFile(filepath.Join(r.sandbox.Repo, bornPath))
+	if err != nil || string(contents) != bornContents {
+		return fmt.Errorf("born-during candidate was not preserved: contents=%q err=%v", contents, err)
 	}
-	var continuedStatus struct {
-		ActiveAttempt *struct {
-			IntendedUntracked []string `json:"intended_untracked"`
-		} `json:"active_attempt"`
-	}
-	if err := proveJSON(r.sandbox, &continuedStatus, "sdd-attempt", "status", "--cwd", r.sandbox.Repo, "--change", sddChange); err != nil {
-		return err
-	}
-	if continuedStatus.ActiveAttempt == nil || len(continuedStatus.ActiveAttempt.IntendedUntracked) != 1 ||
-		continuedStatus.ActiveAttempt.IntendedUntracked[0] != "docs/born.md" {
-		return fmt.Errorf("born-during successor lost the settled selection: %#v", continuedStatus)
+	modeAfter, err := bornDuringReviewMode(r)
+	if err != nil || modeAfter != modeBefore {
+		return fmt.Errorf("born-during SDD recovery changed review mode from %q to %q: %v", modeBefore, modeAfter, err)
 	}
 	return nil
+}
+
+func bornDuringUntrackedInventory(sandbox *Sandbox) (string, error) {
+	output, err := gitOut(sandbox, sandbox.Repo, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return "", err
+	}
+	paths := []string{}
+	if output != "" {
+		paths = strings.Split(output, "\n")
+		sort.Strings(paths)
+	}
+	hash := sha256.New()
+	for _, value := range append([]string{"gentle-ai.intended-untracked-inventory/v1"}, paths...) {
+		_, _ = fmt.Fprintf(hash, "%d\x00%s\x00", len(value), value)
+	}
+	return "sha256:" + fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func bornDuringReviewMode(r *journeyRun) (string, error) {
+	observation := r.run([]string{"review", "mode", "status", "--cwd", r.sandbox.Repo, "--json"}, false)
+	var mode struct {
+		Status struct {
+			Effective string `json:"effective"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &mode); err != nil || observation.ExitCode != 0 || mode.Status.Effective == "" {
+		return "", fmt.Errorf("review mode observation = %#v parse=%v", observation, err)
+	}
+	return mode.Status.Effective, nil
 }
 
 func selectedUntrackedSDDJourneys() []Journey {
@@ -213,11 +288,12 @@ func selectedUntrackedSDDJourneys() []Journey {
 		},
 	}, {
 		ID:     "j99-sdd-attempt-born-during-untracked-lifecycle",
-		Title:  "SDD attempt: files born during an attempt are declared, accounted, and inherited",
-		Source: "issue #3806: a settlement silently recorded the attempt's own untracked product as zero, and the rescope successor it left behind had no runnable begin",
+		Review: reviewUntouched,
+		Title:  "SDD attempt: native compact recovery settles files born during an attempt",
+		Source: "#4090 Slice B: native compact recovery, not Review STATUS, returns the stale-settlement digest and retained selection floor",
 		Steps: []Step{
 			{Name: "fixture: runtime repository", Fixture: sddRuntimeRepo},
-			{Name: "acquire clean, create, declare at settle, and continue", Requires: sddBornDuringUntrackedCapability, Composite: driveBornDuringUntrackedSDDAttempt},
+			{Name: "acquire clean, create a born-during candidate, recover stale compact settlement, and preserve review mode", Requires: sddBornDuringUntrackedCapability, Composite: driveBornDuringUntrackedSDDAttempt},
 		},
 	}}
 }
