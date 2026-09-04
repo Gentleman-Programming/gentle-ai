@@ -7556,7 +7556,8 @@ exit 0
 		t.Fatalf("missing %q in argv (special-character CLAUDE_PROJECT_DIR did not survive argument reconstruction):\nlog:\n%s\npwsh output:\n%s", wantCwdArg, log, pwshOutput)
 	}
 	if !strings.Contains(log, fmt.Sprintf("CLAUDE_PROJECT_DIR=%s", projectDir)) {
-		t.Fatalf("CLAUDE_PROJECT_DIR not propagated into the fake:\n%s", log)	}
+		t.Fatalf("CLAUDE_PROJECT_DIR not propagated into the fake:\n%s", log)
+	}
 }
 
 func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testing.T) {
