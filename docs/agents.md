@@ -17,7 +17,7 @@
 | Codex           | `codex`          | Yes          | Yes | Native multi-agent (default; solo fallback) | No            | No             | `~/.codex`                          |
 | Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                       | No            | No             | `~/.codeium/windsurf`               |
 | Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control     | No            | No             | `~/.gemini/antigravity`             |
-| Kimi Code       | `kimi`           | Yes          | Yes | Full (native custom agents)      | Via KIMI.md include [^kimi-output-style] | No | `~/.kimi`                           |
+| Kimi Code       | `kimi`           | Yes          | Yes | Full (native custom agents)      | Via AGENTS.md include [^kimi-output-style] | No | `~/.kimi-code` (legacy `~/.kimi`)   |
 | Qwen Code       | `qwen-code`      | Yes          | Yes | Full (native sub-agents)         | No            | Yes            | `~/.qwen`                           |
 | Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.kiro`                           |
 | OpenClaw        | `openclaw`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.openclaw`                       |
@@ -29,7 +29,7 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 
 `gentle-ai install --scope=workspace` is supported across selected agents for agent-scoped files, not only Claude Code. In workspace scope, Gentle AI writes system prompts, skills, SDD agents, and persona files into the current project root when the agent supports project-local configuration. Global-only integrations, such as package installs or settings that the agent only reads from its global config, remain global by design.
 
-[^kimi-output-style]: Kimi has no `settings.json` `outputStyle` mechanism like Claude Code. Instead, `KIMI.md` unconditionally includes `output-style.md` as a Jinja module — the canonical tone/language/philosophy channel for Kimi's persona (`persona.md` carries only tooling/action directives plus a pointer to this module).
+[^kimi-output-style]: Kimi has no `settings.json` `outputStyle` mechanism like Claude Code. Instead, `AGENTS.md` unconditionally includes `output-style.md` as a Jinja module — the canonical tone/language/philosophy channel for Kimi's persona (`persona.md` carries only tooling/action directives plus a pointer to this module).
 
 ---
 
@@ -185,11 +185,12 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### Kimi Code
 
-- Installation requires the `uv` Python package manager (`uv tool install kimi-cli`).
-- Root custom agent at `~/.kimi/agents/gentleman.yaml` with `system_prompt_path: ../KIMI.md`
-- `KIMI.md` is a thin Jinja template that includes modular prompt files:
+- Current kimi-code (Node.js) installs via npm: `npm install -g @moonshot-ai/kimi-code` (requires Node.js >= 22.19.0). The legacy Python CLI used `uv tool install kimi-cli`.
+- Config root is `~/.kimi-code` (current kimi-code; overridable via `KIMI_CODE_HOME`). gentle-ai uses `~/.kimi` only when that legacy directory exists without `~/.kimi-code`; a fresh machine defaults to `~/.kimi-code`.
+- Root custom agent at `{config-root}/agents/gentleman.yaml` with `system_prompt_path: ../AGENTS.md`
+- Global system prompt at `{config-root}/AGENTS.md` — a thin Jinja template that includes modular prompt files:
   `persona.md`, `output-style.md`, `engram-protocol.md`, `sdd-orchestrator.md`
-- Built-in Kimi variables are preserved in `KIMI.md`: `${KIMI_AGENTS_MD}` and `${KIMI_SKILLS}`
+- Built-in Kimi variables are preserved in `AGENTS.md`: `${KIMI_AGENTS_MD}` and `${KIMI_SKILLS}`
 
 ### Kiro IDE
 

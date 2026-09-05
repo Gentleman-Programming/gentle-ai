@@ -33,6 +33,11 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
 
+	// Let the adapter decide where skills belong. For Kimi Code,
+	// SkillsDir already returns the plugin skills subdirectory; for legacy
+	// installs it returns the shared skills dir. Using an interface override
+	// here would create ~/.kimi-code on legacy installs and flip path
+	// resolution mid-injection.
 	skillDir := adapter.SkillsDir(homeDir)
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil

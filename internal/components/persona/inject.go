@@ -318,7 +318,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 
 		// Write separate Jinja include modules for Kimi (and any future agents that
 		// use this strategy). Each module corresponds to one {% include "…" %} in
-		// the static KIMI.md template that the bootstrapper above ensures exists.
+		// the static AGENTS.md template that the bootstrapper above ensures exists.
 		configDir := adapter.GlobalConfigDir(homeDir)
 
 		// Module 1: persona (raw content — no variables; those live in the template).
@@ -524,7 +524,7 @@ func isGentlemanConversationPersona(persona model.PersonaID) bool {
 // philosophy content through an active output-style channel that loads every
 // session, making the system-prompt persona section redundant for that
 // content. Claude Code is gated on SupportsOutputStyles(); Kimi is an explicit
-// carve-out because its KIMI.md unconditionally double-includes both the
+// carve-out because its AGENTS.md unconditionally double-includes both the
 // persona.md and output-style.md Jinja modules regardless of that capability
 // flag (see design.md Decision 1).
 func residualChannel(adapter agents.Adapter) bool {

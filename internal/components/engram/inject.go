@@ -532,7 +532,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			}
 
 			// Write the Engram protocol as a standalone Jinja include module.
-			// The static KIMI.md template references it via {% include "engram-protocol.md" %}.
+			// The static AGENTS.md template references it via {% include "engram-protocol.md" %}.
 			configDir := adapter.GlobalConfigDir(promptDir)
 			protocolContent := protocolFor(adapter.Agent(), opts)
 			modulePath := filepath.Join(configDir, "engram-protocol.md")

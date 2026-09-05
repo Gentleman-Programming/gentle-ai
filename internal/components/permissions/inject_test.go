@@ -365,6 +365,13 @@ func TestInjectAntigravitySkipsPermissions(t *testing.T) {
 	}
 }
 
+func TestPermissionsInject_KimiReturnsNil(t *testing.T) {
+	overlay := agentOverlay(model.AgentKimi)
+	if overlay != nil {
+		t.Errorf("expected nil overlay for Kimi, got %s", overlay)
+	}
+}
+
 // TestInjectCodexNeverWritesConfig pins the decision that gentle-ai writes
 // nothing to Codex's permissions configuration — neither a profile nor the
 // legacy migration that used to strip one. Codex refuses to load a config that

@@ -13,7 +13,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
-// cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for testability.
+// cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for
+// testability.
 var cmdLookPath = exec.LookPath
 var osStat = os.Stat
 var osGetenv = os.Getenv
@@ -85,18 +86,29 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
 }
 
-// resolveKimiInstall returns the official Kimi install command sequence.
-// To avoid the security risks of pipe-to-shell patterns (curl | bash),
-// we execute the underlying command that the scripts alias: `uv tool install`.
+// resolveKimiInstall returns the npm install command sequence gentle-ai shows
+// for the current Node.js-based Kimi Code (@moonshot-ai/kimi-code). The legacy
+// Python-based kimi-cli (`uv tool install kimi-cli`) is the old product:
+// gentle-ai still detects an existing legacy install (~/.kimi) but no longer
+// installs it.
+//
+// On Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
+// On Windows and macOS, sudo is never needed.
+//
+// --ignore-scripts blocks postinstall hooks, the primary supply-chain attack
+// vector for npm packages. The version is "latest" because a human reads and
+// runs this command; a frozen pin would go stale as soon as upstream ships a
+// newer release.
 func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error) {
-	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic
-	// prerequisite manager to ensure secure and isolated installs.
 	if !profile.Supported {
 		return nil, fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
 	}
 
-	// We explicitly request python 3.13 as strictly defined by Kimi upstream.
-	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}, nil
+	const pkg = "@moonshot-ai/kimi-code@latest"
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+	}
+	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 }
 
 // npmBasedAgents is the set of agents whose auto-install runs npm commands.
@@ -125,8 +137,6 @@ func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.A
 		}
 	}
 	switch agent {
-	case model.AgentKimi:
-		return validateKimiInstallPreflight(profile)
 	case model.AgentPi:
 		return validatePiInstallPreflight()
 	default:
@@ -157,40 +167,6 @@ func validateNpmInstallPreflight(profile system.PlatformProfile) error {
 		)
 	}
 	return nil
-}
-
-func validateKimiInstallPreflight(profile system.PlatformProfile) error {
-	if !profile.Supported {
-		return fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
-	}
-
-	if _, err := cmdLookPath("uv"); err != nil {
-		return fmt.Errorf(
-			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
-				"Install uv and retry:\n"+
-				"  %s",
-			uvInstallHint(profile),
-		)
-	}
-
-	return nil
-}
-
-func uvInstallHint(profile system.PlatformProfile) string {
-	switch profile.PackageManager {
-	case "brew":
-		return "brew install uv"
-	case "apt":
-		return "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
-	case "pacman":
-		return "sudo pacman -S --noconfirm uv"
-	case "dnf":
-		return "sudo dnf install -y uv"
-	case "winget":
-		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
-	default:
-		return "https://docs.astral.sh/uv/getting-started/installation/"
-	}
 }
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {

@@ -395,16 +395,28 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
-			name:    "kimi on windows uses uv to strictly enforce secure package installation",
+			name:    "kimi on windows installs current kimi-code via npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true},
 			agent:   model.AgentKimi,
-			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@moonshot-ai/kimi-code@latest"}},
 		},
 		{
-			name:    "kimi on unix uses uv to strictly enforce secure package installation",
+			name:    "kimi on darwin installs current kimi-code via npm without sudo",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:   model.AgentKimi,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@moonshot-ai/kimi-code@latest"}},
+		},
+		{
+			name:    "kimi on linux system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: true},
 			agent:   model.AgentKimi,
-			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@moonshot-ai/kimi-code@latest"}},
+		},
+		{
+			name:    "kimi on linux nvm skips sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: true, NpmWritable: true},
+			agent:   model.AgentKimi,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@moonshot-ai/kimi-code@latest"}},
 		},
 		{
 			name:    "kimi on unsupported profile returns error",
@@ -449,41 +461,6 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 		errContains string
 	}{
 		{
-			name:    "kimi on unsupported platform returns unsupported error before uv lookup",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: "", Supported: false},
-			agent:   model.AgentKimi,
-			lookPath: func(file string) (string, error) {
-				return "", fmt.Errorf("should not be called")
-			},
-			wantErr:     true,
-			errContains: "not supported on this platform",
-		},
-		{
-			name:    "kimi missing uv returns actionable remediation",
-			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
-			agent:   model.AgentKimi,
-			lookPath: func(file string) (string, error) {
-				if file == "uv" {
-					return "", fmt.Errorf("not found")
-				}
-				return "/usr/bin/" + file, nil
-			},
-			wantErr:     true,
-			errContains: "brew install uv",
-		},
-		{
-			name:    "kimi with uv present passes preflight",
-			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true},
-			agent:   model.AgentKimi,
-			lookPath: func(file string) (string, error) {
-				if file == "uv" {
-					return "/usr/bin/uv", nil
-				}
-				return "", fmt.Errorf("not found")
-			},
-			wantErr: false,
-		},
-		{
 			name:    "pi missing binary returns actionable remediation",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
 			agent:   model.AgentPi,
@@ -525,10 +502,11 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			errContains: "Node.js",
 		},
 		{
-			// ClaudeCode does not require uv (that is Kimi-specific), but it does
-			// require npm. This case verifies that npm being present is sufficient
-			// for the preflight to pass — uv absence is irrelevant.
-			name:    "non kimi npm agent does not require uv but does require npm (npm present)",
+			// ClaudeCode has no agent-specific runtime gate (that is
+			// Kimi-specific), but it does require npm. This case verifies that
+			// npm being present is sufficient for the preflight to pass —
+			// node availability beyond npm is irrelevant.
+			name:    "non kimi npm agent does not require node version but does require npm (npm present)",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
 			agent:   model.AgentClaudeCode,
 			lookPath: func(file string) (string, error) {
@@ -567,17 +545,12 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var calls int
 			lookPath := tt.lookPath
 			if lookPath == nil {
 				lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
 			}
-			wrappedLookPath := func(file string) (string, error) {
-				calls++
-				return lookPath(file)
-			}
 			origLookPath := cmdLookPath
-			cmdLookPath = wrappedLookPath
+			cmdLookPath = lookPath
 			t.Cleanup(func() { cmdLookPath = origLookPath })
 
 			err := ValidateAgentInstallPreflight(tt.profile, tt.agent)
@@ -587,13 +560,6 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 
 			if tt.wantErr && !strings.Contains(err.Error(), tt.errContains) {
 				t.Fatalf("ValidateAgentInstallPreflight() error = %q, want to contain %q", err.Error(), tt.errContains)
-			}
-			if tt.name == "kimi on unsupported platform returns unsupported error before uv lookup" && strings.Contains(strings.ToLower(err.Error()), "install uv") {
-				t.Fatalf("ValidateAgentInstallPreflight() unsupported-platform error leaked uv remediation: %q", err.Error())
-			}
-
-			if tt.name == "kimi on unsupported platform returns unsupported error before uv lookup" && calls != 0 {
-				t.Fatalf("ValidateAgentInstallPreflight() called uv lookup %d times on unsupported platform, want 0", calls)
 			}
 		})
 	}

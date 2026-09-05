@@ -28,6 +28,24 @@ type ConfigState struct {
 // until the import cycle is resolved and ScanConfigs can delegate directly to
 // agents.DiscoverInstalled.
 func knownAgentConfigDirs(homeDir string) []ConfigState {
+	// Kimi Code (Node.js) uses ~/.kimi-code (or KIMI_CODE_HOME); legacy
+	// (Python/uv) uses ~/.kimi. Mirrors kimi.Adapter.resolveConfigDir: env
+	// override first, then ~/.kimi-code, then ~/.kimi only when it exists.
+	kimiDir := filepath.Join(homeDir, ".kimi-code")
+	if envDir := os.Getenv("KIMI_CODE_HOME"); envDir != "" {
+		if info, err := os.Stat(envDir); err == nil && info.IsDir() {
+			kimiDir = envDir
+		}
+	}
+	if kimiDir == filepath.Join(homeDir, ".kimi-code") {
+		if info, err := os.Stat(kimiDir); err != nil || !info.IsDir() {
+			legacyDir := filepath.Join(homeDir, ".kimi")
+			if info, err := os.Stat(legacyDir); err == nil && info.IsDir() {
+				kimiDir = legacyDir
+			}
+		}
+	}
+
 	return []ConfigState{
 		{Agent: "claude-code", Path: filepath.Join(homeDir, ".claude")},
 		{Agent: "opencode", Path: filepath.Join(homeDir, ".config", "opencode")},
@@ -38,7 +56,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
-		{Agent: "kimi", Path: filepath.Join(homeDir, ".kimi")},
+		{Agent: "kimi", Path: kimiDir},
 		{Agent: "qwen-code", Path: filepath.Join(homeDir, ".qwen")},
 		{Agent: "kiro-ide", Path: filepath.Join(homeDir, ".kiro")},
 		{Agent: "openclaw", Path: filepath.Join(homeDir, ".openclaw")},

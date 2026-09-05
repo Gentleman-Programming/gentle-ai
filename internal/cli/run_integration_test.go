@@ -2303,8 +2303,8 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = missingBinaryLookPath
 	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "uv" {
-			return "/usr/bin/uv", nil
+		if name == "npm" {
+			return "/usr/bin/npm", nil
 		}
 		return "", exec.ErrNotFound
 	})
@@ -2327,7 +2327,7 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	}
 
 	// Verify that KIMI.md was created in the agent's config dir.
-	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	hubPath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
 	}
@@ -2368,7 +2368,7 @@ func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
 	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
 
 	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "uv" {
+		if name == "npm" {
 			return "", exec.ErrNotFound
 		}
 		return "/usr/bin/" + name, nil
@@ -2387,7 +2387,7 @@ func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	hubPath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	if _, err := os.Stat(hubPath); err != nil {
 		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
 	}

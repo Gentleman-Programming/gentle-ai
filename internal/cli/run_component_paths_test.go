@@ -446,16 +446,17 @@ func TestComponentPathsSDDKimiIncludesAgentFilesAndGlobalSkills(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
 
+	pluginSkills := filepath.Join(home, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")
 	for _, want := range []string{
-		filepath.Join(home, ".kimi", "KIMI.md"),
-		filepath.Join(home, ".kimi", "agents", "gentleman.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-init.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-propose.md"),
-		filepath.Join(home, ".kimi", "agents", "sdd-apply.yaml"),
-		filepath.Join(home, ".kimi", "agents", "sdd-verify.md"),
-		filepath.Join(home, ".kimi", "agents", "sdd-archive.yaml"),
-		filepath.Join(home, ".config", "agents", "skills", "sdd-init", "SKILL.md"),
-		filepath.Join(home, ".config", "agents", "skills", "_shared", "engram-convention.md"),
+		filepath.Join(home, ".kimi-code", "AGENTS.md"),
+		filepath.Join(home, ".kimi-code", "agents", "gentleman.yaml"),
+		filepath.Join(home, ".kimi-code", "agents", "sdd-init.yaml"),
+		filepath.Join(home, ".kimi-code", "agents", "sdd-propose.md"),
+		filepath.Join(home, ".kimi-code", "agents", "sdd-apply.yaml"),
+		filepath.Join(home, ".kimi-code", "agents", "sdd-verify.md"),
+		filepath.Join(home, ".kimi-code", "agents", "sdd-archive.yaml"),
+		filepath.Join(pluginSkills, "sdd-init", "SKILL.md"),
+		filepath.Join(pluginSkills, "_shared", "engram-convention.md"),
 	} {
 		if !containsPath(paths, want) {
 			t.Fatalf("componentPaths(sdd,kimi) missing %q\npaths=%v", want, paths)
@@ -469,7 +470,7 @@ func TestComponentPathsContext7KimiIncludesMCPConfig(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentContext7)
 
-	want := filepath.Join(home, ".kimi", "mcp.json")
+	want := filepath.Join(home, ".kimi-code", "mcp.json")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(context7,kimi) missing %q\npaths=%v", want, paths)
 	}

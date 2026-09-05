@@ -205,7 +205,7 @@ For any adapter with an active output-style channel — Claude Code (gated by `S
 #### Scenario: Claude and Kimi residual sections carry no tone content
 
 - GIVEN Claude or Kimi assets are generated with persona `gentleman` or `neutral`
-- WHEN the CLAUDE.md or KIMI.md-included persona section is inspected
+- WHEN the CLAUDE.md or AGENTS.md-included persona section is inspected
 - THEN it contains only Rules, Expertise, Contextual Skill Loading, a pointer to the output style, and any agent-native tooling section identified in the design's disposition tables (Kimi: `## Kimi-native notes`)
 - AND it contains no tone, language, or philosophy prose
 
@@ -264,7 +264,7 @@ Uninstall and auto-heal fingerprint checks that rely on literal markers from the
 
 ### Requirement: Kimi Non-Duplication and Documentation Accuracy
 
-Kimi's `KIMI.md` module includes MUST NOT deliver tone/language/philosophy content twice per session. `docs/agents.md` MUST accurately describe Kimi's output-style status as an active canonical tone channel, not as unsupported.
+Kimi's `AGENTS.md` module includes MUST NOT deliver tone/language/philosophy content twice per session. `docs/agents.md` MUST accurately describe Kimi's output-style status as an active canonical tone channel, not as unsupported.
 
 #### Scenario: Kimi delivers tone content once per session
 

@@ -438,7 +438,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 
 			// Write the SDD orchestrator as a standalone Jinja include module.
-			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
+			// The static AGENTS.md template references it via {% include "sdd-orchestrator.md" %}.
 			configDir := adapter.GlobalConfigDir(homeDir)
 			content := renderSDDOrchestratorAsset(adapter.Agent(), opts.orchestratorPolicyRenderOptions())
 			modulePath := filepath.Join(configDir, "sdd-orchestrator.md")
@@ -456,7 +456,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
 			// Write the strict-tdd-mode marker as a standalone Jinja include module.
-			// The static KIMI.md template references it via {% include "strict-tdd-mode.md" %}.
+			// The static AGENTS.md template references it via {% include "strict-tdd-mode.md" %}.
 			configDir := adapter.GlobalConfigDir(homeDir)
 			content := "Strict TDD Mode: enabled"
 			modulePath := filepath.Join(configDir, "strict-tdd-mode.md")
@@ -1754,6 +1754,17 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 		}
 		return InjectionResult{Changed: changed, Files: []string{hooksPath}}, nil
 	}
+	if adapter.Agent() == model.AgentKimi {
+		configPath := adapter.SettingsPath(homeDir)
+		if configPath == "" {
+			return InjectionResult{}, nil
+		}
+		changed, err := ensureKimiSkillRegistryHook(configPath)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("install Kimi skill-registry hook: %w", err)
+		}
+		return InjectionResult{Changed: changed, Files: []string{configPath}}, nil
+	}
 	if adapter.Agent() != model.AgentClaudeCode {
 		return InjectionResult{}, nil
 	}
@@ -1770,6 +1781,81 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
 	}
 	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
+}
+
+func ensureKimiSkillRegistryHook(configPath string) (bool, error) {
+	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore || true`
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read Kimi config %q: %w", configPath, err)
+	}
+	text := string(data)
+
+	// Dedup: if the hook command already exists, skip.
+	if strings.Contains(text, command) {
+		return false, nil
+	}
+
+	const correctLine = `command = '` + command + `'`
+
+	// If the correctly-quoted hook already exists, nothing to do.
+	if strings.Contains(text, correctLine) {
+		return false, nil
+	}
+
+	// Migration: drop any stale SessionStart skill-registry hook block (e.g. the
+	// Unix-only `--cwd "$PWD"` variant) before appending the current one.
+	text = removeKimiSkillRegistryHookBlocks(text)
+
+	hookBlock := `
+[[hooks]]
+event = "SessionStart"
+` + correctLine
+	updated := strings.TrimRight(text, "\n") + "\n" + hookBlock
+
+	wr, err := filemerge.WriteFileAtomic(configPath, []byte(updated), 0o644)
+	if err != nil {
+		return false, fmt.Errorf("write Kimi config %q: %w", configPath, err)
+	}
+	return wr.Changed, nil
+}
+
+// kimiSkillRegistryMarker matches every variant of the skill-registry hook
+// command, including stale ones such as the Unix-only `--cwd "$PWD"` form.
+const kimiSkillRegistryMarker = "skill-registry refresh"
+
+// removeKimiSkillRegistryHookBlocks deletes every [[hooks]] SessionStart block
+// whose command references the skill-registry marker, so a sync replaces stale
+// hook variants with the current command. Unrelated [[hooks]] blocks are kept.
+func removeKimiSkillRegistryHookBlocks(text string) string {
+	searchFrom := 0
+	for {
+		idx := strings.Index(text[searchFrom:], kimiSkillRegistryMarker)
+		if idx == -1 {
+			return text
+		}
+		idx += searchFrom
+		blockStart := strings.LastIndex(text[:idx], "[[hooks]]")
+		if blockStart == -1 {
+			return text
+		}
+		rest := text[blockStart:]
+		blockEnd := len(rest)
+		if next := strings.Index(rest[1:], "\n[["); next != -1 {
+			blockEnd = next + 1
+		}
+		if !strings.Contains(rest[:blockEnd], "SessionStart") {
+			// Not a SessionStart hook: leave the block and keep scanning.
+			searchFrom = idx + len(kimiSkillRegistryMarker)
+			continue
+		}
+		text = text[:blockStart] + strings.TrimPrefix(rest[blockEnd:], "\n")
+		searchFrom = blockStart
+	}
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
