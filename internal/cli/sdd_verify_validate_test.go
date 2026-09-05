@@ -103,7 +103,7 @@ func TestRunSDDVerifyValidateHelpNamesTheEvidenceRevisionFormat(t *testing.T) {
 func TestRunSDDVerifyValidateRefusalNamesEvidenceRevisionFormat(t *testing.T) {
 	report := "```yaml\nschema: gentle-ai.verify-result/v1\nevidence_revision: sha256:nope\nverdict: fail\nblockers: 1\ncritical_findings: 0\nrequirements: 1/1\nscenarios: 1/1\ntest_command: go test ./...\ntest_exit_code: 0\ntest_output_hash: sha256:" + strings.Repeat("b", 64) + "\nbuild_command: go vet ./...\nbuild_exit_code: 0\nbuild_output_hash: sha256:" + strings.Repeat("c", 64) + "\n```"
 	err := runSDDVerifyValidate([]string{"--input", "-", "--requirements", "1", "--scenarios", "1"}, strings.NewReader(report), &bytes.Buffer{})
-	const want = "evidence_revision must be sha256:<64 lowercase hex>"
+	const want = "invalid evidence_revision in verify result envelope: must be sha256:<64-lowercase-hex>"
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %v, want containing %q", err, want)
 	}
@@ -188,4 +188,15 @@ type sddVerifyValidateReadSpy struct{ reads int }
 func (spy *sddVerifyValidateReadSpy) Read([]byte) (int, error) {
 	spy.reads++
 	return 0, errors.New("help must not read stdin")
+}
+
+func TestRunSDDVerifyValidateHelpDocumentsSHA256IdentityFieldFormats(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
+	}
+	want := "evidence_revision, test_output_hash, and build_output_hash are sha256:<64-lowercase-hex> identities"
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("help missing the sha256 identity format note %q:\n%s", want, output.String())
+	}
 }

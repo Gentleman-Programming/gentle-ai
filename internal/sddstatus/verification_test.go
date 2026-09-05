@@ -77,8 +77,8 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 		{"malformed", strings.Replace(valid, "blockers: 0", "blockers", 1), "malformed", false},
 		{"missing", strings.Replace(valid, "build_command: go test ./cmd/gentle-ai\n", "", 1), "missing build_command", false},
 		// #4089: the refusal must name the expected shape, not just the field.
-		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "test_output_hash must be sha256:<64 lowercase hex>", false},
-		{"invalid evidence_revision", strings.Replace(valid, "sha256:"+strings.Repeat("a", 64), "sha256:nope", 1), "evidence_revision must be sha256:<64 lowercase hex>", false},
+		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "invalid test_output_hash", false},
+		{"invalid evidence_revision", strings.Replace(valid, "sha256:"+strings.Repeat("a", 64), "sha256:nope", 1), "invalid evidence_revision", false},
 		{"placeholder command", strings.Replace(valid, "test_command: go test ./internal/example", "test_command: placeholder", 1), "concrete", false},
 	}
 	for _, tt := range tests {
@@ -149,6 +149,46 @@ func TestCountSpecRequirementsAndScenariosUsesActualArtifacts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := countSpecRequirementsAndScenarios(tt.specs); got != tt.want {
 				t.Fatalf("counts = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVerifyReportAdmissionNamesTheAcceptedSHA256FieldShape(t *testing.T) {
+	valid := testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0)
+	canonical := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name, report, want string
+	}{
+		{
+			name:   "bare digest without the sha256 prefix",
+			report: strings.Replace(valid, "evidence_revision: "+canonical, "evidence_revision: "+strings.Repeat("a", 64), 1),
+			want:   "invalid evidence_revision in verify result envelope: must be sha256:<64-lowercase-hex> (received length=64, sha256: prefix=false, non-lowercase-hex characters=false)",
+		},
+		{
+			name:   "quoted value keeps its quotes",
+			report: strings.Replace(valid, "evidence_revision: "+canonical, "evidence_revision: \""+canonical+"\"", 1),
+			want:   "invalid evidence_revision in verify result envelope: must be sha256:<64-lowercase-hex> (received length=73, sha256: prefix=false, non-lowercase-hex characters=true)",
+		},
+		{
+			name:   "uppercase digest",
+			report: strings.Replace(valid, "evidence_revision: "+canonical, "evidence_revision: sha256:"+strings.Repeat("A", 64), 1),
+			want:   "invalid evidence_revision in verify result envelope: must be sha256:<64-lowercase-hex> (received length=71, sha256: prefix=true, non-lowercase-hex characters=true)",
+		},
+		{
+			name:   "output hash without the sha256 prefix",
+			report: strings.Replace(valid, "test_output_hash: sha256:"+strings.Repeat("b", 64), "test_output_hash: "+strings.Repeat("b", 64), 1),
+			want:   "invalid test_output_hash in verify result envelope: must be sha256:<64-lowercase-hex> (received length=64, sha256: prefix=false, non-lowercase-hex characters=false)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			admission := ValidateVerifyReportAdmission(tt.report, SpecCounts{Requirements: 2, Scenarios: 3})
+			if admission.Valid {
+				t.Fatalf("admission unexpectedly valid for %s", tt.name)
+			}
+			if !strings.Contains(admission.Reason, tt.want) {
+				t.Fatalf("Reason = %q, want containing %q", admission.Reason, tt.want)
 			}
 		})
 	}
