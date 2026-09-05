@@ -597,7 +597,7 @@ func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, r
 			return nil, err
 		}
 		if remaining := state.CorrectionBudget - state.CumulativeCorrectionLines; actual < 0 || actual > remaining {
-			return nil, fmt.Errorf("actual correction is %d changed lines, exceeding the frozen budget of %d", actual, state.CorrectionBudget)
+			return nil, fmt.Errorf("actual correction is %d changed lines, exceeding the frozen budget of %d; shrink the correction to at most %d changed lines and rerun `gentle-ai review capture-validation` with the exact tokens STATUS reoffers", actual, state.CorrectionBudget, remaining)
 		}
 	}
 	if outcome == "failed" {
