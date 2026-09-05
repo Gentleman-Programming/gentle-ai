@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -1840,7 +1841,23 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	// command is platform-aware so the legacy POSIX `|| true` form does not
+	// reach Windows PowerShell 5.1, which fails to parse it.
+	var command string
+	if runtime.GOOS == "windows" {
+		command = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+	} else {
+		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	}
+
+	// On Windows, prune the pre-fix POSIX literal before the canonical-existence
+	// early return so a settings file that already carries the canonical entry
+	// still gets the legacy cleaned up.
+	if runtime.GOOS == "windows" {
+		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+		pruneLegacyClaudeHook(root, legacy)
+	}
+
 	if claudeHookExists(root, command) {
 		return false, nil
 	}
@@ -1853,6 +1870,7 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
+
 	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
 	userPromptSubmit, _ := promptRaw.([]any)
 	if hasUserPromptSubmit && userPromptSubmit == nil {
@@ -1993,6 +2011,69 @@ func claudeHookExists(root map[string]any, command string) bool {
 		}
 	}
 	return false
+}
+
+// pruneLegacyClaudeHook removes any inner-hook entry whose `command` matches
+// `legacy` from the UserPromptSubmit hook in root, mutating the structure
+// in place. Called from ensureClaudeSkillRegistryHook before the canonical-
+// existence early return so a settings file that already has the canonical
+// entry but still carries the legacy gets cleaned up.
+func pruneLegacyClaudeHook(root map[string]any, legacy string) {
+	hooksRaw, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return
+	}
+	const userPromptSubmit = "UserPromptSubmit"
+	upsRaw, ok := hooksRaw[userPromptSubmit]
+	if !ok {
+		return
+	}
+	ups, ok := upsRaw.([]any)
+	if !ok {
+		return
+	}
+	var pruned []any
+	for _, item := range ups {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			pruned = append(pruned, item)
+			continue
+		}
+		innerHooks, ok := itemMap["hooks"].([]any)
+		if !ok {
+			pruned = append(pruned, item)
+			continue
+		}
+		var kept []any
+		for _, h := range innerHooks {
+			hMap, ok := h.(map[string]any)
+			if ok && hMap["command"] == legacy {
+				continue
+			}
+			kept = append(kept, h)
+		}
+		if len(kept) == len(innerHooks) {
+			pruned = append(pruned, item)
+			continue
+		}
+		if len(kept) == 0 {
+			// Drop the whole item. Falling through (not `return`) is what
+			// lets the post-loop `len(pruned) == 0` check delete the
+			// UserPromptSubmit key entirely when no outer entries survive.
+			continue
+		}
+		copyMap := make(map[string]any, len(itemMap))
+		for k, v := range itemMap {
+			copyMap[k] = v
+		}
+		copyMap["hooks"] = kept
+		pruned = append(pruned, copyMap)
+	}
+	if len(pruned) == 0 {
+		delete(hooksRaw, userPromptSubmit)
+	} else {
+		hooksRaw[userPromptSubmit] = pruned
+	}
 }
 
 func claudeHookListContains(hookEntries []any, command string) bool {
