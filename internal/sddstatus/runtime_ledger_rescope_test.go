@@ -3,6 +3,9 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1148,5 +1151,275 @@ func TestRuntimeLedgerCompleteObjectiveRefusalNamesTheSuccessor(t *testing.T) {
 	}
 	if advanced.ActiveAttempt == nil || advanced.Objective == nil || advanced.Objective.WorkUnit != "verify-the-change" {
 		t.Fatalf("advanced objective = %#v", advanced)
+	}
+}
+
+// runtimeLedgerRescope4195Setup opens a fresh repo, acquires an objective with
+// no intended-untracked selection, and settles it interrupted with zero
+// changes -- exactly the #4195 field report's starting state: a clean
+// terminal objective whose recorded selection is empty.
+func runtimeLedgerRescope4195Setup(t *testing.T, change string) (string, RuntimeStore, RuntimeStatus) {
+	t.Helper()
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, change)
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "4195-begin-1", WorkUnit: "worker task", EvidenceGoal: "do work",
+		MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "4195-finish-1", Outcome: AttemptInterrupted,
+		Diagnosis: "worker stalled, no changes", HarnessDisposition: HarnessReused,
+		CleanupEvidence: "none needed", ProcessEvidence: "n/a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, store, interrupted
+}
+
+// TestRuntimeLedgerRescopeAdmitsFreshUntrackedSelection is the RED-then-GREEN
+// reproduction of #4195: eligible untracked files authored AFTER a clean
+// interrupted settlement (outside any active attempt) can never be admitted,
+// because Rescope always replayed the predecessor's recorded selection --
+// empty here -- into the successor's InitialCandidateIdentity/CandidateTree,
+// and a later begin/acquire that explicitly selects the new files is refused
+// as an objective change against that stale candidate. A maintainer-
+// authorized rescope carrying an explicit fresh selection must capture the
+// successor's initial candidate WITH it.
+func TestRuntimeLedgerRescopeAdmitsFreshUntrackedSelection(t *testing.T) {
+	repo, store, interrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195")
+
+	// Files authored after settlement, outside any active attempt (#4195).
+	if err := os.WriteFile(filepath.Join(repo, "client.go"), []byte("package demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "client_test.go"), []byte("package demo_test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := currentUntrackedInventoryDigest(t, repo)
+	selection := []string{"client.go", "client_test.go"}
+
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "4195-rescope-1",
+		WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+		MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "narrow to additive client+tests", Actor: "maintainer",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: digest,
+	})
+	if err != nil {
+		t.Fatalf("rescope with a fresh untracked selection was refused: %v", err)
+	}
+	if rescoped.Objective == nil {
+		t.Fatal("rescoped status has no objective")
+	}
+
+	// Baseline: the SAME predecessor state rescoped with no selection at all
+	// (today's only supported shape) must produce a DIFFERENT successor
+	// candidate identity -- proving the selection is what actually changed
+	// it, not an unrelated difference between the two repos/objectives.
+	baselineRepo, baselineStore, baselineInterrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195-baseline")
+	_ = baselineRepo
+	baselineRescoped, err := baselineStore.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: baselineInterrupted.Revision, RequestID: "4195-rescope-1",
+		WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+		MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "narrow to additive client+tests", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rescoped.Objective.InitialCandidateTree == baselineRescoped.Objective.InitialCandidateTree {
+		t.Fatalf("fresh untracked selection did not change the successor's initial candidate: got=%#v empty-selection=%#v",
+			rescoped.Objective, baselineRescoped.Objective)
+	}
+
+	// A following begin explicitly selecting the same two files now proceeds
+	// instead of being refused as an objective change (#4195's dead end).
+	began, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "4195-begin-2",
+		WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+		MaxAttempts: 2, MaxChangedLines: 400, IntendedUntracked: selection,
+	})
+	if err != nil {
+		t.Fatalf("begin with the admitted selection was refused: %v", err)
+	}
+	if began.ActiveAttempt == nil || !slices.Equal(began.ActiveAttempt.IntendedUntracked, selection) {
+		t.Fatalf("begin did not record the admitted selection: %#v", began.ActiveAttempt)
+	}
+}
+
+// TestRuntimeLedgerRescopeRefusesStaleUntrackedInventoryDigest proves a
+// rescope's fresh untracked selection is validated against the CURRENT
+// eligible inventory exactly like begin/acquire/finish/settle: a selection
+// declared against a digest the workspace has since moved past is refused
+// with the same typed sentinel those commands use, not silently admitted.
+func TestRuntimeLedgerRescopeRefusesStaleUntrackedInventoryDigest(t *testing.T) {
+	repo, store, interrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195-stale")
+
+	if err := os.WriteFile(filepath.Join(repo, "client.go"), []byte("package demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleDigest := currentUntrackedInventoryDigest(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, "client_test.go"), []byte("package demo_test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selection := []string{"client.go", "client_test.go"}
+
+	before := countRuntimeRecords(t, store.Dir)
+	_, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "4195-rescope-stale",
+		WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+		MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "narrow to additive client+tests", Actor: "maintainer",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: staleDigest,
+	})
+	if !errors.Is(err, ErrRuntimeUndeclaredUntracked) {
+		t.Fatalf("stale untracked inventory digest error = %v, want ErrRuntimeUndeclaredUntracked", err)
+	}
+	if after := countRuntimeRecords(t, store.Dir); after != before {
+		t.Fatalf("refused rescope mutated the ledger: records went %d -> %d", before, after)
+	}
+}
+
+// TestRuntimeLedgerRescopeWithoutUntrackedSelectionReplaysHistory pins the
+// unchanged legacy shape: a rescope that declares no selection at all keeps
+// replaying the predecessor's recorded selection into the successor's
+// initial candidate, exactly as before #4195's fix.
+func TestRuntimeLedgerRescopeWithoutUntrackedSelectionReplaysHistory(t *testing.T) {
+	_, store, interrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195-absent")
+
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "4195-rescope-absent",
+		WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+		MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "narrow to additive client+tests", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor := interrupted.Attempts[len(interrupted.Attempts)-1]
+	if rescoped.Objective.InitialCandidateTree != predecessor.FinishCandidateTree {
+		t.Fatalf("absent selection changed replay history: initial=%q finish=%q",
+			rescoped.Objective.InitialCandidateTree, predecessor.FinishCandidateTree)
+	}
+}
+
+// flipRuntimeTestHexChar changes value's last hex digit: shape-valid, wrong.
+func flipRuntimeTestHexChar(t *testing.T, value string) string {
+	t.Helper()
+	bytes := []byte(value)
+	if bytes[len(bytes)-1] == '0' {
+		bytes[len(bytes)-1] = '1'
+	} else {
+		bytes[len(bytes)-1] = '0'
+	}
+	return string(bytes)
+}
+
+// #4195 R3/R4-002: a mutated declared-selection candidate must be rejected at replay.
+func TestRuntimeLedgerRescopeReplayRejectsMutatedDeclaredSelectionCandidate(t *testing.T) {
+	repo, store, interrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195-mutated-replay")
+	if err := os.WriteFile(filepath.Join(repo, "born.go"), []byte("package demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := currentUntrackedInventoryDigest(t, repo)
+	selection := []string{"born.go"}
+	genuine, err := captureRuntimeCandidate(context.Background(), repo, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := interrupted.Attempts[len(interrupted.Attempts)-1]
+	successorDigest := runtimeRescopeSuccessorCandidateDigest(last.FinishCandidateTree, selection, digest, genuine.Identity, genuine.CandidateTree)
+	mutatedIdentity, mutatedTree := flipRuntimeTestHexChar(t, genuine.Identity), flipRuntimeTestHexChar(t, genuine.CandidateTree)
+	objective, generation := interrupted.Objective, interrupted.ObjectiveGeneration+1
+	request := RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "forge-mutated-candidate",
+		WorkUnit: "add born file", EvidenceGoal: "admit the born file", MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "narrow to admit the born file", Actor: "attacker", IntendedUntracked: &selection, ExpectedUntrackedInventory: digest,
+	}
+	forgedObjectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, mutatedIdentity, generation)
+	forgedRecord := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: interrupted.Revision,
+		Operation: runtimeOperationRescope, RequestID: request.RequestID,
+		RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request),
+		Rescope: &runtimeRescopeEvent{
+			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
+			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
+			RescopeCandidateIdentity: mutatedIdentity, RescopeCandidateTree: mutatedTree,
+			ObjectiveID: forgedObjectiveID, ObjectiveGeneration: generation,
+			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
+			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines, Reason: request.Reason, Actor: request.Actor,
+			IntendedUntracked: &selection, DeclaredUntrackedInventory: digest, SuccessorCandidateDigest: successorDigest,
+		},
+	}
+	if err := validateRuntimeRecordShape(forgedRecord); err != nil {
+		t.Fatalf("mutated-candidate record unexpectedly failed shape validation: %v", err)
+	}
+	revision, payload, err := runtimeRecordRevision(forgedRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Status(); err == nil || !strings.Contains(err.Error(), "objective_rescope_candidate_match") {
+		t.Fatalf("replay of mutated declared-selection candidate = %v, want objective_rescope_candidate_match", err)
+	}
+}
+
+// #4195 R4-001: a concurrent tracked write between the two captures is refused.
+func TestRuntimeLedgerRescopeRefusesWhenSecondCaptureDriftsFromFirst(t *testing.T) {
+	for _, selection := range [][]string{{"client.go"}, {}} {
+		repo, store, interrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195-toctou-"+strconv.Itoa(len(selection)))
+		if err := os.WriteFile(filepath.Join(repo, "client.go"), []byte("package demo\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		digest := currentUntrackedInventoryDigest(t, repo)
+		originalHook := runtimeRescopeBeforeSecondCaptureHook
+		runtimeRescopeBeforeSecondCaptureHook = func() { appendRuntimeLedgerFile(t, repo, "raced\n") }
+
+		before := countRuntimeRecords(t, store.Dir)
+		_, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+			ExpectedRevision: interrupted.Revision, RequestID: "4195-rescope-race",
+			WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+			MaxAttempts: 2, MaxChangedLines: 400, Reason: "narrow to additive scope", Actor: "maintainer",
+			IntendedUntracked: &selection, ExpectedUntrackedInventory: digest,
+		})
+		runtimeRescopeBeforeSecondCaptureHook = originalHook
+		if !errors.Is(err, ErrRuntimeRescopeNotAllowed) {
+			t.Fatalf("selection=%v racing rescope = %v, want ErrRuntimeRescopeNotAllowed", selection, err)
+		}
+		if after := countRuntimeRecords(t, store.Dir); after != before {
+			t.Fatalf("selection=%v refused racing rescope mutated the ledger: records went %d -> %d", selection, before, after)
+		}
+	}
+}
+
+// A declared exclude (empty) selection still produces the legacy candidate.
+func TestRuntimeLedgerRescopeEmptyExcludeDeclarationMatchesLegacyCandidate(t *testing.T) {
+	_, store, interrupted := runtimeLedgerRescope4195Setup(t, "rescope-4195-exclude")
+	digest, excluded := currentUntrackedInventoryDigest(t, store.Repo), []string{}
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "4195-rescope-exclude",
+		WorkUnit: "add client and tests", EvidenceGoal: "implement client with tests",
+		MaxAttempts: 2, MaxChangedLines: 400, Reason: "narrow to additive scope", Actor: "maintainer",
+		IntendedUntracked: &excluded, ExpectedUntrackedInventory: digest,
+	})
+	if err != nil {
+		t.Fatalf("declared exclude rescope was refused: %v", err)
+	}
+	predecessor := interrupted.Attempts[len(interrupted.Attempts)-1]
+	if rescoped.Objective.InitialCandidateTree != predecessor.FinishCandidateTree {
+		t.Fatalf("declared exclude selection changed the successor's candidate: initial=%q finish=%q",
+			rescoped.Objective.InitialCandidateTree, predecessor.FinishCandidateTree)
 	}
 }
