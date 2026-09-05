@@ -446,6 +446,9 @@ func catFileBatchRecordBytes(oid string, size int64) int64 {
 // Extensions only nominate a candidate; an interpreter directive, runtime MDX
 // syntax, or bytes that are not decodable text all withdraw the nomination.
 func isPassiveDocumentContent(logicalPath string, content []byte) bool {
+	if isPassiveImageExtension(logicalPath) {
+		return hasPassiveImageSignature(content)
+	}
 	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
 		return false
 	}
@@ -977,11 +980,39 @@ func isPassiveContentCandidatePath(logicalPath string) bool {
 	return true
 }
 
+// isPassiveImageExtension names the binary image formats a reviewer can never
+// read as prose or execute: their bytes carry no authored behavior, so a
+// binary blob under one of them stays passive instead of failing closed into a
+// lens that could not inspect it anyway (#4185).
+func isPassiveImageExtension(logicalPath string) bool {
+	switch strings.ToLower(path.Ext(logicalPath)) {
+	case ".png", ".jpg", ".jpeg", ".gif":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasPassiveImageSignature requires the bytes to open with the PNG, JPEG, or
+// GIF signature: an image extension alone never admits a blob as passive.
+func hasPassiveImageSignature(content []byte) bool {
+	for _, magic := range [][]byte{[]byte("\x89PNG\r\n\x1a\n"), {0xff, 0xd8, 0xff}, []byte("GIF87a"), []byte("GIF89a")} {
+		if bytes.HasPrefix(content, magic) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPassiveContentCandidateStat adds the mode half of the tier-0 nomination: a
-// binary blob, a symlink, a gitlink, a mode-only entry, or an executable bit
-// cannot be reviewed as prose whatever its extension claims.
+// symlink, a gitlink, a mode-only entry, or an executable bit cannot be
+// reviewed as prose whatever its extension claims, and a binary blob only
+// qualifies under a passive image extension.
 func isPassiveContentCandidateStat(stat DiffStat) bool {
-	if stat.Binary || stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
+	if stat.Binary && !isPassiveImageExtension(stat.Path) {
+		return false
+	}
+	if stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
 		return false
 	}
 	return isRegularNonExecutableGitMode(stat.OldMode) && isRegularNonExecutableGitMode(stat.NewMode)
