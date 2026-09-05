@@ -537,13 +537,13 @@ Scope. The %s sections below are the complete and only view of this candidate: a
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
 
-Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s. Set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
+Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s -- this is the %s section's own subject_hash field above, and only that field; never echo a target or target_identity value carried elsewhere in this context, even though it is also a sha256: string. Set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
 
 Citations. Every finding location, and every path cited inside an evidence string or a proof_refs entry, must be a repository-relative path exactly as it appears in the changed-path manifest, optionally with :line or :start-end. Never cite absolute paths, bare file basenames without their directory, or non-path colon-number shapes such as host:port. Any token shaped like path:line is validated against the frozen repository, and one unknown path rejects the entire result. A finding whose causal_disposition is introduced, behavior-activated, or worsened must anchor its location entirely within lines this candidate changed: every line of a path:start-end span is validated as candidate-changed, one unchanged context line in the span rejects the entire result, and observations about unchanged code belong under pre-existing or base-only instead. When the candidate's own content contains a path-shaped literal that is not a real repository path (for example a traversal or fixture token inside a test), never reproduce that token in evidence or proof_refs: describe it in words and cite the manifest file and line that contain it.
 
 Honesty. If you could not inspect the candidate, say so in evidence and do not return a clean result: an access failure is not a completed inspection, and reporting one as clean is the single outcome this review cannot recover from.`,
 		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader,
-		reviewLensContextResultSchema, binding.SubjectHash), nil
+		reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
 }
 
 // reviewLensContextWriteLine writes one header plus its canonical one-line
