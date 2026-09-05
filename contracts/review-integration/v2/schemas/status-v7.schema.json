@@ -12,7 +12,7 @@
     "contract": {"$ref": "status-v5.schema.json#/properties/contract"}, "operation": {"$ref": "status-v5.schema.json#/properties/operation"},
     "applicability": {"$ref": "status-v5.schema.json#/properties/applicability"}, "authority": {"$ref": "status-v5.schema.json#/properties/authority"},
     "action": {"enum": ["start", "validate", "recover", "maintainer_action", "select_lineage", "repair_authority", "stop", "collect", "execute"]}, "action_disposition": {"$ref": "status-v5.schema.json#/properties/action_disposition"},
-    "replayability": {"$ref": "status-v5.schema.json#/properties/replayability"}, "frozen": {"$ref": "status-v5.schema.json#/properties/frozen"},
+    "replayability": {"$ref": "status-v5.schema.json#/properties/replayability"}, "frozen": {"type": "object", "additionalProperties": false, "required": ["tier", "original_changed_lines", "correction_budget"], "properties": {"tier": {"enum": ["low", "medium", "high"]}, "original_changed_lines": {"type": "integer", "minimum": 0}, "correction_budget": {"type": "integer", "minimum": 0, "maximum": 200}, "changed_path_manifest_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}},
     "target_identity": {"$ref": "status-v5.schema.json#/properties/target_identity"}, "authority_target_identity": {"$ref": "status-v5.schema.json#/properties/authority_target_identity"},
     "projection": {"$ref": "status-v5.schema.json#/properties/projection"}, "repair": {"$ref": "status-v5.schema.json#/properties/repair"},
     "candidates": {"$ref": "status-v5.schema.json#/properties/candidates"}, "reconciliation": {"$ref": "status-v5.schema.json#/properties/reconciliation"},
