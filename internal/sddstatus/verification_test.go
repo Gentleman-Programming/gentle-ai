@@ -180,6 +180,11 @@ func TestVerifyReportAdmissionNamesTheAcceptedSHA256FieldShape(t *testing.T) {
 			report: strings.Replace(valid, "test_output_hash: sha256:"+strings.Repeat("b", 64), "test_output_hash: "+strings.Repeat("b", 64), 1),
 			want:   "invalid test_output_hash in verify result envelope: must be sha256:<64-lowercase-hex> (received length=64, sha256: prefix=false, non-lowercase-hex characters=false)",
 		},
+		{
+			name:   "build output hash without the sha256 prefix",
+			report: strings.Replace(valid, "build_output_hash: sha256:"+strings.Repeat("c", 64), "build_output_hash: "+strings.Repeat("c", 64), 1),
+			want:   "invalid build_output_hash in verify result envelope: must be sha256:<64-lowercase-hex> (received length=64, sha256: prefix=false, non-lowercase-hex characters=false)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
