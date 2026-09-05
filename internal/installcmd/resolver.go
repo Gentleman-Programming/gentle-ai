@@ -149,12 +149,16 @@ func validatePiInstallPreflight() error {
 func validateNpmInstallPreflight(profile system.PlatformProfile) error {
 	if _, err := cmdLookPath("npm"); err != nil {
 		hint := system.InstallHintForDep("node", profile)
-		return fmt.Errorf(
+		msg := fmt.Sprintf(
 			"Node.js / npm is required but `npm` was not found in PATH.\n"+
 				"Install Node.js (npm is included) and retry:\n"+
 				"  %s",
 			hint,
 		)
+		if profile.PackageManager == "rpm-ostree" {
+			msg += "\nIf a pending deployment prevents --apply-live, stage without it and reboot:\n  rpm-ostree install -y nodejs npm && systemctl reboot"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
@@ -165,12 +169,16 @@ func validateKimiInstallPreflight(profile system.PlatformProfile) error {
 	}
 
 	if _, err := cmdLookPath("uv"); err != nil {
-		return fmt.Errorf(
+		msg := fmt.Sprintf(
 			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
 				"Install uv and retry:\n"+
 				"  %s",
 			uvInstallHint(profile),
 		)
+		if profile.PackageManager == "rpm-ostree" {
+			msg += "\nIf a pending deployment prevents --apply-live, stage without it and reboot:\n  rpm-ostree install -y uv && systemctl reboot"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 
 	return nil
@@ -186,6 +194,8 @@ func uvInstallHint(profile system.PlatformProfile) string {
 		return "sudo pacman -S --noconfirm uv"
 	case "dnf":
 		return "sudo dnf install -y uv"
+	case "rpm-ostree":
+		return "rpm-ostree install -y --apply-live uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -218,6 +228,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+	case "rpm-ostree":
+		return CommandSequence{{"rpm-ostree", "install", "-y", "--apply-live", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:

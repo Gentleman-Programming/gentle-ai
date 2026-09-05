@@ -91,6 +91,17 @@ ID_LIKE=debian
 PRETTY_NAME="Ubuntu 22.04.3 LTS"
 VERSION_ID="22.04"
 `
+
+	osReleaseSilverblue = `NAME="Fedora Linux"
+VERSION="44.20260827.0 (Silverblue)"
+RELEASE_TYPE=stable
+ID=fedora
+VERSION_ID=44
+PRETTY_NAME="Fedora Linux 44.20260827.0 (Silverblue)"
+VARIANT="Silverblue"
+VARIANT_ID=silverblue
+OSTREE_VERSION='44.20260827.0'
+`
 )
 
 // toolsOnPath builds the tool map DetectTools would produce when exactly the
@@ -108,10 +119,11 @@ func toolsOnPath(names ...string) map[string]ToolStatus {
 // membership in a list somebody has to keep editing.
 func TestLinuxIsSupportedWheneverAPackageManagerIsOnPath(t *testing.T) {
 	tests := []struct {
-		name      string
-		osRelease string
-		onPath    []string
-		wantPM    string
+		name         string
+		osRelease    string
+		onPath       []string
+		ostreeBooted bool
+		wantPM       string
 	}{
 		{name: "opensuse tumbleweed with zypper (#140)", osRelease: osReleaseOpenSUSE, onPath: []string{"zypper"}, wantPM: "zypper"},
 		{name: "alpine with apk (#334)", osRelease: osReleaseAlpine, onPath: []string{"apk"}, wantPM: "apk"},
@@ -135,10 +147,19 @@ func TestLinuxIsSupportedWheneverAPackageManagerIsOnPath(t *testing.T) {
 		{name: "distro nobody has heard of, with dnf", osRelease: "ID=some-future-distro\n", onPath: []string{"dnf"}, wantPM: "dnf"},
 		{name: "no os-release at all, with pacman", osRelease: "", onPath: []string{"pacman"}, wantPM: "pacman"},
 		{name: "brew keeps winning over the native manager", osRelease: osReleaseAlpine, onPath: []string{"apk", "brew"}, wantPM: "brew"},
+		{name: "fedora silverblue with rpm-ostree alone", osRelease: osReleaseSilverblue, onPath: []string{"rpm-ostree"}, ostreeBooted: true, wantPM: "rpm-ostree"},
+		{name: "brew wins over rpm-ostree on silverblue", osRelease: osReleaseSilverblue, onPath: []string{"rpm-ostree", "brew"}, ostreeBooted: true, wantPM: "brew"},
+		{name: "ostree host with dnf and rpm-ostree selects rpm-ostree", osRelease: osReleaseSilverblue, onPath: []string{"dnf", "rpm-ostree"}, ostreeBooted: true, wantPM: "rpm-ostree"},
+		{name: "mutable fedora with dnf and rpm-ostree selects dnf", osRelease: "ID=fedora\nID_LIKE=\"rhel fedora\"\n", onPath: []string{"dnf", "rpm-ostree"}, ostreeBooted: false, wantPM: "dnf"},
+		{name: "brew wins over both dnf and rpm-ostree on ostree", osRelease: osReleaseSilverblue, onPath: []string{"rpm-ostree", "dnf", "brew"}, ostreeBooted: true, wantPM: "brew"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			orig := isOSTreeBooted
+			isOSTreeBooted = func() bool { return tc.ostreeBooted }
+			t.Cleanup(func() { isOSTreeBooted = orig })
+
 			profile := resolvePlatformProfile("linux", tc.osRelease, toolsOnPath(tc.onPath...))
 
 			if !profile.Supported {
@@ -171,6 +192,7 @@ func TestLinuxDistroReportsTheOSReleaseIDVerbatim(t *testing.T) {
 		{name: "uos", osRelease: osReleaseUOS, wantDistro: "uos"},
 		{name: "nixos", osRelease: osReleaseNixOS, wantDistro: "nixos"},
 		{name: "ubuntu", osRelease: osReleaseUbuntu, wantDistro: "ubuntu"},
+		{name: "silverblue reports fedora", osRelease: osReleaseSilverblue, wantDistro: "fedora"},
 		{name: "missing os-release", osRelease: "", wantDistro: LinuxDistroUnknown},
 		{name: "comments only", osRelease: "# nothing here\n", wantDistro: LinuxDistroUnknown},
 		{name: "malformed lines are skipped", osRelease: "no-equals-sign\nID='gentoo'\n", wantDistro: "gentoo"},
@@ -204,14 +226,14 @@ func TestLinuxRefusalNamesTheProbedManagersAndARunnableCheck(t *testing.T) {
 
 	// Every manager the probe looks for must be named, so the reader knows
 	// exactly which one to install.
-	for _, manager := range []string{"brew", "apt", "dnf", "pacman", "apk", "zypper", "nix", "emerge"} {
+	for _, manager := range []string{"brew", "apt", "dnf", "rpm-ostree", "pacman", "apk", "zypper", "nix", "emerge"} {
 		if !strings.Contains(message, manager) {
 			t.Errorf("refusal does not name probed package manager %q:\n%s", manager, message)
 		}
 	}
 
 	// The exit has to be runnable, not a description of a policy.
-	if !strings.Contains(message, `for m in brew apt dnf pacman apk zypper nix emerge; do command -v "$m"; done`) {
+	if !strings.Contains(message, `for m in brew apt dnf rpm-ostree pacman apk zypper nix emerge; do command -v "$m"; done`) {
 		t.Errorf("refusal does not print the runnable probe check:\n%s", message)
 	}
 	if !strings.Contains(message, "PATH") {

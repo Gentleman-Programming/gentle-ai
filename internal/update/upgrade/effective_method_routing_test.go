@@ -118,7 +118,7 @@ func TestGentleAIOnLinuxNeverRoutesToGoInstall(t *testing.T) {
 	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
 	homebrewPackageInstalled = func(string) bool { return false }
 
-	for _, packageManager := range []string{"apt", "pacman", "dnf", ""} {
+	for _, packageManager := range []string{"apt", "pacman", "dnf", "rpm-ostree", ""} {
 		profile := system.PlatformProfile{OS: "linux", PackageManager: packageManager, GoAvailable: true}
 		if got := effectiveMethod(registryGentleAI(t), profile); got != update.InstallBinary {
 			t.Errorf("effectiveMethod on linux/%s = %q, want %q (minisign-verified download)", packageManager, got, update.InstallBinary)
