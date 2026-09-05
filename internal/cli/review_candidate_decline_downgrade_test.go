@@ -121,7 +121,7 @@ func TestCandidateDecline_UnmanagedDelivery_ByteIdenticalToDisabled(t *testing.T
 	// Declined repo: consent relay declines the exact candidate, THEN
 	// reviews are disabled, THEN the identical candidate is gated.
 	declinedRepo := func() string {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		stubReviewConsole(t, false, "")
 		writeReviewStartCandidate(t, repo, candidatePath, candidateContents, 0o644)
@@ -143,7 +143,7 @@ func TestCandidateDecline_UnmanagedDelivery_ByteIdenticalToDisabled(t *testing.T
 	// Control repo: the byte-identical candidate, never declined, in an
 	// otherwise-identical disabled repo.
 	controlRepo := func() string {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, candidatePath, candidateContents, 0o644)
 		runReviewCLIGit(t, repo, "add", candidatePath)

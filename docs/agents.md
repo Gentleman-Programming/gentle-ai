@@ -25,7 +25,7 @@
 | Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
 | Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | `~/.hermes`                         |
 
-Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
+Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI™ installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
 `gentle-ai install --scope=workspace` is supported across selected agents for agent-scoped files, not only Claude Code. In workspace scope, Gentle AI writes system prompts, skills, SDD agents, and persona files into the current project root when the agent supports project-local configuration. Global-only integrations, such as package installs or settings that the agent only reads from its global config, remain global by design.
 
@@ -40,7 +40,7 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 | **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
 | **Full (delegate_task)** | The orchestrator uses Hermes's native `delegate_task` primitive to spawn ephemeral workers in fresh context windows. Workers receive only a self-contained mission; the parent receives only their final summary. Toolsets, MCP, and skills must be passed explicitly (not inherited by default). | Hermes |
 | **Native multi-agent** | The orchestrator delegates through the agent's native collaboration tools when configured and available, with inline execution as a graceful fallback. | Codex |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Windsurf, Antigravity, OpenClaw, Trae                                                                     |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram™ provides cross-phase persistence.                                                                     | Windsurf, Antigravity, OpenClaw, Trae                                                                     |
 
 ### Cursor Native Subagents
 
@@ -94,9 +94,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 ### Claude Code
 
 - Sub-agents via the native Task tool with isolated context windows
+- Slash commands for SDD phases are namespaced `/gentle-sdd-*` (`/gentle-sdd-init`, `/gentle-sdd-new`, `/gentle-sdd-continue`, etc.) so no command shares a name with a delegate-only SDD skill
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`
+- Three managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry, `SessionStart` runs the review stop-hook subcommand to record the session's starting candidate as its baseline, and `Stop` runs that same subcommand to remind only about candidates the session itself produced; uninstall removes all three
 
 ### OpenCode
 
@@ -107,9 +109,9 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Managed launchers live under `~/.gentle-ai/bin/` and preserve an explicit `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false`; restart OpenCode after enabling them
 - `serve`, `attach`, Desktop, and sessions not launched through the managed launcher use the safe foreground fallback
 - Background jobs are process-local and non-durable, have no filesystem isolation, and must not be used for dependent phases or parallel writers in one worktree
-- The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
-- Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
-- Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
+- The TUI model picker asynchronously discovers the active project's effective providers and models through `opencode models --verbose`, including custom, authenticated, plugin, and dynamic providers
+- Only models OpenCode reports with tool-call capability appear as selectable SDD-capable options
+- Multi-mode prerequisite: connect your AI providers, then return to the picker; Gentle AI does not refresh OpenCode's catalog
 - Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
 - Review launch runs from an ordinary already-running OpenCode session: no restart, child process, special user-visible session, or `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_DISABLE_EXTERNAL_SKILLS` variable is required (rdd-advisory-transport SKILL.md).
@@ -244,10 +246,8 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
   - `pi install npm:gentle-engram`
   - `pi install npm:pi-mcp-adapter`
   - `npm exec --yes --package gentle-engram@latest -- pi-engram init`
-  - `pi install npm:pi-subagents-j0k3r`
   - `pi install npm:@juicesharp/rpiv-ask-user-question`
   - `pi install npm:pi-web-access`
-  - `pi install npm:@juicesharp/rpiv-todo`
   - `pi install npm:pi-btw`
 - **`gentle-pi` package**: adds the Gentleman harness for Pi: SDD/OpenSpec workflow, strict TDD guidance, safety defaults, `/gentle-ai:*` commands, skill assets, prompts, SDD agents, and SDD chains. On normal `session_start`, it copies project assets into `.pi/agents/`, `.pi/chains/`, and `.pi/gentle-ai/support/` without overwriting local files unless the Pi recovery command uses `--force`. Starting Pi with `pi -ns` skips startup skill loading/hooks, so that automatic refresh does not run in that mode.
 - **Package metadata**: latest verified `gentle-pi` version is `0.2.6`; npm lists `alan_buscaglia` as maintainer, with source at [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi) and package docs at [npm: gentle-pi](https://www.npmjs.com/package/gentle-pi).
@@ -255,9 +255,12 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **Model assignment command**: `gentle-pi` owns Pi model selection through `/gentleman:models` (`/gentle-ai:models` remains a compatibility alias). It opens a Pi-native modal for project, user, and built-in agents, prioritizes SDD agents, saves `.pi/gentle-ai/models.json`, and applies overrides into `.pi/agents/*.md` or `.pi/settings.json`.
 - **`gentle-engram` package**: adds persistent Engram memory for Pi. It captures sessions, exposes Engram MCP tools through `pi-mcp-adapter`, and degrades safely when the local `engram` binary is missing.
 - **MCP adapter wiring**: ComponentEngram declares `npm:pi-mcp-adapter` in `.pi/agent/settings.json` packages and adds `pi-mcp-adapter` `^2.6.0` to `.pi/npm/package.json` without removing unrelated user entries. `pi-engram init` owns the Pi Engram MCP config schema and is run during installation.
-- **`pi-subagents-j0k3r` package**: discovers and runs SDD agents from `.pi/agents/`; Gentle AI installs it directly with `pi install npm:pi-subagents-j0k3r`.
+- **Subagents**: discovering and running SDD agents from `.pi/agents/` is provided by `gentle-pi`'s Gentle Agents, which ships the same `subagent_*` tools that `npm:pi-subagents-j0k3r` used to provide; Gentle AI no longer installs `pi-subagents-j0k3r` separately, and an existing `npm:pi-subagents-j0k3r` entry is dropped from `settings.json` on the next install or update so Pi uninstalls it on its next package sync.
+- **Background subagents**: managed background execution is configured through `gentle-ai install` / `gentle-ai sync` with `--pi-background-subagents=auto|on|off` or `GENTLE_AI_PI_BACKGROUND_SUBAGENTS`; there is no launcher or activation plumbing, because the primitive is the already-installed `pi-subagents-j0k3r` extension.
+- CLI precedence is flag, non-empty environment, prior managed state, then `auto`; `auto` never enables by itself, unresolved non-interactive `auto` stays foreground, and the interactive Pi installer prompts only when that preference is unresolved.
+- The resolved on/off policy is projected to `~/.pi/gentle-ai/background-subagents.json` as `{"schema":"gentle-pi.background-subagents/v1","policy":"on"|"off"}` (the base directory honors `GENTLE_PI_CONFIG_HOME`); `off` rewrites the policy instead of deleting files, and a file at that path without the managed schema marker is never overwritten.
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
-- **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
+- **Pi companion packages**: `pi-web-access` and `pi-btw` add web access and companion workflow support. Todo tracking ships inside `gentle-pi` (Gentle Todo); an existing `@juicesharp/rpiv-todo` entry is dropped from `settings.json` on the next install or update, and Pi uninstalls it on its next package sync.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
 
 ### Hermes Ephemeral Delegation

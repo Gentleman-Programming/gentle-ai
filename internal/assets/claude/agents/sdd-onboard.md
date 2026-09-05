@@ -6,7 +6,7 @@ description: >
   workflow — from exploration to archive — on an actual project change.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
-tools: Read, Edit, Write, Glob, Grep, Bash, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save, mcp__plugin_engram_engram__mem_update
+tools: Read, Edit, Write, Glob, Grep, Bash, {{ENGRAM_TOOL_PREFIX}}mem_search, {{ENGRAM_TOOL_PREFIX}}mem_get_observation, {{ENGRAM_TOOL_PREFIX}}mem_save, {{ENGRAM_TOOL_PREFIX}}mem_update
 ---
 
 You are the SDD **onboard** executor. Do this phase's work yourself. Do NOT delegate further.

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -312,7 +314,7 @@ func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
 	}
-	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Authority-only fail extension", "maximum report size: 1048576 bytes (1 MiB)"} {
+	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Independent test and build execution evidence is required", "maximum report size: 1048576 bytes (1 MiB)"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("sdd-verify-validate help missing %q:\n%s", want, output.String())
 		}
@@ -418,7 +420,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
-		{command: "review-validate", want: "review-validate requires --cwd and --receipt"},
+		{command: "review-validate", want: "review-validate requires --cwd"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			var output bytes.Buffer
@@ -453,8 +455,13 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|opencode-transport|bind-sdd>") {
+	if !strings.Contains(output.String(), "review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
+	}
+	for _, retired := range []string{"preserve-result", "dispose-result"} {
+		if strings.Contains(output.String(), retired) {
+			t.Fatalf("compact review help still advertises retired %q:\n%s", retired, output.String())
+		}
 	}
 	output.Reset()
 	if err := RunArgs([]string{"review", "repair", "--help"}, &output); err != nil || !strings.Contains(output.String(), "provider-owned") {
@@ -634,7 +641,7 @@ func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
 	selection := model.Selection{Preset: model.PresetCustom, Components: []model.ComponentID{}, Skills: []model.SkillID{}, SDDMode: model.SDDModeMulti, StrictTDD: true}
-	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, "", "", nil)
+	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, "", "", "", "", nil)
 	got, err := state.Read(home)
 	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || !got.StrictTDD || len(got.Components) != 0 || len(got.Skills) != 0 {
 		t.Fatalf("persisted selection = %#v, execute err = %v, read err = %v", got, result.Err, err)
@@ -661,7 +668,7 @@ func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) 
 		Components: []model.ComponentID{},
 		Preset:     model.PresetCustom,
 	}
-	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, nil)
+	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
 	if result.Err != nil {
 		t.Fatalf("tuiExecuteWithBackground() error = %v", result.Err)
 	}
@@ -678,6 +685,106 @@ func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) 
 	}
 }
 
+func TestTUIExecuteWithBackgroundPreservesConcurrentCLIStateMutation(t *testing.T) {
+	home := t.TempDir()
+	candidate := buildAppCandidateBinary(t)
+	setupMockHome(t, home)
+
+	initialRecordedAt := time.Now().UTC().Add(-time.Hour)
+	if err := state.Write(home, state.InstallState{
+		RDDMode:           "off",
+		RDDModeRecordedAt: &initialRecordedAt,
+		BackgroundIntent:  model.OpenCodeBackgroundOff,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	publicationReached := make(chan struct{})
+	releasePublication := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releasePublication) }) }
+	t.Cleanup(release)
+	previousWriteReconciled := appStateWriteReconciled
+	appStateWriteReconciled = func(homeDir string, installState state.InstallState) error {
+		close(publicationReached)
+		<-releasePublication
+		return state.WriteReconciled(homeDir, installState)
+	}
+	t.Cleanup(func() { appStateWriteReconciled = previousWriteReconciled })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{},
+		Preset:     model.PresetCustom,
+	}
+	resultCh := make(chan pipeline.ExecutionResult, 1)
+	go func() {
+		resultCh <- tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
+	}()
+
+	select {
+	case <-publicationReached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("TUI did not reach final state publication")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, candidate, "review", "mode", "enable", "--scope", "global")
+	command.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("candidate review mode enable succeeded while TUI owned the install-state transaction:\n%s", output)
+	}
+	intermediate, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read state after contended candidate review mode enable: %v", err)
+	}
+	if intermediate.RDDMode != "off" || intermediate.RDDModeRecordedAt == nil || !intermediate.RDDModeRecordedAt.Equal(initialRecordedAt) {
+		t.Fatalf("contended candidate review mode enable changed persisted state: %#v", intermediate)
+	}
+
+	release()
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			t.Fatalf("tuiExecuteWithBackground() error = %v", result.Err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("TUI did not finish final state publication")
+	}
+
+	command = exec.CommandContext(ctx, candidate, "review", "mode", "enable", "--scope", "global")
+	command.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	output, err = command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("candidate review mode enable retry failed: %v\n%s", err, output)
+	}
+
+	final, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read final install state: %v", err)
+	}
+	if final.RDDMode != "on" || final.RDDModeRecordedAt == nil || !final.RDDModeRecordedAt.After(initialRecordedAt) || final.BackgroundIntent != model.OpenCodeBackgroundOn || !final.SelectionConfigured || final.Preset != model.PresetCustom || !slices.Equal(final.InstalledAgents, []string{string(model.AgentOpenCode)}) {
+		t.Fatalf("final install state lost retried CLI review-mode mutation or TUI-owned fields: %#v", final)
+	}
+}
+
+func buildAppCandidateBinary(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "gentle-ai")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build candidate binary: %v\n%s", err, output)
+	}
+	return binary
+}
+
 func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.T) {
 	home := t.TempDir()
 	previousUserHomeDir := appUserHomeDir
@@ -688,7 +795,7 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}, SDDMode: model.SDDModeSingle}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}}
-	installResult := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, nil)
+	installResult := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
 	if installResult.Err != nil {
 		t.Fatalf("TUI install error = %v", installResult.Err)
 	}
@@ -790,21 +897,37 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		t.Fatalf("sdd-apply agent did not receive selected model; got:\n%s", body)
 	}
 
+	promptPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	body, err = os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", promptPath, err)
+	}
+	if strings.Contains(string(body), "| orchestrator |") {
+		t.Fatalf("Claude parent prompt should not expose orchestrator as a configurable model row; got:\n%s", body)
+	}
+	for _, want := range []string{
+		"| sdd-apply | haiku | default | Implementation |",
+		"| default | haiku | default | Generic and SDD/JD delegation fallback |",
+		"Every Claude Agent tool call MUST include `model`",
+		"Gentle AI does not configure the main orchestrator model",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("Claude parent prompt missing %q; got:\n%s", want, body)
+		}
+	}
+
 	workflowPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
 	body, err = os.ReadFile(workflowPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s): %v", workflowPath, err)
 	}
-	if strings.Contains(string(body), "| orchestrator |") {
-		t.Fatalf("lazy SDD workflow should not expose orchestrator as a configurable model row; got:\n%s", body)
-	}
-	for _, want := range []string{
-		"| sdd-apply | haiku | default | Implementation |",
-		"| default | haiku | default | SDD/JD phase fallback |",
-		"Gentle AI does not configure the main orchestrator model",
+	for _, unwanted := range []string{
+		"<!-- gentle-ai:sdd-model-assignments -->",
+		"## Model Assignments",
+		"Every Claude Agent tool call MUST include `model`",
 	} {
-		if !strings.Contains(string(body), want) {
-			t.Fatalf("lazy SDD workflow missing %q; got:\n%s", want, body)
+		if strings.Contains(string(body), unwanted) {
+			t.Fatalf("lazy SDD workflow retained model-assignment policy %q; got:\n%s", unwanted, body)
 		}
 	}
 }
@@ -1533,6 +1656,7 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 }
 
 func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
+	assumeInteractiveTTY(t)
 	// NOTE: modifies package-level vars; must not run in parallel.
 	origSelfUpdate := selfUpdateFn
 	origDetect := detectSystem
@@ -1573,6 +1697,37 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	}
 	if tuiCalled != 1 {
 		t.Fatalf("runTUI should be called exactly once for TUI flow; got %d call(s)", tuiCalled)
+	}
+}
+
+func TestRunArgs_TUIFailsClosedOnUnreadableState(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	origDetect, origEnsure, origRunTUI := detectSystem, ensureCurrentOSSupported, runTUI
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	runTUI = func(tea.Model, ...tea.ProgramOption) (tea.Model, error) {
+		t.Fatal("runTUI called with unreadable state")
+		return nil, nil
+	}
+
+	if err := RunArgs(nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "read install state") {
+		t.Fatalf("RunArgs(TUI) error = %v, want unreadable state error", err)
 	}
 }
 
@@ -1642,7 +1797,7 @@ func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{}}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}
-	result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, nil)
+	result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
 	if result.Err == nil || !strings.Contains(result.Err.Error(), "persist install state") {
 		t.Fatalf("tuiExecute() error = %v, want state persistence failure", result.Err)
 	}
@@ -1678,7 +1833,7 @@ func TestTUIExecuteRollsBackOnMalformedState(t *testing.T) {
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{}}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}
-	result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, nil)
+	result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
 	if result.Err == nil || !strings.Contains(result.Err.Error(), "read persisted install state") {
 		t.Fatalf("tuiExecute() error = %v, want state read failure", result.Err)
 	}
@@ -2023,6 +2178,7 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	assumeInteractiveTTY(t)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
@@ -2064,6 +2220,7 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 // state.json has PendingSync=true, RunArgs (TUI path / no args) calls
 // the deferred sync runner and writes PendingSync=false on success.
 func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2127,6 +2284,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2192,6 +2350,7 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2255,6 +2414,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2313,6 +2473,7 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 // post-upgrade state. Per #1901, this reuses the existing PendingSync signal
 // rather than introducing a new persisted flag.
 func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2366,6 +2527,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
 // the doctor advisory is printed regardless of deferred sync outcome. The
 // advisory is informational and complements the sync outcome (not a replacement).
 func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2419,6 +2581,7 @@ func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T)
 // doctor advisory is NOT printed on a normal launch where PendingSync=false.
 // The advisory is gated strictly on the post-upgrade signal.
 func TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 

@@ -59,6 +59,7 @@ func waveFiveJourneys() []Journey {
 	journeys := []Journey{
 		{
 			ID:     "j61-pre-pr-multi-segment-delivery-denies-without-composition",
+			Review: reviewOptedIn,
 			Title:  "Pre-PR multi-segment delivery composition used to rescue now denies, naming a runnable next step",
 			Source: "Wave 5 Slice 5 (design decision 1: DELETED edges: EvaluateCompactPrePRChain)",
 			Steps: []Step{

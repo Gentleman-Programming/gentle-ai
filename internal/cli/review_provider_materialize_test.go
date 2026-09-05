@@ -24,14 +24,16 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 	lens := record.State.SelectedLenses[0]
 	subjectHash := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
 	return []string{
+		"--cwd", repo,
 		"--repository-context", handle,
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--expected-revision", record.Revision, "--lens", lens, "--order", "0",
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens, "--order", "0",
 		"--subject-hash", subjectHash,
 	}
 }
 
 func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	binding := piHostRelayCaptureBinding(t, repo, args, record)
@@ -46,7 +48,11 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 		t.Fatal("materialized provider task omits the frozen target identity")
 	}
 	var native bytes.Buffer
-	if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens}, &native); err != nil {
+	if err := RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", handle,
+		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens,
+	}, &native); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), native.Bytes()) {
@@ -63,9 +69,9 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || slot.Occupied {
-		t.Fatalf("materialize occupied the reviewer result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleLens) {
+		t.Fatalf("materialize mutated compact authority: %#v, %v", current, err)
 	}
 
 	stale := replaceInspectionArg(t, slices.Clone(binding), "--subject-hash", "sha256:"+strings.Repeat("0", 64))
@@ -76,6 +82,7 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 }
 
 func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	binding := piHostRelayCaptureBinding(t, repo, args, record)
@@ -88,22 +95,19 @@ func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t 
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--input", input), &output); err != nil {
+	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--agent", string(model.AgentPi), "--input", input), &output); err != nil {
 		t.Fatal(err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
-	if artifact.Lens != lens || artifact.SelectedOrder != 0 || artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
-		t.Fatalf("submitted reviewer artifact = %#v", artifact)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("submitted reviewer terminal result = %#v", terminal)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("submission did not occupy the reviewer result slot: %#v, %v", slot, err)
-	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }
 
 func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
@@ -129,9 +133,14 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "materializes internally",
 		},
 		{
+			// #3441: this refusal used to be byte-identical to the opposite
+			// one (--materialize omitted for a non-capture runtime), so the
+			// assertion could not tell them apart either. The exact texts of
+			// both live in
+			// TestCaptureResultHostMediatedRefusalsAreDistinguishable.
 			name: "opencode keeps its host-mediated refusal", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--materialize=true"),
-			want: "is host-mediated; use its live transport collection",
+			want: "--materialize is unavailable for \"opencode\": printing the Go-materialized provider task is the host-relay form",
 		},
 		{
 			name: "combined with input", env: reviewPiHostRelayContract,
@@ -142,6 +151,11 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			name: "combined with preflight", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true", "--preflight=true"),
 			want: "cannot be combined with --input or --preflight",
+		},
+		{
+			name: "compiled runtime cannot label caller input", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--input", "-"),
+			want: "only a compiled host-relay runtime may submit its raw reviewer result",
 		},
 		{
 			name: "without agent", env: reviewPiHostRelayContract,
@@ -166,6 +180,7 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 }
 
 func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, _, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	var output bytes.Buffer
@@ -196,9 +211,9 @@ func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T)
 	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
 		t.Fatalf("pi host relay capture arguments = %#v", input.Arguments)
 	}
-	wantTokens := make([]string, 0, len(input.Arguments)-1)
+	wantTokens := make([]string, 0, len(input.Arguments))
 	for _, argument := range input.Arguments {
-		if argument.Name != "agent" && argument.Name != "materialize" {
+		if argument.Name != "materialize" {
 			wantTokens = append(wantTokens, argument.Token)
 		}
 	}

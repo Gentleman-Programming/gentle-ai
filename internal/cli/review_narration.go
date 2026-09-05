@@ -2,14 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"io"
-	"os"
 	"regexp"
-	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 // reviewNarrationTier classifies every registered human-facing emission into
@@ -67,7 +62,7 @@ func buildReviewNarrationRegistry() map[string]reviewNarrationEmission {
 	// A representative rendering proves the template itself stays
 	// vocabulary-clean; the real call site (sddstatus/review_gate.go) fills
 	// in the same template with live numbers at run time.
-	escalationSample := fmt.Sprintf(sddstatus.EscalationAccountingReasonTemplate,
+	escalationSample := fmt.Sprintf(reviewtransaction.EscalationAccountingReasonTemplate,
 		reviewtransactionEscalationCauseSample, 10, 0, 10)
 	registry["escalation:accounting"] = reviewNarrationEmission{
 		ID: "escalation:accounting", Tier: reviewNarrationTierA, Statement: escalationSample,
@@ -116,9 +111,6 @@ const reviewModeDisableCloneCommand = "gentle-ai review mode disable --scope clo
 const reviewModeDisableCloneCaveat = "(omitting --scope disables it for every repository on the machine)"
 
 var reviewStopReasonNarration = map[string]string{
-	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
-		"Ask a maintainer to inspect the review record before trusting that evidence, or run `" + reviewModeDisableCloneCommand + "` " +
-		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
 		"Ask a maintainer to inspect the review record directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
@@ -126,8 +118,7 @@ var reviewStopReasonNarration = map[string]string{
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
-		"(or `gentle-ai review finalize --lineage <id>`). " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`. " +
 		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
 		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
 		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> " +
@@ -138,15 +129,9 @@ var reviewStopReasonNarration = map[string]string{
 		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
-		"to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
-		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
-		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"manual_intervention_required": "This review reached a state Gentle AI does not recognize. " +
 		"This is a product defect. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, ask a maintainer to review it and report the defect.",
@@ -156,18 +141,11 @@ var reviewStopReasonNarration = map[string]string{
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
 		"Ask a maintainer to review it before doing anything else, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
 	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
 		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
-	"staged_delivery_candidate_required": "Stage every reviewed path exactly as it was reviewed, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --lineage <id> --projection staged --gate pre-commit --next-transition`.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",
-	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. " +
-		"`gentle-ai review start` on this exact unchanged candidate only resumes this same review, not a fresh one -- change the " +
-		"candidate content first, then run `gentle-ai review start` to begin a genuinely new one, or run `" +
-		reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 }
 
 // reviewConsentPromptNarration registers the one-time RDD consent prompt's
@@ -224,86 +202,12 @@ func reviewNarrationContainsWord(lowered, word string) bool {
 	return pattern.MatchString(lowered)
 }
 
-// reviewNarrationOutput is the human-surface stream Tier C statements print
-// to. It is a var, like reviewConsole, so tests can capture it without a
-// real terminal; production always writes to stderr, never stdout, because
-// stdout carries the machine-readable JSON envelope and a narration line
-// mixed into it would corrupt every caller that parses it.
-var reviewNarrationOutput io.Writer = os.Stderr
-
-// reviewStopReasonStatement looks up the registered Tier C statement for a
-// review_next_transition.go stop reason code. The second result is false for
-// a code with no registry entry — TestReviewNarrationRegistryCoversEveryStopReasonCode
-// is what keeps that from happening for any code the source actually emits.
-func reviewStopReasonStatement(reason string) (string, bool) {
-	emission, ok := reviewNarrationRegistry["stop:"+strings.TrimSpace(reason)]
-	if !ok {
-		return "", false
-	}
-	return emission.Statement, true
-}
-
-// reviewNarrateStopReason writes exactly one Tier C statement to the human
-// surface for a stop-kind next transition. It never touches stdout, so the
-// negotiated JSON envelope (the machine surface) is byte-for-byte unchanged;
-// it is the additive half of spec "Three-Tier Narration Contract"'s "Tier C
-// terminal state emits exactly one statement" scenario. A reason with no
-// registry entry prints nothing: TestReviewNarrationRegistryCoversEveryStopReasonCode
-// is the fail-closed proof that should never happen for a code the source emits.
-func reviewNarrateStopReason(reason string, runtimeAgent model.AgentID, continuation string) {
-	statement, ok := reviewStopReasonStatement(reason)
-	if !ok {
-		return
-	}
-	if strings.TrimSpace(continuation) != "" {
-		statement = continuation
-	}
-	_, _ = fmt.Fprintln(reviewNarrationOutput, bindNarrationRuntimeIdentity(statement, runtimeAgent))
-}
-
-func reviewRDDDisabledNarration(mode reviewtransaction.RDDModeStatus, root string, statusArgs []string) string {
-	enable := "gentle-ai review mode enable --scope=global"
-	if mode.Source == reviewtransaction.RDDModeSourceCloneLocal {
-		enable = "gentle-ai review mode enable --scope=clone --cwd=" + reviewTransitionShellWord(root)
-	}
-	parts := []string{reviewTransitionCommandTool, "review", "status", reviewTransitionShellWord("--cwd=" + root)}
-	for index := 0; index < len(statusArgs); index++ {
-		argument := statusArgs[index]
-		if argument == "--cwd" {
-			index++
-			continue
-		}
-		if strings.HasPrefix(argument, "--cwd=") {
-			continue
-		}
-		parts = append(parts, reviewTransitionShellWord(argument))
-	}
-	return "Review mode is disabled. Run `" + enable + "`, then re-run `" + strings.Join(parts, " ") + "`."
-}
-
-// reviewNarrateForecast keeps the v2 machine envelope on stdout while showing
-// its descriptive, non-routing head to a human on stderr.
-func reviewNarrateForecast(forecast ReviewForecast) {
-	_, _ = fmt.Fprintf(reviewNarrationOutput, "Forecast horizon: %s\n", forecast.Horizon)
-	for _, step := range forecast.Steps {
-		_, _ = fmt.Fprintf(reviewNarrationOutput, "step %d: %s; reason_code=%s; description=%s\n", step.Step, step.Kind, step.ReasonCode, step.Description)
-	}
-	if forecast.Horizon == ForecastHorizonPartial {
-		_, _ = fmt.Fprintln(reviewNarrationOutput, "Re-query STATUS after completing this partial head.")
-	}
-}
-
-// bindNarrationRuntimeIdentity fills the runtime-identity slot in a registered
-// statement with the identity the caller declared on this very invocation. The
-// registry is a package-level map with no caller context, so the statements
-// carry a slot rather than a constant: a narration that told every runtime to
-// rerun as `claude-code` would invite a Codex or OpenCode reader to declare a
-// false identity and pass the transport admission check under another runtime's
-// capability profile. An undeclared caller omits the entire optional segment.
-func bindNarrationRuntimeIdentity(statement string, runtimeAgent model.AgentID) string {
-	identity := strings.TrimSpace(string(runtimeAgent))
-	if identity == "" {
-		return strings.ReplaceAll(statement, " --agent "+reviewUndeclaredRuntimeIdentitySlot, "")
-	}
-	return strings.ReplaceAll(statement, reviewUndeclaredRuntimeIdentitySlot, identity)
-}
+// There is deliberately no stderr emission machinery here anymore: a
+// successful negotiated operation is machine-readable end to end (gentle-pi
+// fails closed on any stderr a successful native process writes). The
+// registered statements above stay live two ways. The Tier C stop statements
+// are contract data cross-validated against the live stop-code emitter in
+// review_next_transition.go by review_narration_test.go (the bijection test).
+// The Tier A consent prompt remains production-emitted through the
+// interactive console ceremony in review_mode.go, proven reachable by
+// TestNegotiatedStartUndeclaredInteractiveKeepsConsentCeremony.

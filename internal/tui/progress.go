@@ -10,6 +10,7 @@ import (
 type ProgressItem struct {
 	Label  string
 	Status string
+	Nested bool
 }
 
 const (

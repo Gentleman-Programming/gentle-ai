@@ -3,7 +3,6 @@ package sddstatus
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -165,7 +164,9 @@ func TestAmbiguousChangeSelectionNamesARunnableCommandPerChange(t *testing.T) {
 
 	reasons := strings.Join(status.BlockedReasons, "\n")
 	for _, change := range []string{"first", "second"} {
-		want := "gentle-ai sdd-status --cwd " + root + " --change " + change
+		// The selector is positional: ParseCommandArgs has no --change flag
+		// (#3278, #2790), so this is the only runnable spelling.
+		want := "gentle-ai sdd-status " + change + " --cwd " + root
 		if !strings.Contains(reasons, want) {
 			t.Fatalf("blocked reasons named no runnable command for %q; a refusal that lists options and no command is the shape this project does not ship.\ngot:\n%s", change, reasons)
 		}
@@ -255,7 +256,7 @@ func TestResolveStatusJSONUsesEmptyBlockedReasonsArray(t *testing.T) {
 func TestBlockerReasonsForRoute(t *testing.T) {
 	expected := []string{
 		"proposal.md is missing or partial.",
-		"spec.md or specs/**/spec.md is missing or partial.",
+		"openspec/changes/thin/specs/<domain>/spec.md is missing or partial.",
 		"design.md is missing or partial.",
 		"tasks.md is missing or partial.",
 	}
@@ -333,6 +334,25 @@ func TestResolvePlanningRoutesOmitExpectedBlockersForBothStores(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestResolveMissingProposalStillRecommendsPropose(t *testing.T) {
+	root := t.TempDir()
+	seedPlanningRoute(t, root, "legacy-change", "propose")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "legacy-change"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "propose" {
+		t.Fatalf("NextRecommended = %q, want propose", status.NextRecommended)
+	}
+	if status.Artifacts["proposal"] != ArtifactMissing {
+		t.Fatalf("proposal state = %q, want missing", status.Artifacts["proposal"])
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want no planning-route blockers", status.BlockedReasons)
 	}
 }
 
@@ -483,6 +503,43 @@ func TestResolveArtifactStatesAndTaskProgress(t *testing.T) {
 	}
 }
 
+// #3311: status built Relationships.DependsOn as an unconditional empty list
+// and never read openspec/changes/<change>/state.yaml, the file the OpenSpec
+// convention names as the change's DAG state.
+func TestResolveProjectsOpenSpecStateDependsOn(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  []string
+	}{
+		{"flow list", "dependsOn: [parent-change]\n", []string{"parent-change"}},
+		{"block list", "phase: apply\ndependsOn:\n  - parent-change\n  - other-change\n", []string{"parent-change", "other-change"}},
+		{"no file", "", []string{}},
+		{"missing key", "phase: apply\n", []string{}},
+		{"malformed", "dependsOn: [unclosed\n", []string{}},
+		{"scalar instead of list", "dependsOn: parent-change\n", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "add-auth", "- [ ] 1.1 Work\n")
+			if tt.state != "" {
+				write(t, filepath.Join(changeRoot, "state.yaml"), tt.state)
+			}
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "add-auth"})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.Relationships.DependsOn == nil || !reflect.DeepEqual(status.Relationships.DependsOn, tt.want) {
+				t.Fatalf("Relationships.DependsOn = %#v, want %#v", status.Relationships.DependsOn, tt.want)
+			}
+			if status.NextRecommended != "apply" {
+				t.Fatalf("NextRecommended = %q, want apply: state.yaml must never block status", status.NextRecommended)
+			}
+		})
+	}
+}
+
 func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -562,8 +619,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready only when verify report exists and tasks are complete",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass"))
-				writeApprovedReviewArtifacts(t, changeRoot)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -575,7 +631,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical passing verify report",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n"+strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"### Build & Tests Execution",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 0 skipped",
@@ -587,7 +643,6 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"Verdict: PASS",
 					"",
 				}, "\n"))
-				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -599,7 +654,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical pass with warnings verdict",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass_with_warnings")+"\n"+strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass_with_warnings", 0, 0, "1/1", "1/1", 0, 0)+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 1 skipped",
 					"**CRITICAL**: None",
@@ -608,7 +663,6 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"PASS WITH WARNINGS",
 					"",
 				}, "\n"))
-				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -755,8 +809,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready when verify report has status pass",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n# Verify\nStatus: PASS\n")
-				writeApprovedReviewArtifacts(t, changeRoot)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)+"\n# Verify\nStatus: PASS\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -776,26 +829,162 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 				t.Fatalf("Resolve() error = %v", err)
 			}
 
+			wantVerify, wantNext, wantBlocked := tt.wantVerify, tt.wantNext, tt.wantBlocked
+			// Legacy fixtures with no strict envelope used to route to review.
+			// They now represent incomplete verification evidence and rerun verify.
+			if wantNext == "resolve-review" {
+				wantVerify, wantNext, wantBlocked = DependencyReady, "verify", ""
+			}
 			if status.ApplyState != tt.wantApply {
 				t.Fatalf("ApplyState = %q, want %q", status.ApplyState, tt.wantApply)
 			}
 			if status.Dependencies.Apply != tt.wantApplyD {
 				t.Fatalf("Dependencies.Apply = %q, want %q", status.Dependencies.Apply, tt.wantApplyD)
 			}
-			if status.Dependencies.Verify != tt.wantVerify {
-				t.Fatalf("Dependencies.Verify = %q, want %q", status.Dependencies.Verify, tt.wantVerify)
+			if status.Dependencies.Verify != wantVerify {
+				t.Fatalf("Dependencies.Verify = %q, want %q", status.Dependencies.Verify, wantVerify)
 			}
 			if status.Dependencies.Archive != tt.wantArchive {
 				t.Fatalf("Dependencies.Archive = %q, want %q", status.Dependencies.Archive, tt.wantArchive)
 			}
-			if status.NextRecommended != tt.wantNext {
-				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, tt.wantNext)
+			if status.NextRecommended != wantNext {
+				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, wantNext)
 			}
-			if tt.wantBlocked != "" && !strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlocked) {
-				t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, tt.wantBlocked)
+			if wantBlocked != "" && !strings.Contains(strings.Join(status.BlockedReasons, "\n"), wantBlocked) {
+				t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, wantBlocked)
 			}
 			if tt.wantBlockedAbsent != "" && strings.Contains(strings.Join(status.BlockedReasons, "\n"), tt.wantBlockedAbsent) {
 				t.Fatalf("BlockedReasons = %v, want not containing %q", status.BlockedReasons, tt.wantBlockedAbsent)
+			}
+		})
+	}
+}
+
+func TestResolveStaleOrIncompleteVerificationReroutesToFreshVerify(t *testing.T) {
+	const completeSpec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
+	const staleSpec = completeSpec + "#### Scenario: Added after verification\n"
+	invalidOutputHash := "sha256:" + strings.Repeat("b", 64)
+	tests := []struct {
+		name        string
+		spec        string
+		report      string
+		wantReasons []string
+	}{
+		{
+			name:   "stale complete pass after a spec scenario is added",
+			spec:   staleSpec,
+			report: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0),
+			wantReasons: []string{
+				"verify result total 1 does not match actual scenario count 2",
+				"rerun SDD verification",
+			},
+		},
+		{
+			name:        "current-format incomplete failed evidence",
+			spec:        completeSpec,
+			report:      testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 1),
+			wantReasons: []string{"failed verification evidence is incomplete"},
+		},
+		{
+			name: "malformed failed evidence with an invalid output hash",
+			spec: completeSpec,
+			report: strings.Replace(
+				testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 1),
+				"test_output_hash: "+invalidOutputHash,
+				"test_output_hash: sha256:invalid",
+				1,
+			),
+			wantReasons: []string{"verification evidence is incomplete"},
+		},
+	}
+
+	for _, backend := range []string{"openspec", "engram"} {
+		for _, tt := range tests {
+			t.Run(backend+"/"+tt.name, func(t *testing.T) {
+				root := t.TempDir()
+				var status Status
+				var err error
+				switch backend {
+				case "openspec":
+					changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+					write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), completeSpec)
+					write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), tt.spec)
+					write(t, filepath.Join(changeRoot, "verify-report.md"), tt.report)
+					status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				case "engram":
+					mkdir(t, filepath.Join(root, ".engram"))
+					project := strings.ToLower(filepath.Base(root))
+					restore := stubEngramExport(t, []engramObservation{
+						{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/spec", Content: tt.spec, Project: project, Scope: "project"},
+						{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+						{Title: "sdd/thin/verify-report", Content: tt.report, Project: project, Scope: "project"},
+					})
+					defer restore()
+					status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				}
+				if err != nil {
+					t.Fatalf("Resolve() error = %v", err)
+				}
+				if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+					t.Fatalf("status = verify %q archive %q next %q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+				}
+				if status.RemediationState != (RemediationState{}) {
+					t.Fatalf("RemediationState = %#v, want empty", status.RemediationState)
+				}
+				if strings.Contains(strings.Join(status.BlockedReasons, "\n"), "missing_review_authority") {
+					t.Fatalf("BlockedReasons = %v, want no legacy missing_review_authority routing", status.BlockedReasons)
+				}
+				// A verify route that exists only to refresh evidence must name
+				// why the persisted report cannot stand (#3538).
+				joined := strings.Join(status.BlockedReasons, "\n")
+				for _, want := range tt.wantReasons {
+					if !strings.Contains(joined, want) {
+						t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestResolveCompleteFailedVerificationStillRequiresRemediation(t *testing.T) {
+	const completeSpec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
+	completeReport := testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 1)
+
+	for _, backend := range []string{"openspec", "engram"} {
+		t.Run(backend, func(t *testing.T) {
+			root := t.TempDir()
+			var status Status
+			var err error
+			switch backend {
+			case "openspec":
+				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+				write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), completeSpec)
+				write(t, filepath.Join(changeRoot, "verify-report.md"), completeReport)
+				status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			case "engram":
+				mkdir(t, filepath.Join(root, ".engram"))
+				project := strings.ToLower(filepath.Base(root))
+				restore := stubEngramExport(t, []engramObservation{
+					{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/spec", Content: completeSpec, Project: project, Scope: "project"},
+					{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+					{Title: "sdd/thin/verify-report", Content: completeReport, Project: project, Scope: "project"},
+				})
+				defer restore()
+				status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			}
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "remediate" {
+				t.Fatalf("status = verify %q archive %q next %q, want blocked/blocked/remediate", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+			}
+			if !status.RemediationState.Required || status.RemediationState.FailedEvidenceRevision == "" {
+				t.Fatalf("RemediationState = %#v, want required with failed evidence revision", status.RemediationState)
 			}
 		})
 	}
@@ -921,8 +1110,15 @@ func TestResolveIncludesInstructionsWhenRequested(t *testing.T) {
 	if status.PhaseInstructions == nil {
 		t.Fatal("PhaseInstructions is nil")
 	}
-	if !strings.Contains(strings.Join(status.PhaseInstructions.Archive, "\n"), "verify-report.md exists") {
-		t.Fatalf("Archive instructions = %v", status.PhaseInstructions.Archive)
+	// #3814: the archive gate names the resolved verify-report locator and the
+	// active store's read verb instead of a hardcoded OpenSpec filename, so the
+	// same instruction is correct under every artifact store.
+	archive := strings.Join(status.PhaseInstructions.Archive, "\n")
+	if !strings.Contains(archive, "Verify-report locator:") {
+		t.Fatalf("Archive instructions omit the verify-report locator = %v", status.PhaseInstructions.Archive)
+	}
+	if !strings.Contains(archive, "a verify report resolves at that locator") {
+		t.Fatalf("Archive instructions omit the archive gate = %v", status.PhaseInstructions.Archive)
 	}
 }
 
@@ -1087,7 +1283,7 @@ func TestParseCommandArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCommandArgs() error = %v", err)
 	}
-	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true}
+	want := CommandArgs{ChangeName: "add-auth", CWD: "/tmp/repo", JSON: true, IncludeInstructions: true, Contract: "gentle-ai.sdd-status/v2"}
 	if got != want {
 		t.Fatalf("ParseCommandArgs() = %#v, want %#v", got, want)
 	}
@@ -1114,16 +1310,6 @@ func TestParseCommandArgsRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func seedReadyChange(t *testing.T, root string, name string, tasks string) string {
-	t.Helper()
-	changeRoot := filepath.Join(root, "openspec", "changes", name)
-	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
-	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Expected behavior\n")
-	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
-	write(t, filepath.Join(changeRoot, "tasks.md"), tasks)
-	return changeRoot
-}
-
 func seedPlanningRoute(t *testing.T, root string, name string, route string) {
 	t.Helper()
 	changeRoot := filepath.Join(root, "openspec", "changes", name)
@@ -1138,49 +1324,6 @@ func seedPlanningRoute(t *testing.T, root string, name string, route string) {
 	}
 	if route == "propose" {
 		write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
-	}
-}
-
-func engramPlanningRoute(name string, route string) []engramObservation {
-	observations := []engramObservation{}
-	if route != "propose" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "design" || route == "tasks" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/spec", Content: "# Spec\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "tasks" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"})
-	}
-	if route == "propose" {
-		observations = append(observations, engramObservation{Title: "sdd/" + name + "/tasks", Content: "- [ ] 1.1 Work\n", Project: "gentle-ai", Scope: "project"})
-	}
-	return observations
-}
-
-func write(t *testing.T, path string, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-}
-
-func stubEngramExport(t *testing.T, observations []engramObservation) func() {
-	t.Helper()
-	original := engramExport
-	engramExport = func(_ string) ([]engramObservation, error) {
-		return observations, nil
-	}
-	return func() { engramExport = original }
-}
-
-func mkdir(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
 	}
 }
 
@@ -1202,9 +1345,96 @@ func equalStringPtr(left *string, right *string) bool {
 	return *left == *right
 }
 
-func ptrValue(value *string) string {
-	if value == nil {
-		return "<nil>"
+// #2212: a flat openspec/changes/<change>/specs/<cap>.md layout reports
+// partial and routes to spec, but the spec route drops expected planning
+// blockers, so the reporter saw an empty blockedReasons forever. The layout
+// guidance is a genuine reason so it survives the spec route.
+func TestResolveFlatSpecsLayoutNamesNestedLayoutOnSpecRoute(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := filepath.Join(root, "openspec", "changes", "flat-specs")
+	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "specs", "example.md"), "# Spec\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "flat-specs"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
 	}
-	return *value
+	assertArtifact(t, status, "specs", ArtifactPartial)
+	if status.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, "spec")
+	}
+	want := "openspec/changes/flat-specs/specs/ has files but no non-empty <domain>/spec.md; the spec phase writes every capability (new ones as full specs) at openspec/changes/flat-specs/specs/<domain>/spec.md, and sdd-archive promotes new ones to openspec/specs/<domain>/spec.md"
+	if !reflect.DeepEqual(status.BlockedReasons, []string{want}) {
+		t.Fatalf("BlockedReasons = %v, want [%q]", status.BlockedReasons, want)
+	}
+}
+
+func TestResolveNestedSpecsLayoutReportsDoneWithoutLayoutGuidance(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := filepath.Join(root, "openspec", "changes", "nested-specs")
+	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "specs", "example", "spec.md"), "# Spec\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "nested-specs"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	assertArtifact(t, status, "specs", ArtifactDone)
+	if status.NextRecommended != "apply" {
+		t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, "apply")
+	}
+	for _, reason := range status.BlockedReasons {
+		if strings.Contains(reason, "<domain>/spec.md") {
+			t.Fatalf("BlockedReasons carries layout guidance for a nested layout: %v", status.BlockedReasons)
+		}
+	}
+}
+
+func TestArtifactBlockedReasonsNamesChangeLocalSpecPath(t *testing.T) {
+	artifacts := map[string]ArtifactState{"proposal": ArtifactDone, "specs": ArtifactMissing, "design": ArtifactDone, "tasks": ArtifactDone}
+	reasons := artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "thin")
+	want := []string{"openspec/changes/thin/specs/<domain>/spec.md is missing or partial."}
+	if !reflect.DeepEqual(reasons.expectedPlanning, want) {
+		t.Fatalf("expectedPlanning = %v, want %v", reasons.expectedPlanning, want)
+	}
+	if len(reasons.genuine) != 0 {
+		t.Fatalf("genuine = %v, want none for a missing specs directory", reasons.genuine)
+	}
+
+	reasons = artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "")
+	if want := []string{"openspec/changes/<change>/specs/<domain>/spec.md is missing or partial."}; !reflect.DeepEqual(reasons.expectedPlanning, want) {
+		t.Fatalf("expectedPlanning without a change name = %v, want %v", reasons.expectedPlanning, want)
+	}
+}
+
+// An empty Engram spec artifact also reports partial, but the change-local
+// filesystem layout guidance belongs to the OpenSpec store only.
+func TestResolveEngramPartialSpecOmitsOpenSpecLayoutGuidance(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	runRuntimeLedgerGit(t, root, "init", "-q")
+	runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/thin/spec", Content: "   \n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/thin/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/thin/tasks", Content: "- [ ] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
+	})
+	defer restore()
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	assertArtifact(t, status, "specs", ArtifactPartial)
+	if status.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want spec", status.NextRecommended)
+	}
+	if want := []string{}; !reflect.DeepEqual(status.BlockedReasons, want) {
+		t.Fatalf("BlockedReasons = %v, want %v", status.BlockedReasons, want)
+	}
 }

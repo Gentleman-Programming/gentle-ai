@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,18 +36,6 @@ func enableReviewForClone(t *testing.T, repo string) {
 	if status := decodeReviewModeResult(t, output.Bytes()).Status; status.Effective != reviewtransaction.RDDModeOn {
 		t.Fatalf("kill switch did not come back on: %#v", status)
 	}
-}
-
-// approveTwoExactlyGoverningReceipts stages the composition discovery reports
-// as ReviewReceiptAmbiguous with DeterministicallyStaleOnly false: two terminal
-// receipts that each EXACTLY govern the identical live candidate.
-func approveTwoExactlyGoverningReceipts(t *testing.T, repo string) []string {
-	t.Helper()
-	lineageA := "review-disabled-reach-exact-a"
-	lineageB := "review-disabled-reach-exact-b"
-	_, storeA := approveDiscoveryMarkdownProjection(t, repo, lineageA, "docs/exact.md", "exact\n", reviewtransaction.ProjectionWorkspace)
-	cloneApprovedDiscoveryAuthority(t, repo, storeA, lineageB)
-	return []string{lineageA, lineageB}
 }
 
 // corruptReviewAuthorityInventory writes a truncated compact record, which is
@@ -100,33 +87,15 @@ func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte) Rev
 	return result
 }
 
-// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
-// closes the first hole the maintainer's rule leaves open. Two receipts that
-// each exactly govern the candidate used to fail closed even with reviews off,
-// on the argument that reclassifying "would risk silently choosing" between
-// them. Nothing is chosen here: the gate declines to manage, emits no lineage
-// and no receipt, and ordinary repository policy decides.
-func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts(t *testing.T) {
+// TestReviewValidateReportsDisabledUnmanagedDeliveryAtPostApply preserves the
+// direct non-deciding gate coverage while reviews are disabled.
+func TestReviewFacadeValidateReportsDisabledUnmanagedDeliveryAtPostApply(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	_ = approveTwoExactlyGoverningReceipts(t, repo)
-
 	disableReviewForClone(t, repo)
-
-	gateInput := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}
-	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", gateInput)
-	var discovery *ReviewReceiptDiscoveryError
-	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptAmbiguous || discovery.DeterministicallyStaleOnly {
-		t.Fatalf("multiple exact receipts discovery = %#v, %v, want ambiguous and NOT deterministically stale", discovery, discoveryErr)
-	}
 
 	var output bytes.Buffer
 	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
-	// Wave 5 Slice 2 (design decision 4): the competing-lineage detail this
-	// disabled report used to carry moved to the enabled-mode sibling
-	// TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled
-	// below, where discovery genuinely still runs. While disabled, discovery
-	// never runs at all, so there is nothing scenario-specific left to name.
 	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 
 	var replay bytes.Buffer
@@ -138,50 +107,6 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
 	}
 }
 
-// TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled is
-// the regression that matters most: with reviews ON, two exactly-governing
-// receipts still block, byte-for-byte as before, and the gate still refuses to
-// pick for the caller.
-//
-// Wave 5 Slice 2 supersession: this is also now the sole home of the
-// competing-lineage-names-visible property that
-// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
-// above used to assert on the DISABLED half too (removed there — design
-// decision 4's "no discovery kind while disabled" means that half no longer
-// runs discovery at all, so it has nothing to name). The property survives
-// here because discovery genuinely still runs while reviews are ON.
-func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	lineages := approveTwoExactlyGoverningReceipts(t, repo)
-
-	var output bytes.Buffer
-	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
-	var denied ReviewGateDeniedError
-	if !errors.As(runErr, &denied) {
-		t.Fatalf("multiple exact receipts while enabled did not fail closed: %T %v\n%s", runErr, runErr, output.String())
-	}
-	if fields := strictReviewJSONFields(t, output.Bytes()); !reflectDeepEqualStrings(fields, wantEnabledReviewGateFields) {
-		t.Fatalf("enabled gate fields = %v, want %v", fields, wantEnabledReviewGateFields)
-	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Delivery != "" {
-		t.Fatalf("an enabled switch reported a delivery disposition: %#v", result)
-	}
-	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewReceiptAmbiguous) {
-		t.Fatalf("enabled multiple-exact denial = %#v", result)
-	}
-	if !strings.Contains(result.Reason, "require explicit target selection") {
-		t.Fatalf("enabled multiple-exact reason = %q", result.Reason)
-	}
-	for _, lineage := range lineages {
-		if !strings.Contains(result.Reason, lineage) {
-			t.Fatalf("enabled multiple-exact reason dropped %q: %q", lineage, result.Reason)
-		}
-	}
-}
-
 // TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority is
 // the deliberate decision on damaged authority. Corrupted review authority is
 // damage to a system the operator switched off; blocking an ordinary commit on
@@ -189,18 +114,16 @@ func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled(t *
 //
 // Wave 5 Slice 2 supersession (design decision 4): the switch is now
 // consulted BEFORE any authority read, so this disabled report no longer even
-// discovers the corruption — "visible, not silent: the damage is named" moved
-// to TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled
-// below, where discovery genuinely still runs. Re-enabling still rediscovers
+// discovers the corruption — the visibility assertion belongs to enabled-mode
+// non-deciding gate coverage. Re-enabling still rediscovers
 // the same damage and blocks, so nothing is forgiven, only deferred; while
 // disabled, the damage simply never gets read in the first place.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeFacadeReviewForRepo(t, repo)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
 
@@ -218,73 +141,11 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t 
 	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 }
 
-// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled is the
-// enabled half: with reviews on, damaged authority still fails closed exactly
-// as before, and still names the damage in the reason -- visible, not silent
-// (Wave 5 Slice 2: this is now the sole home of that visibility property; the
-// disabled half above no longer discovers the corruption at all).
-func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	finalizeFacadeReviewForRepo(t, repo)
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
-	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("second unreviewed commit\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
-	runReviewCLIGit(t, repo, "commit", "-qm", "second unreviewed commit")
-	corruptReviewAuthorityInventory(t, repo)
-
-	var output bytes.Buffer
-	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	var denied ReviewGateDeniedError
-	if !errors.As(runErr, &denied) {
-		t.Fatalf("corrupted authority while enabled did not fail closed: %T %v\n%s", runErr, runErr, output.String())
-	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Delivery != "" {
-		t.Fatalf("an enabled switch reported a delivery disposition: %#v", result)
-	}
-	if result.Allowed || result.Context.Denial == nil {
-		t.Fatalf("enabled denial over unreviewed commits = %#v", result)
-	}
-	// The denial is about THIS candidate, not about an unrelated damaged
-	// entry sitting in the same shared store. Two unreviewed commits have no
-	// receipt, and that is what the gate must say; borrowing a corruption
-	// verdict from history would describe a repository the operator does not
-	// have and name no action they can take.
-	if result.Context.Denial.Code == string(ReviewAuthorityCorrupted) {
-		t.Fatalf("an unrelated damaged entry was reported as this candidate's corruption: %#v", result)
-	}
-	// Visible, not silent: the damage is still named where it belongs.
-	var inspection bytes.Buffer
-	if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspection); err != nil {
-		t.Fatalf("inspect-authority over a damaged store: %v\n%s", err, inspection.String())
-	}
-	if !strings.Contains(inspection.String(), "corrupt-reach") {
-		t.Fatalf("the damaged entry vanished from inspection:\n%s", inspection.String())
-	}
-}
-
 // TestReviewValidateNegotiatedContractReportsDisabledUnmanagedDelivery covers
-// the reach hole an agent hits: the whole disabled-unmanaged escape used to sit
-// behind `if !negotiated`, so the identical repository that exits 0 for a human
-// exited 1 for any caller driving the negotiated contract.
+// the negotiated non-deciding gate while reviews are disabled.
 func TestReviewValidateNegotiatedContractReportsDisabledUnmanagedDelivery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	logicalPath := "docs/negotiated-stale.md"
-	_, storeA := approveDiscoveryMarkdownProjection(t, repo, "review-disabled-reach-negotiated-a", logicalPath, "reviewed\n", reviewtransaction.ProjectionWorkspace)
-	cloneApprovedDiscoveryAuthority(t, repo, storeA, "review-disabled-reach-negotiated-b")
-	if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(logicalPath)), []byte("drifted\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	disableReviewForClone(t, repo)
 
 	var output bytes.Buffer
@@ -312,148 +173,98 @@ func TestReviewValidateNegotiatedContractReportsDisabledUnmanagedDelivery(t *tes
 	}
 }
 
-// TestReviewValidateNegotiatedContractKeepsFailingClosedWhileEnabled is the
-// negotiated regression: with reviews on, the same repository still produces
-// the typed failure envelope and a non-zero exit.
-func TestReviewValidateNegotiatedContractKeepsFailingClosedWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+// TestReviewValidateNegotiatedContractUsesUnmanagedDeliveryWhileEnabled proves
+// that the shipped negotiated route reports ordinary repository policy without
+// inspecting authority.
+func TestReviewValidateNegotiatedContractUsesUnmanagedDeliveryWhileEnabled(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	logicalPath := "docs/negotiated-stale.md"
-	_, storeA := approveDiscoveryMarkdownProjection(t, repo, "review-enabled-reach-negotiated-a", logicalPath, "reviewed\n", reviewtransaction.ProjectionWorkspace)
-	cloneApprovedDiscoveryAuthority(t, repo, storeA, "review-enabled-reach-negotiated-b")
-	if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(logicalPath)), []byte("drifted\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	var output bytes.Buffer
-	runErr := RunReview([]string{
+	if err := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
-	}, &output)
-	if runErr == nil {
-		t.Fatalf("negotiated enabled gate did not fail closed:\n%s", output.String())
+	}, &output); err != nil {
+		t.Fatalf("negotiated enabled gate: %v\n%s", err, output.String())
 	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Code != string(ReviewReceiptAmbiguous) {
-		t.Fatalf("negotiated enabled gate failure = %#v", failure)
+	envelope := decodeReviewOperationEnvelope(t, output.Bytes())
+	if err := envelope.Validate(); err != nil {
+		t.Fatalf("negotiated enabled gate envelope: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, envelope.Result, &result)
+	if result.Result != reviewtransaction.GateInvalidated || result.Allowed || result.Action != reviewDeliveryPolicyAction ||
+		result.Delivery != reviewtransaction.RDDDeliveryUnmanaged || result.Context.Gate != reviewtransaction.GatePostApply ||
+		result.Context.Denial != nil || result.Context.LineageID != "" {
+		t.Fatalf("negotiated enabled gate result = %#v", result)
 	}
 }
 
-// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority
-// covers the last untyped blocker: a compact v2 receipt that exactly governs,
-// contested by a terminal legacy v1 chain that also exactly governs. It stayed
-// outside the disposition machinery on the argument that reclassifying would
-// mean "silently picking one authority system over the other". While disabled
-// neither is picked — the gate reports that it is not governing at all.
-//
-// Wave 5 Slice 2 supersession (design decision 4): the switch is consulted
-// BEFORE any authority read, so this disabled report no longer discovers the
-// contest at all, and the "compact v2 and legacy v1" detail it used to name
-// moved to review_receipt_discovery_test.go's
-// TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch,
-// whose enabled half asserts the same message (errReviewMixedCompactLegacyAuthority
-// is returned directly while enabled, since discovery genuinely still runs).
-func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority(t *testing.T) {
-	fixture := newLegacyCLIFixture(t, "review-disabled-reach-mixed-legacy")
-	finalizeFacadeReviewForRepo(t, fixture.repo)
-
-	disableReviewForClone(t, fixture.repo)
-
-	var output bytes.Buffer
-	runErr := RunReviewFacadeValidate([]string{
-		"--cwd", fixture.repo, "--gate", string(reviewtransaction.GatePostApply),
-	}, &output)
-	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
-}
-
-// TestReviewValidateReValidatesFromScratchAfterReEnabling proves the second
-// half of the rule: nothing that happened while disabled may be treated as
-// approved afterwards. The candidate changes during the disabled window, and
-// once reviews are back on the gate blocks, and a fresh START re-freezes the
-// CURRENT candidate instead of resuming the pre-disable obligation.
+// TestReviewValidateReValidatesFromScratchAfterReEnabling keeps delivery
+// non-deciding across a disabled window. Re-enabling never discovers a
+// predecessor: a new START creates or exactly replays its own worktree-bound
+// compact authority over the current candidate.
 func TestReviewValidateReValidatesFromScratchAfterReEnabling(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+	writeReviewStartCandidate(t, repo, "tracked.txt", "reviewed candidate behavior\n", 0o644)
+	predecessor := runNegotiatedReviewStart(t, repo, "review-before-disabling")
+	predecessorStore, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, predecessor.LineageID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	beforeTarget := liveFacadeSnapshotIdentity(t, repo)
-	finalizeApprovedFacadeReview(t, repo, "review-before-disabling")
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
-
-	var approved bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &approved); err != nil {
-		t.Fatalf("receipt-governed gate before disabling: %v\n%s", err, approved.String())
+	predecessorRecord, err := predecessorStore.Load()
+	if err != nil || predecessorRecord.State.InitialAtomicStart == nil {
+		t.Fatalf("pre-disable compact authority = %#v, %v", predecessorRecord, err)
 	}
-	assertReviewGateResult(t, approved.Bytes(), reviewtransaction.GateAllow)
+	beforePredecessor, err := os.ReadFile(predecessorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	disableReviewForClone(t, repo)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "changed while reviews were off\n", 0o644)
 
-	// Work authored entirely inside the disabled window.
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed while reviews were off\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
-
-	var disabled bytes.Buffer
-	disabledErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &disabled)
-	if disabledErr != nil {
-		t.Fatalf("disabled gate vetoed work authored while off: %v\n%s", disabledErr, disabled.String())
-	}
-	var disabledResult ReviewValidateResult
-	decodeStrictReviewJSON(t, disabled.Bytes(), &disabledResult)
-	if disabledResult.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged || disabledResult.Allowed {
-		t.Fatalf("disabled gate over changed work = %#v", disabledResult)
-	}
+	beforeDisabledGate := snapshotShippedReviewStore(t, repo)
+	disabled := runShippedNonDecidingReviewValidate(t, repo, reviewtransaction.GatePreCommit)
+	afterDisabledGate := snapshotShippedReviewStore(t, repo)
+	assertShippedReviewStoreUnchanged(t, beforeDisabledGate, afterDisabledGate)
+	assertDisabledUnmanagedGate(t, nil, disabled)
 
 	enableReviewForClone(t, repo)
+	beforeEnabledGate := snapshotShippedReviewStore(t, repo)
+	enabled := runShippedNonDecidingReviewValidate(t, repo, reviewtransaction.GatePreCommit)
+	afterEnabledGate := snapshotShippedReviewStore(t, repo)
+	assertShippedReviewStoreUnchanged(t, beforeEnabledGate, afterEnabledGate)
+	assertEnabledUnmanagedGatePayload(t, enabled, reviewtransaction.GatePreCommit)
 
-	// Re-enabling must re-validate: the pre-disable receipt is content-bound to
-	// bytes that no longer exist, and nothing from the disabled window carries
-	// an approval forward.
-	var reEnabled bytes.Buffer
-	reEnabledErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &reEnabled)
-	if reEnabledErr == nil {
-		t.Fatalf("re-enabling inherited an approval for work done while disabled:\n%s", reEnabled.String())
+	created := atomicStartV2(t, repo, "")
+	if created.Action != "created" || created.LineageID == predecessor.LineageID ||
+		created.State != reviewtransaction.StateReviewing {
+		t.Fatalf("re-enabled new START = %#v, predecessor = %#v", created, predecessor)
 	}
-	var inherited ReviewValidateResult
-	decodeStrictReviewJSON(t, reEnabled.Bytes(), &inherited)
-	if inherited.Allowed || inherited.Result == reviewtransaction.GateAllow {
-		t.Fatalf("re-enabled gate approved unreviewed work: %#v", inherited)
+	createdStore, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, created.LineageID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if inherited.Delivery != "" {
-		t.Fatalf("re-enabled gate still reported a disabled disposition: %#v", inherited)
+	createdRecord, err := createdStore.Load()
+	if err != nil || createdRecord.State.InitialAtomicStart == nil || createdRecord.State.Recovery != nil ||
+		createdRecord.State.InitialSnapshot.Identity == predecessorRecord.State.InitialSnapshot.Identity ||
+		createdRecord.State.InitialAtomicStart.WorktreeIdentity != predecessorRecord.State.InitialAtomicStart.WorktreeIdentity {
+		t.Fatalf("re-enabled compact authority = %#v, %v", createdRecord, err)
 	}
-
-	// The pre-disable authority is offered only as an explicit recovery the
-	// operator must choose, never as an inherited approval.
-	afterStart := startFacadeReviewResult(t, repo, "review-after-re-enabling")
-	if afterStart.Action != "recover" || afterStart.LineageID != "review-before-disabling" {
-		t.Fatalf("re-enabled START = %#v, want an explicit recovery of the pre-disable lineage", afterStart)
-	}
-	var stillBlocked bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &stillBlocked); err == nil {
-		t.Fatalf("merely starting after re-enabling produced an approval:\n%s", stillBlocked.String())
+	if after, err := os.ReadFile(predecessorStore.StatePath()); err != nil || !bytes.Equal(beforePredecessor, after) {
+		t.Fatalf("new START reconstructed or mutated predecessor authority: %v", err)
 	}
 
-	// Completing that re-validation is what unblocks delivery, and it does so on
-	// a NEW lineage frozen over the CURRENT candidate — never by reusing the
-	// pre-disable receipt or its target identity.
-	successor := recoverFacadeReview(t, repo, "review-before-disabling", "review-after-re-enabling")
-	if successor.TargetIdentity == beforeTarget {
-		t.Fatalf("re-validation reused the pre-disable target identity %q", beforeTarget)
+	beforeReplay, err := os.ReadFile(createdStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
 	}
-	finalizeApprovedFacadeReview(t, repo, successor.LineageID)
-
-	var revalidated bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &revalidated); err != nil {
-		t.Fatalf("gate after re-validating from scratch: %v\n%s", err, revalidated.String())
-	}
-	assertReviewGateResult(t, revalidated.Bytes(), reviewtransaction.GateAllow)
-	var fresh ReviewValidateResult
-	decodeStrictReviewJSON(t, revalidated.Bytes(), &fresh)
-	if fresh.Context.LineageID != successor.LineageID {
-		t.Fatalf("re-validated gate bound lineage %q, want the fresh successor %q", fresh.Context.LineageID, successor.LineageID)
+	replayed := atomicStartV2(t, repo, "")
+	afterReplay, err := os.ReadFile(createdStore.StatePath())
+	if err != nil || replayed.Action != "replayed" || replayed.LineageID != created.LineageID || !bytes.Equal(beforeReplay, afterReplay) {
+		t.Fatalf("re-enabled exact START replay = %#v, state changed=%t, err=%v", replayed, !bytes.Equal(beforeReplay, afterReplay), err)
 	}
 }
 
@@ -509,14 +320,8 @@ func startFacadeReviewResult(t *testing.T, repo, lineage string) ReviewFacadeSta
 }
 
 // liveFacadeSnapshotIdentity computes the current workspace candidate's
-// snapshot identity WITHOUT persisting any authority (legacy or v3) for it.
-// Some fixtures need this identity purely as a later comparison value
-// (proving a successor candidate is NOT the same target), and calling it
-// where a subsequent finalizeApprovedFacadeReview also creates LEGACY
-// authority for the identical lineage id would otherwise leave both a v3
-// record (from an ordinary `review start`) and a v2 one (from
-// finalizeApprovedFacadeReview's direct construction) for the same lineage
-// -- a collision this helper avoids by never persisting anything.
+// snapshot identity without persisting review authority. Fixtures use it only
+// as a comparison value when proving a successor has a distinct target.
 func liveFacadeSnapshotIdentity(t *testing.T, repo string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -533,90 +338,6 @@ func liveFacadeSnapshotIdentity(t *testing.T, repo string) string {
 		t.Fatalf("build live snapshot identity: %v", err)
 	}
 	return snapshot.Identity
-}
-
-// finalizeApprovedFacadeReview finalizes an already-started LEGACY
-// (compact-v2) lineage to a terminal receipt. Every caller of this helper
-// specifically needs genuine legacy authority (proven by
-// reviewtransaction.CompactAuthoritativeStore/CompactAuthoritativeStore
-// reads immediately after several call sites, and by the two
-// legacy-vs-v3-precedence tests in review_governing_authority_test.go),
-// never merely "some approved review" -- a v3 fixture would not exercise
-// what any of these tests actually assert.
-//
-// Before Wave 7 S7 (WU18), this called the CLI's own `review start` with
-// the (default, unset) activation switch off, which took the legacy
-// compact-v2 branch. WU18 removed that branch entirely -- `review start` is
-// now unconditionally v3, so there is no CLI-reachable way left to create a
-// NEW legacy authority (matches gate_boundary_matrix_test.go's own
-// disclosed-gap comment: a v1 legacy lineage already had no CLI-reachable
-// creation path, and now neither does v2). This constructs the identical
-// legacy compact-v2 authority directly through the same
-// reviewtransaction API runReviewFacadeStart's now-deleted legacy branch
-// used to call, then finalizes it through the unchanged CLI
-// RunReviewFacadeFinalize (finalize's discovery-by-kind logic never
-// depended on the switch and is untouched by WU18).
-func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
-	t.Helper()
-	ctx := context.Background()
-	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	root, err := builder.ResolveRepositoryRoot(ctx)
-	if err != nil {
-		t.Fatalf("resolve legacy facade review repository root: %v", err)
-	}
-	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	})
-	if err != nil {
-		t.Fatalf("build legacy facade review target %q: %v", lineage, err)
-	}
-	assessment, err := rootBuilder.AssessSnapshotRisk(ctx, snapshot)
-	if err != nil {
-		t.Fatalf("classify legacy facade review target %q: %v", lineage, err)
-	}
-	lenses, err := facadeSelectedLenses(assessment, "reliability")
-	if err != nil {
-		t.Fatalf("select legacy facade review lenses %q: %v", lineage, err)
-	}
-	policy, err := facadePolicyBytes("")
-	if err != nil {
-		t.Fatalf("read legacy facade review policy %q: %v", lineage, err)
-	}
-	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
-		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
-		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
-	})
-	if err != nil {
-		t.Fatalf("create legacy facade review state %q: %v", lineage, err)
-	}
-	compactStarted, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
-		State: state, ExplicitLineage: true,
-	})
-	if err != nil {
-		t.Fatalf("start legacy compact authority %q: %v", lineage, err)
-	}
-	// reviewFacadeStartResultFor is the same production helper
-	// runReviewFacadeStart's own (now-deleted) legacy branch used to shape
-	// this exact result from a StartCompactAuthority call -- reused here
-	// rather than calling the CLI a second time, which would now hit the
-	// unconditional start path's own read-only guard against an existing
-	// legacy chain (by design: v3 must never be created over live legacy
-	// authority for the same lineage id).
-	started := reviewFacadeStartResultFor(compactStarted.Action, compactStarted.LensesRequired, compactStarted.Record.State)
-	args := []string{"--cwd", repo, "--lineage", started.LineageID}
-	if len(started.SelectedLenses) != 0 {
-		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		args = append(args, facadeReviewerResultArgs(t, repo, started)...)
-		args = append(args, "--evidence", evidencePath)
-	}
-	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
-		t.Fatalf("finalize facade review %q: %v", lineage, err)
-	}
 }
 
 // TestDisabledGateNeverEmitsAllowOrCreatesReceipt sweeps every reclassified
@@ -640,13 +361,15 @@ func TestDisabledGateNeverEmitsAllowOrCreatesReceipt(t *testing.T) {
 		stage func(t *testing.T, repo string)
 	}{
 		{
-			name:  "multiple exactly governing receipts",
-			stage: func(t *testing.T, repo string) { approveTwoExactlyGoverningReceipts(t, repo) },
+			name: "active atomic authority",
+			stage: func(t *testing.T, repo string) {
+				writeReviewStartCandidate(t, repo, "docs/sweep.md", "reviewed\n", 0o644)
+				runNegotiatedReviewStart(t, repo, "review-disabled-sweep-active")
+			},
 		},
 		{
 			name: "corrupted authority",
 			stage: func(t *testing.T, repo string) {
-				approveDiscoveryMarkdownProjection(t, repo, "review-disabled-sweep-corrupt", "docs/sweep.md", "reviewed\n", reviewtransaction.ProjectionWorkspace)
 				corruptReviewAuthorityInventory(t, repo)
 			},
 		},
@@ -658,7 +381,7 @@ func TestDisabledGateNeverEmitsAllowOrCreatesReceipt(t *testing.T) {
 	outputs := make(map[string][]byte, len(cases))
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			testCase.stage(t, repo)
 			disableReviewForClone(t, repo)
@@ -756,21 +479,11 @@ func TestSDDAttemptFinishImposesNoRemediationObligationEitherWay(t *testing.T) {
 			runReviewCLIGit(t, repo, "add", ".")
 			runReviewCLIGit(t, repo, "commit", "-qm", "seed change")
 
-			runSDDAttemptStatus(t, []string{
+			bound := runSDDAttemptStatus(t, []string{
 				"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "switch-begin-1",
 				"--work-unit", "cli-kill-switch", "--evidence-goal", "close a bound attempt",
 				"--max-attempts", "3", "--max-changed-lines", "40",
 			})
-
-			lineage := "cli-kill-switch-lineage"
-			writeCLIApprovedCompactAuthority(t, repo, lineage)
-			if _, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, ""); err != nil {
-				t.Fatal(err)
-			}
-			bound := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
-			if bound.Binding == nil {
-				t.Fatalf("bound CLI status = %#v", bound)
-			}
 
 			// Work that changes the candidate tree during the attempt: this is
 			// exactly what arms the implicit successor demand.
@@ -794,9 +507,6 @@ func TestSDDAttemptFinishImposesNoRemediationObligationEitherWay(t *testing.T) {
 			decodeStrictReviewJSON(t, output.Bytes(), &status)
 			if status.ActiveAttempt != nil {
 				t.Fatalf("disabled bound finish left the attempt open: %#v", status.ActiveAttempt)
-			}
-			if status.Binding == nil || status.Binding.Revision != bound.Binding.Revision {
-				t.Fatalf("disabled bound finish mutated the review binding: %#v", status.Binding)
 			}
 		})
 	}

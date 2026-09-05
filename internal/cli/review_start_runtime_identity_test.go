@@ -59,6 +59,7 @@ func initLensSelectingReviewCLIRepo(t *testing.T) (repo, baseRef string) {
 // from the repository where it was emitted so executability is proved without
 // filling a placeholder or guessing a transport identity.
 func TestDirectReviewStartRefusalInventsNoRuntimeIdentity(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef := initLensSelectingReviewCLIRepo(t)
 
 	var stdout bytes.Buffer
@@ -150,30 +151,27 @@ func TestNegotiatedStartCommandEchoesTheCallersOwnRuntime(t *testing.T) {
 	}
 }
 
-func TestTierCRecoveryNarrationBindsOnlyDeclaredRuntimeIdentity(t *testing.T) {
+// TestTierCRecoveryStatementsCarryOnlyTheIdentitySlot keeps the issue #2440
+// property on the registered Tier C statements themselves: they never bake a
+// compiled runtime identity into a printed command, only the neutral
+// placeholder slot. The old runtime-binding renderer was removed along with
+// all Tier C stderr emission (successful negotiated operations are byte-silent
+// on stderr), so the registry data is the surface that remains to guard.
+func TestTierCRecoveryStatementsCarryOnlyTheIdentitySlot(t *testing.T) {
 	t.Parallel()
 
-	for _, reason := range []string{"corrected_candidate_unavailable", "correction_repository_verification_failed"} {
-		statement, ok := reviewStopReasonStatement(reason)
+	for _, reason := range []string{"corrected_candidate_unavailable"} {
+		emission, ok := reviewNarrationRegistry["stop:"+reason]
 		if !ok {
 			t.Fatalf("Tier C reason %q has no narration", reason)
 		}
-		for _, runtime := range []model.AgentID{"", model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
-			t.Run(reason+"/"+string(runtime), func(t *testing.T) {
-				rendered := bindNarrationRuntimeIdentity(statement, runtime)
-				if strings.Contains(rendered, reviewUndeclaredRuntimeIdentitySlot) {
-					t.Fatalf("Tier C narration retained the runtime placeholder: %s", rendered)
-				}
-				if runtime == "" {
-					if strings.Contains(rendered, "--agent") {
-						t.Fatalf("unbound Tier C narration emitted an agent segment: %s", rendered)
-					}
-					return
-				}
-				if strings.Count(rendered, "--agent "+string(runtime)) != 1 {
-					t.Fatalf("bound Tier C narration does not contain one exact runtime identity: %s", rendered)
-				}
-			})
+		if !strings.Contains(emission.Statement, "--agent "+reviewUndeclaredRuntimeIdentitySlot) {
+			t.Fatalf("Tier C statement lost the neutral runtime-identity slot: %s", emission.Statement)
+		}
+		for _, identity := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
+			if strings.Contains(emission.Statement, "--agent "+string(identity)) {
+				t.Fatalf("Tier C statement baked in compiled identity %q: %s", identity, emission.Statement)
+			}
 		}
 	}
 }

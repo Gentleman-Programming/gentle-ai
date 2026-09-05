@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,7 +16,9 @@ import (
 )
 
 func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	for _, tt := range []struct {
 		name             string
@@ -48,7 +51,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("review routing = risk %q lenses %v", started.RiskLevel, started.SelectedLenses)
 			}
 
-			finalizeArgs := []string{"--cwd", repo, "--lineage", started.LineageID}
+			resultPaths := make([]string, 0, len(started.SelectedLenses))
 			for index, lens := range started.SelectedLenses {
 				resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
 				findings := []facadeFinding{}
@@ -62,17 +65,13 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 					Lens: lens, Findings: findings, Evidence: []string{"inspected the exact frozen candidate"},
 				})
-				finalizeArgs = append(finalizeArgs, "--result", resultPath)
+				resultPaths = append(resultPaths, resultPath)
 			}
-			if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
+			if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
 				t.Fatal(err)
 			}
 			if tt.forecast > 0 {
-				if err := RunReviewFacadeFinalize([]string{
-					"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", fmt.Sprint(tt.forecast),
-				}, &bytes.Buffer{}); err != nil {
-					t.Fatal(err)
-				}
+				captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, tt.forecast)
 			}
 
 			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -112,8 +111,12 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("correction transition = %#v", transition)
 			}
 			request := transition.CorrectionRequest
-			classification := record.State.Classifications[record.State.FixFindingIDs[0]]
-			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.Revision ||
+			view, err := record.State.CompactReviewView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			classification := view.Classifications[record.State.FixFindingIDs[0]]
+			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.State.CapturePhaseRevision ||
 				request.TargetIdentity != record.State.CurrentSnapshot.Identity || request.CorrectionBudget != record.State.CorrectionBudget ||
 				!reflect.DeepEqual(request.FixFindingIDs, record.State.FixFindingIDs) || len(request.Findings) != 1 ||
 				request.Findings[0].ID != record.State.FixFindingIDs[0] || request.Findings[0].Location != tt.path+":1" ||
@@ -135,11 +138,198 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			validateAgainstPublishedNextTransitionSchemaV4(t, transitionPayload)
+			validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
 			after, err := os.ReadFile(store.StatePath())
 			if err != nil || !bytes.Equal(before, after) || len(record.State.CorrectionAttempts) != 0 || record.State.CumulativeCorrectionLines != 0 {
 				t.Fatalf("read-only correction request consumed authority or budget: %v", err)
 			}
 		})
 	}
+}
+
+func captureCorrectionPlanFromCurrentStatus(t *testing.T, cwd, lineage string, correctionLines int) {
+	t.Helper()
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).ResolveRepositoryRoot(context.Background())
+	if err != nil {
+		t.Fatalf("resolve correction repository root for STATUS: %v", err)
+	}
+	_, record, err := discoverCompactFacadeReview(context.Background(), root, lineage, false)
+	if err != nil {
+		t.Fatalf("discover correction authority for STATUS: %v", err)
+	}
+	args := []string{
+		"status", "--cwd", cwd, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", lineage,
+	}
+	switch record.State.InitialSnapshot.Kind {
+	case reviewtransaction.TargetCurrentChanges:
+		if record.State.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			args = append(args, "--projection", string(reviewtransaction.ProjectionStaged))
+		}
+	case reviewtransaction.TargetBaseDiff:
+		args = append(args, "--base-ref", record.State.InitialSnapshot.BaseTree, "--committed-only")
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		args = append(args, "--base-ref", record.State.InitialSnapshot.BaseTree, "--workspace-overlay")
+		if record.State.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			args = append(args, "--projection", string(reviewtransaction.ProjectionStaged))
+		}
+	default:
+		t.Fatalf("unsupported correction authority target kind %q", record.State.InitialSnapshot.Kind)
+	}
+	builder := reviewtransaction.SnapshotBuilder{Repo: root}
+	inventory, inventoryDigest, err := builder.IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatalf("discover correction untracked inventory for STATUS: %v", err)
+	}
+	if len(inventory) > 0 {
+		mode := "exclude"
+		if len(record.State.InitialSnapshot.IntendedUntracked) > 0 {
+			mode = "select"
+		}
+		args = append(args, "--untracked-scope", mode, "--expected-untracked-inventory", inventoryDigest)
+		for _, path := range record.State.InitialSnapshot.IntendedUntracked {
+			args = append(args, "--intended-untracked", path)
+		}
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("read correction-plan STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transition := status.NextTransition
+	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" ||
+		transition.CorrectionRequest == nil || transition.Collect == nil || len(transition.Collect.Inputs) != 1 ||
+		transition.Collect.Inputs[0].CaptureOperation != reviewCaptureCorrectionPlanOperation {
+		t.Fatalf("correction-plan STATUS = %#v", transition)
+	}
+	captureArgs := reviewTransitionInputTokens(t, cwd, transition.Collect.Inputs[0])
+	captureArgs = append(captureArgs, "--correction-lines", strconv.Itoa(correctionLines))
+	if err := RunReviewCaptureCorrectionPlan(captureArgs, &bytes.Buffer{}); err != nil {
+		t.Fatalf("capture current correction plan: %v", err)
+	}
+}
+
+// TestNegotiatedStatusRoutesCorrectionRequiredDriftCorrectly pins issue #4094
+// defect A: a bound STATUS re-entered after four admitted reviewer captures
+// closed the lineage into correction_required, with the working tree drifting
+// before capture-correction-plan runs. A tracked file outside the frozen
+// manifest must route to recovery (mirroring the reviewing-phase drift
+// guard), while an edit to a path already inside the frozen manifest must
+// still offer the correction plan instead of failing STATUS pre_native.
+func TestNegotiatedStatusRoutesCorrectionRequiredDriftCorrectly(t *testing.T) {
+	reviewEnabledHome(t)
+
+	t.Run("drift outside the frozen manifest routes to recovery", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		if err := os.WriteFile(filepath.Join(repo, "unrelated.go"), []byte("package unrelated\n\nfunc Value() int { return 1 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runReviewCLIGit(t, repo, "add", "unrelated.go")
+		runReviewCLIGit(t, repo, "commit", "-qm", "add unrelated tracked file")
+
+		lineage := closeReviewLineageIntoCorrectionRequired(t, repo, "drift-outside-manifest")
+
+		if err := os.WriteFile(filepath.Join(repo, "unrelated.go"), []byte("package unrelated\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		status := negotiatedReviewStatusForLineage(t, repo, lineage)
+		if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
+			status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
+			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "recovery_authorization_required" {
+			t.Fatalf("out-of-manifest drift status = %#v", status)
+		}
+	})
+
+	t.Run("drift inside the frozen manifest still offers the correction plan", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		lineage := closeReviewLineageIntoCorrectionRequired(t, repo, "drift-inside-manifest")
+
+		// Edit the SAME genesis path again, unstaged, before capturing the
+		// correction plan: the candidate tree drifts, but every changed path
+		// stays inside the frozen manifest.
+		if err := os.WriteFile(filepath.Join(repo, "candidate.go"), []byte("package candidate\n\nfunc value() int { return 3 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		status := negotiatedReviewStatusForLineage(t, repo, lineage)
+		if status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
+			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "correction_plan_required" ||
+			status.NextTransition.CorrectionRequest == nil {
+			t.Fatalf("in-manifest drift status = %#v", status)
+		}
+	})
+}
+
+// closeReviewLineageIntoCorrectionRequired starts a review on candidate.go,
+// captures every selected lens with one CRITICAL finding on the first lens,
+// and returns the lineage now sitting in correction_required with no
+// correction plan captured yet.
+func closeReviewLineageIntoCorrectionRequired(t *testing.T, repo, lineage string) string {
+	t.Helper()
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, repo, lineage)
+
+	resultPaths := make([]string, 0, len(started.SelectedLenses))
+	for index, lens := range started.SelectedLenses {
+		resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
+		findings := []facadeFinding{}
+		if index == 0 {
+			findings = []facadeFinding{{
+				Location: "candidate.go:1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
+				ProofRefs:     []string{"exact changed hunk", "reproduced candidate failure"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+			Lens: lens, Findings: findings, Evidence: []string{"inspected the exact frozen candidate"},
+		})
+		resultPaths = append(resultPaths, resultPath)
+	}
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
+		t.Fatal(err)
+	}
+	return started.LineageID
+}
+
+// negotiatedReviewStatusForLineage runs one bound negotiated STATUS for the
+// given lineage and decodes its envelope, failing the test on any operation
+// error instead of returning it, so callers assert only routing shape.
+func negotiatedReviewStatusForLineage(t *testing.T, repo, lineage string) ReviewTargetStatusResult {
+	t.Helper()
+	args := []string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", lineage,
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("negotiated STATUS for lineage %q: %v\n%s", lineage, err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+// reviewTransitionInputTokens replays one collect input exactly as a host does.
+// The rendered transition carries no filesystem path, so the host supplies the
+// repository the provider-issued context digest is verified against -- either
+// by running in it, or by naming it as this helper does.
+func reviewTransitionInputTokens(t *testing.T, repo string, input ReviewTransitionInput) []string {
+	t.Helper()
+	args := make([]string, 0, len(input.Arguments)+1)
+	args = append(args, "--cwd="+repo)
+	for _, argument := range input.Arguments {
+		if argument.Token == "" {
+			t.Fatalf("transition argument %q has no exact token", argument.Name)
+		}
+		args = append(args, argument.Token)
+	}
+	return args
 }

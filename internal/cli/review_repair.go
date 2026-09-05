@@ -68,12 +68,39 @@ type ReviewRepairDispositionExecution struct {
 	AuthorizationSHA256        string `json:"authorization_sha256"`
 }
 
+// reviewRepairTruncatedContinuation is issue #3409's whole fix: what a
+// `truncated` preflight leaves the maintainer holding.
+//
+// The bound itself is honest and stays. It produces a typed `truncated`
+// status rather than a silently partial classification, which is the right
+// failure direction: a partial answer presented as complete is worse than a
+// refusal. What was wrong is that the refusal terminated. A store crosses the
+// assessment's bound by ordinary use, because lineages accumulate and nothing
+// reaps them (retention is #1656, deliberately out of scope here), and from
+// that point `review repair --preflight` classified nothing and named nothing
+// -- the documented repair route simply closed, precisely on the stores most
+// likely to need it.
+//
+// `review inspect-authority` is the way forward that already exists and is
+// already the command this codebase names for every shape of authority damage
+// (see compactBlockedLineageError and reviewAuthorityCorruptionDetail). It
+// reads through scanCompactAuthority, carries no assessment bound at all, and
+// reports a per-entry diagnosis plus each entry's own sanctioned exits -- so
+// it classifies exactly the large store this assessment refused to walk.
+// Naming it converts a dead end into a route without weakening the bound,
+// widening any authority, or presenting one byte of partial classification as
+// though it were complete.
+const reviewRepairTruncatedContinuation = "this authority store exceeds the bounded repair assessment, so nothing was classified here; classify every entry with `gentle-ai review inspect-authority`"
+
 type ReviewRepairResult struct {
-	Schema                    string                                                `json:"schema"`
-	Contract                  string                                                `json:"contract"`
-	Operation                 string                                                `json:"operation"`
-	Mode                      ReviewRepairMode                                      `json:"mode"`
-	Assessment                reviewtransaction.AuthorityRepairAssessment           `json:"assessment"`
+	Schema     string                                      `json:"schema"`
+	Contract   string                                      `json:"contract"`
+	Operation  string                                      `json:"operation"`
+	Mode       ReviewRepairMode                            `json:"mode"`
+	Assessment reviewtransaction.AuthorityRepairAssessment `json:"assessment"`
+	// Continuation is populated only for a truncated preflight, and is then
+	// exactly reviewRepairTruncatedContinuation.
+	Continuation              string                                                `json:"continuation,omitempty"`
 	ProviderInputs            *ReviewRepairProviderInputs                           `json:"provider_inputs,omitempty"`
 	RequiredInputs            []string                                              `json:"required_inputs"`
 	Execution                 *reviewtransaction.ClassifiedAuthorityRepairExecution `json:"execution,omitempty"`
@@ -91,6 +118,18 @@ func (result ReviewRepairResult) Validate() error {
 	}
 	if err := result.Assessment.Validate(); err != nil {
 		return fmt.Errorf("review repair assessment: %w", err)
+	}
+	// issue #3409: a truncated preflight carries the continuation and every
+	// other result carries none, so no surface can quietly lose the way
+	// forward again, and none can attach it to a classification that
+	// actually completed.
+	wantContinuation := ""
+	if result.Mode == ReviewRepairModePreflight && result.Assessment.Status == reviewtransaction.AuthorityRepairTruncated {
+		wantContinuation = reviewRepairTruncatedContinuation
+	}
+	if result.Continuation != wantContinuation {
+		// refusal:by-design world-action: the continuation is attached by newReviewRepairPreflightResult from the assessment status this same result carries; a mismatch is a product defect to fix in code, not a value any operator supplies
+		return errors.New("review repair result continuation does not match its assessment status")
 	}
 	switch result.Mode {
 	case ReviewRepairModePreflight:
@@ -443,6 +482,15 @@ func newReviewRepairPreflightResult(assessment reviewtransaction.AuthorityRepair
 	}
 	if len(contracts) > 0 && contracts[0] == ReviewIntegrationContractV2 {
 		result.Schema, result.Contract = ReviewIntegrationRepairSchemaV2, ReviewIntegrationContractV2
+	}
+	// issue #3409: a truncated assessment classified nothing, so it must not
+	// be the end of the road. It names the unbounded per-entry diagnosis
+	// instead. No candidate, no provider inputs and no required inputs are
+	// derived here: the bound still fails closed and still publishes no
+	// partial classification.
+	if assessment.Status == reviewtransaction.AuthorityRepairTruncated {
+		result.Continuation = reviewRepairTruncatedContinuation
+		return result
 	}
 	if assessment.Status != reviewtransaction.AuthorityRepairEligible || assessment.Candidate == nil {
 		return result

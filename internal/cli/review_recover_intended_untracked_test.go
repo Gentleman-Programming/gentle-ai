@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -31,23 +33,15 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage,
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{"--cwd", repo, "--lineage", lineage,
 		"--untracked-scope=select", "--expected-untracked-inventory=" + digest,
-		"--intended-untracked", "notes-a.txt", "--intended-untracked", "notes-b.txt"}, io.Discard); err != nil {
+		"--intended-untracked", "notes-a.txt", "--intended-untracked", "notes-b.txt"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	resultPath := filepath.Join(t.TempDir(), "review.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
-			ProofRefs:     []string{"differential test fails only on candidate"},
-			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
-		}}, Evidence: []string{"focused differential test failed"},
-	})
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage,
-		"--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
-		t.Fatal(err)
-	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	escalateReviewForRecovery(t, repo, started)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +57,63 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 	return repo, predecessor
 }
 
+// escalateReviewForRecovery reaches the surviving recovery predecessor through
+// reviewer capture, a status-bound correction plan, and a captured validator.
+func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeStartResult) {
+	t.Helper()
+	for order := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if order == 0 {
+			findings = []facadeFinding{{
+				Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
+				ProofRefs:     []string{"differential test fails only on candidate"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
+	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, 1)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var validation facadeValidationResult
+	if err := json.Unmarshal(providerTargetedValidationPayload(t, request), &validation); err != nil {
+		t.Fatal(err)
+	}
+	validation.OriginalCriteria.Passed = false
+	payload, err := json.Marshal(validation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	previous := reviewProviderRoleHostAdapter
+	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+			return payload, nil
+		})
+	}
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
+		"--agent", string(model.AgentPi), "--execute=true",
+	}, io.Discard); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v", err)
+	}
+}
+
 // TestReviewRecoverInheritsDeclaredIntendedUntracked is #3159.
 //
 // `review recover` hardcoded the successor's intended-untracked declaration
@@ -76,6 +127,7 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 // under review. The rc.7 reporter's client refused to treat that partial
 // review as approval, which is the only reason this was caught.
 func TestReviewRecoverInheritsDeclaredIntendedUntracked(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedIntendedUntrackedRecoveryFixture(t, "recover-3159")
 
 	// Apply the fix that verification asked for: the successor candidate must
@@ -134,6 +186,7 @@ func TestReviewRecoverInheritsDeclaredIntendedUntracked(t *testing.T) {
 // An untracked file that appeared after the predecessor froze must stay out
 // of the successor, no matter that it would be eligible for a fresh START.
 func TestReviewRecoverStillNeverSweepsUndeclaredUntracked(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedIntendedUntrackedRecoveryFixture(t, "recover-3159-nosweep")
 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {
@@ -181,5 +234,62 @@ func TestReviewRecoverStillNeverSweepsUndeclaredUntracked(t *testing.T) {
 		if path == "appeared-later.txt" {
 			t.Fatalf("successor manifest contains the undeclared untracked file: %v", successor.State.InitialSnapshot.Paths)
 		}
+	}
+}
+
+// TestReviewRecoverInheritsDeclarationAfterDeclaredPathWasCommitted is #3759.
+//
+// Inheriting the predecessor's frozen declaration (#3159) replayed it
+// verbatim, so once ordinary development committed one of those paths the
+// successor build refused with "already tracked" and named one path per
+// attempt. A committed path is no longer untracked: the index carries it and
+// the current-changes target already covers it, so there is nothing left to
+// declare. Inheritance keeps only the entries that are still untracked.
+func TestReviewRecoverInheritsDeclarationAfterDeclaredPathWasCommitted(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, predecessor := escalatedIntendedUntrackedRecoveryFixture(t, "recover-3759")
+
+	// Unrelated development lands one declared path between escalation and
+	// recovery; the other declared path stays untracked.
+	runReviewCLIGit(t, repo, "add", "notes-a.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "land notes-a")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	complete, err := builder.Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+		IntendedUntracked: []string{"notes-b.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision,
+		complete.Identity, "maintainer", "recover after landing a declared path")
+
+	var output bytes.Buffer
+	if err := RunReviewRecover([]string{
+		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision,
+		"--successor-lineage", "recover-3759-successor", "--disposition", "escalated",
+		"--reason", "recover after landing a declared path", "--actor", "maintainer",
+		"--maintainer-authorization", authorization,
+	}, &output); err != nil {
+		t.Fatalf("recovery inheriting a declaration with one committed path was refused: %v\n%s", err, output.String())
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "recover-3759-successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(successor.State.InitialSnapshot.IntendedUntracked, ","); got != "notes-b.txt" {
+		t.Fatalf("successor declaration = %q, want only the still-untracked notes-b.txt", got)
+	}
+	if successor.State.InitialSnapshot.Identity != complete.Identity {
+		t.Fatalf("successor identity %s does not bind the authorized candidate %s", successor.State.InitialSnapshot.Identity, complete.Identity)
 	}
 }

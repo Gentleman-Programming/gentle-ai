@@ -51,8 +51,11 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		name:   "dispatcher guard",
 		marker: "### Native SDD Dispatcher Guard",
 		sentinels: []string{
-			"reads ONLY OpenSpec file artifacts",
-			"When the session artifact store is `engram`, do NOT invoke the dispatcher",
+			// #3814: these used to pin the store-branching prose. The dispatcher
+			// resolves the declared store itself, so the invariant is now that
+			// the guard tells the actor NOT to re-derive it.
+			"invoke the native dispatcher",
+			"Do NOT determine the artifact store yourself, and do NOT branch on it",
 			"Route only by `nextRecommended` and dependency states",
 		},
 	},
@@ -155,9 +158,6 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 	if !strings.Contains(content, "--agent "+string(agent)+" --next-transition") {
 		t.Fatalf("%s does not bind negotiated review routing to runtime %q", label, agent)
 	}
-	if !strings.Contains(content, "agent: "+string(agent)) {
-		t.Fatalf("%s does not bind the reviewer consent envelope to runtime %q", label, agent)
-	}
 
 	lastMarker := -1
 	for _, section := range currentOpenCodeOrchestratorSections {
@@ -195,10 +195,11 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 
 	assertTextContainsClauses(t, label+" bounded review", content, []string{
 		"#### Review Execution Contract",
-		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
-		"OpenCode relays one host Task through one live Go transport process",
+		"Selectorless STATUS only preflights the current worktree candidate",
+		"START freezes one compact atomic transaction",
 		"Only candidate-caused severe findings block",
-		"Model/provider/profile selection remains user-owned",
+		"Only that exact invocation burns authority and artifacts",
+		"The final reviewer, refuter, or targeted-validator capture owns closure.",
 	})
 	if profileName == "" {
 		assertTextContainsClauses(t, label+" model assignment contract", content, []string{
@@ -327,18 +328,22 @@ func TestOpenCodeNamedProfileOrchestratorPreservesCurrentContract(t *testing.T) 
 	}
 }
 
-func TestKilocodeOrchestratorBaselineSharesHistoricalAssetWithoutBackgroundAddendum(t *testing.T) {
+func TestKilocodeOrchestratorBaselineSharesHistoricalAssetWithoutReviewLifecycle(t *testing.T) {
 	if got, want := sddOrchestratorAsset(model.AgentKilocode), sddOrchestratorAsset(model.AgentOpenCode); got != want {
 		t.Fatalf("Kilocode orchestrator asset = %q, want shared historical asset %q", got, want)
 	}
 
 	content := renderSDDOrchestratorAsset(model.AgentKilocode)
-	assertCurrentOpenCodeOrchestratorContract(t, "Kilocode baseline orchestrator", content, model.AgentKilocode, "")
+	if strings.Contains(content, "### Authority-First Terminal Procedure") {
+		t.Fatal("Kilocode baseline received the shared review lifecycle")
+	}
+	for _, want := range []string{"## SDD Workflow", "### Native SDD Dispatcher Guard", "### SDD Init Guard (MANDATORY)"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Kilocode baseline lost normal SDD clause %q", want)
+		}
+	}
 
-	// Reserve the later composition seam's marker as a negative control. This
-	// slice freezes Kilocode's baseline; it does not claim Kilocode should gain
-	// OpenCode's future background-subagent policy.
 	if strings.Contains(content, openCodeBackgroundPolicyMarker) {
-		t.Fatalf("Kilocode baseline received an OpenCode-only background addendum")
+		t.Fatal("Kilocode baseline received an OpenCode-only background addendum")
 	}
 }

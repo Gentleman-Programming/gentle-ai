@@ -18,10 +18,11 @@ func init() {
 		Name:     modelPickerAxis,
 		Title:    "OpenCode custom-agent model-picker runtime proof",
 		BlackBox: false,
+		Review:   reviewUntouched,
 		Properties: []string{
 			"j97 drives the compiled TUI model-picker state through the public gentle-ai binary and checks the persisted opencode.json boundary.",
 			"The journey requires a product binary built with -tags bench_fixture; ordinary binaries report unsupported instead of fabricating a pass.",
-			"The fixture uses a fresh HOME and opencode.json containing an unconfigured custom native agent plus a tool-call-capable model provider.",
+			"The fixture uses a fresh HOME with an unconfigured custom native agent and injects an effective tool-capable runtime catalog without OpenCode private cache files.",
 		},
 		Journeys: modelPickerJourneys,
 	})
@@ -30,6 +31,7 @@ func init() {
 func modelPickerJourneys() []Journey {
 	return []Journey{{
 		ID:     "j97-opencode-custom-agent-model-picker-runtime",
+		Review: reviewUntouched,
 		Title:  "Runtime model picker discovers and persists a custom native agent assignment",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2098",
 		Steps: []Step{
@@ -48,14 +50,6 @@ func modelPickerFixture(sandbox *Sandbox) error {
 	}
 	settingsPath := filepath.Join(sandbox.Home, ".config", "opencode", "opencode.json")
 	settings := `{
-  "provider": {
-    "bench-provider": {
-      "name": "Bench Provider",
-      "models": {
-        "bench-model": { "name": "Bench Model", "tool_call": true }
-      }
-    }
-  },
   "agent": {
     "custom-refactor-agent": {
       "mode": "subagent",
@@ -66,7 +60,7 @@ func modelPickerFixture(sandbox *Sandbox) error {
 	if err := sandbox.write(settingsPath, settings); err != nil {
 		return fmt.Errorf("write model-picker settings: %w", err)
 	}
-	return sandbox.write(filepath.Join(sandbox.Home, ".cache", "opencode", "models.json"), "{}\n")
+	return nil
 }
 
 func modelPickerAfter(sandbox *Sandbox, observation Observation) error {

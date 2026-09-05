@@ -121,6 +121,48 @@ func TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals(t *testing.T) {
 	})
 }
 
+// TestRARWindowsOwnerOnlyConstantsMatchWindows binds the constants the pure
+// rule is table-tested against to the real Windows values, so the
+// cross-platform table cannot drift away from the platform it describes.
+func TestRARWindowsOwnerOnlyConstantsMatchWindows(t *testing.T) {
+	wantFlags := uint8(windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE)
+	if rarWindowsInheritDirectoryACEFlags != wantFlags {
+		t.Fatalf("directory ACE flags = %#04x, want %#04x",
+			rarWindowsInheritDirectoryACEFlags, wantFlags)
+	}
+	// The written mask and the accepted masks have to be the same access set,
+	// which is the whole reason the SDDL may say FA instead of GA.
+	if !ownerOnlyRARWindowsAccessMask(windows.GENERIC_ALL) {
+		t.Fatal("GENERIC_ALL is not an accepted owner-only mask")
+	}
+	const fileAllAccess = windows.ACCESS_MASK(0x001f01ff)
+	if !ownerOnlyRARWindowsAccessMask(fileAllAccess) {
+		t.Fatal("FILE_ALL_ACCESS is not an accepted owner-only mask")
+	}
+	if ownerOnlyRARWindowsAccessMask(windows.FILE_GENERIC_READ) {
+		t.Fatal("a read-only mask is accepted as owner-only")
+	}
+}
+
+// TestRARWindowsOwnerOnlyDescriptorRoundTrips proves the descriptor the repair
+// writes is the descriptor the validator accepts, through the real SDDL
+// builder and the real observation layer rather than a hand-built table.
+func TestRARWindowsOwnerOnlyDescriptorRoundTrips(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		descriptor, err := ownerOnlyRARSecurityDescriptor(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mismatch := privateRARSecurityDescriptorMismatch(descriptor, directory); mismatch != "" {
+			t.Fatalf("the descriptor gentle-ai writes (directory=%t) is refused by its own rule: %s",
+				directory, mismatch)
+		}
+		if !privateRARSecurityDescriptorSafe(descriptor, directory) {
+			t.Fatalf("mismatch and safe disagree for directory=%t", directory)
+		}
+	}
+}
+
 func TestRARPrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 	descriptor, err := ownerOnlyRARSecurityDescriptor(false)
 	if err != nil {
@@ -152,6 +194,74 @@ func TestRARPrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 	}
 }
 
+// TestRARWindowsTokenPrincipalsDescribeThisProcess covers the half of the
+// ownership decision that cannot be executed off Windows: reading the real
+// token. The rule applied to what it reads is covered cross-platform by
+// TestRARWindowsRepairOwnerControlled.
+func TestRARWindowsTokenPrincipalsDescribeThisProcess(t *testing.T) {
+	token, err := currentRARWindowsTokenPrincipals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.User == "" || token.DefaultOwner == "" {
+		t.Fatalf("token principals are incomplete: %+v", token)
+	}
+	for _, owned := range []string{token.User, token.DefaultOwner} {
+		if !rarWindowsRepairOwnerControlled(owned, token) {
+			t.Fatalf("this process does not control its own principal %s", owned)
+		}
+	}
+
+	// A directory this process creates without an explicit owner comes out
+	// owned by the token's default owner, so the repair must accept exactly
+	// that SID. This is the invariant #3376's predicate could not express.
+	dir := filepath.Join(t.TempDir(), "created-by-this-process")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(
+		dir,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled, err := rarWindowsDescriptorOwnerControlled(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !controlled {
+		owner, _, ownerErr := descriptor.Owner()
+		t.Fatalf("a directory this process just created is owned by %v (err %v), "+
+			"which %+v does not control", owner, ownerErr, token)
+	}
+
+	// The squattable well-known groups stay outside the accepted set whatever
+	// this token turns out to be.
+	for _, forgeable := range []windows.WELL_KNOWN_SID_TYPE{
+		windows.WinWorldSid,
+		windows.WinAuthenticatedUserSid,
+	} {
+		sid, err := windows.CreateWellKnownSid(forgeable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rarWindowsRepairOwnerControlled(sid.String(), token) {
+			t.Fatalf("forgeable owner %s is treated as controlled", sid)
+		}
+	}
+
+	// A foreign account SID derived from this machine's own domain is the
+	// closest thing to a real attacker-owned directory a test can build.
+	if rarWindowsRepairOwnerControlled(
+		"S-1-5-21-1004336348-1177238915-682003330-31337",
+		token,
+	) {
+		t.Fatal("a foreign account SID is treated as controlled")
+	}
+}
+
 func rarWindowsDescriptorForOwner(
 	t *testing.T,
 	owner *windows.SID,
@@ -171,6 +281,64 @@ func rarWindowsDescriptorForOwner(
 		t.Fatal("test security descriptor is invalid")
 	}
 	return descriptor
+}
+
+// ignoreRequestedRARDescriptor reproduces a filesystem or token that accepts the
+// descriptor handed to CreateDirectory and then ignores it.
+func ignoreRequestedRARDescriptor(t *testing.T) {
+	t.Helper()
+	previous := rarPrivateDirectoryCreate
+	rarPrivateDirectoryCreate = func(name *uint16, _ *windows.SecurityAttributes) error {
+		return windows.CreateDirectory(name, nil)
+	}
+	t.Cleanup(func() { rarPrivateDirectoryCreate = previous })
+}
+
+func TestCreatePrivateRARDirectoryRepairsADescriptorThatDidNotStick(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1")
+	ignoreRequestedRARDescriptor(t)
+
+	// A nil error is the revalidation: createPrivateRARDirectory only reports
+	// success once validatePrivateRARDirectory accepted the repaired handle.
+	created, err := createPrivateRARDirectory(path)
+	if err != nil || !created {
+		t.Fatalf("createPrivateRARDirectory on a mount that ignored the descriptor = (%t, %v), want (true, nil)", created, err)
+	}
+}
+
+func TestCreatePrivateRARDirectoryRepairsWhatAnInterruptedRunLeftBehind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1")
+	// What a run killed between CreateDirectory and its repair leaves behind: a
+	// directory carrying inherited ACLs. CreateDirectory answers every later
+	// attempt with ERROR_ALREADY_EXISTS, so a `created` gate never repairs it.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := createPrivateRARDirectory(path)
+	if err != nil || created {
+		t.Fatalf("invocation after an interrupted run = (%t, %v), want (false, nil)", created, err)
+	}
+}
+
+func TestCreatePrivateRARDirectoryKeepsTheUnsafePathItNamesOnWindows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1")
+	ignoreRequestedRARDescriptor(t)
+	previous := rarPrivateDirectoryRepair
+	// A repair that reports success and changes nothing, the way a mount
+	// without persistent ACL semantics behaves.
+	rarPrivateDirectoryRepair = func(string, fs.FileMode) error { return nil }
+	t.Cleanup(func() { rarPrivateDirectoryRepair = previous })
+
+	created, err := createPrivateRARDirectory(path)
+	var unsafePath *UnsafeRARPathError
+	if created || !errors.As(err, &unsafePath) || unsafePath.Path != path || !unsafePath.Directory {
+		t.Fatalf("createPrivateRARDirectory = (%t, %v), want (false, *UnsafeRARPathError naming %q)", created, err, path)
+	}
+	// Removing the refused directory is what made the printed repair unrunnable.
+	if _, statErr := os.Lstat(path); statErr != nil {
+		t.Fatalf("refused path %q is gone, so the printed repair cannot run: %v", path, statErr)
+	}
 }
 
 // classifierStub records every path it receives and returns a fixed filesystem type.

@@ -45,6 +45,12 @@ type waveOperationResult struct {
 	TargetIdentity       string `json:"target_identity"`
 }
 
+type waveTransitionArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Token string `json:"token"`
+}
+
 type waveCorrectionStatus struct {
 	Schema         string `json:"schema"`
 	TargetIdentity string `json:"target_identity"`
@@ -81,10 +87,15 @@ type waveCorrectionStatus struct {
 				CaptureOperation string                         `json:"capture_operation"`
 				Arguments        []struct{ Name, Value string } `json:"arguments"`
 				Submission       *waveSubmissionDescriptor      `json:"submission"`
+				ProviderTask     *struct {
+					Prompt string `json:"prompt"`
+					Role   string `json:"role"`
+				} `json:"provider_task"`
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute *struct {
-			Operation string `json:"operation"`
+			Operation string                   `json:"operation"`
+			Arguments []waveTransitionArgument `json:"arguments"`
 		} `json:"execute"`
 	} `json:"next_transition"`
 }
@@ -468,10 +479,22 @@ func captureCorrectableFindingFor(r *journeyRun, selectors ...string) error {
 		"--expected-revision", envelope.argument("expected-revision"), "--lens", envelope.argument("lens"),
 		"--order", envelope.argument("order"), "--input", path,
 	}, true)
-	if observation.ExitCode != 0 {
-		return fmt.Errorf("capture blocking reviewer result: %s", firstLine(observation.Stderr))
+	if status, terminal, err := correctionStatusFromLastEventCapture(r, observation); err != nil {
+		return err
+	} else if terminal {
+		return rememberCorrectionStatusContinuation(r, status.Authority.LineageID, status)
 	}
-	return captureAllLensesFor(r, selectors...)
+	last, err := captureAllLensesWithLastCaptureFor(r, selectors...)
+	if err != nil {
+		return err
+	}
+	if status, terminal, err := correctionStatusFromLastEventCapture(r, last); err != nil {
+		return err
+	} else if !terminal {
+		return errors.New("last reviewer capture did not open correction-required status continuation")
+	} else {
+		return rememberCorrectionStatusContinuation(r, status.Authority.LineageID, status)
+	}
 }
 
 func writeCorrectedCandidate(sandbox *Sandbox) error {
@@ -498,6 +521,17 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 }
 
 func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
+	if lineage != "" {
+		if payload, found, err := readCorrectionPlanStatusContinuation(r, lineage); err != nil {
+			return waveCorrectionStatus{}, err
+		} else if found {
+			var status waveCorrectionStatus
+			if err := json.Unmarshal([]byte(payload), &status); err != nil {
+				return waveCorrectionStatus{}, fmt.Errorf("decode carried correction-plan STATUS: %w", err)
+			}
+			return status, nil
+		}
+	}
 	// These journeys create their authority through the manual compatibility
 	// path, so they must not invent a runtime identity for a later STATUS read.
 	arguments := []string{"review", "status", "--contract", contract, "--next-transition"}
@@ -566,7 +600,11 @@ func capturePassedCorrectionEvidence(r *journeyRun) error {
 }
 
 func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
-	status, err := readCorrectionStatusFor(r, lineage)
+	return capturePassedCorrectionEvidenceForContract(r, lineage, reviewContract)
+}
+
+func capturePassedCorrectionEvidenceForContract(r *journeyRun, lineage, contract string) error {
+	status, err := readCorrectionStatusForContract(r, lineage, contract)
 	if err != nil {
 		return err
 	}
@@ -592,6 +630,13 @@ func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
 
 func completeCorrectedReview(r *journeyRun) error {
 	return completeCorrectedReviewForContract(r, correctedDeliveryLineage, reviewContractV2)
+}
+
+func completeBurnedCorrectedReview(r *journeyRun) error {
+	if err := completeCorrectedReview(r); err != nil {
+		return err
+	}
+	return requireAtomicLineageAcknowledged(r, correctedDeliveryLineage)
 }
 
 func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
@@ -1043,122 +1088,85 @@ func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
 	return nil
 }
 
-func rememberArchiveAuthority(sandbox *Sandbox, observation Observation) error {
-	if err := rememberLineage(sandbox, observation); err != nil {
-		return err
+// requireDisabledUnmanagedArchiveStatus asserts the kill-switch-off shape at
+// sdd-status: the optional offer is structurally absent and archive remains
+// governed only by tasks and independent verification.
+func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observation) error {
+	return sddStatusAssertion(name, func(status sddStatusV2) error {
+		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
+			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
+				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
+		}
+		if status.ReviewOffer != nil {
+			return fmt.Errorf("disabled status reviewOffer=%+v, want structural absence", status.ReviewOffer)
+		}
+		return nil
+	})
+}
+
+// snapshotJ47StatusInput records the repository state that the public status
+// read must preserve. The completed SDD fixture commits its own artifacts, so a
+// changed head or worktree here would be a side effect of status itself.
+func snapshotJ47StatusInput(sandbox *Sandbox) error {
+	head, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("read status input head: %w", err)
 	}
-	if sandbox.Lineage == "" || sandbox.Revision == "" {
-		return errors.New("approved archive authority published no lineage or revision")
+	worktree, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain=v1")
+	if err != nil {
+		return fmt.Errorf("read status input worktree: %w", err)
 	}
-	sandbox.Scratch["archive-authority-revision"] = sandbox.Revision
+	sandbox.Scratch["j47-status-head"] = head
+	sandbox.Scratch["j47-status-worktree"] = worktree
 	return nil
 }
 
-func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("discovered receipt premise", func(status sddStatusV1) error {
-		if status.ReviewGate == nil || status.ReviewGate.Result != "allow" || status.ReviewGate.Delivery != "" {
-			return fmt.Errorf("reviewGate = %+v, want discovered allow without a delivery override", status.ReviewGate)
-		}
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
-			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
-				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-		}
-		return nil
-	})(nil, observation)
-}
+// requireJ47DisabledV2ArchiveStatus pins #3564's public V2 projection: completed
+// SDD work proceeds to archive under the clone-local disabled mode without any
+// retired review data, and status does not alter its input repository.
+func requireJ47DisabledV2ArchiveStatus(sandbox *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("disabled V2 sdd-status exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
 
-// requireDiscoveredArchiveStatus asserts the enabled or disabled shape of a
-// discovered archive authority whose current candidate changed. Corrective verify cycle
-// CRITICAL-1 (rdd-post-verify-review-offer's "Kill-Switch-Off Is Structural
-// Absence" requirement): the disabled branch previously required a populated
-// "disabled/unmanaged" disposition; it now requires reviewGate's structural
-// ABSENCE instead -- no field, no ceremony, archive unfailable on review
-// grounds. The enabled branch is untouched.
-func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
-	return sddStatusAssertion("discovered scope-changed archive authority", func(status sddStatusV1) error {
-		if disabled {
-			if status.ReviewGate != nil {
-				return fmt.Errorf("disabled reviewGate = %+v, want structural absence", status.ReviewGate)
-			}
-			if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-				return fmt.Errorf("disabled archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
-			}
-			return nil
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &document); err != nil {
+		return fmt.Errorf("parse disabled V2 sdd-status: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	var schemaVersion int
+	if raw, ok := document["schemaVersion"]; !ok || json.Unmarshal(raw, &schemaVersion) != nil || schemaVersion != 2 {
+		return fmt.Errorf("schemaVersion = %s, want 2", document["schemaVersion"])
+	}
+	for _, retired := range []string{"reviewOffer", "reviewGate", "reviewTransaction", "runtimeStatus", "reVerify", "receipt", "lineage"} {
+		if _, present := document[retired]; present {
+			return fmt.Errorf("disabled V2 sdd-status exposed retired key %q", retired)
 		}
-		if status.ReviewGate == nil || status.ReviewGate.Result != "scope-changed" {
-			return fmt.Errorf("reviewGate = %+v, want scope-changed", status.ReviewGate)
-		}
-		if !strings.Contains(status.ReviewGate.Reason, "review scope changed") {
-			return fmt.Errorf("reviewGate.reason = %q, want the changed candidate reason", status.ReviewGate.Reason)
-		}
-		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want scope-changed blocked/resolve-review",
-				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
-		}
-		return nil
-	})
-}
+	}
 
-func introduceArchiveCandidateDrift(sandbox *Sandbox) error {
-	return sandbox.write(filepath.Join(sandbox.Repo, "docs", "archive-authority.md"), "# archive-authority\n\nchanged after review.\n")
-}
+	var status sddStatusV2
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
+		return fmt.Errorf("decode disabled V2 status: %w", err)
+	}
+	if !status.TaskProgress.AllComplete || status.TaskProgress.Total == 0 || status.Dependencies.Verify != "all_done" ||
+		status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
+		return fmt.Errorf("disabled V2 status = tasks %d/%d complete=%v verify=%q archive=%q next=%q blocked=%v, want completed/all_done/ready/archive/no blockers",
+			status.TaskProgress.Completed, status.TaskProgress.Total, status.TaskProgress.AllComplete,
+			status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
+	}
 
-func writeExplicitInvalidArchiveReceipt(sandbox *Sandbox) error {
-	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "reviews", "receipt.json"), "{\n")
-}
-
-// requireDisabledExplicitInvalidReceiptIsIgnored asserts the corrective
-// verify cycle's CRITICAL-1 line: the ratified "zero review code MUST
-// execute on any SDD path" requirement carries no carve-out for an explicit
-// review artifact either. Superseded expectation (documented, not silently
-// dropped): this journey previously required an explicit invalid receipt to
-// still fail closed while disabled ("declining is not the same as blessing
-// content it never validated"); that narrower contract predates this wave's
-// ratified requirement, which is unconditional -- while off, the explicit
-// receipt is never even read, so its invalidity has no bearing.
-func requireDisabledExplicitInvalidReceiptIsIgnored(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("disabled explicit invalid archive authority is never read", func(status sddStatusV1) error {
-		if status.ReviewGate != nil {
-			return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
-		}
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-			return fmt.Errorf("disabled explicit-invalid-receipt archive=%q next=%q, want ready/archive",
-				status.Dependencies.Archive, status.NextRecommended)
-		}
-		return nil
-	})(nil, observation)
-}
-
-// requireDisabledUnmanagedArchiveStatus asserts the kill-switch-off shape at
-// sdd-status. Corrective verify cycle CRITICAL-1: reviewGate is now
-// structurally absent, not a populated non-authorizing disposition.
-func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observation) error {
-	return sddStatusAssertion(name, func(status sddStatusV1) error {
-		if status.ReviewGate != nil {
-			return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
-		}
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
-			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
-				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-		}
-		return nil
-	})
-}
-
-func proveArchiveAuthorityUnchanged(sandbox *Sandbox) error {
-	head, err := proveAuthorities(sandbox)
+	head, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
 	if err != nil {
-		return err
+		return fmt.Errorf("read status output head: %w", err)
 	}
-	for _, entry := range head.Entries {
-		if entry.LineageID == sandbox.Lineage {
-			if entry.State != "approved" || entry.Revision != sandbox.Scratch["archive-authority-revision"] {
-				return fmt.Errorf("archive authority changed to state=%q revision=%q", entry.State, entry.Revision)
-			}
-			return nil
-		}
+	worktree, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain=v1")
+	if err != nil {
+		return fmt.Errorf("read status output worktree: %w", err)
 	}
-	return fmt.Errorf("archive authority %q disappeared", sandbox.Lineage)
+	if head != sandbox.Scratch["j47-status-head"] || worktree != sandbox.Scratch["j47-status-worktree"] {
+		return fmt.Errorf("disabled V2 sdd-status mutated its repository input: head %q/%q worktree %q/%q",
+			sandbox.Scratch["j47-status-head"], head, sandbox.Scratch["j47-status-worktree"], worktree)
+	}
+	return nil
 }
 
 func prepareDeclinedCandidate(sandbox *Sandbox) error {
@@ -1243,6 +1251,7 @@ func waveOneJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j44-corrected-current-changes-delivery",
+			Review: reviewOptedIn,
 			Title:  "Corrected current-changes receipt: one exact linked-worktree delivery is discovered selector-free",
 			Source: "issue #1819 + shape 3 (the squashed-delivery proof was hidden behind the wrong binding condition)",
 			Steps: []Step{
@@ -1273,6 +1282,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j45-completed-final-verification-retry",
+			Review: reviewOptedIn,
 			Title:  "Completed final-verification retry: provider successor remains authoritative in inventory and post-apply",
 			Source: "issue #1915 + shape 3 (retry edge validation was gated on a validating-only successor)",
 			Steps: []Step{
@@ -1304,6 +1314,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j46-correction-required-staged-recovery",
+			Review: reviewOptedIn,
 			Title:  "Correction-required base diff: negotiated staged recovery receives a fresh review and delivers",
 			Source: "issue #1921",
 			Steps: []Step{
@@ -1352,33 +1363,21 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j47-disabled-mode-archives-discovered-scope-changed-authority",
-			Title:  "Discovered scope-changed archive authority: disabled mode steps aside without weakening explicit authority",
-			Source: "issue #2128",
+			Review: reviewUntouched,
+			Title:  "Disabled clone mode: explicit-CWD SDD status v2 reports archive readiness",
+			Source: "issue #3564 V2: completed SDD tasks and verification route directly to archive",
 			Steps: []Step{
-				{Name: "fixture: archive-ready SDD change", Fixture: sddPlanningArtifacts(sddVerifyReport)},
-				{Name: "fixture: stage the reviewed candidate", Fixture: stageProse("", "archive-authority")},
-				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start")},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberArchiveAuthority},
-				{Name: "discovered receipt allows before candidate drift", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchivePremise},
-				{Name: "fixture: change a reviewed candidate path", Fixture: introduceArchiveCandidateDrift},
-				{Name: "enabled discovered receipt blocks", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
-				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "disabled discovered receipt closes unmanaged", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(true)},
-				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
-				{Name: "re-enabled discovered receipt blocks again", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
-				{Name: "fixture: write an explicit invalid receipt", Fixture: writeExplicitInvalidArchiveReceipt},
-				{Name: "mode disable with explicit receipt", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "disabled explicit invalid receipt is never read", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDisabledExplicitInvalidReceiptIsIgnored},
-				{Name: "authority remained approved at its original revision", Fixture: proveArchiveAuthorityUnchanged},
+				{Name: "fixture: completed SDD change with passing verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
+				{Name: "disable review mode for the clone", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
+				{Name: "fixture: capture status input state", Fixture: snapshotJ47StatusInput},
+				{Name: "explicit-CWD disabled V2 status is archive-ready and read-only", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--contract", "gentle-ai.sdd-status/v2", "--json"), After: requireJ47DisabledV2ArchiveStatus},
 			},
 		},
 		{
 			ID:     "j48-recovered-workspace-preserves-full-candidate-scope",
+			Review: reviewOptedIn,
 			Title:  "Recovered workspace correction: terminal authorities preserve the complete candidate scope",
 			Source: "issue #2090",
 			Steps: []Step{
@@ -1412,6 +1411,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j49-status-without-cwd-honors-kill-switch",
+			Review: reviewOptedIn,
 			Title:  "SDD status without CWD: repository resolution and the kill switch share one workspace",
 			Source: "issue #2129",
 			Steps: []Step{
@@ -1445,6 +1445,7 @@ func waveOneJourneys() []Journey {
 			// tree matches the frozen target) were never gate-side and
 			// stay exactly as true as before.
 			ID:     "j50-candidate-decline-denies-generically-then-disabled",
+			Review: reviewOptedIn,
 			Title:  "Candidate decline creates no review authority; a later gate denies generically, or reaches ordinary unmanaged delivery once reviews are disabled",
 			Source: "issue #2045 (Wave 5 Slice 6 downgrade)",
 			Steps: []Step{
@@ -1462,29 +1463,35 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j51-negotiated-status-correction-continuation",
-			Title:  "Negotiated status: fresh candidate starts, corrected candidate continues",
-			Source: "issue #2044: selector-free fresh status and post-correction continuation",
+			Review: reviewOptedIn,
+			Title:  "#3587: selectorless STATUS starts only a fresh candidate; correction continues through its exact active lineage",
+			Source: "issue #2044 under #3587: selectorless STATUS is fresh by design, while every active correction continuation carries its exact lineage",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
 				{Name: "fixture: product process temp is unavailable", Fixture: unavailableProcessTemp},
 				{Name: "fresh negotiated status offers review start without authority history", Requires: statusCapability,
 					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition"), After: requireFreshNegotiatedStart},
-				{Name: "review start", Requires: startNamedCapability,
+				{Name: "review start with an exact active lineage", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", correctedDeliveryLineage), After: rememberLineage},
-				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: captureCorrectableFinding},
-				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
-					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
-					After: requireReviewState("correction_required", correctedDeliveryLineage)},
-				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
-					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "capture one blocking finding and finish the full selected lens set for the exact active lineage", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureExactSelectedReviewerSlots(r, correctedDeliveryLineage, true)
+				}},
+				{Name: "capture the bounded correction plan from the exact STATUS binding", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, correctedDeliveryLineage, 2)
+				}},
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
-				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
-				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+				{Name: "post-correction exact active-lineage validator capture emits acknowledgement on completion", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+					return captureProviderValidatorSlotFor(r, correctedDeliveryLineage)
+				}},
+				{Name: "no correction authority survives exact acknowledgement", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, correctedDeliveryLineage)
+				}},
 			},
 		},
 		{
 			ID:     "j65-selectorless-committed-correction-continuation",
+			Review: reviewOptedIn,
 			Title:  "Committed-only correction: selector-less status and finalize rebuild the frozen base boundary",
 			Source: "issue #1925",
 			Steps: []Step{

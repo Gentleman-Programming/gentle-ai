@@ -12,7 +12,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
@@ -28,6 +32,7 @@ func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 	wantNames := []string{
 		"README.md",
 		"manifest.json",
+		"orchestration/pi.md",
 		"schemas/lens.schema.json",
 		"schemas/refuter.schema.json",
 		"schemas/targeted-validator.schema.json",
@@ -516,4 +521,176 @@ func cloneFiles(files map[string][]byte) map[string][]byte {
 
 func equalStrings(left, right []string) bool {
 	return slices.Equal(left, right)
+}
+
+// TestGeneratedOrchestrationEntryCarriesTheBoundPiContract locks the content
+// gentle-pi mirrors (issue #4056): the orchestration file must be Pi's exact
+// bound review execution contract, with the runtime placeholder resolved and
+// its capture command named exactly once.
+func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, found := files["orchestration/pi.md"]
+	if !found {
+		t.Fatal("generated files are missing orchestration/pi.md")
+	}
+	text := string(content)
+	if !strings.HasSuffix(text, "\n") {
+		t.Fatal("orchestration/pi.md does not end with a trailing newline")
+	}
+	if strings.Contains(text, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
+		t.Fatal("orchestration/pi.md left the runtime identity placeholder unbound")
+	}
+	for _, want := range []string{
+		"`gentle_review` with {\"operation\":\"inspect\"}",
+		"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
+		"`gentle_review_capture_group`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("orchestration/pi.md missing Pi facade route %q", want)
+		}
+	}
+	if strings.Contains(text, "gentle-ai review status") {
+		t.Fatal("orchestration/pi.md exposes raw STATUS")
+	}
+	if !strings.Contains(text, "## Entry rule") {
+		t.Fatal("orchestration/pi.md is missing the `## Entry rule` heading")
+	}
+}
+
+// TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry is the
+// generate-then-verify roundtrip strict TDD requires: the manifest must carry
+// a sorted orchestration entry naming pi and its file reference, and Verify
+// must accept the archive built from exactly those bytes.
+func TestPiFacadeLifecycleValidation(t *testing.T) {
+	valid, err := sdd.ReviewExecutionContractFor(model.AgentPi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		content string
+		valid   bool
+	}{
+		{name: "complete facade lifecycle", content: valid, valid: true},
+		{name: "missing facade status", content: strings.Replace(valid, "`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed", "", 1)},
+		{name: "missing single capture", content: strings.ReplaceAll(valid, "`gentle_review_capture`", "")},
+		{name: "missing group capture", content: strings.ReplaceAll(valid, "`gentle_review_capture_group`", "")},
+		{name: "missing approved acknowledgement", content: strings.Replace(valid, "Only the exact provider-issued acknowledgement continuation burns approved authority.", "", 1)},
+		{name: "missing public facade acknowledgement operation", content: strings.Replace(valid, "`acknowledge-approved` continuation", "`replacement` continuation", 1), valid: false},
+		{name: "missing answer-consent route", content: strings.Replace(valid, "`gentle_review` with operation `answer-consent` and the exact `consentBinding`", "", 1), valid: false},
+		{name: "missing forecast acknowledgement", content: strings.Replace(valid, "resubmit the same exact binding with `reviewerRunAcknowledged: true`", "", 1), valid: false},
+		{name: "user-owned mode switch is allowed", content: valid + "\ngentle-ai review mode enable --scope global\n", valid: true},
+		{name: "raw status", content: valid + "\ngentle-ai review status\n"},
+		{name: "raw capture", content: valid + "\ngentle-ai review capture-result\n"},
+		{name: "raw acknowledgement", content: valid + "\ngentle-ai review acknowledge-approved\n"},
+		{name: "raw recover", content: valid + "\ngentle-ai review recover --lineage x\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validPiFacadeLifecycle(test.content); got != test.valid {
+				t.Fatalf("validPiFacadeLifecycle() = %t, want %t", got, test.valid)
+			}
+		})
+	}
+}
+
+func TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry(t *testing.T) {
+	directory := t.TempDir()
+	if err := Generate(directory, "1.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	files := readGeneratedFiles(t, directory)
+	var decoded manifest
+	if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Orchestration) != 1 {
+		t.Fatalf("manifest orchestration entries = %d, want 1", len(decoded.Orchestration))
+	}
+	entry := decoded.Orchestration[0]
+	if entry.Runtime != "pi" {
+		t.Fatalf("manifest orchestration runtime = %q, want %q", entry.Runtime, "pi")
+	}
+	if entry.File.Path != "orchestration/pi.md" || hash(files["orchestration/pi.md"]) != entry.File.SHA256 {
+		t.Fatalf("manifest orchestration file reference = %+v, does not match generated content", entry.File)
+	}
+
+	archive := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	writeArchive(t, archive, files, nil, false)
+	if err := VerifyArchive(archive); err != nil {
+		t.Fatalf("VerifyArchive: %v", err)
+	}
+	if err := VerifyStaging(directory); err != nil {
+		t.Fatalf("VerifyStaging: %v", err)
+	}
+}
+
+// TestVerifyArchiveRejectsATamperedOrchestrationFile proves the orchestration
+// entry is protected by the same sha256 binding as every other bundle file.
+func TestVerifyArchiveRejectsATamperedOrchestrationFile(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := cloneFiles(files)
+	tampered["orchestration/pi.md"] = append(tampered["orchestration/pi.md"], '\n')
+	archive := filepath.Join(t.TempDir(), "tampered-orchestration.tar.gz")
+	writeArchive(t, archive, tampered, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted a tampered orchestration/pi.md byte")
+	}
+}
+
+// TestVerifyArchiveRejectsAManifestMissingTheOrchestrationEntry proves an old
+// 1.1.0-shaped manifest (no orchestration section) is refused once the bundle
+// carries orchestration/pi.md: VerifyArchive is only ever run against the
+// archive generated from the same commit's CONTRACT_SEMVER (release preflight
+// and the README's manual-inspection instructions), so there is no caller
+// depending on the older layout staying acceptable.
+func TestVerifyArchiveRejectsAManifestMissingTheOrchestrationEntry(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped := cloneFiles(files)
+	delete(stripped, "orchestration/pi.md")
+	var decoded map[string]any
+	if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	delete(decoded, "orchestration")
+	payload, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped["manifest.json"] = append(payload, '\n')
+	archive := filepath.Join(t.TempDir(), "missing-orchestration.tar.gz")
+	writeArchive(t, archive, stripped, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted a manifest without the orchestration entry")
+	}
+}
+
+// TestVerifyArchiveRejectsAnUnregisteredOrchestrationRuntime proves the
+// orchestration runtime is checked against the closed registered-runtime
+// identity list, the same way every other runtime-scoped claim in this bundle
+// is, rather than trusted from the manifest bytes alone.
+func TestVerifyArchiveRejectsAnUnregisteredOrchestrationRuntime(t *testing.T) {
+	files, err := generatedFiles("1.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := cloneFiles(files)
+	payload := bytes.Replace(tampered["manifest.json"], []byte(`"runtime": "pi"`), []byte(`"runtime": "not-a-runtime"`), 1)
+	if bytes.Equal(payload, tampered["manifest.json"]) {
+		t.Fatal("could not rewrite the orchestration runtime identity")
+	}
+	tampered["manifest.json"] = payload
+	archive := filepath.Join(t.TempDir(), "unregistered-orchestration-runtime.tar.gz")
+	writeArchive(t, archive, tampered, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted an unregistered orchestration runtime")
+	}
 }

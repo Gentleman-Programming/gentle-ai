@@ -867,8 +867,11 @@ func withoutCorrectionBudgetFields(t *testing.T, transaction Transaction) Transa
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := ParseTransaction(payload)
-	if err != nil {
+	var legacy Transaction
+	if err := json.Unmarshal(payload, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.validate(); err != nil {
 		t.Fatal(err)
 	}
 	return legacy

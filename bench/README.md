@@ -33,9 +33,8 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 57 journeys. `j57` is deliberately excluded because
-it requires the product's `bench_fixture` seam; it is an explicit
-`source-coupled` axis, not a portable black-box measurement.
+The portable core contains every non-axis journey and stays independent of
+product-private test seams.
 
 The measured binary is passed in with `--binary`, so the tool never depends on
 the sources next to it. That is what lets it measure an old release and the
@@ -75,18 +74,6 @@ gentle-ai-bench run --binary /path/to/gentle-ai --only \
   j55-sdd-mismatched-authority-receipt-fails-closed,\
   j56-sdd-non-allow-post-apply-gate-fails-closed,\
   j58-sdd-foreign-openspec-path-fails-closed
-```
-
-Run the source-coupled receipt-drift proof only with its tagged product binary.
-Build the product from the repository root, then run the benchmark from `bench/`:
-
-```sh
-# From the repository root.
-go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
-
-# From bench/, after building gentle-ai-bench above.
-./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only \
-  j57-sdd-authority-drift-during-discovery-fails-closed
 ```
 
 **`run` fails closed on failed journeys.** A journey that reports `failed`
@@ -334,13 +321,11 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty-seven mandatory portable
-   black-box journeys run end to end, weighted toward failure paths because that
-   is where friction lives. `j57` is one explicit source-coupled journey that
-   requires a `bench_fixture`-tagged product binary, for 58 registered journey
-   IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
-   are inspection steps rather than review-lifecycle friction and are not
-   modelled.
+7. **The corpus is honest, not exhaustive.** Mandatory portable black-box
+   journeys run end to end, weighted toward failure paths because that is where
+   friction lives. Testing-guide flows 1 (install) and 8 (no phantom SDD
+   artifacts) are inspection steps rather than review-lifecycle friction and are
+   not modelled.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
    instead.** A network mount where advisory locks fail in ways that are
@@ -375,8 +360,8 @@ invents a metric is worse than one that admits a gap.
 10. **The report is not byte-identical between two runs, though every count
     except one is.** Each journey runs under `os.MkdirTemp`, whose random
     suffix varies in length, and several journeys quote that path back in a
-    block message — `j14`, `j17`, `j31`, `j33`, `j34`, `j37`, `j38`, `j39` and
-    `j40` observed so far, and any journey that drives a refusal naming a
+    block message — `j14`, `j17`, `j31`, `j33`, `j34`, and `j40` observed so
+    far, and any journey that drives a refusal naming a
     repository path can join them. Which of them actually moves between a given
     pair of runs is chance: the suffix is 9 or 10 digits. No `damaged-store`
     axis journey has been observed to move: its refusals name lineages,
@@ -462,9 +447,8 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The portable core has since
-grown to 57 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
-Re-run `run` against your own binary rather than reading the block above as
-current totals. The row labels moved too: `by_design` did not exist when this
+grown; re-run `run` against your own binary rather than reading the block above
+as current totals. The row labels moved too: `by_design` did not exist when this
 was recorded and is now printed as `4d`, next to the number it carves out of,
 with `dead_end` at `4e`.
 
@@ -480,6 +464,30 @@ with `commands_to_completion` unchanged at 16.
 
 Journeys are data — a slice of `Step` in `journeys.go`. Adding one is
 appending to that slice.
+
+### Every journey declares its review precondition
+
+Receipt-driven development is opt-in, and the sandbox `HOME` each journey runs
+under is a fresh install, so a journey gets no review by standing still.
+`Journey.Review` says what the runner does about that, and it is **mandatory** —
+`validateCorpus` fails the whole run on a journey that does not declare one.
+
+- `reviewOptedIn` — before the journey's first step, the runner opts in the way
+  a user does: `gentle-ai review mode enable --scope global`, run from a
+  throwaway checkout of its own, then read back. The journey fails if the
+  product does not report the switch on. It is sandbox setup, not operator work,
+  so it is never counted in `commands_to_completion`. Global is the only scope
+  that can assert "on"; a clone may only ever assert "off".
+- `reviewUntouched` — the runner runs no mode command at all. This is for a
+  journey whose subject IS the switch (`j03-kill-switch` drives it itself,
+  `j31-nonsense-mode-value` authors the record under test) and for one that has
+  nothing to do with reviews (`j2138`, `j3043`, `j97` install agents).
+
+The declaration is mandatory because the alternative already cost us once: the
+corpus measured the review lifecycle only because the product's default happened
+to say yes, and the day that default changed those journeys did not fail — they
+quietly measured a different flow, with the review refused and the gate passing
+under ordinary repository policy.
 
 | ID | Flow | Source |
 |---|---|---|
@@ -542,23 +550,18 @@ number look covered.
 | `j35-correction-budget-exactly-zero` | forecasting a correction against a budget of 0 | 3 + 4 |
 | `j36-contract-right-name-wrong-version` | `--contract` with the right name and a version this build lacks | 2 + 4 |
 
-### The SDD remediation successor cycle (`journeys_sdd.go`)
+### SDD lifecycle journeys (`journeys_sdd.go`)
 
-Journeys 37 to 43 close the corpus's largest blind spot. A community tester
-found a hard deadlock on this path that no internal audit had caught, and two
-of its blocks were fixed by hand with nothing in a loop pinning either one. Up
-to journey 36 the benchmark reported zero `out_of_band` blocks and zero dead
-ends for a surface it had simply never driven.
+The active SDD-focused corpus is non-exhaustive; it includes these lifecycle
+and compatibility journeys:
 
-| ID | Flow | Shape |
+| ID | Flow | Source |
 |---|---|---|
-| `j37-sdd-remediation-self-successor` | a bound passing attempt over a corrected candidate is refused, and the refusal names the finish that IS accepted | 4 |
-| `j38-sdd-remediation-distinct-successor` | with a real recovery successor in the way, the same refusal must route to review and must NOT name a finish | 3 + 4 |
-| `j39-sdd-remediation-stranded-successor` | a successor that can never be finalized: the named route runs and changes nothing | 4 + 2 |
-| `j40-sdd-attempt-reset-after-drift` | terminal attempt plus candidate drift: begin refuses, reset is the only way on | 2 + 4 |
-| `j41-kill-switch-versus-sdd-pre-verify` | reviews off at the pre-verify decision: the router steps aside instead of naming a review the operator may not start | 5 |
-| `j42-kill-switch-versus-sdd-archive` | reviews off at the archive decision: the product defers and never fabricates an approval | 5 |
-| `j43-recovery-guard-rails-as-an-operator-meets-them` | three correct refusals around healthy approved authority, and the exit that is not a command | 4 |
+| `j40-sdd-attempt-reset-after-drift` | terminal attempt, drifted candidate: begin refuses and reset is the only way on | shape 2 (a recoverable objective read as terminal) + shape 4 |
+| `j41-kill-switch-versus-sdd-pre-verify` | pre-verify: RDD supervises nothing, on or off, before verify runs | shape 5 (the kill switch and the pre-verify router) + Wave 4's removal of pre-verify review supervision |
+| `j42-kill-switch-versus-sdd-archive` | the offer is an invitation, never a gate: archive proceeds with reviews on or off | shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1 |
+| `j63-disabled-failed-verification-unmanaged-remediation` | failed verification gets one evidence-bound correction; re-enabled review context remains informational | #3417: failed, unknown, and pending review evidence remains visible but never gates completed SDD archive routing |
+| `j44-sdd-historical-requirement-stale-pass` | historical change-local requirement heading: stale PASS restarts verification instead of failed remediation | issue #2137 (historical OpenSpec requirement compatibility and stale verification routing) |
 
 Two of them measure something no test could: `j41` and `j42` each take one item
 off the documented known-open list and let the number say whether it is still
@@ -569,20 +572,10 @@ count, so a regression fails the journey loudly instead of passing quietly.
 `j41` is the clearest example of the corpus working as intended: it was written
 to measure a believed-open dead end where the SDD pre-verify router demanded a
 review the kill switch forbade, and it FAILED its own assertions on the run that
-found the behavior fixed. The failure was the finding. It now pins both
-positions of the switch — off routes to `verify` with no blocked reasons, on
-routes to `review` with a reason that says why — because either half alone would
-pass while the other regressed.
-
-The state these journeys need cannot be built with git alone: an attempt
-ordinal, a populated review binding and the leaf/non-leaf topology of a lineage
-all live inside the product. Every fixture and composite here therefore reads
-them back out of the product (`Sandbox.readBack`, uncounted, `GIT_TRACE`
-blanked so its git calls are never charged to the next counted invocation) and
-fails the journey when the state is not what it claims — including the two
-premises that matter most: that the plain passing finish really does block, and
-that the topology really is the leaf or the non-leaf shape the journey says it
-is.
+found the behavior fixed. The failure was the finding. It now pins the absence
+of pre-verify review supervision: with the switch on, off, and re-enabled,
+routing remains `verify` with a ready verification dependency and no blocked
+reasons, because either half alone would pass while the other regressed.
 
 **Every fixture proves its own edge case before the journey trusts the result.**
 A fixture that sets its edge case up wrongly and then passes is the failure mode
@@ -643,8 +636,7 @@ unrelated lineage in the repository.
 Portable journeys 52 to 56 and 58 prove SDD chooses the sole exact approved
 authority over stale history and fails closed for every public authority shape.
 Each uses the public binary through the normal benchmark sandbox, not a
-source-level proxy. The `j57` receipt-drift proof is source-coupled and is
-listed with its axis below.
+source-level proxy.
 
 | ID | Flow | Source |
 |---|---|---|
@@ -692,22 +684,14 @@ Adding an axis is adding one file with an `init()` that calls `RegisterAxis`.
 The seam in `axis.go` is deliberately small — one registry, one flag, one report
 section — and it does not know what any axis measures.
 
-### `source-coupled` (`axis_source_coupled.go`)
-
-The preserved `j57-sdd-authority-drift-during-discovery-fails-closed` fixture
-uses the `bench_fixture` build tag to mutate its fresh sandbox receipt between
-the product's immutable authority reads. That hook is intentionally absent from
-ordinary binaries, so this is not portable black-box core coverage. Run it only
-with `--axis source-coupled` and a product binary built with
-`-tags bench_fixture`.
-
-| ID | Coupling | What it tests |
-|---|---|---|
-| `j57-sdd-authority-drift-during-discovery-fails-closed` | tagged sandbox receipt mutation seam | authority reads must remain immutable during discovery |
-
 ### `damaged-store` (`axis_damaged_store.go`)
 
 Journeys that start from a compact-v2 review store already damaged on disk.
+
+The `ds11` crash-recovery positions require a product binary built with
+`-tags bench_fixture`, which exposes only their deterministic crash hook. The
+`model-picker` axis uses the same tag for `j97`; ordinary binaries report that
+journey unsupported rather than fabricating a pass.
 
 `validateCompactRecoveryEdge` runs at write time on both `review recover` and
 the compact transport import, so **no sequence of CLI commands produces a store
@@ -862,8 +846,8 @@ metrics.go     Dimension, BlockCounts, accumulator, aggregate
 runner.go      Sandbox, capability probe, journey engine
 journeys.go    the corpus, as data — guide flows and their failure paths
 journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
-journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
-                  SDD, and the recovery guard rails
+journeys_sdd.go   active SDD attempt flows, the kill switch against SDD, and
+                  the recovery guard rails
 journeys_wave1.go  integrated community fixes exercised at their CLI boundary
 axis.go        the opt-in axis seam: registry, --axis selection, provenance
 axis_damaged_store.go  ONE axis, deletable: journeys starting from a store

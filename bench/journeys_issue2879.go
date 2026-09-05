@@ -25,9 +25,10 @@ var issue2879ReleasedRecord []byte
 func issue2879Journeys() []Journey {
 	return []Journey{{
 		ID: "j92-released-compact-history-quarantines-without-compatibility", Title: "Released compact history is quarantined through the bound repair plan", Source: "issue #2879 D-2879",
+		Review: reviewOptedIn,
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "enable review mode in the disposable clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "fixture: stage unrelated current target", Fixture: stageProse("", "issue2879-current")},
 			{Name: "fixture: replay exact released v2.2.4 authority bytes", Fixture: issue2879HistoricalFixture},
 			{Name: "unrelated malformed entry blocks historical preflight", Requires: repairPreflightCapability, Composite: issue2879Plan},

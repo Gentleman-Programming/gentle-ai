@@ -54,8 +54,7 @@ func runNegotiatedReviewStartExcludingUntracked(t *testing.T, repo, lineage stri
 // untracked and undeclared next to it.
 func startWithUnrelatedUntrackedCredential(t *testing.T, lineage string) (string, ReviewIntegrationStartResult) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "reviewed candidate\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, unrelatedCredentialPath, unrelatedCredentialContents, 0o600)
@@ -67,6 +66,7 @@ func startWithUnrelatedUntrackedCredential(t *testing.T, lineage string) (string
 // scope, so an unrelated untracked file never becomes part of the frozen
 // candidate and never appears as intended-untracked provenance.
 func TestNegotiatedStartKeepsUndeclaredUntrackedFileOutOfCandidate(t *testing.T) {
+	reviewEnabledHome(t)
 	_, started := startWithUnrelatedUntrackedCredential(t, "untracked-scope-excluded")
 
 	manifest := startedChangedPathManifest(t, started)
@@ -88,8 +88,7 @@ func TestNegotiatedStartKeepsUndeclaredUntrackedFileOutOfCandidate(t *testing.T)
 // reviewed. Declaration is the existing Git index, so nothing has to be
 // configured for the safe default to also be the useful one.
 func TestNegotiatedStartKeepsDeclaredUntrackedFileInCandidate(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "reviewed candidate\n", 0o644)
 	writeReviewStartCandidate(t, repo, "declared-helper.txt", "declared new file\n", 0o644)
@@ -118,9 +117,17 @@ func TestNegotiatedStartKeepsDeclaredUntrackedFileInCandidate(t *testing.T) {
 // the delivered artifact, so the assertion is on its exact text rather than on
 // any intermediate structure that only feeds it.
 func TestReviewerLensContextOmitsUndeclaredUntrackedBytes(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started := startWithUnrelatedUntrackedCredential(t, "untracked-scope-delivery")
 
-	block := lensContextBlock(t, started.RepositoryContext.Handle, started.SelectedLenses[0])
+	block := lensContextBlock(t, []string{
+		"--cwd", repo,
+		"--cwd", repo,
+		"--repository-context", started.RepositoryContext.Handle,
+		"--lineage", started.LineageID,
+		"--target", started.RepositoryContext.TargetIdentity,
+		"--expected-revision", started.RepositoryContext.Revision,
+	}, started.SelectedLenses[0])
 
 	if strings.Contains(block, unrelatedCredentialMarker) {
 		t.Fatal("delivered reviewer context carries the contents of an undeclared untracked file")

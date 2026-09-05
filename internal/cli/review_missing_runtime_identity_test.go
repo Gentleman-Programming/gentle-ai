@@ -10,7 +10,7 @@ import (
 )
 
 // The documented negotiated lifecycle route in
-// internal/assets/claude/commands/sdd-apply.md and
+// internal/assets/claude/commands/gentle-sdd-apply.md and
 // internal/assets/opencode/commands/sdd-apply.md declares no runtime
 // identity. A read-only STATUS creates no authority, tier, budget, or
 // collection state, so it has nothing to fail closed over: an undeclared
@@ -45,6 +45,7 @@ func TestNegotiatedStatusWithoutRuntimeIdentityIsAnswered(t *testing.T) {
 // answers, and the exact provider-returned START it names must execute
 // rather than refuse the same undeclared identity one step later.
 func TestNegotiatedRouteWithoutRuntimeIdentityReachesStart(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
 

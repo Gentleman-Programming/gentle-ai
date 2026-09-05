@@ -120,7 +120,7 @@ func rc1ConsecutiveRescopeStore(sandbox *Sandbox) error {
 	if err := sandbox.write(filepath.Join(sandbox.Repo, "README.md"), "# RC fixture\n"); err != nil {
 		return err
 	}
-	if err := sandbox.git(sandbox.Repo, "add", "README.md"); err != nil {
+	if err := sandbox.git(sandbox.Repo, "add", "README.md", ".gitignore"); err != nil {
 		return err
 	}
 	if err := sandbox.git(sandbox.Repo, "commit", "-qm", "fixture baseline"); err != nil {
@@ -247,6 +247,7 @@ func printedConsecutiveRescopeRepairArguments(stderr string) ([]string, error) {
 func consecutiveRescopeRepairJourneys() []Journey {
 	return []Journey{{
 		ID:     "j81-rc1-consecutive-rescope-repair-executes-printed-command",
+		Review: reviewOptedIn,
 		Title:  "RC-created poison: status names and executes the audited repair without rewriting C",
 		Source: "issue #2839; fixture extracted byte-for-byte from the v2.4.0-rc.1 RED run",
 		Steps: []Step{

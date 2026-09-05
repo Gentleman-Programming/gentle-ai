@@ -349,7 +349,7 @@ func TestValidateCorpusFailsLoudly(t *testing.T) {
 	step := func(mutate func(*Step)) Journey {
 		base := Step{Name: "s", Args: productArgs("review", "start")}
 		mutate(&base)
-		return Journey{ID: "jXX", Steps: []Step{base}}
+		return Journey{ID: "jXX", Review: reviewOptedIn, Steps: []Step{base}}
 	}
 	cases := []struct {
 		name    string
@@ -366,6 +366,16 @@ func TestValidateCorpusFailsLoudly(t *testing.T) {
 			s.DeadEnd = true
 			s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction, NextAction: "free some disk space"}
 		}), "opposite"},
+		{"no review precondition", func() Journey {
+			journey := step(func(*Step) {})
+			journey.Review = reviewPreconditionUndeclared
+			return journey
+		}(), "declares no review precondition"},
+		{"unrecognised review precondition", func() Journey {
+			journey := step(func(*Step) {})
+			journey.Review = ReviewPrecondition("sometimes")
+			return journey
+		}(), "unrecognised review precondition"},
 		{"declared on a step that never invokes", func() Journey {
 			journey := step(func(s *Step) {
 				s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction, NextAction: "free some disk space"}

@@ -7,7 +7,7 @@ Pi support installs the Gentleman harness as Pi packages, then lets Pi own its o
 ## Quick Start
 
 1. Install Pi and make sure `pi` is available on `PATH`.
-2. Install the Pi support stack from Gentle AI:
+2. Install the Pi support stack from Gentle AI™:
 
 ```bash
 gentle-ai install --agent pi
@@ -19,7 +19,7 @@ gentle-ai install --agent pi
 pi
 ```
 
-Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi.
+Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram™ component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi. Gentle AI writes nothing into the Pi system prompt because `gentle-pi` owns it, so the review execution contract ships as `orchestration/pi.md` in the published provider contract bundle, which `gentle-pi` mirrors and injects at session start. Because `gentle-pi` owns that file, `install` and `sync` also remove any gentle-ai managed blocks an older build left in `~/.pi/agent/APPEND_SYSTEM.md`, including the routing guidance block; routing guidance is delivered to every other agent's system prompt, but Pi is skipped for that step too.
 
 ## Installed Packages
 
@@ -30,10 +30,8 @@ pi install npm:gentle-pi
 pi install npm:gentle-engram
 pi install npm:pi-mcp-adapter
 npm exec --yes --package gentle-engram@latest -- pi-engram init
-pi install npm:pi-subagents-j0k3r
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-web-access
-pi install npm:@juicesharp/rpiv-todo
 pi install npm:pi-btw
 ```
 
@@ -43,11 +41,11 @@ pi install npm:pi-btw
 | [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself.                               |
 | `pi-mcp-adapter`                                         | Lets Pi expose MCP servers, including Engram, through Pi's MCP runtime.                                                   |
 | `pi-engram init`                                         | Initializes the Pi Engram MCP config shape owned by `gentle-engram`.                                                      |
-| `pi-subagents-j0k3r`                                      | Runs SDD agents discovered from `.pi/agents/`; installed from the published Pi package `npm:pi-subagents-j0k3r`.                 |
 | `@juicesharp/rpiv-ask-user-question`                     | Lets Pi child agents ask the active user session for clarification when they need human input.                            |
 | `pi-web-access`                                          | Adds web access tools for Pi.                                                                                             |
-| `@juicesharp/rpiv-todo`                                  | Adds todo/task tracking support for Pi sessions.                                                                          |
 | `pi-btw`                                                 | Adds BTW companion workflow support for Pi.                                                                               |
+
+Discovering and running SDD agents from `.pi/agents/` is provided by `gentle-pi`'s Gentle Agents, which ships the same `subagent_*` tools that the retired `npm:pi-subagents-j0k3r` package used to provide. Gentle AI no longer installs `pi-subagents-j0k3r`, and an existing entry is dropped from `settings.json` on the next install or update so Pi uninstalls it on its next package sync.
 
 `gentle-pi` owns Pi's runtime behavior. Its current harness enforces parent-only delegation triggers: delegate exploration after 4+ files, use one writer for multi-file changes, require fresh review before PRs, run fresh audits after incidents, and pause long monolithic sessions before they drift.
 

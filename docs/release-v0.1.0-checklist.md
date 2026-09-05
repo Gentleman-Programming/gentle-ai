@@ -16,7 +16,7 @@
 - [ ] Dry-run install on macOS.
 - [ ] Real install on macOS test account.
 - [ ] Validate key output paths for Claude Code and OpenCode.
-- [ ] Validate Engram health endpoint is reachable when selected.
+- [ ] Validate Engram™ health endpoint is reachable when selected.
 
 ## Documentation
 

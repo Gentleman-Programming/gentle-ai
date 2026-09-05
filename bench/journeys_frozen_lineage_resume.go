@@ -99,7 +99,7 @@ func requireFrozenReviewerBinding(status statusEnvelope, document map[string]jso
 	}
 	input := status.NextTransition.Collect.Inputs[0]
 	if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" || input.ArtifactSubject.SubjectHash == "" ||
-		len(input.ChangedPathManifest) != 2 || status.argument("lineage") != lineage || status.argument("target") != status.TargetIdentity ||
+		len(status.paths()) != 2 || status.argument("lineage") != lineage || status.argument("target") != status.TargetIdentity ||
 		status.argument("expected-revision") != status.Authority.Revision || status.argument("lens") == "" || status.argument("order") != "0" || status.argument("repository-context") == "" {
 		return fmt.Errorf("frozen reviewer collect binding = %+v", input)
 	}
@@ -246,6 +246,13 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 	if occupied.NextTransition.Kind != "stop" || occupied.NextTransition.ReasonCode != "native_stop_required" {
 		return fmt.Errorf("drifted occupied frozen status = %+v", occupied.NextTransition)
 	}
+	// The drift guard must hold end to end: finalizing the drifted candidate
+	// directly must refuse instead of publishing a receipt for bytes nobody
+	// reviewed.
+	if observation := r.run([]string{"review", "finalize", "--cwd", r.sandbox.Repo,
+		"--lineage", r.sandbox.Lineage, "--captured-results=true"}, false); observation.ExitCode == 0 {
+		return fmt.Errorf("drifted frozen finalize must refuse, got exit 0")
+	}
 	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, frozenLineageTracked), frozenLineageSource); err != nil {
 		return err
 	}
@@ -313,11 +320,12 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 func frozenLineageResumeJourneys() []Journey {
 	return []Journey{{
 		ID:     "j90-explicit-frozen-reviewing-lineage-resumes-after-drift",
+		Review: reviewOptedIn,
 		Title:  "Explicit frozen reviewing lineage resumes its pending slot after live workspace drift",
 		Source: "issue #2016: explicit compact-v2 selection resumes only immutable pending review input, never live workspace drift",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "v2 OpenCode frozen review resumes after tracked and intended-untracked drift", Requires: frozenLineageStatusCapability, Composite: exerciseFrozenLineageResume},
 		},
 	}}

@@ -37,14 +37,16 @@ type ReviewModeResult struct {
 	Status    reviewtransaction.RDDModeStatus `json:"status"`
 }
 
-// RunReviewMode is the user-controlled receipt-driven-development kill switch.
-// The global mode lives in uncommitted user state; the clone-local override
-// lives under this clone's Git common directory and can only disable. Any off
-// wins, status never mutates, and re-enabling applies to future candidates only.
+// RunReviewMode is the user-controlled receipt-driven-development switch.
+// Receipt-driven development is opt-in: with no source expressing an opinion it
+// resolves to off, and only an explicit global enable turns it on. The global
+// mode lives in uncommitted user state; the clone-local override lives under
+// this clone's Git common directory and can only disable. Any off wins, status
+// never mutates, and enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. Any off wins: a repository may disable receipt-driven development for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Re-enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is off until you enable it: run 'gentle-ai review mode enable --scope global' to opt in. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -86,7 +88,9 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	var err error
 	if operation == "status" {
 		result.Scope = reviewModeScopeBoth
-		result.Status, err = reviewModeStatus(ctx, *cwd)
+		result.Status, err = ReviewModeStatus(ctx, *cwd)
+	} else if selectedScope == reviewModeScopeGlobal {
+		result.Status, err = SetGlobalReviewMode(ctx, *cwd, operation == "enable")
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
 	}
@@ -98,13 +102,52 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 
 // reviewModeStatus is strictly read-only: it never creates user state and never
 // creates repository state.
+// ReviewModeStatus resolves the persisted review-mode sources without mutating them.
+func ReviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
+	return reviewModeStatus(ctx, repo)
+}
+
+// SetGlobalReviewMode changes only the global review-mode source and returns the
+// resolved status for the requested repository.
+func SetGlobalReviewMode(ctx context.Context, repo string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
+	operation := "disable"
+	if enabled {
+		operation = "enable"
+	}
+	return applyReviewMode(ctx, repo, operation, reviewModeScopeGlobal, "", false)
+}
+
 func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Effective: reviewtransaction.RDDModeOff}, err
 	}
 	status, err := reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	if err != nil && reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return globalOnlyReviewModeStatus(global), nil
+	}
 	return status, reviewModeUnreadable(ctx, repo, global, err)
+}
+
+func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtransaction.RDDModeStatus {
+	status := reviewtransaction.RDDModeStatus{
+		Schema:     reviewtransaction.RDDModeStatusSchema,
+		Global:     reviewtransaction.RDDModeUnset,
+		CloneLocal: reviewtransaction.RDDModeUnset,
+		Effective:  reviewtransaction.RDDModeOff,
+		Source:     reviewtransaction.RDDModeSourceDefault,
+	}
+	switch strings.TrimSpace(global.Value) {
+	case string(reviewtransaction.RDDModeOn):
+		status.Global = reviewtransaction.RDDModeOn
+		status.Effective = reviewtransaction.RDDModeOn
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	case string(reviewtransaction.RDDModeOff):
+		status.Global = reviewtransaction.RDDModeOff
+		status.Effective = reviewtransaction.RDDModeOff
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	}
+	return status
 }
 
 // ReviewModeUnreadableScope names one kill-switch source whose persisted value
@@ -236,6 +279,21 @@ func reviewModeUnsafePathRefusal(err error) error {
 	return nil
 }
 
+type reviewModeRepositoryRequiredError struct{ Cause error }
+
+func (err *reviewModeRepositoryRequiredError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeRepositoryRequiredError) Error() string {
+	return "clone-local review mode requires a Git repository; rerun the original command with --cwd pointing at the intended repository, or use `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global` for machine-wide state"
+}
+
+func reviewModeRepositoryRequiredRefusal(err error) error {
+	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return nil
+	}
+	return &reviewModeRepositoryRequiredError{Cause: err}
+}
+
 func reviewModeCommandsByVerb(commands []string, verb string) []string {
 	selected := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -265,6 +323,9 @@ func reviewModeUnreadable(
 	if unsafePath := reviewModeUnsafePathRefusal(err); unsafePath != nil {
 		return unsafePath
 	}
+	if repoRequired := reviewModeRepositoryRequiredRefusal(err); repoRequired != nil {
+		return repoRequired
+	}
 	scopes := make([]ReviewModeUnreadableScope, 0, 2)
 	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
 		if home, homeErr := os.UserHomeDir(); homeErr == nil {
@@ -282,30 +343,6 @@ func reviewModeUnreadable(
 		return err
 	}
 	return &ReviewModeUnreadableError{Scopes: scopes, Cause: err}
-}
-
-// reviewDeliveryDisposition reports what governs delivery for the candidate
-// currently under a lifecycle gate. The kill switch alone never decides: an
-// existing receipt keeps governing because disabling freezes authority
-// read-only rather than unmaking an approval that is content-bound to exactly
-// these bytes.
-//
-// An unreadable switch is not a disabled switch. When the mode cannot be
-// resolved this fails closed to the managed disposition, so a broken or
-// tampered mode file can never relax a gate into reporting work as unmanaged by
-// choice.
-func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent bool) (reviewtransaction.RDDDelivery, error) {
-	status, err := reviewModeStatus(ctx, repo)
-	if refusal := reviewModeUnsafePathRefusal(err); refusal != nil {
-		return reviewtransaction.RDDDeliveryUnmanaged, refusal
-	}
-	if err != nil {
-		if receiptPresent {
-			return reviewtransaction.RDDDeliveryReceiptGoverned, nil
-		}
-		return reviewtransaction.RDDDeliveryUnmanaged, nil
-	}
-	return reviewtransaction.RDDDeliveryDisposition(status, receiptPresent), nil
 }
 
 // reviewDrivenDevelopmentDisabled reports whether the user's kill switch is off
@@ -394,21 +431,23 @@ func writeGlobalRDDMode(operation string) error {
 	if err != nil {
 		return fmt.Errorf("resolve user home directory: %w", err)
 	}
-	persisted, err := state.Read(home)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read global review mode: %w", err)
-	}
-	mode := reviewtransaction.RDDModeOff
-	if operation == "enable" {
-		mode = reviewtransaction.RDDModeOn
-	}
-	recorded := time.Now().UTC()
-	persisted.RDDMode = string(mode)
-	persisted.RDDModeRecordedAt = &recorded
-	if err := state.Write(home, persisted); err != nil {
-		return fmt.Errorf("persist global review mode: %w", err)
-	}
-	return nil
+	return withInstallStateLock(home, func() error {
+		persisted, err := state.Read(home)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read global review mode: %w", err)
+		}
+		mode := reviewtransaction.RDDModeOff
+		if operation == "enable" {
+			mode = reviewtransaction.RDDModeOn
+		}
+		recorded := time.Now().UTC()
+		persisted.RDDMode = string(mode)
+		persisted.RDDModeRecordedAt = &recorded
+		if err := state.Write(home, persisted); err != nil {
+			return fmt.Errorf("persist global review mode: %w", err)
+		}
+		return nil
+	})
 }
 
 func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) error {
@@ -427,6 +466,36 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 		result.Status.Source,
 		reviewModeLabel(result.Status.Global),
 		reviewModeLabel(result.Status.CloneLocal),
+	)
+	if err != nil {
+		return err
+	}
+	if result.Operation == "enable" && result.Scope == reviewModeScopeClone &&
+		result.Status.Effective == reviewtransaction.RDDModeOff && result.Status.Source == reviewtransaction.RDDModeSourceDefault {
+		// The clone-local override can only disable, so this enable cleared an
+		// opinion and turned nothing on: the global switch was never set and
+		// still decides (issue #3972). The outcome is by design and exits 0,
+		// but a status block that stops at "off" reads as if reviews were
+		// enabled, and the next START refuses with rdd_disabled again. The
+		// JSON envelope already carries the fact as source "default", so the
+		// sentence lives on the human surface only.
+		if _, err = fmt.Fprint(
+			stdout,
+			"  note:        a clone-local override can only disable, so this cleared the clone's off opinion and the global switch still decides; run `gentle-ai review mode enable --scope global` to turn receipt-driven development on\n",
+		); err != nil {
+			return err
+		}
+	}
+	if result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+		return nil
+	}
+	// The switch is machine state. A write that reached only this build has to
+	// say so on the surface the operator actually reads, or it reports a
+	// working kill switch to someone half of whose gentle-ai installations are
+	// still enforcing review.
+	_, err = fmt.Fprint(
+		stdout,
+		"  note:        applied for this gentle-ai only; a gentle-ai installed before the switch moved reads a location this command could not open, and keeps enforcing the value it holds there\n",
 	)
 	return err
 }
@@ -523,16 +592,13 @@ const (
 	reviewConsentQuestion       = "Choose 1 or 2 [1]: "
 
 	// reviewConsentSkippedNotice keeps the fail-safe default discoverable: an
-	// unanswerable question must never look like a silent yes.
+	// unanswerable question must never look like a silent yes. It carries no
+	// provenance sentence about how reviews got switched on, because with
+	// receipt-driven development opt-in there is only one way: an explicit
+	// enable. A clone that never opted in is refused long before this point.
 	reviewConsentSkippedNotice = "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. " +
 		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
 
-	// reviewConsentSkippedDefaultProvenance rides with the skip notice only
-	// when the resolved mode source is `default`: reviews are on because
-	// nobody chose anything, and the operator deserves to know the switch was
-	// never explicitly set, with both commands that make it a real choice.
-	reviewConsentSkippedDefaultProvenance = "Reviews are on by default; this was never explicitly chosen. " +
-		"Run 'gentle-ai review mode enable' to make reviews an explicit choice, or 'gentle-ai review mode disable' to turn them off."
 	reviewConsentUnreadableNotice = "Gentle AI could not read an answer, so it reviewed this change and will ask again next time."
 	reviewConsentUnknownNotice    = "Gentle AI did not recognize that answer, so it reviewed this change and will ask again next time."
 
@@ -630,15 +696,15 @@ func reviewConsoleTerminal(file *os.File) bool {
 // A consent declaration selects candidate-scoped negotiated semantics: relay
 // always returns the typed question, while granted and declined apply only to
 // the exact frozen candidate and never touch the legacy clone-wide latch. An
-// undeclared START keeps the one-time console behavior unchanged.
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
+// undeclared plain START keeps the one-time console behavior unchanged; an
+// undeclared negotiated START authorizes silently (see below).
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
 	}
-	status, err := reviewtransaction.AuthorizeRDDOperation(
-		ctx, repo, global, reviewtransaction.RDDOperationStart)
-	if err != nil {
+	if _, err := reviewtransaction.AuthorizeRDDOperation(
+		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
 	if err := authorizeManagedReviewerAssets(); err != nil {
@@ -669,6 +735,20 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return nil
 	}
 	console := reviewConsole()
+	if negotiated && !console.Interactive {
+		// A non-interactive negotiated invocation is machine-readable end to
+		// end: stdout carries the typed envelope and a successful operation
+		// writes zero bytes to stderr (gentle-pi fails closed on any stderr a
+		// successful START writes), and machine listeners only ever spawn
+		// non-interactive processes. Negotiated consent is carried by the
+		// typed consent envelope (--consent relay/granted/declined), so this
+		// route returns before the latch read: neither the one-time consent
+		// latch nor the once-per-clone notice marker is consumed, and a later
+		// plain start in this clone can still ask and still announce. A human
+		// at a real terminal falls through to the unchanged one-time ceremony
+		// below and keeps the power to refuse.
+		return nil
+	}
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
 	if err != nil {
 		// A damaged latch must neither block the review nor silently disable it:
@@ -690,13 +770,6 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		// occurrence must never be silently suppressed.
 		if shown, shownErr := reviewConsentNoticeAlreadyShown(ctx, repo); shownErr != nil || !shown {
 			_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedNotice)
-			if status.Source == reviewtransaction.RDDModeSourceDefault {
-				// The status already knows this provenance: reviews are on
-				// because no source expressed an opinion, and the operator
-				// working headless deserves to learn the switch was never
-				// explicitly chosen.
-				_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedDefaultProvenance)
-			}
 			_ = recordReviewConsentNoticeShown(ctx, repo)
 		}
 		return nil

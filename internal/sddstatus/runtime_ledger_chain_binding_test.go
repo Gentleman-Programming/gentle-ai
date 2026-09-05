@@ -80,7 +80,7 @@ func TestRuntimeUnmanagedRemediationBindsAcrossAuditedReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("correction across the audited reset was refused: %v", err)
 	}
-	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil || len(completed.Attempts) != 2 {
+	if !completed.Complete || completed.ActiveAttempt != nil || len(completed.Attempts) != 2 {
 		t.Fatalf("correction across the audited reset = %#v", completed)
 	}
 	last := completed.Attempts[len(completed.Attempts)-1]

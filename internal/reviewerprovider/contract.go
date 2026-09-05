@@ -35,8 +35,47 @@ const (
   "examples": [{"subject_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "inspection": {"status": "completed", "paths": ["internal/example.go"]}, "findings": [], "evidence": ["reviewed the complete candidate scope"]}]
 }`
 	RefuterResultSchema           = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/schema/review/refuter/v1","title":"Gentle AI refuter result","type":"object","additionalProperties":false,"required":["refuter_request_hash","results"],"properties":{"refuter_request_hash":{"$ref":"#/$defs/sha256"},"results":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["finding_id","outcome","proof_refs"],"properties":{"finding_id":{"type":"string"},"outcome":{"type":"string","enum":["corroborated","refuted","inconclusive"]},"proof_refs":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S"}}}}}},"$defs":{"sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}},"examples":[{"refuter_request_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","results":[]}]}`
-	TargetedValidatorResultSchema = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/schema/review/validator/v1","title":"Gentle AI targeted validator result","type":"object","additionalProperties":false,"required":["targeted_validation_request_hash","correction_target_identity","original_criteria","correction_regression","follow_ups"],"properties":{"targeted_validation_request_hash":{"$ref":"#/$defs/sha256"},"correction_target_identity":{"$ref":"#/$defs/sha256"},"original_criteria":{"$ref":"#/$defs/check"},"correction_regression":{"$ref":"#/$defs/check"},"follow_ups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["observation","proof_refs"],"properties":{"observation":{"type":"string"},"proof_refs":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S"}}}}}},"$defs":{"sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"check":{"type":"object","additionalProperties":false,"required":["passed","evidence"],"properties":{"passed":{"type":"boolean"},"evidence":{"type":"array","minItems":1,"items":{"type":"string"}}}}},"examples":[{"targeted_validation_request_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","correction_target_identity":"sha256:1111111111111111111111111111111111111111111111111111111111111111","original_criteria":{"passed":true,"evidence":["acceptance test passed"]},"correction_regression":{"passed":true,"evidence":["regression test passed"]},"follow_ups":[]}]}`
+	TargetedValidatorResultSchema = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/schema/review/validator/v1","title":"Gentle AI targeted validator result","type":"object","additionalProperties":false,"required":["targeted_validation_request_hash","correction_target_identity","original_criteria","correction_regression","follow_ups"],"properties":{"targeted_validation_request_hash":{"$ref":"#/$defs/sha256"},"correction_target_identity":{"$ref":"#/$defs/sha256"},"original_criteria":{"$ref":"#/$defs/check"},"correction_regression":{"$ref":"#/$defs/check"},"follow_ups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["observation","proof_refs"],"properties":{"observation":{"type":"string"},"proof_refs":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S"}}}}}},"allOf":[{"if":{"properties":{"correction_regression":{"type":"object","properties":{"passed":{"const":false}},"required":["passed"]}},"required":["correction_regression"]},"then":{"properties":{"correction_regression":{"type":"object","properties":{"regressions":{"minItems":1}},"required":["regressions"]}}}}],"$defs":{"sha256":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"check":{"type":"object","additionalProperties":false,"required":["passed","evidence"],"properties":{"passed":{"type":"boolean","description":"true means the named check passed; false means the named check failed."},"evidence":{"type":"array","minItems":1,"items":{"type":"string"}},"regressions":{"type":"array","items":{"$ref":"#/$defs/regression"},"description":"Required with at least one entry when this is correction_regression and passed is false: one entry per observed regression, omitted or empty otherwise."}}},"regression":{"type":"object","additionalProperties":false,"required":["location","claim","proof_refs"],"properties":{"id":{"type":"string","description":"Optional explicit ID; omit it to receive a native-assigned ID."},"location":{"type":"string","description":"One canonical repository-relative path:line or inclusive path:start-end span.","pattern":"^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$"},"claim":{"type":"string","minLength":1},"proof_refs":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S"}}}}},"examples":[{"targeted_validation_request_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","correction_target_identity":"sha256:1111111111111111111111111111111111111111111111111111111111111111","original_criteria":{"passed":true,"evidence":["acceptance test passed"]},"correction_regression":{"passed":true,"evidence":["regression test passed"]},"follow_ups":[]}]}`
 )
+
+// targetedValidatorPromptInstruction is the targeted validator's complete
+// briefing. Unlike a reviewing lens, this role may hold live tools on some
+// runtimes, so the briefing must say which immutable-inspection command exists
+// and where each of its arguments comes from. Withholding that recipe while
+// inviting an "I could not inspect it" answer is what produced #3380: one
+// runtime spent the lineage's single correction attempt on a non-observation
+// and another stranded its lineage with no verdict at all.
+const targetedValidatorPromptInstruction = "You are the read-only targeted fix validator. " +
+	"Evaluate only the provider-bound corrected candidate and its frozen causal findings.\n\n" +
+	"Inspecting the immutable candidate. The `evidence` array already carries the complete frozen tree-to-tree patch " +
+	"for every path in `validation_request.correction_paths`. It is authoritative corrected-candidate content read " +
+	"from the immutable trees, not a summary of them, so a verdict reached from it is a verified verdict. " +
+	"When you can run commands, read those same immutable trees yourself with " +
+	"`gentle-ai review inspect-candidate --purpose targeted-validation " +
+	"--lineage <validation_request.lineage_id> " +
+	"--expected-revision <validation_request.expected_revision> " +
+	"--target <validation_request.correction_target_identity> " +
+	"--request-hash <validation_request.request_hash> " +
+	"--repository-context <repository_context> " +
+	"--operation <name-status|numstat|stat|patch|object>`. " +
+	"Every value comes from this input and nowhere else. " +
+	"`stat` and `patch` also take `--path-index <n>`, the zero-based index into `validation_request.correction_paths`; " +
+	"`object` takes that same `--path-index` plus `--side base|candidate`. Never pass `--lens` or `--order`. " +
+	"That command is the only sanctioned route to the frozen trees: never read the live worktree, index, or HEAD, " +
+	"and never reach the repository through any other command.\n\n" +
+	"Reporting that the candidate could not be inspected is a last resort, never a first response. " +
+	"It is admissible only after the supplied evidence, and that command where you can run it, have both failed to " +
+	"answer. Never record an inconclusive inspection as a failed check: a failed check spends the correction budget " +
+	"on something you did not observe.\n\n" +
+	"Return exactly one JSON object with no prose. " +
+	"Validate your result against the supplied output schema. " +
+	"Echo targeted_validation_request_hash and correction_target_identity from the input. " +
+	"Include original_criteria and correction_regression, each with a boolean passed and non-empty evidence. " +
+	"Set `original_criteria.passed` to true only when every original criterion is met in the corrected candidate; set it to false when any original criterion remains unmet. " +
+	"Set `correction_regression.passed` to true only when the correction caused no regression; set it to false when you observe a regression. " +
+	"When `correction_regression.passed` is false, populate `correction_regression.regressions` with one entry per observed regression (id, location, claim, proof_refs) before writing its evidence prose; when it is true, omit `regressions` or use []. " +
+	"Always emit follow_ups; use [] when none exist. " +
+	"Native Go alone decides correction accounting, receipts, and delivery gates."
 
 // Contract is the sole role authority for schema serving, capability reporting,
 // storage routing, prompt instruction, and raw-output limits.
@@ -68,7 +107,7 @@ var contracts = []Contract{
 		ID: string(RoleTargetedValidator), Role: RoleTargetedValidator, RequestSchemaID: "gentle-ai.review-targeted-validation-request/v1",
 		ResultSchemaID: "https://gentle-ai.dev/schema/review/validator/v1", ResultSchema: []byte(TargetedValidatorResultSchema), StorageSlot: "correction-targeted-validator",
 		RequiredCapabilities: []string{TransportCapability}, ResultLimit: 4 << 20,
-		PromptInstruction: "You are the read-only targeted fix validator. Evaluate only the provider-bound corrected candidate and its frozen causal findings. If either check could not inspect the immutable candidate, report that fact in evidence rather than inventing a verdict. Return exactly one JSON object with no prose. Native Go alone decides correction accounting, receipts, and delivery gates.",
+		PromptInstruction: targetedValidatorPromptInstruction,
 	},
 }
 

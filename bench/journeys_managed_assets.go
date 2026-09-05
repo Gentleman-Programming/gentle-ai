@@ -45,7 +45,14 @@ func staleManagedAssetState(sandbox *Sandbox) error {
 	if !bytes.Equal(copied, historicalManagedAssetState) {
 		return fmt.Errorf("historical managed asset state copy differs from its fixture")
 	}
-	return nil
+	// The predecessor artifact is the whole install state, and it predates the
+	// kill switch, so copying it over the journey's opted-in state.json takes
+	// receipt-driven development back off. Opt in again the same way the runner
+	// did — through the product's own command, which leaves the stale digest
+	// exactly as this fixture wrote it. Without this the journey would measure
+	// a review-disabled STATUS instead of the stale-asset refusal it exists to
+	// measure.
+	return optIntoReviewMode(sandbox)
 }
 
 func staleManagedAssetsStartIsNotUnknown(r *journeyRun) error {
@@ -104,6 +111,7 @@ func managedAssetJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j93-stale-managed-assets-start-is-not-unknown",
+			Review: reviewOptedIn,
 			Title:  "Stale managed assets: v2 OpenCode START stops before authority and STATUS remains usable",
 			Source: "issue #2822: a stale product-created managed-asset digest refuses before START can mutate; negotiated output must not claim native execution",
 			Steps: []Step{

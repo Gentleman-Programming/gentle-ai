@@ -76,10 +76,8 @@ func TestSkillFrontmatterIsLintClean(t *testing.T) {
 			if got := len([]rune(fm.description)); got > budget {
 				t.Errorf("description length = %d chars, want <=%d for Claude Code budget: %q", got, budget, fm.description)
 			}
-			if path != "skills/_shared/SKILL.md" {
-				if !strings.Contains(fm.description, "Trigger:") {
-					t.Errorf("description must contain `Trigger:` substring; got: %q", fm.description)
-				}
+			if !strings.Contains(fm.description, "Trigger:") {
+				t.Errorf("description must contain `Trigger:` substring; got: %q", fm.description)
 			}
 
 			// Rule 5: only allowed top-level keys.

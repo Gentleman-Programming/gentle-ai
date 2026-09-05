@@ -48,6 +48,10 @@
     },
     "execution": {
       "$ref": "#/$defs/execution"
+    },
+    "continuation": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "allOf": [
@@ -152,6 +156,41 @@
               "provider_inputs"
             ]
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "preflight"
+          },
+          "assessment": {
+            "properties": {
+              "status": {
+                "const": "truncated"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "assessment"
+        ]
+      },
+      "then": {
+        "required": [
+          "continuation"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "continuation"
+          ]
         }
       }
     }

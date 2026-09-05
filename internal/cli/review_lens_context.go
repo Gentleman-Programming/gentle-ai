@@ -31,21 +31,30 @@ const reviewLensContextTimeout = 120 * time.Second
 // It is enforced by outright refusal. Truncating would hand a reviewer a
 // partial view of the candidate while still letting it report a clean result,
 // which is the one failure this surface exists to make impossible.
+//
+// It is also the *only* bound this surface applies. A separate 32-entry cap
+// used to sit beside it, inherited unchanged from the deleted advisory-review
+// adapter's request validator, where it carried no rationale of its own. A
+// count is not a measure of what a reviewer's context costs: it refused 33
+// one-line files whose complete evidence was a few kilobytes while admitting
+// 32 files that filled this entire budget. Counting entries also made the
+// refusal unfixable rather than merely large, because path count is the one
+// property splitting a candidate barely changes (issue #3367).
 const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffBytes
 
-// reviewProviderMaxEvidenceEntries bounds every provider-owned role request.
-// It is shared native policy, never adapter-owned configuration.
-const reviewProviderMaxEvidenceEntries = 32
-
+// The two markers an installed agent definition also names are read from the
+// canonical constants both halves share, never respelled here: a reviewer
+// admits the block by marker name, so a second spelling on either side is the
+// whole of issue #2777.
 const (
-	reviewLensContextBindingHeader = "GENTLE_AI_REVIEW_BINDING"
-	reviewLensContextContextHeader = "GENTLE_AI_REVIEW_CONTEXT"
+	reviewLensContextBindingHeader = reviewtransaction.ReviewerBindingMarker
+	reviewLensContextContextHeader = reviewtransaction.ReviewerContextMarker
+	reviewLensContextTerminator    = reviewtransaction.ReviewerContextTerminator
 	reviewLensContextNameStatus    = "GENTLE_AI_REVIEW_NAME_STATUS"
 	reviewLensContextNumstat       = "GENTLE_AI_REVIEW_NUMSTAT"
 	reviewLensContextInstruction   = "GENTLE_AI_REVIEW_INSTRUCTION"
 	reviewLensContextResultSchema  = "GENTLE_AI_REVIEW_RESULT_SCHEMA"
 	reviewLensContextPatch         = "GENTLE_AI_REVIEW_PATCH"
-	reviewLensContextTerminator    = "GENTLE_AI_REVIEW_CONTEXT_END"
 )
 
 // reviewLensContextBinding is the machine data a relaying orchestrator used to
@@ -83,6 +92,10 @@ const (
 	reviewLensContextBudgetAction = "immutable candidate evidence is never truncated and retrying this candidate cannot succeed; " +
 		"split the candidate into a chained sequence of smaller reviewable commits, each under the budget, then refresh the exact native next transition by running " +
 		reviewNextTransitionRefreshCommandV21 + " and execute the returned transition for the reduced scope"
+	reviewLensContextStartBudgetAction = "no review authority was created, so nothing has to be abandoned or repaired; " +
+		"immutable candidate evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained sequence of smaller reviewable commits, each under the budget, " +
+		"then refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
+		" and execute the returned transition for the reduced scope"
 	reviewLensContextEmptyPatchAction = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
 		"refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and run this operation again, and if the same path keeps producing no patch treat it as a native inspection defect and stop retrying"
@@ -92,23 +105,6 @@ const (
 		"produce this lens context by the same mechanism that already recorded one, or start a review for a fresh candidate by running " +
 		reviewNextTransitionRefreshCommandV21
 )
-
-// reviewLensContextConflictActionFor names the mechanism the slot really
-// recorded, so the exit is runnable without guessing which one it was.
-//
-// The generic wording is kept for the case where the record cannot be read
-// back: naming a mechanism this code did not actually observe would be worse
-// than staying general, because an exit that does not work sends an operator in
-// circles blaming themselves.
-func reviewLensContextConflictActionFor(recorded reviewtransaction.ReviewerContextLevel) string {
-	if strings.TrimSpace(string(recorded)) == "" {
-		return reviewLensContextConflictAction
-	}
-	return "this frozen lens slot already recorded a reviewer context produced by " + string(recorded) +
-		", and audit history is never rewritten; re-run this operation with --delivery " + string(recorded) +
-		" to produce the same context by the mechanism the slot recorded, or start a review for a fresh candidate by running " +
-		reviewNextTransitionRefreshCommandV21
-}
 
 // RunReviewLensContext emits the finished reviewer lens context for one
 // selected lens: the provider-authored binding, the provider-authored capture
@@ -144,12 +140,11 @@ func RunReviewLensContext(args []string, stdout io.Writer) error {
 // content-changing path.
 type reviewLensContextDeps struct {
 	timeout  time.Duration
-	resolve  func(context.Context, string) (string, reviewtransaction.ReviewRepositoryContextBinding, error)
+	resolve  func(context.Context, string, string, reviewtransaction.ReviewRepositoryContextBinding) (string, reviewtransaction.ReviewRepositoryContextBinding, error)
 	discover func(context.Context, string, string, bool) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error)
 	prepare  func(reviewtransaction.SnapshotBuilder, context.Context, reviewtransaction.Snapshot) (reviewLensCandidateInspector, error)
 	inspect  func(context.Context, reviewLensCandidateInspector, string, int, string) ([]byte, error)
 	close    func(reviewLensCandidateInspector) error
-	record   func(string, reviewtransaction.LensContextEmission) error
 }
 
 type reviewLensCandidateInspector interface {
@@ -169,8 +164,7 @@ func reviewLensContextDependencies() reviewLensContextDeps {
 		inspect: func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
 			return inspector.Inspect(ctx, operation, pathIndex, side)
 		},
-		close:  func(inspector reviewLensCandidateInspector) error { return inspector.Close() },
-		record: reviewtransaction.PublishLensContextEmission,
+		close: func(inspector reviewLensCandidateInspector) error { return inspector.Close() },
 	}
 }
 
@@ -178,92 +172,84 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	ctx, cancel := context.WithTimeout(context.Background(), deps.timeout)
 	defer cancel()
 	flags := newReviewFlagSet("review lens-context", help,
-		"Emit the finished reviewer lens context for one selected lens.\n\nForm: --repository-context <handle> --lens <lens> [--delivery provider_command|runtime_interception]\n\nBoth tokens are carried verbatim by the collect transition; nothing else is accepted, and nothing is left for the caller to assemble.")
+		"Emit the finished reviewer lens context for one selected lens.\n\nForm: --cwd <repo> --repository-context <handle> --lineage <id> --target <sha256> --expected-revision <sha256> --lens <lens> [--delivery provider_command|runtime_interception]\n\nEvery token is carried verbatim by the collect transition; nothing else is accepted, and nothing is left for the caller to assemble.")
+	cwd := flags.String("cwd", ".", "repository path the provider-issued context is verified against")
 	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context")
+	lineage := flags.String("lineage", "", "exact review lineage identifier")
+	target := flags.String("target", "", "exact frozen target identity")
+	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	lens := flags.String("lens", "", "exact selected lens")
 	delivery := flags.String("delivery", string(reviewtransaction.ReviewerContextLevelProviderCommand),
-		"how this context reaches the reviewer: provider_command when a caller relays it, runtime_interception when a runtime adapter injects it")
+		"deprecated compatibility option; reviewer context is ephemeral and never persisted")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return nil, err
 	}
 	if reviewHelpRequested(args) {
 		return nil, nil
 	}
-	if flags.NArg() != 0 || strings.TrimSpace(*repositoryContext) == "" || strings.TrimSpace(*lens) == "" {
-		return nil, reviewPreflightError(errors.New("review lens-context requires the exact provider-issued repository context and lens carried by the collect transition; run `gentle-ai review lens-context --help` for the closed command form"))
+	requested := reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: strings.TrimSpace(*lineage), TargetIdentity: strings.TrimSpace(*target), Revision: strings.TrimSpace(*revision),
 	}
+	if flags.NArg() != 0 || strings.TrimSpace(*repositoryContext) == "" || strings.TrimSpace(*lens) == "" ||
+		requested.LineageID == "" || requested.TargetIdentity == "" || requested.Revision == "" {
+		return nil, reviewPreflightError(errors.New("review lens-context requires the exact provider-issued repository context, lineage, target, expected revision, and lens carried by the collect transition; run `gentle-ai review lens-context --help` for the closed command form"))
+	}
+
 	level := reviewtransaction.ReviewerContextLevel(strings.TrimSpace(*delivery))
 	if level == reviewtransaction.ReviewerContextLevelProviderContract {
-		return nil, reviewPreflightError(errors.New("review lens-context delivery provider_contract is reserved for Go-owned provider execution and cannot be declared by callers")) // refusal:by-design world-action: only the live Go transport may record its provider contract provenance
+		return nil, reviewPreflightError(errors.New("review lens-context delivery provider_contract is reserved for Go-owned provider execution and cannot be declared by callers")) // refusal:by-design world-action: current context delivery has no durable provenance record
 	}
 	if !reviewtransaction.ReviewerContextLevelAccepted(level) {
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
 	}
 
-	authority, err := resolveReviewLensAuthority(ctx, deps, strings.TrimSpace(*repositoryContext), strings.TrimSpace(*lens))
+	authority, err := resolveReviewLensAuthority(ctx, deps, *cwd, strings.TrimSpace(*repositoryContext), strings.TrimSpace(*lens), requested)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(authority.Inspector) })
 	}()
-	block, err := reviewLensContextAssemble(ctx, deps, authority.Binding, authority.Subject, authority.Frozen, authority.Inspector)
+	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
 	if err != nil {
 		return nil, err
 	}
 	if expired := reviewLensContextDeadline(ctx, ctx.Err()); expired != nil {
 		return nil, expired
 	}
-	// Recorded only after the context really exists, and only for the slot it
-	// was produced for. This is an append-only audit note beside the captured
-	// reviewer results: it costs no authority revision, so the revision the
-	// caller is still holding for its capture stays valid.
-	if err := deps.record(authority.Store.Dir, reviewtransaction.LensContextEmission{
-		Schema: reviewtransaction.LensContextEmissionSchema, LineageID: authority.Binding.Lineage,
-		TargetIdentity: authority.Binding.Target, AuthorityRevision: authority.Binding.Revision,
-		Lens: authority.Binding.Lens, SelectedOrder: authority.Binding.Order, SubjectHash: authority.Binding.SubjectHash, Level: level,
-	}); err != nil {
-		if errors.Is(err, reviewtransaction.ErrLensContextEmissionConflict) {
-			// Read back what the slot really holds so the refusal names the
-			// mechanism to re-run with. The record is bound to this exact
-			// revision, so a hit here is genuinely a mechanism conflict and not
-			// the stale-revision collision this slot key used to produce.
-			recorded, _ := reviewtransaction.ReadLensContextEmission(authority.Store.Dir, authority.Binding.Lineage,
-				authority.Binding.Target, authority.Binding.Revision, authority.Binding.Lens,
-				authority.Binding.Order, authority.Binding.SubjectHash)
-			return nil, reviewLensContextRefusal("lens_context_emission_conflict", reviewLensContextConflictActionFor(recorded.Level))
-		}
-		return nil, reviewLensContextRefusal("lens_context_emission_unavailable", reviewLensContextRefreshAction)
-	}
+	// Materialization is ephemeral and read-only: no context, readiness, or delivery record is persisted.
 	return block, nil
 }
 
-// reviewLensContextAssemble is the one immutable evidence representability
-// check. STATUS reuses it before publishing a collection transition, while the
-// launch path records an emission only after this function returns a block.
-func reviewLensContextAssemble(
-	ctx context.Context, deps reviewLensContextDeps, binding reviewLensContextBinding,
-	subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
-	inspector reviewLensCandidateInspector,
-) ([]byte, error) {
-	if len(frozen.ChangedPathManifest) > reviewProviderMaxEvidenceEntries {
-		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(frozen.ChangedPathManifest)))
-	}
-	return reviewLensContextBlock(ctx, deps, inspector, binding, subject, frozen)
-}
+// reviewLensContextProbeOutcome is what a representability probe learned. The
+// first two are verdicts about the candidate; the third is a fact about the
+// probe, and the type exists so they never collapse into each other.
+type reviewLensContextProbeOutcome int
 
-// reviewLensContextStatusBudgetExhausted proves only the deterministic budget
-// refusal for the frozen slots STATUS would otherwise reoffer. It derives the
-// same opaque handle without publishing it and never records an emission.
-// Every other assembly failure remains a launch-time failure so fresh STATUS
-// preserves the existing negotiated collection continuity.
-func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
-	assemblyContext, cancel := context.WithTimeout(ctx, reviewLensContextTimeout)
+const (
+	reviewLensContextRepresentable reviewLensContextProbeOutcome = iota // every lens assembled in full, inside the budget
+	reviewLensContextOverBudget                                         // one lens exceeded it: deterministic and permanent
+	reviewLensContextUnproven                                           // never decided: the candidate may fit perfectly well
+)
+
+// reviewLensContextBudgetProbe assembles the complete immutable evidence for
+// every lens a review selected and classifies the candidate. It derives the
+// opaque handle without publishing it, records no emission, and writes nothing.
+//
+// The third outcome is the one that matters. Every stop that is not the budget
+// refusal -- an unreachable tree, an expired deadline, any other typed refusal
+// -- ends the probe and returns its cause, because before issue #3367 those
+// failures read exactly like a candidate that fits, which let a caller be
+// handed a reviewer slot nothing had verified was fillable.
+func reviewLensContextBudgetProbe(
+	ctx context.Context, deps reviewLensContextDeps, repo string,
+	state reviewtransaction.CompactState, revision string,
+) (reviewLensContextProbeOutcome, error) {
+	assemblyContext, cancel := context.WithTimeout(ctx, deps.timeout)
 	defer cancel()
-	deps := reviewLensContextDependencies()
 	inspector, err := deps.prepare(reviewtransaction.SnapshotBuilder{Repo: repo}, assemblyContext, state.InitialSnapshot)
 	if err != nil {
-		return false
+		return reviewLensContextUnproven, err
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
@@ -271,23 +257,87 @@ func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, st
 		LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: revision,
 	})
 	if err != nil {
-		return false
+		return reviewLensContextUnproven, err
 	}
 	for order, lens := range state.SelectedLenses {
 		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, revision, frozen, lens, order, "")
 		if subjectErr != nil {
-			continue
+			return reviewLensContextUnproven, subjectErr
 		}
-		_, assemblyErr := reviewLensContextAssemble(assemblyContext, deps, reviewLensContextBinding{
+		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
-		}, subject, frozen, inspector)
+		}, subject, frozen)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
-			return true
+			return reviewLensContextOverBudget, nil
+		}
+		if assemblyErr != nil {
+			return reviewLensContextUnproven, assemblyErr
 		}
 	}
-	return false
+	return reviewLensContextRepresentable, nil
+}
+
+// reviewLensContextStatusBudgetExhausted proves the deterministic budget
+// refusal for the frozen slots STATUS would otherwise reoffer, and only that.
+//
+// An unproven probe answers false rather than degrading STATUS: this runs only
+// after the captured artifacts verified, so reporting its cause as that
+// discovery's failure would turn a transient hiccup into a terminal
+// captured-artifact verdict about something that never happened. The launch
+// this keeps offering re-runs the same assembly against the same frozen trees
+// and refuses with its own typed, refreshable cause.
+//
+// Since START refuses an unrepresentable candidate before persisting anything,
+// the only lineages this can still classify as exhausted are ones an older
+// build created, so it stays as the upgrade path's defence rather than the
+// primary guard.
+func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
+	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+	return outcome == reviewLensContextOverBudget
+}
+
+// reviewLensContextCompactAtomicStartBudgetRefusal applies the complete-evidence
+// bound to the compact authority START will create or replay. It derives the
+// provisional compact revision in memory, never opens or discovers authority
+// storage, and therefore keeps an over-budget refusal persistence-free.
+func reviewLensContextCompactAtomicStartBudgetRefusal(
+	ctx context.Context, repo string, request reviewtransaction.CompactAtomicStartRequest,
+) error {
+	if len(request.Binding.SelectedLenses) == 0 {
+		return nil
+	}
+	state := request.State
+	binding := request.Binding
+	binding.Selector.IntendedUntracked = append([]string(nil), binding.Selector.IntendedUntracked...)
+	binding.Selector.LedgerIDs = append([]string(nil), binding.Selector.LedgerIDs...)
+	binding.SelectedLenses = append([]string(nil), binding.SelectedLenses...)
+	state.InitialAtomicStart = &binding
+	revision, err := reviewtransaction.CompactRevisionForState(state)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("derive compact atomic START reviewer-context binding: %w", err))
+	}
+	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+	if outcome != reviewLensContextOverBudget {
+		return nil
+	}
+	return reviewPreflightRefusal(reviewLensContextStartBudgetReason,
+		&reviewLensContextError{Code: "lens_context_budget_exceeded", Action: reviewLensContextStartBudgetAction})
+}
+
+// reviewLensContextStartBudgetReason classifies START's budget refusal. The
+// default "correct the request you sent" shape would be an actively wrong
+// instruction here: no flag, projection, or lineage makes an over-budget
+// candidate representable, and raising the bound would only move the cliff.
+// The contract message stays inside the published 240-character bound and says
+// the two things a caller acts on -- that nothing was created, and that the
+// change has to be reviewed as smaller candidates. The exact runnable
+// continuation travels with the cause.
+var reviewLensContextStartBudgetReason = reviewPreflightReason{
+	Code:       "lens_context_budget_exceeded",
+	Message:    "The candidate's complete reviewer evidence exceeds the native context budget, so no review authority was created; review this change as smaller candidates that each fit under it.",
+	NextAction: "stop",
 }
 
 // reviewLensAuthority is the resolved provider-owned binding, subject, and
@@ -307,8 +357,8 @@ type reviewLensAuthority struct {
 // order, subject, and frozen candidate context from the two opaque tokens a
 // caller supplies: the provider-issued repository context and the selected
 // lens. Both repositoryContext and lens must already be trimmed.
-func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (reviewLensAuthority, error) {
-	root, binding, err := deps.resolve(ctx, repositoryContext)
+func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps, repo, repositoryContext, lens string, requested reviewtransaction.ReviewRepositoryContextBinding) (reviewLensAuthority, error) {
+	root, binding, err := deps.resolve(ctx, repo, repositoryContext, requested)
 	if err != nil {
 		// The deadline is checked before classification: an expired aggregate
 		// deadline is not evidence that the repository context is unavailable,
@@ -328,7 +378,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 	}
 	state := record.State
 	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity ||
-		record.Revision != binding.Revision {
+		state.CapturePhaseRevision != binding.Revision {
 		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
 	}
 	order, err := reviewLensContextSelectedOrder(state.SelectedLenses, lens)
@@ -342,7 +392,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 		return reviewLensAuthority{}, reviewLensContextInspectionFailure(ctx, err)
 	}
 	frozen := inspector.FrozenCandidateContext()
-	subject, err := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, state.SelectedLenses[order], order, "")
+	subject, err := reviewtransaction.NewArtifactSubject(state, state.CapturePhaseRevision, frozen, state.SelectedLenses[order], order, "")
 	if err != nil {
 		if cleanupErr := inspector.Close(); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
@@ -476,6 +526,8 @@ Causality. Report only what this candidate caused. Give every BLOCKER or CRITICA
 
 Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s. Set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
 
+Citations. Every finding location, and every path cited inside an evidence string or a proof_refs entry, must be a repository-relative path exactly as it appears in the changed-path manifest, optionally with :line or :start-end. Never cite absolute paths, bare file basenames without their directory, or non-path colon-number shapes such as host:port. Any token shaped like path:line is validated against the frozen repository, and one unknown path rejects the entire result. A finding whose causal_disposition is introduced, behavior-activated, or worsened must anchor its location entirely within lines this candidate changed: every line of a path:start-end span is validated as candidate-changed, one unchanged context line in the span rejects the entire result, and observations about unchanged code belong under pre-existing or base-only instead. When the candidate's own content contains a path-shaped literal that is not a real repository path (for example a traversal or fixture token inside a test), never reproduce that token in evidence or proof_refs: describe it in words and cite the manifest file and line that contain it.
+
 Honesty. If you could not inspect the candidate, say so in evidence and do not return a clean result: an access failure is not a completed inspection, and reporting one as clean is the single outcome this review cannot recover from.`,
 		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader,
 		reviewLensContextResultSchema, binding.SubjectHash), nil
@@ -532,8 +584,4 @@ func reviewLensContextDeadline(ctx context.Context, err error) error {
 		return reviewLensContextRefusal("lens_context_canceled", reviewLensContextRefreshAction)
 	}
 	return nil
-}
-
-func reviewLensContextCapacityAction(entries int) string {
-	return fmt.Sprintf("immutable candidate evidence has %d paths but provider-owned reviewer context accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then refresh the exact native next transition by running %s and execute the returned transition for the reduced scope", entries, reviewProviderMaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
 }

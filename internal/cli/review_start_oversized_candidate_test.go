@@ -21,11 +21,12 @@ func writeReviewStartLargeCandidate(t *testing.T, repo string, lines int) []byte
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, repo, "add", "big.txt")
-	return []byte(runReviewCLIGitOutput(t, repo, "diff", "--cached", "--binary", "--full-index",
+	return []byte(runReviewCLIGit(t, repo, "diff", "--cached", "--binary", "--full-index",
 		"--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"))
 }
 
 func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	fullDiff := writeReviewStartLargeCandidate(t, repo, 110000)
 	if len(fullDiff) <= 4<<20 {
@@ -51,7 +52,7 @@ func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) 
 
 	var status bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", start.LineageID, "--next-transition",
 	}, &status); err != nil {
 		t.Fatal(err)
 	}
@@ -65,24 +66,28 @@ func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) 
 		t.Fatalf("large-candidate STATUS produced no reviewer input: %#v", result.NextTransition)
 	}
 	for _, input := range result.NextTransition.Collect.Inputs {
+		// issue #3922 / #4199 / gentle-pi#543: the native-git collect input no
+		// longer inlines the manifest -- artifact_subject.changed_path_manifest_sha256
+		// already commits to it -- so its absence here is expected, not lost
+		// context.
 		if input.BaseTree != start.BaseTree || input.CandidateTree != start.CandidateTree ||
-			input.ChangedPathManifest == nil || input.ArtifactSubject == nil {
+			input.ChangedPathManifest != nil || input.ArtifactSubject == nil {
 			t.Fatalf("collect input lost native Git context: %#v", input)
 		}
 	}
 	// The reviewer recipe is plain read-only native Git against the frozen
 	// trees: compact discovery first, then a literal-pathspec selective diff.
-	discovery := runReviewCLIGitOutput(t, repo, "--no-pager", "diff", "--name-status", "--no-renames",
+	discovery := runReviewCLIGit(t, repo, "--no-pager", "diff", "--name-status", "--no-renames",
 		start.BaseTree, start.CandidateTree)
 	if strings.TrimSpace(discovery) != "A\tbig.txt" {
 		t.Fatalf("compact discovery = %q, want the single added path", discovery)
 	}
-	numstat := runReviewCLIGitOutput(t, repo, "--no-pager", "diff", "--numstat", "--no-renames",
+	numstat := runReviewCLIGit(t, repo, "--no-pager", "diff", "--numstat", "--no-renames",
 		start.BaseTree, start.CandidateTree)
 	if !strings.Contains(numstat, "big.txt") {
 		t.Fatalf("numstat discovery = %q, want big.txt", numstat)
 	}
-	selective := runReviewCLIGitOutput(t, repo, "--no-pager", "diff", "--no-ext-diff", "--no-textconv",
+	selective := runReviewCLIGit(t, repo, "--no-pager", "diff", "--no-ext-diff", "--no-textconv",
 		"--full-index", "--no-renames", "--diff-algorithm=myers",
 		start.BaseTree, start.CandidateTree, "--", ":(literal)big.txt")
 	if len(selective) <= 4<<20 || !strings.Contains(selective, "line 00000000 payload") ||

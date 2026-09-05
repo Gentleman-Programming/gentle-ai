@@ -14,16 +14,32 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+// lensContextArgv renders the closed lens-context command form from the flags
+// the collect transition carries: the repository the context digest is verified
+// against, the digest, the binding it commits to, and the lens.
+func lensContextArgv(args []string, lens string) []string {
+	argv := []string{}
+	for _, name := range []string{"--cwd", "--repository-context", "--lineage", "--target", "--expected-revision"} {
+		index := slices.Index(args, name)
+		if index < 0 || index+1 >= len(args) {
+			continue
+		}
+		argv = append(argv, name, args[index+1])
+	}
+	return append(argv, "--lens", lens)
+}
+
 // lensContextBlock runs `review lens-context` for one lens and returns the
 // finished reviewer block exactly as a runtime would inject it.
-func lensContextBlock(t *testing.T, handle, lens string) string {
+func lensContextBlock(t *testing.T, args []string, lens string) string {
 	t.Helper()
 	var output bytes.Buffer
-	if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens}, &output); err != nil {
+	if err := RunReview(append([]string{"lens-context"}, lensContextArgv(args, lens)...), &output); err != nil {
 		t.Fatalf("lens-context %s: %v", lens, err)
 	}
 	return output.String()
@@ -34,11 +50,12 @@ func lensContextBlock(t *testing.T, handle, lens string) string {
 // collect transition already carries, and receives the complete reviewer
 // prompt prefix with nothing left to assemble.
 func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) {
-	_, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	reviewEnabledHome(t)
+	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 
-	block := lensContextBlock(t, handle, lens)
+	block := lensContextBlock(t, args, lens)
 
 	lines := strings.SplitN(block, "\n", 3)
 	if len(lines) < 3 {
@@ -94,6 +111,7 @@ func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) 
 	// Every materialized section is exactly what the provider's own bounded
 	// inspection returns for the frozen candidate.
 	inspection := []string{
+		"--cwd", repo,
 		"--repository-context", handle, "--expected-revision", subject["authority_revision"].(string),
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
 		"--lens", lens, "--order", "0",
@@ -138,23 +156,23 @@ func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) 
 // with no bytes on stdout: a partial reviewer block is the fabricate-a-clean-
 // review shape this surface exists to prevent.
 func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 	tests := []struct {
 		name string
 		argv []string
 		want string
 	}{
-		{name: "missing lens", argv: []string{"lens-context", "--repository-context", handle}, want: "requires the exact provider-issued"},
+		{name: "missing lens", argv: append([]string{"lens-context"}, lensContextArgv(args, "")[:len(lensContextArgv(args, ""))-2]...), want: "requires the exact provider-issued"},
 		{name: "missing context", argv: []string{"lens-context", "--lens", lens}, want: "requires the exact provider-issued"},
-		{name: "malformed context", argv: []string{"lens-context", "--repository-context", "not-a-handle", "--lens", lens}, want: "repository_context_"},
-		{name: "unknown context", argv: []string{"lens-context", "--repository-context", "rctx1_" + strings.Repeat("0", 64), "--lens", lens}, want: "repository_context_"},
-		{name: "unselected lens", argv: []string{"lens-context", "--repository-context", handle, "--lens", "review-nonexistent"}, want: "lens_context_lens_not_selected"},
-		{name: "positional", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "HEAD"}, want: "requires the exact provider-issued"},
-		{name: "unknown flag", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--order", "0"}, want: "flag provided but not defined"},
-		{name: "unknown delivery", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", "hand-wave"}, want: "unknown reviewer context delivery"},
-		{name: "caller provider contract", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", string(reviewtransaction.ReviewerContextLevelProviderContract)}, want: "reserved for Go-owned provider execution"},
+		{name: "malformed context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "not-a-handle"), lens)...), want: "repository_context_"},
+		{name: "unknown context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), lens)...), want: "repository_context_"},
+		{name: "unselected lens", argv: append([]string{"lens-context"}, lensContextArgv(args, "review-nonexistent")...), want: "lens_context_lens_not_selected"},
+		{name: "positional", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "HEAD"), want: "requires the exact provider-issued"},
+		{name: "unknown flag", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "--order", "0"), want: "flag provided but not defined"},
+		{name: "unknown delivery", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "--delivery", "hand-wave"), want: "unknown reviewer context delivery"},
+		{name: "caller provider contract", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "--delivery", string(reviewtransaction.ReviewerContextLevelProviderContract)), want: "reserved for Go-owned provider execution"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -170,30 +188,61 @@ func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
 	}
 }
 
-// TestReviewLensContextRefusesOverBudgetCandidateWithoutTruncating proves the
-// budget is enforced by outright refusal. Truncated candidate evidence could
-// fabricate a false-clean lens result, so there is no partial outcome.
-func TestReviewLensContextRefusesOverBudgetCandidateWithoutTruncating(t *testing.T) {
-	// Two paths that each read well inside the per-command cap but together
-	// exceed the whole-context budget: this is the aggregate the surface owns
-	// and no single native read would ever catch.
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
-	repo := initReviewCLIRepo(t)
+// writeOverByteBudgetLensContextCandidate writes two paths that each read well
+// inside the per-command cap but together exceed the whole-context byte budget.
+// That aggregate is what this surface owns, and no single native read catches
+// it.
+func writeOverByteBudgetLensContextCandidate(t *testing.T, repo string) {
+	t.Helper()
 	body := strings.Repeat("oversized evidence line\n", 100_000)
 	for _, name := range []string{"bulk-one.txt", "bulk-two.txt"} {
 		writeReviewStartCandidate(t, repo, name, body, 0o644)
 	}
-	started := runNegotiatedReviewStart(t, repo, "lens-context-budget")
+}
+
+// TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority
+// proves the budget is enforced by outright refusal at the point of decision.
+// Truncated candidate evidence could fabricate a false-clean lens result, so
+// there is no partial outcome; and because START refuses before creating
+// authority, there is no dead lineage to abandon afterwards either (#3367).
+func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeOverByteBudgetLensContextCandidate(t, repo)
+	authorityRoot := reviewCLIAuthorityRoot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, authorityRoot)
+	homeBefore := readLegacyAuthorityTree(t, home)
+
 	var output bytes.Buffer
-	err := RunReview([]string{
-		"lens-context", "--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
-	}, &output)
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "lens-context-budget",
+	}), &output)
 	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
-		t.Fatalf("over-budget error = %v", err)
+		t.Fatalf("over-budget START error = %v\n%s", err, output.String())
 	}
-	if output.Len() != 0 {
-		t.Fatalf("over-budget refusal emitted %d bytes of truncated evidence", output.Len())
+	if !strings.Contains(err.Error(), "no review authority was created") {
+		t.Fatalf("over-budget START does not say that nothing was persisted: %v", err)
+	}
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) {
+		t.Fatalf("over-budget START did not emit a typed negotiated failure: %T", err)
+	}
+	if failure.Failure.MutationOutcome != ReviewMutationNotStarted || failure.Failure.Phase != "preflight" ||
+		failure.Failure.NextAction != "stop" || failure.Failure.Code != "lens_context_budget_exceeded" {
+		t.Fatalf("over-budget START envelope does not report a refusal that wrote nothing: %#v", failure.Failure)
+	}
+	if !strings.Contains(failure.Failure.Cause, "chained sequence of smaller reviewable commits") ||
+		!strings.Contains(failure.Failure.Cause, "gentle-ai review status") {
+		t.Fatalf("over-budget START cause does not name the runnable continuation: %q", failure.Failure.Cause)
+	}
+	if strings.Contains(output.String(), "GENTLE_AI_REVIEW_") {
+		t.Fatalf("over-budget START refusal emitted reviewer evidence:\n%s", output.String())
+	}
+	if after := snapshotAuthorityTree(t, authorityRoot); authorityBefore != after {
+		t.Fatalf("over-budget START changed authority storage before create:\nbefore:\n%s\nafter:\n%s", authorityBefore, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("over-budget START persisted an artifact: before=%#v after=%#v", homeBefore, after)
 	}
 }
 
@@ -203,8 +252,8 @@ func TestReviewLensContextRefusesOverBudgetCandidateWithoutTruncating(t *testing
 // not launch. A reviewer handed a path header with no diff would report it
 // clean.
 func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 	deps := reviewLensContextDependencies()
 	deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
@@ -213,7 +262,7 @@ func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) 
 		}
 		return inspector.Inspect(ctx, operation, pathIndex, side)
 	}
-	block, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
+	block, err := runReviewLensContext(lensContextArgv(args, lens), io.Discard, deps)
 	if err == nil || !strings.Contains(err.Error(), "lens_context_empty_patch") {
 		t.Fatalf("empty patch error = %v", err)
 	}
@@ -226,12 +275,12 @@ func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) 
 // deadline reaches every phase, so a repository that stops answering partway
 // through never yields a partial block.
 func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 	deps := reviewLensContextDependencies()
 	deps.timeout = 0
-	block, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
+	block, err := runReviewLensContext(lensContextArgv(args, lens), io.Discard, deps)
 	if err == nil || !strings.Contains(err.Error(), "lens_context_deadline_exceeded") {
 		t.Fatalf("deadline error = %v", err)
 	}
@@ -248,64 +297,33 @@ func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
 	}
 }
 
-func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspection(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
-	repo := initReviewCLIRepo(t)
-	for index := range 33 {
-		writeReviewStartCandidate(t, repo, fmt.Sprintf("path-%02d.txt", index), "candidate\n", 0o644)
-	}
-	started := runNegotiatedReviewStart(t, repo, "lens-context-entry-capacity")
-	deps := reviewLensContextDependencies()
-	inspect := deps.inspect
-	patchReads := 0
-	deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
-		if operation == "patch" {
-			patchReads++
-		}
-		return inspect(ctx, inspector, operation, pathIndex, side)
-	}
-	block, err := runReviewLensContext([]string{
-		"--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
-	}, io.Discard, deps)
-	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
-		t.Fatalf("entry-capacity error = %v", err)
-	}
-	if strings.Contains(err.Error(), "advisory review") || !strings.Contains(err.Error(), "provider-owned reviewer context accepts at most") ||
-		!strings.Contains(err.Error(), "33") || !strings.Contains(err.Error(), "32") || !strings.Contains(err.Error(), "retrying this candidate cannot succeed") ||
-		!strings.Contains(err.Error(), "chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
-		t.Fatalf("entry-capacity guidance does not name its limit and runnable continuation: %q", err)
-	}
-	if patchReads != 0 {
-		t.Fatalf("patch inspections before entry-capacity refusal = %d, want 0", patchReads)
-	}
-	if len(block) != 0 {
-		t.Fatalf("entry-capacity refusal emitted %d bytes of reviewer context", len(block))
-	}
-}
-
+// TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation keeps
+// STATUS's deterministic budget classification honest for a lineage that
+// already exists over budget. Its candidate changed with issue #3367: the
+// 33-path fixture it used to carry is now reviewable, because path count no
+// longer decides anything, so the over-budget candidate has to be one whose
+// evidence genuinely exceeds the byte budget.
+//
+// Its authority is created through StartCompactAuthority rather than the
+// facade, which is exactly the shape a build without START's representability
+// check leaves behind. That upgrade path is the only way this stop is still
+// reachable, and it is why the classification is kept rather than deleted
+// along with the count. Every no-mutation assertion below is unchanged.
 func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *testing.T) {
-	home := reviewModeHome(t)
+	home := reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	for index := range reviewProviderMaxEvidenceEntries + 1 {
-		writeReviewStartCandidate(t, repo, "path-"+strconv.Itoa(index)+".txt", "candidate\n", 0o644)
-	}
-	started := runNegotiatedReviewStart(t, repo, "lens-context-status-budget")
-	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeOverByteBudgetLensContextCandidate(t, repo)
+	record := startCompactAuthorityWithoutFacadeChecks(t, repo, "lens-context-status-budget")
+	handle := deriveLensContextHandle(t, repo, record)
 	before := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
 	homeBefore := readLegacyAuthorityTree(t, home)
 	worktreeBefore := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all")
 
 	var context bytes.Buffer
-	err = RunReview([]string{
-		"lens-context", "--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
+	err := RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", handle,
+		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", record.State.SelectedLenses[0],
 	}, &context)
 	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
 		t.Fatalf("lens-context refusal = %v, want deterministic budget exhaustion", err)
@@ -320,7 +338,7 @@ func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *t
 		t.Fatalf("lens-context budget refusal persisted an artifact: before=%#v after=%#v", homeBefore, after)
 	}
 
-	status := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
 	if status.Action != reviewtransaction.TargetStatusActionStop ||
 		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
 		status.NextTransition.ReasonCode != "lens_context_budget_exceeded" ||
@@ -329,7 +347,7 @@ func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *t
 		t.Fatalf("STATUS reoffered a deterministically impossible reviewer slot: %#v", status)
 	}
 	if status.Authority == nil || status.Authority.Revision != record.Revision ||
-		status.Authority.State != reviewtransaction.StateReviewing || status.Receipt.Status != ReviewReceiptExpectedMissing ||
+		status.Authority.State != reviewtransaction.StateReviewing ||
 		status.Frozen == nil || status.Frozen.CorrectionBudget != record.State.CorrectionBudget {
 		t.Fatalf("terminal STATUS changed frozen review truth: %#v", status)
 	}
@@ -373,7 +391,7 @@ func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t 
 		action string
 	}{
 		{name: "evidence capacity", action: reviewLensContextBudgetAction},
-		{name: "entry capacity", action: reviewLensContextCapacityAction(reviewProviderMaxEvidenceEntries + 1)},
+		{name: "start capacity", action: reviewLensContextStartBudgetAction},
 		{name: "deadline", action: reviewLensContextDeadlineAction},
 	}
 	for _, test := range tests {
@@ -423,24 +441,36 @@ func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperatio
 }
 
 func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.T) {
+	reviewEnabledHome(t)
 	cleanupErr := errors.New("close inspector")
 	for _, caller := range []struct {
 		name string
-		call func(reviewLensContextDeps, string, string) (error, bool)
+		call func(reviewLensContextDeps, string, []string, string, string, reviewtransaction.ReviewRepositoryContextBinding) (error, bool)
 	}{
-		{"lens context", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
-			payload, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
+		{"lens context", func(deps reviewLensContextDeps, repo string, args []string, handle, lens string, _ reviewtransaction.ReviewRepositoryContextBinding) (error, bool) {
+			payload, err := runReviewLensContext(append([]string{"--cwd", repo}, args...), io.Discard, deps)
 			return err, payload == nil
 		}},
-		{"provider materialization", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
-			request, err := reviewProviderMaterialize(context.Background(), deps, handle, lens)
+		{"provider materialization", func(deps reviewLensContextDeps, repo string, _ []string, handle, lens string, binding reviewtransaction.ReviewRepositoryContextBinding) (error, bool) {
+			request, err := reviewProviderMaterialize(context.Background(), deps, repo, handle, lens, binding)
 			return err, request.Store.Dir == "" && request.Binding == (reviewLensContextBinding{}) && request.Subject == (reviewtransaction.ArtifactSubject{}) && len(request.Invocation.Prompt()) == 0
 		}},
 	} {
 		for _, operation := range []bool{false, true} {
 			t.Run(caller.name, func(t *testing.T) {
-				_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+				repo, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 				handle, lens := args[slices.Index(args, "--repository-context")+1], args[slices.Index(args, "--lens")+1]
+				binding := reviewtransaction.ReviewRepositoryContextBinding{
+					LineageID:      args[slices.Index(args, "--lineage")+1],
+					TargetIdentity: args[slices.Index(args, "--target")+1],
+					Revision:       args[slices.Index(args, "--expected-revision")+1],
+				}
+				lensArgs := []string{
+					"--cwd", repo,
+					"--repository-context", handle, "--lens", lens,
+					"--lineage", binding.LineageID, "--target", binding.TargetIdentity,
+					"--expected-revision", binding.Revision,
+				}
 				deps := reviewLensContextDependencies()
 				deps.close = func(inspector reviewLensCandidateInspector) error {
 					if err := inspector.Close(); err != nil {
@@ -457,7 +487,7 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 						return inspect(ctx, inspector, kind, index, side)
 					}
 				}
-				err, zero := caller.call(deps, handle, lens)
+				err, zero := caller.call(deps, repo, lensArgs, handle, lens, binding)
 				if !zero {
 					t.Fatal("cleanup did not zero the result")
 				}
@@ -479,14 +509,14 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 // TestReviewLensContextLeavesRepositoryUntouched proves the surface is a pure
 // read of the frozen trees.
 func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 	before := [2]string{
 		runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"),
 		runReviewCLIGit(t, repo, "rev-parse", "HEAD"),
 	}
-	if _, err := io.WriteString(io.Discard, lensContextBlock(t, handle, lens)); err != nil {
+	if _, err := io.WriteString(io.Discard, lensContextBlock(t, args, lens)); err != nil {
 		t.Fatal(err)
 	}
 	after := [2]string{
@@ -500,150 +530,44 @@ func TestReviewLensContextLeavesRepositoryUntouched(t *testing.T) {
 
 // TestReviewLensContextRecordsProviderEmissionForTheReceipt proves the level a
 // receipt will carry is observed from what the provider actually produced, not
-// declared by whoever finalizes. Absence stays absence when nothing produced a
+// declared by whoever closes the review. Absence stays absence when nothing produced a
 // context.
-func TestReviewLensContextRecordsProviderEmissionForTheReceipt(t *testing.T) {
+func TestReviewLensContextIsEphemeralAndDoesNotPersistDeliveryState(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
-	state := record.State
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	lens := args[slices.Index(args, "--lens")+1]
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, record.State.LineageID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subjects := make([]string, len(state.SelectedLenses))
-
-	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects); level != "" {
-		t.Fatalf("level recorded before any context was produced: %q", level)
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for order, lens := range state.SelectedLenses {
-		block := lensContextBlock(t, handle, lens)
-		binding, _, _ := strings.Cut(strings.TrimPrefix(strings.SplitN(block, "\n", 2)[0], "GENTLE_AI_REVIEW_BINDING "), "\n")
-		var decoded map[string]any
-		if err := json.Unmarshal([]byte(binding), &decoded); err != nil {
-			t.Fatal(err)
+	for _, delivery := range []string{"provider_command", "runtime_interception"} {
+		var output bytes.Buffer
+		if err := RunReview(append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "--delivery", delivery), &output); err != nil {
+			t.Fatalf("ephemeral lens context for %s: %v", delivery, err)
 		}
-		subjects[order] = decoded["subject_hash"].(string)
-		// Re-emitting the identical context converges instead of conflicting.
-		lensContextBlock(t, handle, lens)
-	}
-
-	level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects)
-	if level != reviewtransaction.ReviewerContextLevelProviderCommand {
-		t.Fatalf("recorded level = %q, want %q", level, reviewtransaction.ReviewerContextLevelProviderCommand)
-	}
-
-	// A record is bound to its exact candidate: read it against another
-	// subject and it is absent, never reused.
-	wrong := append([]string(nil), subjects...)
-	wrong[0] = "sha256:" + strings.Repeat("0", 64)
-	if level := reviewtransaction.DiscoverReviewerContextLevel(store.Dir, state.LineageID,
-		state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, wrong); level != "" {
-		t.Fatalf("emission was reused for a different candidate: %q", level)
-	}
-}
-
-// TestReviewLensContextRefusesConflictingDeliveryForOneSlot proves the audit
-// record cannot be rewritten: one frozen lens slot records one mechanism.
-func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
-	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
-	lens := args[slices.Index(args, "--lens")+1]
-	lensContextBlock(t, handle, lens)
-	var output bytes.Buffer
-	err := RunReview([]string{
-		"lens-context", "--repository-context", handle, "--lens", lens,
-		"--delivery", string(reviewtransaction.ReviewerContextLevelRuntimeInterception),
-	}, &output)
-	if err == nil || !strings.Contains(err.Error(), "lens_context_emission_conflict") {
-		t.Fatalf("conflicting delivery error = %v", err)
-	}
-	// The exit has to name the mechanism the slot actually recorded: "use the
-	// same mechanism" is not runnable if the operator cannot tell which one
-	// that was (issue #2850).
-	for _, want := range []string{
-		string(reviewtransaction.ReviewerContextLevelProviderCommand),
-		"--delivery " + string(reviewtransaction.ReviewerContextLevelProviderCommand),
-	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("conflict refusal does not name a runnable exit (%q): %v", want, err)
+		if output.Len() == 0 {
+			t.Fatalf("ephemeral lens context for %s was empty", delivery)
 		}
 	}
-	if output.Len() != 0 {
-		t.Fatalf("conflicting delivery emitted %d bytes", output.Len())
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("lens context changed authority bytes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "lens-contexts")); !os.IsNotExist(err) {
+		t.Fatalf("lens context persisted retired delivery state: %v", err)
 	}
 }
 
-// TestReviewReceiptRecordsLensContextLevel is the end of the chain: a review
-// whose every lens context came from the provider command carries that fact on
-// its terminal receipt, and a review that never used the surface carries no
-// level at all rather than a guessed one.
-func TestReviewReceiptRecordsLensContextLevel(t *testing.T) {
-	for _, test := range []struct {
-		name           string
-		produceContext bool
-		want           reviewtransaction.ReviewerContextLevel
-	}{
-		{name: "provider produced every lens context", produceContext: true, want: reviewtransaction.ReviewerContextLevelProviderCommand},
-		{name: "nothing produced a lens context", produceContext: false, want: ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-			handle := args[slices.Index(args, "--repository-context")+1]
-			state := record.State
-			if test.produceContext {
-				for _, lens := range state.SelectedLenses {
-					lensContextBlock(t, handle, lens)
-				}
-			}
-			finalizeArgs := []string{"--cwd", repo, "--lineage", state.LineageID}
-			for range state.SelectedLenses {
-				resultPath := filepath.Join(t.TempDir(), "review.json")
-				writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-					Findings: []facadeFinding{}, Evidence: []string{"reviewed the complete candidate scope"},
-				})
-				finalizeArgs = append(finalizeArgs, "--result", resultPath)
-			}
-			evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-			if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			finalizeArgs = append(finalizeArgs, "--evidence", evidencePath)
-			if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, io.Discard); err != nil {
-				t.Fatal(err)
-			}
-			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			payload, err := os.ReadFile(store.ReceiptPath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			receipt, err := reviewtransaction.ParseCompactReceipt(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if receipt.ReviewerContextLevel != test.want {
-				t.Fatalf("receipt reviewer context level = %q, want %q", receipt.ReviewerContextLevel, test.want)
-			}
-		})
-	}
-}
-
-// TestReviewLensContextStandsAloneAsTheReviewerInstruction is the level-2
-// floor's load-bearing property: an orchestrator with no runtime adapter pastes
-// this block in front of a generic subagent and the reviewer knows who it is,
-// what it may look at, and exactly what to return. There is no runtime layer
-// behind this output to fill a gap in it.
 func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
 	for _, lens := range record.State.SelectedLenses {
 		t.Run(lens, func(t *testing.T) {
-			block := lensContextBlock(t, handle, lens)
+			block := lensContextBlock(t, args, lens)
 			instruction, found := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
 			if !found {
 				t.Fatalf("block carries no reviewer instruction:\n%s", block)
@@ -659,7 +583,18 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			}
 			// The reviewer must know the evidence in the block is the whole
 			// candidate, and that reading anything else is not permitted.
-			for _, required := range []string{"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end"} {
+			// The citation discipline must warn that free-text evidence and
+			// proof_refs tokens shaped like path:line are validated against
+			// the frozen repository, since one unknown path rejects the
+			// entire result, and that a candidate-causal finding must anchor
+			// its span entirely within candidate-changed lines, since one
+			// unchanged context line in the span rejects the result too.
+			for _, required := range []string{
+				"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end",
+				"exactly as it appears in the changed-path manifest", "host:port", "validated against the frozen repository",
+				"entirely within lines this candidate changed", "one unchanged context line in the span",
+				"never reproduce that token", "describe it in words and cite the manifest file and line",
+			} {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}
@@ -690,4 +625,180 @@ func lensContextSection(block, header string) (string, bool) {
 	}
 	body, _, found := strings.Cut(after, "\n"+header+"_END\n")
 	return body, found
+}
+
+// writeLensContextPathFixture writes `paths` small, distinct source files so a
+// candidate's path count and its evidence byte size can be varied
+// independently. Every file is a few dozen bytes, which is what makes the
+// difference between counting entries and measuring bytes observable.
+func writeLensContextPathFixture(t *testing.T, repo string, paths int) {
+	t.Helper()
+	for index := range paths {
+		writeReviewStartCandidate(t, repo,
+			fmt.Sprintf("internal/candidate/path%02d/source.go", index),
+			"package path"+strconv.Itoa(index)+"\n\nfunc Exported"+strconv.Itoa(index)+"() bool { return true }\n", 0o644)
+	}
+}
+
+// TestNegotiatedStartLeavesNoAuthorityStatusCanOnlyRefuse pins the documented
+// START invariant from review_facade.go: "a candidate that starts here is a
+// candidate STATUS can answer". A candidate whose only excess is its path count
+// costs a few kilobytes of evidence, so START must not persist durable
+// authority whose STATUS is a permanent stop (issue #3367 property 1).
+func TestNegotiatedStartLeavesNoAuthorityStatusCanOnlyRefuse(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeLensContextPathFixture(t, repo, 60)
+	started := runNegotiatedReviewStart(t, repo, "large-candidate-reviewable")
+	if len(started.SelectedLenses) == 0 {
+		t.Fatal("60-path candidate selected no lenses; the fixture no longer exercises reviewer evidence")
+	}
+	status := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if status.NextTransition == nil {
+		t.Fatal("STATUS published no next transition for a durable authority START created")
+	}
+	if status.NextTransition.Kind == reviewNextTransitionStop {
+		t.Fatalf("START persisted authority STATUS can only refuse: stop(%s) for a %d-path candidate",
+			status.NextTransition.ReasonCode, len(started.SelectedLenses))
+	}
+}
+
+// TestReviewLensContextAdmitsManyPathsFarUnderByteBudget pins that the limit
+// tracks the thing that actually costs reviewer context. Thirty-three one-line
+// files are a rounding error against a 4 MiB budget, so refusing them while
+// admitting a much larger 32-path candidate is a count masquerading as a
+// budget (issue #3367 property 3).
+func TestReviewLensContextAdmitsManyPathsFarUnderByteBudget(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeLensContextPathFixture(t, repo, 33)
+	started := runNegotiatedReviewStart(t, repo, "lens-context-small-paths")
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", started.RepositoryContext.Handle,
+		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
+		"--expected-revision", started.RepositoryContext.Revision, "--lens", started.SelectedLenses[0],
+	}, &output); err != nil {
+		t.Fatalf("33 one-line paths were refused: %v", err)
+	}
+	if output.Len() > reviewLensContextByteBudget/8 {
+		t.Fatalf("fixture is not far under budget: block = %d bytes of %d", output.Len(), reviewLensContextByteBudget)
+	}
+	t.Logf("33-path reviewer block = %d bytes of the %d byte budget", output.Len(), reviewLensContextByteBudget)
+}
+
+// startCompactAuthorityWithoutFacadeChecks persists reviewing authority the way
+// a build predating START's representability check did: the same native state
+// and the same store write, with none of the facade's pre-create refusals. It
+// is the only remaining way to reach a lineage whose reviewer evidence cannot
+// be assembled, which is exactly the upgrade path STATUS still has to classify.
+func startCompactAuthorityWithoutFacadeChecks(t *testing.T, repo, lineage string) reviewtransaction.CompactRecord {
+	t.Helper()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(t.Context(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := builder.AssessSnapshotRisk(t.Context(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses, err := facadeSelectedLenses(assessment, "reliability")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lenses) == 0 {
+		t.Fatal("fixture selected no lenses; it no longer exercises reviewer evidence")
+	}
+	request, err := prepareReviewFacadeCompactAtomicStart(t.Context(), repo, lineage, "", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	}, snapshot, assessment, assessment.ChangedLines, lenses, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := runReviewFacadeCompactAtomicStart(t.Context(), repo, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return started.Record
+}
+
+// deriveLensContextHandle recovers the opaque repository context a collect
+// transition would have carried for an already-persisted record.
+func deriveLensContextHandle(t *testing.T, repo string, record reviewtransaction.CompactRecord) string {
+	t.Helper()
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
+}
+
+// TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget pins the
+// third outcome. A probe that never reached the budget used to return the same
+// false a comfortably-small candidate returns, so no caller could tell "fits"
+// apart from "never measured" (issue #3367 property 2).
+func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeLensContextPathFixture(t, repo, 4)
+	started := runNegotiatedReviewStart(t, repo, "budget-probe-failure")
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision) {
+		t.Fatal("reachable small candidate was classified as over budget")
+	}
+
+	for _, test := range []struct {
+		name string
+		deps func(reviewLensContextDeps) reviewLensContextDeps
+	}{
+		{
+			name: "candidate preparation fails",
+			deps: func(deps reviewLensContextDeps) reviewLensContextDeps {
+				deps.prepare = func(reviewtransaction.SnapshotBuilder, context.Context, reviewtransaction.Snapshot) (reviewLensCandidateInspector, error) {
+					return nil, errors.New("frozen trees are unreachable")
+				}
+				return deps
+			},
+		},
+		{
+			name: "repository context is unreachable",
+			deps: func(deps reviewLensContextDeps) reviewLensContextDeps {
+				deps.timeout = time.Nanosecond
+				return deps
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outcome, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision)
+			if err == nil {
+				t.Fatalf("probe answered outcome=%v with no cause after it never evaluated the budget", outcome)
+			}
+			if outcome != reviewLensContextUnproven {
+				t.Fatalf("probe that failed to evaluate the budget answered %v, inventing a verdict about the candidate: %v", outcome, err)
+			}
+		})
+	}
+}
+
+// replaceArgValue returns args with one flag's value replaced, so a refusal case
+// can corrupt exactly one token of the otherwise-exact closed command form.
+func replaceArgValue(args []string, name, value string) []string {
+	replaced := append([]string{}, args...)
+	if index := slices.Index(replaced, name); index >= 0 && index+1 < len(replaced) {
+		replaced[index+1] = value
+	}
+	return replaced
 }

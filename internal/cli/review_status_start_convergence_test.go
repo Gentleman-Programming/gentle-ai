@@ -98,7 +98,7 @@ func TestNegotiatedStatusNeverOffersAStartItsOwnPreflightRefuses(t *testing.T) {
 			name: "committed-only with a distinct base offers a start that runs",
 			arrange: func(t *testing.T) (string, []string) {
 				repo := initReviewCLIRepo(t)
-				base := strings.TrimSpace(runReviewCLIGitOutput(t, repo, "rev-parse", "HEAD"))
+				base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 				if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\nnext\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -117,7 +117,7 @@ func TestNegotiatedStatusNeverOffersAStartItsOwnPreflightRefuses(t *testing.T) {
 			name: "committed-only base equal to candidate stops up front",
 			arrange: func(t *testing.T) (string, []string) {
 				repo := initReviewCLIRepo(t)
-				head := strings.TrimSpace(runReviewCLIGitOutput(t, repo, "rev-parse", "HEAD"))
+				head := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 				return repo, []string{"--base-ref", head, "--committed-only"}
 			},
 			wantReason: "empty_base_diff_bootstrap_required",
@@ -135,7 +135,7 @@ func TestNegotiatedStatusNeverOffersAStartItsOwnPreflightRefuses(t *testing.T) {
 
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo, extra := shape.arrange(t)
 			kind, reason, operation, tokens := reviewNegotiatedTransition(t, repo, extra...)
 

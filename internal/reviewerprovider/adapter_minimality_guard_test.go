@@ -21,6 +21,7 @@ import (
 var reviewerAdapterImplementations = map[string]string{
 	"claude_adapter.go": "ClaudeAdapter",
 	"codex_adapter.go":  "CodexAdapter",
+	"pi_adapter.go":     "PiAdapter",
 }
 
 // TestAdapterMinimalityGuard protects the Go-owned review boundary. An adapter
@@ -199,6 +200,11 @@ func reviewerAdapterSourceViolations(file string, source []byte) []string {
 
 	violations := make(map[string]bool)
 	add := func(message string) { violations[message] = true }
+	for _, forbidden := range []string{"os.Getwd(", "os.Chdir(", "filepath.Abs(", "filepath.EvalSymlinks(", "--cwd", "repository_context"} {
+		if strings.Contains(string(source), forbidden) {
+			add("resolves lifecycle root material")
+		}
+	}
 	promptAliases := map[string]bool{}
 	for _, imported := range parsed.Imports {
 		path := strings.Trim(imported.Path.Value, `"`)

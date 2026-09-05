@@ -26,9 +26,11 @@ package reviewtransaction
 // itself, the classifier was never reconcile-specific dead weight.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -36,25 +38,338 @@ import (
 	"time"
 )
 
-// poisonedRecoveryFixture persists an escalated predecessor with its receipt
-// and a recovery successor whose sole structural anomaly is an unchanged
-// target. mutate, when non-nil, adjusts the successor before it is persisted.
+// startReviewingCompactAuthority starts a fresh compact review through the
+// current atomic START boundary. Fixtures that need a later lifecycle state
+// must build on this reviewing authority rather than minting a store record.
+func startReviewingCompactAuthority(t *testing.T, repo string, state CompactState) (CompactState, CompactStore) {
+	t.Helper()
+	started, err := createAtomicCompactAuthority(t, context.Background(), repo, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Replayed {
+		t.Fatalf("fresh fixture start for lineage %q replayed existing authority", state.LineageID)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return started.Record.State, store
+}
+
+// startReviewingCompactFixture persists an ordinary test fixture without an
+// atomic worktree binding. It keeps cross-repository byte-comparison fixtures
+// deterministic while every review value still enters through admitted capture.
+func startReviewingCompactFixture(t *testing.T, repo string, state CompactState) (CompactState, CompactStore) {
+	t.Helper()
+	phase, err := deriveCompactCapturePhaseRevision(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.CapturePhaseRevision = phase
+	store, err := CompactAuthoritativeStore(t.Context(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+	return state, store
+}
+
+// newCompactFixtureStateForTarget builds a compact START state from the exact
+// repository-derived target used by a fixture.
+func newCompactFixtureStateForTarget(t *testing.T, repo, lineage string, target Target) CompactState {
+	t.Helper()
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, lines, err := (SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses := []string{}
+	switch risk {
+	case RiskMedium:
+		lenses = []string{LensReliability}
+	case RiskHigh:
+		lenses = append([]string(nil), supportedLenses...)
+	}
+	state, err := NewCompactState(Start{
+		LineageID: lineage, Mode: ModeOrdinaryBounded, Generation: 1, Snapshot: snapshot,
+		PolicyHash: hash("1"), RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &lines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// startReviewingFixtureLineage stores a currently reviewing authority over one
+// explicitly intended fixture path.
+func startReviewingFixtureLineage(t *testing.T, repo, lineage, content string) string {
+	t.Helper()
+	path := lineage + ".txt"
+	writeSnapshotFile(t, repo, path, content)
+	state := newCompactFixtureStateForTarget(t, repo, lineage, Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{path},
+	})
+	_, _ = startReviewingCompactAuthority(t, repo, state)
+	return lineage
+}
+
+// captureAndCompleteCompactReview constructs completed review semantics only
+// through canonical admitted captures. It is intentionally test-only: production
+// callers capture through their provider-owned boundaries, while fixtures need the
+// same immutable role values before exercising later lifecycle seams.
+func captureAndCompleteCompactReview(t *testing.T, store CompactStore, state CompactState, input CompactReviewInput) (CompactState, CompactRecord) {
+	t.Helper()
+	if state.State != StateReviewing || len(input.LensResults) != len(state.SelectedLenses) {
+		t.Fatalf("fixture review input does not match reviewing authority: state=%q results=%d lenses=%d", state.State, len(input.LensResults), len(state.SelectedLenses))
+	}
+	classifications := make(map[string]FindingEvidence, len(input.Classifications))
+	for _, classification := range input.Classifications {
+		if _, exists := classifications[classification.FindingID]; exists {
+			t.Fatalf("fixture repeats classification %q", classification.FindingID)
+		}
+		classifications[classification.FindingID] = classification
+	}
+	for order, result := range input.LensResults {
+		if result.Lens != state.SelectedLenses[order] {
+			t.Fatalf("fixture result %d lens = %q, want %q", order, result.Lens, state.SelectedLenses[order])
+		}
+		findings := append([]Finding(nil), result.Findings...)
+		for index := range findings {
+			if !isSevereSeverity(findings[index].Severity) {
+				continue
+			}
+			classification, found := classifications[findings[index].ID]
+			if !found {
+				t.Fatalf("fixture severe finding %q has no classification", findings[index].ID)
+			}
+			findings[index].EvidenceClass = classification.Class
+			findings[index].CausalDisposition = classification.Causality
+		}
+		captureCompactLens(t, store, state, order, findings...)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = record.State
+	if len(input.RefuterOutcomes) != 0 {
+		payload, err := json.Marshal(compactAdmittedRefuterValue{Results: input.RefuterOutcomes})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CaptureAdmittedRefuterResult(t.Context(), CompactAdmittedRefuterResultRequest{
+			ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+			RequestHash: hash("f"), Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		record, err = store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = record.State
+	}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults: view.LensResults, Classifications: compactReviewViewClassifications(view), RefuterOutcomes: view.RefuterOutcomes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return state, record
+}
+
+func compactReviewViewClassifications(view CompactReviewView) []FindingEvidence {
+	classifications := make([]FindingEvidence, 0, len(view.Findings))
+	for _, finding := range view.Findings {
+		if classification, found := view.Classifications[finding.ID]; found {
+			classifications = append(classifications, classification)
+		}
+	}
+	return classifications
+}
+
+func compactLensCaptureRequest(t *testing.T, store CompactStore, state CompactState, order int, findings ...Finding) CompactAdmittedReviewerResultRequest {
+	t.Helper()
+	frozen, err := (SnapshotBuilder{Repo: store.repo}).FrozenCandidateContext(t.Context(), state.InitialSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := state.SelectedLenses[order]
+	subject, err := NewArtifactSubject(state, state.CapturePhaseRevision, frozen, lens, order, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := LensResult{Lens: lens, Findings: append([]Finding{}, findings...), Evidence: []string{"inspected the complete frozen candidate scope"}}
+	candidateCausalFindingIDs := []string{}
+	for _, finding := range result.Findings {
+		if isSevereSeverity(finding.Severity) && (finding.CausalDisposition == CausalIntroduced || finding.CausalDisposition == CausalBehaviorActivated || finding.CausalDisposition == CausalWorsened) {
+			candidateCausalFindingIDs = append(candidateCausalFindingIDs, finding.ID)
+		}
+	}
+	inspection := ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: append([]string(nil), state.InitialSnapshot.Paths...)}
+	raw, err := json.Marshal(compactProviderReviewerResult{SubjectHash: subject.SubjectHash, Inspection: inspection, Lens: lens, Findings: result.Findings, Evidence: result.Evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CompactAdmittedReviewerResultRequest{
+		ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+		FrozenContext: frozen, ArtifactSubject: subject, Inspection: inspection, Result: result,
+		CandidateCausalFindingIDs: candidateCausalFindingIDs, RawPayload: append(raw, '\n'),
+	}
+}
+
+// persistSemanticallyInvalidCompactState changes only the reviewing state
+// marker, so the loader reaches semantic validation before its checksum check.
+// The invalidated state omits required invalidation evidence.
+func persistSemanticallyInvalidCompactState(t *testing.T, store CompactStore) {
+	t.Helper()
+	payload, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := bytes.Replace(payload, []byte(`"state": "reviewing",`), []byte(`"state": "invalidated",`), 1)
+	if bytes.Equal(invalid, payload) {
+		t.Fatal("fixture did not contain the expected reviewing state marker")
+	}
+	if err := os.WriteFile(store.StatePath(), invalid, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// correctionRequiredCompactAuthority opens authority atomically, completes an
+// admitted review with one causal finding, and persists its correction-needed
+// state for store and status fixtures.
+func correctionRequiredCompactAuthority(t *testing.T, repo, lineage string) (CompactState, CompactStore, CompactRecord) {
+	t.Helper()
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
+	state := newCompactTestState(t, repo, lineage)
+	if len(state.SelectedLenses) == 0 {
+		t.Fatal("correction fixture unexpectedly selected no lenses")
+	}
+	state, store := startReviewingCompactFixture(t, repo, state)
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	finding := Finding{
+		ID: "R3-001", Lens: state.SelectedLenses[0], Location: "tracked.txt:5", Severity: "CRITICAL",
+		Claim: "wrong value", ProofRefs: []string{"candidate-only failure"},
+	}
+	results[0].Findings = []Finding{finding}
+	state, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
+		LensResults: results,
+		Classifications: []FindingEvidence{{
+			FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk",
+		}},
+		RefuterOutcomes: []EvidenceResult{},
+	})
+	if state.State != StateCorrectionRequired {
+		t.Fatalf("fixture state = %q, want %q", state.State, StateCorrectionRequired)
+	}
+	if _, err := store.Replace(started.Revision, "review/complete-review", state); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, store, record
+}
+
+// persistHistoricalFailedValidatorAuthority starts the predecessor through the
+// current atomic boundary, then encodes the retired failed-validator shape
+// needed only to prove that read-only historical-status routing remains intact.
+func persistHistoricalFailedValidatorAuthority(t *testing.T, lineage string) (string, CompactState, CompactRecord) {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	state, store, _ := correctionRequiredCompactAuthority(t, repo, lineage)
+	if err := state.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n")
+	fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixHash := FixDeltaHashForSnapshot(fix)
+	state.CorrectionAttempts = []CompactCorrectionAttempt{{
+		Snapshot: fix, ProposedLines: 1, ActualLines: 1, FixDeltaHash: fixHash,
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("6"), FixDeltaHash: fixHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("7"), FixDeltaHash: fixHash},
+	}}
+	state.State, state.CurrentSnapshot, state.CumulativeCorrectionLines = StateCorrectionRequired, fix, 1
+	state.ProposedCorrectionLines, state.ActualCorrectionLines = nil, nil
+	state.FixDeltaHash, state.OriginalCriteria, state.CorrectionRegression = EmptyFixDeltaHash, nil, nil
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	record, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repo, state, record
+}
+
+// escalatedCompactAuthorityFixture creates reviewing authority first, then
+// records a review-completion escalation through the normal compact transition.
+func escalatedCompactAuthorityFixture(t *testing.T, repo, lineage string) (CompactState, CompactStore, CompactRecord) {
+	t.Helper()
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
+	state := newCompactTestState(t, repo, lineage)
+	if len(state.SelectedLenses) == 0 {
+		t.Fatal("escalated fixture unexpectedly selected no lenses")
+	}
+	state, store := startReviewingCompactFixture(t, repo, state)
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	finding := Finding{
+		ID: "R3-001", Lens: state.SelectedLenses[0], Location: "tracked.txt:5", Severity: "CRITICAL",
+		Claim: "reviewer evidence remains inconclusive", ProofRefs: []string{"candidate inspection was inconclusive"},
+	}
+	results[0].Findings = []Finding{finding}
+	state, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
+		LensResults: results,
+		Classifications: []FindingEvidence{{
+			FindingID: finding.ID, Class: EvidenceInsufficient, Causality: CausalUnknown, Proof: "insufficient evidence",
+		}},
+		RefuterOutcomes: []EvidenceResult{},
+	})
+	if state.State != StateEscalated {
+		t.Fatalf("fixture state = %q, want %q", state.State, StateEscalated)
+	}
+	if _, err := store.Replace(started.Revision, "review/complete-review", state); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, store, record
+}
+
+// poisonedRecoveryFixture persists an escalated predecessor and a recovery
+// successor whose sole structural anomaly is an unchanged target. mutate, when
+// non-nil, adjusts the successor before it is persisted.
 func poisonedRecoveryFixture(t *testing.T, repo string, mutate func(*CompactState)) (CompactRecord, CompactStore, CompactRecord, CompactStore) {
 	t.Helper()
-	state := correctedCompactTestState(t, repo, "reconcile-predecessor")
-	state.State = StateEscalated
-	predecessorStore, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	predecessor := writeCompactFixtureRecord(t, predecessorStore, state)
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteCompactReceiptAtomic(predecessorStore.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
+	state, predecessorStore, predecessor := escalatedCompactAuthorityFixture(t, repo, "reconcile-predecessor")
 	successorState := newCompactTestState(t, repo, "reconcile-successor")
 	successorState.Generation = state.Generation + 1
 	successorState.Recovery = &CompactRecoveryProvenance{
@@ -91,20 +406,7 @@ func writeCompactFixtureRecord(t *testing.T, store CompactStore, state CompactSt
 
 func preContractRecoveryFixture(t *testing.T, repo, authorization string, mutate func(*CompactState)) (CompactRecord, CompactStore, CompactRecord, CompactStore) {
 	t.Helper()
-	state := correctedCompactTestState(t, repo, "reconcile-predecessor")
-	state.State = StateEscalated
-	predecessorStore, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	predecessor := writeCompactFixtureRecord(t, predecessorStore, state)
-	receipt, err := state.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteCompactReceiptAtomic(predecessorStore.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
+	state, predecessorStore, predecessor := escalatedCompactAuthorityFixture(t, repo, "reconcile-predecessor")
 	writeSnapshotFile(t, repo, "tracked.txt", "pre-contract recovery target\n")
 	successorState := newCompactTestState(t, repo, "reconcile-successor")
 	successorState.Generation = state.Generation + 1
@@ -117,12 +419,39 @@ func preContractRecoveryFixture(t *testing.T, repo, authorization string, mutate
 	if mutate != nil {
 		mutate(&successorState)
 	}
-	successorStore, err := CompactAuthoritativeStore(context.Background(), repo, successorState.LineageID)
+	recovered, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: predecessor.State.LineageID, ExpectedPredecessorRevision: predecessor.Revision,
+		Successor: successorState, Disposition: RecoveryEscalated, Reason: successorState.Recovery.Reason,
+		Actor: successorState.Recovery.Actor, RecoveredAt: successorState.Recovery.RecoveredAt,
+		MaintainerAuthorization: successorState.Recovery.MaintainerAuthorization,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	successor := writeCompactFixtureRecord(t, successorStore, successorState)
-	return predecessor, predecessorStore, successor, successorStore
+	successorStore, err := CompactAuthoritativeStore(context.Background(), repo, recovered.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return predecessor, predecessorStore, recovered, successorStore
+}
+
+// receiptFreeLastEventClosedCompactState creates a terminal clean-review state
+// without materializing any receipt artifact.
+func receiptFreeLastEventClosedCompactState(t *testing.T, repo, lineage string, intended []string) CompactState {
+	t.Helper()
+	state := newCompactTestStateWithIntended(t, repo, lineage, intended)
+	state, store := startReviewingCompactAuthority(t, repo, state)
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	state, _ = captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
+		LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
+	})
+	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 const preContractFixtureAuthorization = "maintainer approved incident retry per the 2.1.6 runbook"

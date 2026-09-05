@@ -14,6 +14,7 @@ import (
 func issue3094Journeys() []Journey {
 	return []Journey{{
 		ID:     "j103-sdd-interrupted-settlement-omits-evidence",
+		Review: reviewOptedIn,
 		Title:  "Interrupted runtime settlement omits evidence and replays without a second record",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3094",
 		Steps: []Step{
@@ -54,7 +55,10 @@ func issue3094Acquire(r *journeyRun) error {
 	if acquired.State != "proceed" || acquired.Token == "" {
 		return fmt.Errorf("acquire result = %#v, want proceed with a token", acquired)
 	}
-	return r.sandbox.write(filepath.Join(r.sandbox.Repo, ".issue3094-token"), acquired.Token)
+	// The token is harness state, not repository content: writing it inside
+	// the repo under test would leave an untracked file the settlement then has
+	// to rule on, which is this journey's subject nowhere near.
+	return r.sandbox.write(filepath.Join(r.sandbox.Root, ".issue3094-token"), acquired.Token)
 }
 
 func issue3094ObserveActive(r *journeyRun) error {
@@ -69,7 +73,7 @@ func issue3094ObserveActive(r *journeyRun) error {
 }
 
 func issue3094SettleInterrupted(r *journeyRun) error {
-	tokenBytes, err := os.ReadFile(filepath.Join(r.sandbox.Repo, ".issue3094-token"))
+	tokenBytes, err := os.ReadFile(filepath.Join(r.sandbox.Root, ".issue3094-token"))
 	if err != nil {
 		return err
 	}
@@ -110,7 +114,7 @@ func issue3094ReplaySettlement(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	tokenBytes, err := os.ReadFile(filepath.Join(r.sandbox.Repo, ".issue3094-token"))
+	tokenBytes, err := os.ReadFile(filepath.Join(r.sandbox.Root, ".issue3094-token"))
 	if err != nil {
 		return err
 	}

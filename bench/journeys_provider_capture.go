@@ -21,14 +21,17 @@ var providerCaptureRetryCapability = &Capability{Verb: []string{"review", "captu
 func providerCaptureRetryJourneys() []Journey {
 	return []Journey{{
 		ID:     "j105-compiled-provider-capture-retries-same-binding",
+		Review: reviewOptedIn,
 		Title:  "Compiled provider capture retries the same pending binding after a transport failure",
 		Source: "issue #3138: Go owns provider capture binding and retry lifecycle",
 		Steps: []Step{
 			{Name: "fixture: isolated Claude provider fake", Fixture: providerCaptureRetryFixture},
 			{Name: "fixture: stage candidate", Fixture: stageWaveCandidate},
 			{Name: "negotiate and start the Claude provider review", Requires: providerCaptureRetryStatusCapability, Composite: startProviderCaptureRetry},
-			{Name: "failed provider capture preserves the exact pending binding", Requires: providerCaptureRetryCapability, Composite: retryProviderCapture},
-			{Name: "finalize the captured provider result into validation", Requires: finalizeResultsCapability, Composite: finalizeProviderCaptureRetry},
+			{Name: "failed provider capture preserves the exact pending binding and its retry closes", Requires: providerCaptureRetryCapability, Composite: retryProviderCapture},
+			{Name: "the final provider capture awaits exact acknowledgement before it burns the completed lineage", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				return requireAtomicLineageAcknowledged(r, providerCaptureRetryLineage, "--agent", "claude-code")
+			}},
 		},
 	}}
 }
@@ -166,27 +169,11 @@ func retryProviderCapture(r *journeyRun) error {
 	if attempts, err := os.ReadFile(r.sandbox.Scratch["provider-capture-attempts"]); err != nil || string(attempts) != "2\n" {
 		return fmt.Errorf("provider retry attempts = %q, %v; want two adapter invocations", attempts, err)
 	}
-	if advanced, _, err := providerCaptureRetryStatus(r); err != nil || advanced.NextTransition.Kind != "execute" || advanced.NextTransition.Execute.Operation != "review.finalize" {
-		return fmt.Errorf("provider capture did not advance to normal finalize: %+v, %v", advanced.NextTransition, err)
-	}
-	return nil
-}
-
-func finalizeProviderCaptureRetry(r *journeyRun) error {
-	status, _, err := providerCaptureRetryStatus(r)
-	if err != nil {
-		return err
-	}
-	if status.NextTransition.Kind != "execute" || status.NextTransition.Execute.Operation != "review.finalize" {
-		return fmt.Errorf("provider capture finalize transition = %+v", status.NextTransition)
-	}
-	if observation := r.run([]string{"review", "finalize", "--cwd", r.sandbox.Repo,
-		"--lineage", providerCaptureRetryLineage, "--captured-results=true"}, false); observation.ExitCode != 0 {
-		return fmt.Errorf("provider capture finalize failed: %s", firstLine(observation.Stderr))
-	}
-	validated, _, err := providerCaptureRetryStatus(r)
-	if err != nil || validated.Authority.State != "validating" {
-		return fmt.Errorf("provider capture finalize state = %q, %v; want validating", validated.Authority.State, err)
+	if advanced, _, err := providerCaptureRetryStatus(r); err != nil || advanced.Authority.LineageID != providerCaptureRetryLineage ||
+		advanced.Authority.State != "approved" || advanced.NextTransition.Kind != "execute" ||
+		advanced.NextTransition.ReasonCode != "approved_acknowledgement_required" ||
+		advanced.NextTransition.Execute.Operation != "review.acknowledge-approved" {
+		return fmt.Errorf("provider retry did not expose pending acknowledgement after its final capture: authority=%+v transition=%+v err=%v", advanced.Authority, advanced.NextTransition, err)
 	}
 	return nil
 }

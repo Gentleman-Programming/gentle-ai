@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
@@ -29,8 +30,15 @@ func runBenchModelPickerCommand(args []string, stdout io.Writer) (bool, error) {
 		return true, fmt.Errorf("resolve benchmark home: %w", err)
 	}
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	cachePath := filepath.Join(home, ".cache", "opencode", "models.json")
-	picker := screens.NewModelPickerState(cachePath, settingsPath)
+	picker := screens.NewRuntimeModelPickerStateWithDiscoverer(settingsPath, nil)
+	// The fixture supplies the already-effective runtime catalog without a private
+	// OpenCode cache, auth file, or process invocation.
+	picker.StartRuntimeCatalogDiscovery(1, "bench-fixture")
+	picker = picker.Update(screens.RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "bench-fixture", Providers: map[string]opencode.Provider{
+		"bench-provider": {ID: "bench-provider", Name: "Bench Provider", Models: map[string]opencode.Model{
+			"bench-model": {ID: "bench-model", Name: "Bench Model", ToolCall: true},
+		}},
+	}})
 	rows := screens.ModelPickerRowsForState(picker)
 	identityRows := screens.ModelPickerRowsForStateWithIdentity(picker)
 	target := -1

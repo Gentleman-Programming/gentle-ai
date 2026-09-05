@@ -5,8 +5,8 @@ import "strings"
 // sddAttemptContentDigestFlags names the sdd-attempt flags whose value is a
 // caller-computed SHA-256 content digest, which is the only revision kind the
 // CLI boundary may respell (#2523). The other revision-shaped flags stay
-// byte-for-byte: --expected-revision, --expected-binding-revision, and
-// --token carry ledger-issued identities the caller copies from product
+// byte-for-byte: --expected-revision and --token carry ledger-issued identities
+// the caller copies from product
 // output, so a non-canonical spelling of any of them is a transcription
 // fault the strict ledger contract (#2395) must keep refusing.
 var sddAttemptContentDigestFlags = map[string]bool{

@@ -66,6 +66,7 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 func issue3043Journeys() []Journey {
 	return []Journey{{
 		ID:     "j3043-opencode-managed-background-activation",
+		Review: reviewUntouched,
 		Title:  "OpenCode background subagents activate through a managed launcher",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3043",
 		Steps: []Step{

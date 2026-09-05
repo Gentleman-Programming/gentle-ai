@@ -381,12 +381,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		files = append(files, mcpPath)
 
 		if adapter.Agent() == model.AgentAntigravity {
-			settingsWrite, settingsErr := ensureJSONFileIfMissing(adapter.SettingsPath(configHomeDir))
+			settingsTarget := adapter.SettingsPath(configHomeDir)
+			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
 				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
 			}
 			changed = changed || settingsWrite.Changed
-			files = append(files, adapter.SettingsPath(configHomeDir))
+			files = append(files, settingsTarget)
 
 			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
 			if pluginErr != nil {
@@ -669,7 +670,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}

@@ -41,26 +41,50 @@ func TestReviewFoundationSkillsCarryThreatAndWorkUnitEvidence(t *testing.T) {
 	}
 
 	statusContract := assets.MustRead("skills/_shared/sdd-status-contract.md")
-	for _, want := range []string{"reviewReceipt", "scope-changed", "exact persisted transaction", "bare envelope never passes"} {
+	for _, want := range []string{"gentle-ai.sdd-status/v2", "fresh mode-only offer", "ordinary SDD failed-evidence accounting", "a bare envelope never passes"} {
 		if !strings.Contains(statusContract, want) {
 			t.Errorf("status contract missing %q", want)
 		}
 	}
 }
 
-func TestSDDVerifyConsumesPreterminalInputsWithoutCircularTerminalArtifacts(t *testing.T) {
-	content := assets.MustRead("skills/sdd-verify/SKILL.md")
+func TestSDDApplyRoutesToIndependentVerifyBeforeOptionalReview(t *testing.T) {
+	content := assets.MustRead("skills/sdd-apply/SKILL.md")
 	for _, want := range []string{
-		"authoritative preterminal transaction plus the preserved policy and canonical ledger preimages",
-		"Do not require `receipt.json`, `chain-bundle.json`, `gate-context.json`",
-		"exact canonical verification-evidence bytes, not only their hash",
-		"hashes cannot reconstruct artifact content",
+		"After all implementation work units finish, return control to the parent orchestrator for independent SDD verification.",
+		"Do not launch or recommend review directly after apply.",
 	} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("sdd-verify missing non-circular final-verification clause %q", want)
+			t.Fatalf("sdd-apply missing ordering rule %q", want)
 		}
 	}
-	if strings.Contains(content, "(`reviews/transaction.json`, `ledger.json`, `receipt.json`, `gate-context.json`") {
-		t.Fatal("sdd-verify still requires terminal receipt and gate context before final verification")
+	if strings.Contains(content, "review/start(target)") {
+		t.Fatal("sdd-apply retains a direct post-apply review launch")
+	}
+}
+
+func TestSDDVerifyRunsWithoutReviewArtifacts(t *testing.T) {
+	content := assets.MustRead("skills/sdd-verify/SKILL.md")
+	for _, want := range []string{
+		"Review state is informational and never a verification prerequisite.",
+		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
+		"Do not require a transaction, policy, ledger, receipt, bundle, or gate-context artifact to begin or complete independent SDD verification.",
+		"Return ordinary verification evidence with the result.",
+		"Terminal reviewer closure is capture-owned and informational",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("sdd-verify missing independent verification clause %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"authoritative preterminal transaction",
+		"missing_review_authority",
+		"authority_only_failure",
+		"exact canonical verification-evidence bytes, not only their hash",
+		"complete-final-verification",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("sdd-verify retains a review prerequisite %q", forbidden)
+		}
 	}
 }

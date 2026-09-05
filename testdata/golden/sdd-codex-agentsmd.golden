@@ -94,91 +94,119 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 
 - Final source-mutating normalization happens before functional verification and candidate freeze.
 - **Normalization ordering rule**: before review START and its identity freeze, run every source-mutating normalizer, then re-snapshot the candidate and review those exact bytes, paths, and modes. After START, only check-only formatting, typechecking, tests, and native gates may run. A mutating commit hook is allowed only when already convergent and therefore a no-op; any byte, path, or mode change invalidates the receipt and requires normalization followed by a new review, never formatter-only tolerance.
-- Native RAR owns verification applicability, risk, the bounded zero/one/four-lens plan, correction impact, and the terminal receipt. The orchestrator and adapters never select lenses or author PASS.
+- Native RAR owns verification applicability, risk, the bounded zero/one/four-lens plan, correction impact, and terminal receipt. The orchestrator and adapters never select lenses or author PASS.
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
 - If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
 - An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
 - Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
-- Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization and never reopen review for unchanged content.
+- Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content.
 
 #### Review Execution Contract
 
-# Native Bounded Review Orchestration
+# Native Compact Review Orchestration
 
-Parent orchestrator and native CLI only. The active host/orchestrator and fresh reviewer executor are distinct roles; the host coordinates launch while the native CLI remains the sole lifecycle authority. Never pass this contract to a reviewer, refuter, judge, correction actor, or validator. Those roles receive only scope, candidate-causal admission, severity, evidence requirements, and output shape. Prompt prose coordinates launch; it never proves isolation.
+**When a final capture returns `status_continuation`, execute its operation and ordered argument tokens unchanged. Do not reconstruct lifecycle selectors from retained prose or transcript state.**
 
-## Route
+The parent orchestrator coordinates one native transaction; reviewers, refuters, correction actors, and validators receive only their provider-issued role input. Prompt prose never creates authority or decides delivery.
 
-Begin every generated negotiated v2.1 lifecycle route with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --next-transition`. Read only the returned `next_transition`: route only from the returned `next_transition`, never from status prose, lifecycle state, or eligibility. For `execute`, invoke its exact operation and ordered argument tokens unchanged. For `collect`, satisfy only its named inputs with their exact capture operations and arguments, then query STATUS again. For `stop`, run no lifecycle operation, and surface both its `reason_code` and that code's continuation from the "Continue after a stop reason code" table below — never a bare code with nothing behind it, and never a continuation the table does not list. Never hardcode or substitute START: invoke `review.start` only when the returned `execute.operation` names it. Direct `gentle-ai review start` remains compatibility-supported for explicit/manual non-negotiated callers. The native facade discovers repository scope, derives the immutable target, selects zero lenses for low risk, one focus lens for standard risk, or canonical 4R for high risk, and freezes the original line count, tier, and correction budget `min(200, ceil(original_changed_lines / 2))`. Goldens stay in snapshot identity but not that count. Correction and compatible base advance never recalculate risk or open review.
+## Entry rule
 
-When v2 returns `forecast`, relay it losslessly in the user's language: preserve every step's order and fields (`step`, `kind`, `reason_code`, `description`) and the horizon. Never route or execute from forecast; route only from `next_transition`. A `partial` forecast names only the current head, so re-query STATUS after completing it; `terminal` means its current head is `stop`, not a promise about any future state.
+Enter this lifecycle once per candidate, after an authorized source-mutating implementation is complete and normalized and before reporting it complete, whenever the user-owned review switch is enabled (`gentle-ai review mode status` reads it without changing it). Run the selectorless STATUS in step 1 and route only from its returned `next_transition`; the START consent envelope lets the human decide this candidate, so never skip the preflight because the user did not ask for a review. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it. A runtime that runs this preflight itself hands the agent the exact returned START tokens and never runs START.
 
-### Continue after a stop reason code
+## Atomic lifecycle
 
-`stop` carries exactly one reason code and no executable or collect route, so a consumer that does not already know a code's continuation cannot safely proceed from the code alone. The table below names the exact continuation for every reason code `internal/cli/review_next_transition.go` can emit. Never invent a continuation this table does not list, and never propose changing runtime, provider, or toolchain: no stop reason code is ever resolved that way. Where a row names no other command, `gentle-ai review mode disable --scope clone --cwd <repo>` is the self-service delivery exit for this repository only, reachable even while review authority is broken; it hands delivery to ordinary repository policy (hooks, tests, CI) — nothing is silently approved. Omitting `--scope` defaults to `global` and disables review for every repository on the machine, so never omit it here.
+1. **Preflight only.** Selectorless STATUS only preflights the current worktree candidate and returns one exact START invocation. It never discovers, resumes, recovers, or evaluates ambient authority from another lineage or worktree: `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --next-transition`.
 
-| Reason code | Continuation |
-| --- | --- |
-| `captured_artifacts_unverifiable` | Terminal — A captured reviewer artifact failed local verification. Ask a maintainer to inspect the review authority store, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `captured_result_selection_unavailable` | Terminal — internal invariant violation with no caller-side retry. File a defect with the lineage id, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `captured_verification_evidence_invalid` | Terminal — the captured verification record or its raw payload failed integrity checks. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `corrected_candidate_unavailable` | If the review found real defects: change the candidate, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --next-transition` (or `gentle-ai review finalize --lineage <id>`). If the reviewers had the wrong input: a maintainer reopens their lenses with `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> --expected-revision <revision> --target <target> --reason <reason> --actor <actor> --quarantine-lens <lens>` (repeat per lens) and applies the emitted authorization. |
-| `empty_base_diff_bootstrap_required` | Terminal — the selected committed base has no changes to review. If this follows the authorized empty-root first-publication bootstrap, a maintainer inserts an empty root below the content commit, then runs `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --next-transition --base-ref <empty-root> --committed-only`. Do not re-submit the same base or invent a START. |
-| `lens_context_budget_exceeded` | Terminal — complete immutable reviewer evidence exceeds the native budget and is never truncated. Reduce the candidate scope or target identity, then run `gentle-ai review start` for the new candidate; or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy. Do not change the runtime, provider, or toolchain. |
-| `correction_repository_verification_failed` | Change the correction candidate within the same open budget, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --next-transition`. |
-| `corrupted_or_unverifiable_authority` | Terminal — `gentle-ai review repair --preflight --cwd <repo>` classified this authority as unrecoverable. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `final_verification_retry_unavailable` | Terminal — internal invariant violation with no caller-side retry. File a defect with the lineage id, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `manual_intervention_required` | Terminal — authority state this protocol does not recognize. Ask a maintainer to review the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `missing_authority_binding` | Terminal — internal invariant violation with no caller-side retry. File a defect with the lineage id, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `native_stop_required` | Terminal — escalated lineage not yet eligible for automated action. Ask a maintainer to review it, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `original_finalize_request_required` | Re-run `gentle-ai review finalize --lineage <id>` with the exact original content-bound payload. |
-| `recovery_scope_unchanged` | Change the candidate's target identity, then retry the same `review.recover` selector, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered with this STATUS result, then re-run its exact repository-bound STATUS command. |
-| `staged_delivery_candidate_required` | Stage every reviewed path exactly as it was reviewed, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --lineage <id> --projection staged --gate pre-commit --next-transition`. STATUS returns `review.validate` only when that staged candidate exactly matches the approved receipt. |
-| `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh. |
-| `unchanged_or_unverified_authority` | Terminal — `gentle-ai review start` on this exact unchanged candidate only resumes this same review, not a fresh one. Change the candidate content first, then run `gentle-ai review start` to begin a genuinely new one, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
+2. **Freeze once.** Invoke only the returned START operation and its ordered tokens unchanged. START freezes one compact atomic transaction with an explicit lineage, worktree, and target binding. It ignores every other lineage and worktree. Capture the returned lineage, revision, and target tokens. An exact replay of an active START may return `replayed`; a genuinely new START is independent.
 
-If the exact provider-returned START answers with the typed `gentle-ai.review-integration.consent/v3` envelope, treat it as a Lossless Blocking Prompt under the orchestrator contract. Its required `agent: codex` and every follow-up invocation are fixed runtime bindings. Global RDD enabled permits reviews; it never grants consent for this candidate. Low-risk structural readback remains silent and asks no consent question. For medium/high candidates, present the complete semantic envelope once in the active conversation language. This is the one narrow localization exception to the no-relabeling rule: faithfully translate the headline, reason, `value`, risk evidence, choice labels, every choice `effect`, and the off-path note, while preserving the original groups/order, selection mode, exact allowed-answer domain, and answer tokens. Project `value` as explicit benefits and every `effect` as explicit consequences; labels alone are forbidden. Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations. Never summarize, reshape, reorder, merge, or omit any part. Native `question` UI may use the translated labels only when it can represent the complete envelope in one interaction and map the selected label back exactly once to the corresponding original answer token and exact invocation; otherwise use the complete plain-language fallback and stop. Then run exactly the one named follow-up invocation for the human's answer, never answering on their behalf. Do not append `--consent relay` or any other argument to a returned transition. Granted and declined are both scoped to that exact candidate, persist no consent decision, and do not suppress the question for a later medium/high candidate; a decline is not the kill switch.
+3. **Stay bound.** A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding: run that provider-issued command verbatim, with the repository as process cwd, and satisfy every later STATUS and collection call only with the exact tokens each returned transition names. Route only from that transaction's returned `next_transition`; the root `action` field is informational. Never infer a command from prose, ambient state, a gate, or a stale reply. Do not start another lineage, reuse an acknowledged-and-burned lineage, or perform ambient recovery. For `execute`, run the exact operation and ordered arguments. For `collect`, satisfy only the named inputs and their exact capture operations, then ask STATUS again with the same binding. For `stop`, run no lifecycle operation.
 
-A canonical four-lens selection is long work: before the first lens runs, give the one cost/side-effect forecast — four reviewer model runs over the frozen candidate, the frozen correction budget, and the at-most-one bounded correction it implies — once per candidate, never per lens.
+4. **Acknowledge exactly.** Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, targeted validation, and approved closure. A final approved capture commits one pending acknowledgement token and returns `review.acknowledge-approved`; restarted STATUS returns the same operation, ordered arguments, token, and live revision. Only that exact invocation burns authority and artifacts, and on success it prints one `gentle-ai.review-acknowledged/v1` envelope; report the burn from that envelope, never from a later STATUS. Wrong, stale, or replayed acknowledgement refuses without creating a receipt, tombstone, witness, mirror, sidecar, or delivery authority. Unrelated transactions survive unchanged.
 
-Run each exact `review.capture-result` collection input once per provider-returned collection attempt, in the foreground. Begin its reviewer task prompt with the exact literal prefix `GENTLE_AI_REVIEW_BINDING `, including the trailing space and never `=`, followed by one-line JSON assembled only from that input: `lineage`, `target`, `lens`, `order`, `revision` from `expected-revision`, `repository_context`, and `subject_hash` from `artifact_subject.subject_hash`; omit only provider-omitted fields. These are the prompt's first bytes. Return one JSON object echoing `subject_hash`, with completed inspection, every manifest path in order, findings/evidence, and severe evidence class/causality; access failure is not completion. After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again. Relaunch only if its fresh `next_transition` reoffers the exact same bound slot (`lineage`, `target`, `expected-revision`, `artifact_subject`, `lens`, and `order`). If STATUS discovers a committed capture, continue without relaunching. Never infer a retry from transcript or error text alone. Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need `--cwd`. Finalize with manifests in lens order via repeated `--result-artifact-file <path>` (BOM-less UTF-8 on Windows PowerShell 5.1); POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatible; never pass raw `--result`. Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding. Only candidate-caused severe findings block; pre-existing/base-only become follow-ups, unknown escalates, WARNING/SUGGESTION remain info. Deterministic blockers need no refuter; inferential blockers share one read-only refuter batch. Judgment Day uses two judges.
+The final reviewer, refuter, or targeted-validator capture owns closure. A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot. Never invent a binding or retry from prose.
 
-Claude Code, OpenCode, Codex, and Pi advertise immutable reviewer execution through one shared Go provider contract because each active host launches a fresh constrained reviewer before lifecycle work: Claude's generated reviewer has no live tools and receives prompt-carried native evidence; OpenCode relays one host Task through one live Go transport process, which materializes the bound prompt and captures the matching raw output; Codex launches a provider-bound `codex exec` process in an empty scratch directory; and Pi's gentle-pi-owned host relay forwards the Go-issued opaque prompt to a brand-new print-mode `pi` subprocess in an empty scratch directory with every discovery surface disabled, returning raw final bytes through the exact capture operation. Prompt prose alone never proves these boundaries; native admission does. Kilo remains dormant because it has no equivalent native path. The compiled capability is authoritative before repository, target, authority, collection, or process work; normal SDD and ordinary agent support remain available, and model, provider, and profile selection remain user-owned.
+When v2 returns `forecast`, relay it losslessly in the user's language: preserve every step's order and fields (`step`, `kind`, `reason_code`, `description`) and the horizon. Forecast is informational; route only from `next_transition`.
 
-Never hand candidate bytes through `/tmp`, another external file, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`.
+### Cross-repository lifecycle root
 
-Reviewers inspect through read-only native Git commands against those exact immutable trees. The allowed recipe runs in the session cwd and clears inherited environment before Git. It fixes locale, disables system/global Git config and attributes, replacement objects, external diff and textconv, forces `--text`, Myers/no-indent deterministic hunks, literal pathspecs, and exact `cat-file` reads. Run compact `--name-status`/`--numstat` discovery, then only selective tree-to-tree stat/diff/cat-file commands. Never pass `--binary`, read live worktree/index/HEAD, change checkout, pipe candidate bytes through another command, or write temporary files. The frozen trees resolve through the shared object store; unreachable trees produce incomplete inspection.
+A session in repository A may review an explicitly selected nested target in unrelated repository B only after explicit user authorization. Native Go resolves the requested path to the canonical B worktree root; adapters never parse authorization or roots.
 
-Ordinary review permits one correction transaction. When `next_transition.collect` requests `correction_lines`, provide a positive forecast before editing and continue only through the next provider-returned transition. After the bounded edit, run one read-only scoped fix validator only when the exact collection input requests it, then return its targeted result and final test/verification evidence through the exact named capture operations and arguments. That validator must hold read-only Git execution against the immutable trees; never route it to the refuter or any other actor that cannot run Git. A validator that could not inspect those trees produced no verdict: surface one blocked human decision and submit nothing, because an inconclusive check recorded as a failed one consumes the single correction attempt irreversibly. The facade maps correction only to corroborated frozen IDs and genesis paths, rejects over-budget repository evidence, and creates or discovers the terminal receipt. Later observations are follow-ups, not another correction. Judgment Day alone keeps its existing two-round rule. SDD then runs one independent requirements/runtime verification. Failure escalates and never starts another reviewer, refuter, correction, or validator.
+- After B is selected, retain canonical B as the lifecycle working root from selectorless STATUS through consent, collection, correction, targeted validation, acknowledgement, and burn. Do not fall back to A.
+- Run provider-issued command tokens exactly. Never append, remove, or rebuild provider-issued command tokens. When a command omits `--cwd`, run it with process cwd B.
+- Opaque `repository_context` can capture or materialize from any process cwd, but the host still retains B for lifecycle continuity. Go owns repository binding; adapters never parse authorization or roots.
+- The same lineage text in A and B is independent. Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched.
+
+This lifecycle is rendered for exactly Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes remain unavailable before repository or authority mutation.
+
+## Capture and correction
+
+For each returned `review.capture-result` input, run its exact capture operation once with its argument tokens exactly as returned. This runtime captures in process: those tokens carry `--agent` and no `--input`, and running them makes Go materialize the immutable reviewer context, run its own locked-down reviewer on it, and admit the result. Never assemble a reviewer prompt, never launch a lens subagent, and never add `--input` to a returned token list. Each of those rebuilds the returned command into the relay form and moves the complete candidate evidence onto the parent for every lens, to reach a result the returned command already produces carrying nothing. An empty, malformed, schema-invalid, or incomplete result is handled by the recovery rule below, exactly as a relayed one is.
+
+After an empty, malformed, schema-invalid, access/provider-failed, or incomplete capture, query the same exact-lineage STATUS. Relaunch only if its fresh `next_transition` reoffers the same bound slot. Never infer a retry from transcript text. A relayed capture passes its result through `--input <path|->`, one per lens in lens order; BOM-less UTF-8 is required on Windows PowerShell 5.1. Tokens carrying `--agent` capture in process with no `--input`.
+
+Only candidate-caused severe findings block. Pre-existing/base-only findings are follow-ups; unknown causality escalates. A deterministic blocker needs no refuter; inferential blockers share one read-only refuter batch. A four-lens review is long work: before its first lens, give one forecast covering four reviewer runs, the frozen correction budget, and the at-most-one bounded correction.
+
+A correction is native-scoped. When the final reviewer or refuter capture opens `correction_required`, its `status_continuation` is the only re-entry: run its `review.status` operation and ordered tokens unchanged before acting again. Native Go maps edits only to corroborated frozen findings, owns repository evidence and the targeted validator, and permits at most one bounded correction. A validator that cannot inspect the immutable trees produced no verdict: surface one blocked human decision and submit nothing. Do not route it to a refuter or another actor without read-only immutable-tree access. Independent requirements/runtime verification never starts another reviewer, refuter, correction, or validator.
+
+## Consent and immutable inspection
+
+If exact provider-returned START returns the typed `gentle-ai.review-integration.consent/v3` envelope, relay it as a Lossless Blocking Prompt. Global RDD enabled permits review; it never grants consent for this candidate. For medium/high candidates, faithfully translate the headline, reason, `value`, risk evidence, choice labels, every choice `effect`, and the off-path note while preserving original groups/order, selection mode, allowed-answer domain, answer tokens, commands, target IDs, and invocations. Project `value` as benefits and every `effect` as consequences. Do not translate machine answer tokens (`granted`, `declined`). Run exactly the invocation selected by the human; a decline is candidate-scoped and is not the kill switch.
+
+Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract. Go owns frozen evidence, binding, schema, byte bounds, validation, admission, and capture; runtime adapters transport opaque provider output. Claude uses a tool-free fresh reviewer; OpenCode relays one host Task through its live Go transport; Codex uses its provider-bound subprocess; Pi uses its gentle-pi-owned relay. Compiled capability is authoritative before repository, target, authority, collection, or process work.
+
+Reviewers inspect only the provider-bound immutable trees. Never hand candidate bytes through `/tmp`, an external file, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. Use the provider-issued inspection path, never the live worktree, index, `HEAD`, or an unbound revision. Never pass `--binary`, change checkout, or substitute live files.
 
 <!-- authority-first-terminal-procedure:start -->
 ### Authority-First Terminal Procedure
 
-Use only the compact facade; it appends and reads back native authority before materializing existing compatibility artifacts.
+| Order | Operation | Required result |
+| --- | --- | --- |
+| 01 | canonical initial STATUS above | exactly one current-worktree START preflight; no authority discovery |
+| 02 | exact returned START | one compact lineage/worktree/target binding; retain lineage, revision, and target |
+| 03 | exact-lineage STATUS and collect | only returned transaction actions; no ambient resume, reuse, or delivery gate |
+| 04 | final admitted capture | native readback, approved authority, and one exact acknowledgement continuation |
+| 05 | STATUS restart + exact acknowledgement | replayed operation/token/revision; only exact acknowledgement burns authority |
+| 06 | terminal lifecycle stop | ordinary repository policy owns any later delivery decision |
 
-| Order | Operation | Required result | Terminal mirrors |
-|---|---|---|---|
-| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent codex --next-transition` | one provider-owned `next_transition` returned | blocked |
-| 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
-| 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
-| 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
-
-After ambiguous output, query STATUS again; native discovery reports the committed authority and its next transition without another budget. Malformed or ambiguous lineage remains invalid.
 <!-- authority-first-terminal-procedure:end -->
 
-## Delivery
+### Continue after a stop reason code
 
-Repository Git common-dir CAS remains authoritative. Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas, prerequisites, and compatibility behavior remain unchanged in this work unit. Reconcile mirrors only after native allow. Supported lifecycle CLI gates are `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`; they discover and validate the same receipt and never launch reviewers or create a budget. Archive requires structured status: `reviewGate` is structurally absent — no `disabled/unmanaged` value to check — whenever the kill switch is off, or whenever it is on with no review ever started for this candidate; both proceed under ordinary repository policy. `reviewGate.result: allow` with its approved receipt is required only when a review was actually discovered for this candidate; any other discovered, non-`allow` `reviewGate` value still blocks. Model/provider/profile selection remains user-owned.
+A `stop` ends its transition, never approves delivery. Complete atomic inventory: B stays target root; gates stay unmanaged. `D` means `gentle-ai review mode disable --scope clone --cwd <B>`; B ordinary policy decides delivery. `S` means re-query the exact captured target-root STATUS command with lineage and target.
 
-Before commit, stage all reviewed paths without content/mode changes, then validate pre-commit. Frozen intended-untracked paths must remain all untracked or all move to an index whose complete tree and paths match the receipt.
+| Reason codes | Continuation |
+| --- | --- |
+| `captured_artifacts_unverifiable` | Terminal — maintainer inspects B authority, or `D`. |
+| `captured_result_selection_unavailable` | Terminal — maintainer inspects lineage, or `D`. |
+| `missing_authority_binding` | Terminal — file a bounded defect with lineage, or `D`. |
+| `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal — maintainer inspects authority/lineage, or `D`. |
+| `empty_base_diff_bootstrap_required` | Terminal — authorized empty-root bootstrap for a new target, or `D`. |
+| `lens_context_budget_exceeded` | Terminal — reduce B scope and start a new transaction, or `D`. |
+| `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover, or drop `--workspace-overlay` and start fresh; otherwise `D`. |
+| `corrected_candidate_unavailable` | Change B correction candidate, then `S`; do not reuse the pre-correction target. |
+| `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `gentle-ai review recover`. |
+| `rdd_disabled` | `--scope clone` only clears a clone-local off; `gentle-ai review mode enable --scope global`, then `S`. |
+
+## Delivery follows ordinary repository policy
+
+Shipped `review validate` and gate commands are compatibility/informational only. They never discover authority or decide delivery: enabled gates return `invalidated/unmanaged`; disabled gates return `disabled/unmanaged`. They never allow, approve, block, commit, push, open a PR, or govern release.
+
+After exact acknowledgement burns terminal `approved` authority, the review lifecycle stops. Commit, push, PR, and release remain separate human decisions under ordinary repository policy. A review outcome is informational and never authorizes delivery, including when the selected repository is B.
+
+Historical compatibility commands may read older artifacts manually, but they are never the ordinary lifecycle and never restore delivery authority.
+
+### Concurrent Reviewer Group (MANDATORY)
+
+When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.
+
+Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot.
 
 ### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
-- Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
+- Let native review select its bounded checking plan; delivery remains human-owned under ordinary repository policy.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 - If Codex's sub-agent tool policy blocks automatic spawning, stop and tell the user that the hard gate requires delegation before continuing.
 
@@ -222,6 +250,7 @@ explicitly requested background execution.
 ### Phase delegation pattern
 
 For each phase:
+
 1. Look up the phase's `reasoning_effort` **AND** `model` values in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers). This applies both for preset (per-carril) tables and Custom (per-phase) tables — always pass the model and effort shown in the table for that phase.
 2. `spawn_agent` with `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
 3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
@@ -236,6 +265,7 @@ For each phase:
    launching the next phase.
 
 Example — launching `sdd-design` with the values from its generated table row:
+
 ```
 spawn_agent(task_name="sdd-design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
 repeat:
@@ -318,10 +348,11 @@ This is a self-correction mechanism. Do NOT ignore fallback reports — they ind
 - `/sdd-explore <topic>` → investigate an idea; no artifacts created
 - `/sdd-apply [change]` → implement tasks in batches; checks off items as it goes
 - `/sdd-verify [change]` → validate implementation against specs; reports CRITICAL / WARNING / SUGGESTION
-- `/sdd-archive [change]` → close a change and persist final state in the active artifact store 
+- `/sdd-archive [change]` → close a change and persist final state in the active artifact store
 - `/sdd-onboard` → guided end-to-end walkthrough of SDD using your real codebase
 
 Meta-commands (type directly — orchestrator handles them, won't appear in autocomplete):
+
 - `/sdd-new <change>` → start a new change by delegating exploration + proposal to sub-agents
 - `/sdd-continue [change]` → run the next dependency-ready phase via sub-agent(s)
 - `/sdd-ff <name>` → fast-forward planning: proposal → specs → design → tasks
@@ -330,7 +361,7 @@ Meta-commands (type directly — orchestrator handles them, won't appear in auto
 
 ### Native SDD Dispatcher Guard
 
-Before routing, continuing, applying, verifying, or archiving an SDD change, **first determine this session's artifact store** from the cached Session Preflight / Artifact Store Mode choice. If the store is not yet established, resolve it before continuing — check `sdd-init/{project}` in Engram and treat the change as `engram`-backed when no OpenSpec store was selected. **Then scope the native dispatcher by artifact store.** The native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`) reads ONLY OpenSpec file artifacts under `openspec/changes/` and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes. **When the session artifact store is `engram`, do NOT invoke the dispatcher at all** — it is blind to the change and its `blocked`, `Active OpenSpec change not found`, or `nextRecommended: sdd-new` output is meaningless; resolve status entirely from Engram (`mem_search` + `mem_get_observation` on the change's topic keys such as `sdd/{change-name}/tasks`) using the manual status schema. Only when the session artifact store is `openspec` or `hybrid` should you run the dispatcher when `gentle-ai` is available and treat its native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
+Before routing, continuing, applying, verifying, or archiving an SDD change, **invoke the native dispatcher** (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`). It resolves the artifact store the workspace DECLARES, reports it in `artifactStore`, and returns that store's locators in `artifactPaths`. **Do NOT determine the artifact store yourself, and do NOT branch on it** — an actor that re-derives the store disagrees with the authority that launched it, which is how a phase ends up reading a store the workspace never declared. Use the dispatcher for every store when `gentle-ai` is available and treat its native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
 
 ### SDD Init Guard (MANDATORY)
 
@@ -341,6 +372,7 @@ Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-
 3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command
 
 This ensures:
+
 - Testing capabilities are always detected and cached
 - Strict TDD Mode is activated when the project supports it
 - The project context (stack, conventions) is available for all phases
@@ -357,6 +389,7 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first ti
 If the user doesn't specify, default to **Automatic**. After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision.
 
 In **Interactive** mode, between phases:
+
 1. Show a concise summary of what the phase produced
 2. List what the next phase will do
 3. Ask: "¿Continuamos? / Continue?" — accept YES/continue, NO/stop, or specific feedback to adjust
@@ -366,20 +399,22 @@ For this agent (sub-agent delegation): **Automatic** means phases run back-to-ba
 
 Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
 
-Before the `sdd-propose` phase in interactive mode, offer the user a proposal question round instead of silently deciding whether the proposal is clear enough. Explain that the questions are meant to improve the PRD/proposal by uncovering business understanding, business rules, implications, impact, edge cases, and product tradeoffs. Prefer 3–5 concrete product questions per round, then summarize the resulting assumptions and ask whether the user wants to correct anything or run a second question round. Cover business/product/PRD decisions: business problem, target users and situations, business rules, product outcome, current-state gap, implications and impact, edge cases, decision gaps, first-slice scope boundaries, non-goals, product constraints, and business tradeoffs. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics at proposal time unless the user explicitly asks to discuss delivery.
+### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research` immediately after `sdd-explore`; selection makes completion mandatory. Before every `propose`, invoke `sdd-propose` only when selected research is `done` or research is unselected, product decisions are `confirmed`, evidence references are valid, and the selected artifact-store state is ready. The orchestrator owns product discovery. Automatic unresolved choices require one lossless grouped prompt with all context, options, consequences, allowed answers, and exact tokens; it MUST persist the pending state before prompting, then STOP without invoking `sdd-propose`. The proposer receives a confirmed pre-proposal handoff and MUST NOT interview or infer consent. Native `gentle-ai.sdd-status/v2` is the sole status contract.
 
 ### Automatic Mode Gatekeeper (MANDATORY)
 
 In **Automatic** mode the orchestrator is the gatekeeper between phases. The gatekeeper runs after every phase: when a sub-agent returns and BEFORE launching the next sub-agent, the orchestrator MUST validate that the phase reached its objective with everything in order. Autonomous validation — does NOT ask the user (that is Interactive mode); surfaces to the user only when it catches a problem.
 
 **What the gatekeeper checks (every phase, against the Result Contract):**
+
 - **Contract conformance:** the phase returned `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, and `skill_resolution`, and `status` indicates success (not partial, failed, or blocked).
 - **Artifact existence:** the declared artifact actually exists and is readable in the active backend — read it back (engram: `mem_search` + `mem_get_observation` on the topic key; openspec: read the file path). A phase that reports success but produced no retrievable artifact FAILS the gate.
-- **No hallucination:** every file path, symbol, command, or artifact the phase claims it created or referenced must actually exist; spot-check the concrete claims. A referenced path that does not resolve FAILS the gate.
+- **No hallucination:** every file path, symbol, command, or artifact the phase claims it created or referenced must actually exist; spot-check the concrete claims. A referenced path that does not resolve FAILS the gate. A path the artifact explicitly marks as planned (to be created by a later apply) is not required to exist yet; only paths claimed as already created or read must resolve.
 - **No drift from inputs:** the output is consistent with the phase's required inputs per the Dependency Graph — spec stays within the proposal's scope, design answers the proposal, tasks cover spec and design, apply implements the tasks. Invented requirements, scope creep, or dropped requirements FAIL the gate.
 - **Routing coherence:** `next_recommended` follows the Dependency Graph and `risks` are within tolerance (no unaddressed CRITICAL).
 
 **Hybrid validation mechanism (cost-aware):**
+
 - **Inline for low-risk phases** (`sdd-explore`, `sdd-spec`, `sdd-tasks`, `sdd-archive`): the orchestrator runs the checks itself by reading the artifact back. No extra sub-agent.
 - **Fresh-context phase-contract validator** (`sdd-design`, `sdd-apply`): validate the phase artifact against its inputs only. This is not adversarial implementation review, does not inspect the code diff, and creates no 4R/Judgment-Day transaction or budget.
 - **Escalation on smell:** if an inline check on a low-risk phase finds any smell (status mismatch, unresolved path, suspected drift, missing artifact), escalate that phase to a fresh-context delegated review before deciding.
@@ -396,8 +431,9 @@ Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `
 
 1. Before an actor or harness launch, call `gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
 2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
-3. After the external run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> ...` with a request ID distinct from the acquire operation's request ID, outcome, and bounded evidence. Reuse each operation's own ID only for its idempotent replay. Settle derives native binding/remediation inputs; pass `--successor-lineage` only for a distinct approved successor, otherwise the bound lineage remains its own successor.
-4. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
+3. After a failed or passed run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> --outcome <passed|failed> --evidence-revision <sha256> --diagnosis "<proven-diagnosis>" --harness-disposition <reused|invalidated> --cleanup-evidence "<evidence>" --process-evidence "<evidence>"`. After an interrupted run, pass `--outcome interrupted` and omit `--evidence-revision`. When the acquire carried `--remediates-evidence-revision <sha256>`, settle with the same `--remediates-evidence-revision <sha256>`. Use a `<settle-id>` distinct from the acquire operation's request ID; reuse each operation's own ID only for its idempotent replay. Settle defines no other flag and derives native binding and remediation inputs itself.
+4. On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure.
+5. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 
@@ -484,7 +520,7 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 
 | Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |
 |---------------|-------|----------------------------------|------------|
-| `sdd-strong` | `gpt-5.6-sol` | `medium` | explore, propose, design, verify, judge |
+| `sdd-strong` | `gpt-5.6-sol` | `medium` | explore, research, propose, design, verify, judge |
 | `sdd-mid` | `gpt-5.6-terra` | `high` | apply, fix-agent |
 | `sdd-cheap` | `gpt-5.6-luna` | `high` | spec, tasks, archive, onboard |
 

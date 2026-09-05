@@ -148,6 +148,7 @@ func sddChainJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j64-unmanaged-remediation-survives-audited-reset",
+			Review: reviewOptedIn,
 			Title:  "An audited reset between the failed settle and the correction acquire no longer orphans the correction",
 			Source: "#1974 slice 2 (#2565): chain-derived failed-evidence binding",
 			Steps: []Step{
@@ -162,9 +163,9 @@ func sddChainJourneys() []Journey {
 				{Name: "fixture: fresh independent verification passes", Fixture: sddReplaceFailedVerifyReport},
 				{Name: "archive is ready without review authority", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
-					After: sddStatusAssertion("disabled archive after the reset-crossing correction", func(status sddStatusV1) error {
-						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || status.ReviewGate != nil || status.ReviewOffer != nil {
-							return fmt.Errorf("disabled archive = archive %q next %q gate=%+v offer=%+v", status.Dependencies.Archive, status.NextRecommended, status.ReviewGate, status.ReviewOffer)
+					After: sddStatusAssertion("disabled archive after the reset-crossing correction", func(status sddStatusV2) error {
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || status.ReviewOffer != nil {
+							return fmt.Errorf("disabled archive = archive %q next %q offer=%+v", status.Dependencies.Archive, status.NextRecommended, status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -172,6 +173,7 @@ func sddChainJourneys() []Journey {
 		},
 		{
 			ID:     "j87-unmanaged-remediation-uses-chain-failed-evidence",
+			Review: reviewOptedIn,
 			Title:  "A reset-authorized correction settles against its failed evidence, not a later interruption",
 			Source: "#2871: compact settle must match the immutable failed-evidence chain",
 			Steps: []Step{

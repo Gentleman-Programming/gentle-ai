@@ -324,7 +324,7 @@ func TestRuntimeLedgerLegacyBeginRecordReplaysWithoutWorktreeEnforcement(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := captureRuntimeCandidate(context.Background(), repo)
+	snapshot, err := captureRuntimeCandidate(context.Background(), repo, []string{})
 	if err != nil {
 		t.Fatal(err)
 	}

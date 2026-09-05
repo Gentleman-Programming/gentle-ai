@@ -29,6 +29,7 @@ func scopeChangedFixtureJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j76-scope-changed-four-lens-successor",
+			Review: reviewOptedIn,
 			Title:  "Scope-changed high-risk successor: all four exact lens slots admit and reach approval",
 			Source: "issue #2618: a bounded correction recovery must not strand resilience or readability capture slots",
 			Steps: []Step{
@@ -95,10 +96,7 @@ func scopeChangedFixtureNextBinding(r *journeyRun, lineage, wantLens string) (sc
 		if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" {
 			continue
 		}
-		binding := scopeChangedFixtureBinding{subject: input.ArtifactSubject.SubjectHash}
-		for _, entry := range input.ChangedPathManifest {
-			binding.paths = append(binding.paths, entry.Path)
-		}
+		binding := scopeChangedFixtureBinding{subject: input.ArtifactSubject.SubjectHash, paths: envelope.paths()}
 		for _, argument := range input.Arguments {
 			switch argument.Name {
 			case "lens":

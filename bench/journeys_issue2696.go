@@ -27,6 +27,7 @@ var sddContinueCapability = &Capability{
 func issue2696Journeys() []Journey {
 	return []Journey{{
 		ID:     "j98-sdd-flat-root-spec-is-discovered",
+		Review: reviewOptedIn,
 		Title:  "Flat-root spec is discovered consistently by status and continue",
 		Source: "issue #2696: approved flat-root spec.md artifact discovery contract",
 		Steps: []Step{

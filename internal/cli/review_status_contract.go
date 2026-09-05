@@ -25,19 +25,14 @@ const ReviewIntegrationStatusSchemaV4 = "gentle-ai.review-integration.status/v4"
 const ReviewIntegrationStatusSchemaIDV4 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v4.schema.json"
 const ReviewIntegrationStatusSchemaV5 = "gentle-ai.review-integration.status/v5"
 const ReviewIntegrationStatusSchemaIDV5 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v5.schema.json"
-const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV5
-const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV5
+const ReviewIntegrationStatusSchemaV6 = "gentle-ai.review-integration.status/v6"
+const ReviewIntegrationStatusSchemaIDV6 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v6.schema.json"
+const ReviewIntegrationStatusSchemaV7 = "gentle-ai.review-integration.status/v7"
+const ReviewIntegrationStatusSchemaIDV7 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v7.schema.json"
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV7
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV7
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
-
-type ReviewReceiptStatus string
-
-const (
-	ReviewReceiptExpectedMissing    ReviewReceiptStatus = "expected_missing"
-	ReviewReceiptPresent            ReviewReceiptStatus = "present"
-	ReviewReceiptPublicationPending ReviewReceiptStatus = "publication_pending"
-	ReviewReceiptNotApplicable      ReviewReceiptStatus = "not_applicable"
-)
 
 type ReviewForecastHorizon string
 
@@ -64,18 +59,30 @@ type ReviewTargetStatusResult struct {
 	Operation     string                                `json:"operation"`
 	Applicability reviewtransaction.TargetApplicability `json:"applicability"`
 	Authority     *ReviewTargetStatusAuthority          `json:"authority,omitempty"`
-	Receipt       ReviewTargetStatusReceipt             `json:"receipt"`
 	Action        reviewtransaction.TargetStatusAction  `json:"action"`
 	// ActionDisposition names the provider recovery class accepted by the
-	// selected action. Generic recover and final-verification retry remain
-	// distinct operations.
-	ActionDisposition       reviewtransaction.RecoveryDisposition       `json:"action_disposition,omitempty"`
-	Replayability           reviewtransaction.Replayability             `json:"replayability"`
-	Frozen                  *ReviewTargetStatusFrozen                   `json:"frozen,omitempty"`
-	TargetIdentity          string                                      `json:"target_identity"`
-	AuthorityTargetIdentity string                                      `json:"authority_target_identity,omitempty"`
-	Projection              ReviewTargetStatusProjection                `json:"projection"`
-	Repair                  reviewtransaction.AuthorityRepairAssessment `json:"repair"`
+	// selected action. Recovery remains target-scoped and independent from
+	// terminal capture closure.
+	ActionDisposition       reviewtransaction.RecoveryDisposition `json:"action_disposition,omitempty"`
+	Replayability           reviewtransaction.Replayability       `json:"replayability"`
+	Frozen                  *ReviewTargetStatusFrozen             `json:"frozen,omitempty"`
+	TargetIdentity          string                                `json:"target_identity"`
+	AuthorityTargetIdentity string                                `json:"authority_target_identity,omitempty"`
+	Projection              ReviewTargetStatusProjection          `json:"projection"`
+	// EligibleUntrackedInventory is the canonical digest
+	// intendedUntrackedScopeForTarget already computes over the live
+	// workspace's eligible untracked population, published unconditionally
+	// on every projection that inspects untracked files (issue #4040): a
+	// refusal that names this STATUS as its recovery route always yields a
+	// usable value. The `staged` projection does not inspect untracked
+	// files, so it leaves this at its zero value and `omitempty` drops the
+	// key entirely — absence means "not applicable", not "checked, found
+	// none". This is a top-level fact about what the live workspace could
+	// have included; it lives outside Projection (a record of the frozen
+	// candidate) because ReviewTargetStatusProjection serializes through the
+	// shared, multi-version projection.schema.json.
+	EligibleUntrackedInventory string                                      `json:"eligible_untracked_inventory,omitempty"`
+	Repair                     reviewtransaction.AuthorityRepairAssessment `json:"repair"`
 	// Disposition is Wave 6's negotiated-route provider preview (rdd-closure-
 	// disposition-execution / "Reachable Through the Negotiated Transition
 	// Route"): populated only when Repair is not eligible but a closed
@@ -84,20 +91,18 @@ type ReviewTargetStatusResult struct {
 	// (ReviewRepairDispositionProviderInputs) — nothing a maintainer could
 	// not already derive read-only, and nothing that changes without a real
 	// authorization.
-	Disposition            *ReviewRepairDispositionProviderInputs               `json:"disposition,omitempty"`
-	Candidates             []string                                             `json:"candidates"`
-	Reconciliation         *ReviewFinalizeReconciliation                        `json:"reconciliation,omitempty"`
-	Eligibility            *ReviewActionEligibility                             `json:"eligibility,omitempty"`
-	Forecast               *ReviewForecast                                      `json:"forecast,omitempty"`
-	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
-	RepositoryContext      *ReviewRepositoryContextReference                    `json:"repository_context,omitempty"`
-	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
-	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
-	decision               reviewtransaction.TargetStatusDecision               `json:"-"`
-	intendedUntracked      reviewIntendedUntrackedScope
-	repositoryRoot         string
-	rddMode                reviewtransaction.RDDModeStatus
-	rddModeResolved        bool
+	Disposition       *ReviewRepairDispositionProviderInputs       `json:"disposition,omitempty"`
+	Candidates        []string                                     `json:"candidates"`
+	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
+	Forecast          *ReviewForecast                              `json:"forecast,omitempty"`
+	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`
+	RepositoryContext *ReviewRepositoryContextReference            `json:"repository_context,omitempty"`
+	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
+	decision          reviewtransaction.TargetStatusDecision       `json:"-"`
+	intendedUntracked reviewIntendedUntrackedScope
+	repositoryRoot    string
+	rddMode           reviewtransaction.RDDModeStatus
+	rddModeResolved   bool
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -130,7 +135,6 @@ type ReviewActionBinding struct {
 
 var reviewManagedActions = []string{
 	"review.abandon",
-	"review.finalize",
 	"review.invalidate",
 	"review.quarantine-legacy",
 	"review.reclaim",
@@ -138,66 +142,44 @@ var reviewManagedActions = []string{
 	"review.reconcile-authority-batch",
 	"review.recover",
 	"review.repair",
-	ReviewIntegrationOperationRetryFinalVerification,
-	"review.start",
-	"review.validate",
-}
-
-// reviewFinalizeManagedActions preserves the published operation/v1 action
-// eligibility surface. Classified repair is advertised only by status/v2.
-var reviewFinalizeManagedActions = []string{
-	"review.abandon",
-	"review.finalize",
-	"review.invalidate",
-	"review.quarantine-legacy",
-	"review.reclaim",
-	"review.reconcile-authority",
-	"review.reconcile-authority-batch",
-	"review.recover",
 	"review.start",
 	"review.validate",
 }
 
 const (
-	reviewActionEligibleCurrent                = "eligible_current_target"
-	reviewActionEligibleEscalatedRecovery      = "eligible_recovery_escalated"
-	reviewActionEligibleRecovery               = "eligible_recovery"
-	reviewActionEligibleClassifiedRepair       = "eligible_classified_authority_repair"
-	reviewActionEligibleFinalVerificationRetry = "eligible_final_verification_retry"
-	reviewActionForbiddenNotSelected           = "forbidden_not_selected_by_native_status"
-	reviewActionForbiddenAmbiguous             = "forbidden_ambiguous_authority"
-	reviewActionForbiddenCorrupted             = "forbidden_corrupted_authority"
-	reviewActionForbiddenUnrelated             = "forbidden_unrelated_target"
-	reviewActionForbiddenTerminalEscalated     = "forbidden_terminal_escalated_authority"
-	reviewActionForbiddenUnchangedEscalated    = "forbidden_unchanged_escalated_candidate"
-	reviewActionForbiddenManualIntervention    = "forbidden_manual_intervention_required"
-	reviewActionForbiddenReconciliation        = "forbidden_reconciliation_requires_exact_request"
-	reviewActionForbiddenInputsUnavailable     = "forbidden_required_inputs_unavailable"
-	reviewActionForbiddenFinalizeStatus        = "forbidden_finalize_requires_target_status"
-	reviewActionForbiddenRDDDisabled           = "forbidden_rdd_disabled"
+	reviewActionEligibleCurrent             = "eligible_current_target"
+	reviewActionEligibleEscalatedRecovery   = "eligible_recovery_escalated"
+	reviewActionEligibleRecovery            = "eligible_recovery"
+	reviewActionEligibleClassifiedRepair    = "eligible_classified_authority_repair"
+	reviewActionForbiddenNotSelected        = "forbidden_not_selected_by_native_status"
+	reviewActionForbiddenAmbiguous          = "forbidden_ambiguous_authority"
+	reviewActionForbiddenCorrupted          = "forbidden_corrupted_authority"
+	reviewActionForbiddenUnrelated          = "forbidden_unrelated_target"
+	reviewActionForbiddenTerminalEscalated  = "forbidden_terminal_escalated_authority"
+	reviewActionForbiddenUnchangedEscalated = "forbidden_unchanged_escalated_candidate"
+	reviewActionForbiddenManualIntervention = "forbidden_manual_intervention_required"
+	reviewActionForbiddenInputsUnavailable  = "forbidden_required_inputs_unavailable"
+	reviewActionForbiddenRDDDisabled        = "forbidden_rdd_disabled"
 )
 
-type ReviewFinalizeReconciliation struct {
-	Required bool `json:"required"`
-}
-
 type ReviewTargetStatusAuthority struct {
-	Version    reviewtransaction.AuthorityVersion `json:"version"`
-	LineageID  string                             `json:"lineage_id"`
-	State      reviewtransaction.State            `json:"state"`
-	Generation int                                `json:"generation"`
-	Revision   string                             `json:"revision"`
-}
-
-type ReviewTargetStatusReceipt struct {
-	Status   ReviewReceiptStatus `json:"status"`
-	Identity string              `json:"identity,omitempty"`
+	Version              reviewtransaction.AuthorityVersion `json:"version"`
+	LineageID            string                             `json:"lineage_id"`
+	State                reviewtransaction.State            `json:"state"`
+	Generation           int                                `json:"generation"`
+	Revision             string                             `json:"revision"`
+	CapturePhaseRevision string                             `json:"-"`
 }
 
 type ReviewTargetStatusFrozen struct {
 	Tier                 reviewtransaction.RiskLevel `json:"tier"`
 	OriginalChangedLines int                         `json:"original_changed_lines"`
 	CorrectionBudget     int                         `json:"correction_budget"`
+	// ChangedPathManifestSHA256 is the digest of the frozen candidate's
+	// changed-path manifest, re-derived from the repository at STATUS time.
+	// Per-lens capture inputs carry no manifest any more, so each subject's
+	// digest is bound to this one value instead of to an inlined copy.
+	ChangedPathManifestSHA256 string `json:"changed_path_manifest_sha256,omitempty"`
 }
 
 type ReviewTargetStatusProjection struct {
@@ -216,6 +198,11 @@ type ReviewTargetStatusProjection struct {
 }
 
 func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatusResult, contract string) ReviewTargetStatusResult {
+	// Historical terminal states are authority observations only. Public STATUS
+	// never offers a replay, evidence submission, or delivery gate for them;
+	// new lineages burn during their final causal capture event.
+	switch native.Action {
+	}
 	schema := ReviewIntegrationStatusSchema
 	if contract == ReviewIntegrationContractV1 {
 		schema = ReviewIntegrationStatusSchemaV2
@@ -236,21 +223,13 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			IntendedUntrackedProof:  native.Projection.IntendedUntrackedProof,
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
-		Receipt: ReviewTargetStatusReceipt{Status: ReviewReceiptNotApplicable},
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
 	}
-	if native.FinalVerificationRetry != nil {
-		eligibility := *native.FinalVerificationRetry
-		result.FinalVerificationRetry = &eligibility
-	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		return result
-	}
-	if native.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
-		result.Reconciliation = &ReviewFinalizeReconciliation{Required: true}
 	}
 	result.Authority = &ReviewTargetStatusAuthority{
 		Version: native.AuthorityVersion, LineageID: native.LineageID, State: native.State,
@@ -261,14 +240,6 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		result.Frozen = &ReviewTargetStatusFrozen{
 			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: correctionBudget,
 		}
-	}
-	if native.ReceiptIdentity != "" {
-		result.Receipt = ReviewTargetStatusReceipt{Status: ReviewReceiptPresent, Identity: native.ReceiptIdentity}
-	} else if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
-		(native.State == reviewtransaction.StateApproved || native.State == reviewtransaction.StateEscalated) {
-		result.Receipt = ReviewTargetStatusReceipt{Status: ReviewReceiptPublicationPending}
-	} else {
-		result.Receipt = ReviewTargetStatusReceipt{Status: ReviewReceiptExpectedMissing}
 	}
 	return result
 }
@@ -284,14 +255,6 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		}
 	case reviewtransaction.TargetStatusActionValidate:
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
-	case reviewtransaction.TargetStatusActionFinalize:
-		if status.Replayability == reviewtransaction.ReplayabilityExactReplaySafe {
-			allowed.Action, allowed.ReasonCode, allowed.RequiredInputs = "review.finalize", reviewActionEligibleCurrent, []string{"lineage_id"}
-		} else {
-			allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
-		}
-	case reviewtransaction.TargetStatusActionReconcileFinalize:
-		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenReconciliation
 	case reviewtransaction.TargetStatusActionRecover:
 		allowed.Action, allowed.Disposition = "review.recover", status.ActionDisposition
 		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition", "reason", "actor", "maintainer_authorization"}
@@ -303,17 +266,6 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 			allowed.Binding = &ReviewActionBinding{
 				LineageID: status.Authority.LineageID,
 				Revision:  status.Authority.Revision, TargetIdentity: status.TargetIdentity,
-			}
-		}
-	case reviewtransaction.TargetStatusActionRetryFinalVerification:
-		allowed.Action = ReviewIntegrationOperationRetryFinalVerification
-		allowed.ReasonCode = reviewActionEligibleFinalVerificationRetry
-		allowed.Disposition = reviewtransaction.RecoveryFinalVerificationRetry
-		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "incident", "actor", "reason", "maintainer_authorization"}
-		if status.Authority != nil {
-			allowed.Binding = &ReviewActionBinding{
-				LineageID: status.Authority.LineageID,
-				Revision:  status.Authority.Revision, TargetIdentity: reviewAuthorityTargetIdentity(status),
 			}
 		}
 	case reviewtransaction.TargetStatusActionRepairAuthority:
@@ -338,8 +290,6 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		forbiddenReason = reviewActionForbiddenTerminalEscalated
 	case status.Action == reviewtransaction.TargetStatusActionStop && status.Authority != nil && status.Authority.State == reviewtransaction.StateCorrectionRequired:
 		forbiddenReason = reviewActionForbiddenUnchangedEscalated
-	case status.Action == reviewtransaction.TargetStatusActionReconcileFinalize:
-		forbiddenReason = reviewActionForbiddenReconciliation
 	case status.Action == reviewtransaction.TargetStatusActionStart && status.rddModeResolved && !status.rddMode.Enabled():
 		forbiddenReason = reviewActionForbiddenRDDDisabled
 	case allowed.Action == "stop" && allowed.ReasonCode == reviewActionForbiddenInputsUnavailable:
@@ -354,17 +304,6 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 	return &ReviewActionEligibility{AllowedActions: []ReviewEligibleAction{allowed}, ForbiddenActions: forbidden}
 }
 
-func reviewStopEligibility(reason string, requiredInputs []string) *ReviewActionEligibility {
-	forbidden := make([]ReviewForbiddenAction, len(reviewFinalizeManagedActions))
-	for index, action := range reviewFinalizeManagedActions {
-		forbidden[index] = ReviewForbiddenAction{Action: action, ReasonCode: reason}
-	}
-	return &ReviewActionEligibility{
-		AllowedActions:   []ReviewEligibleAction{{Action: "stop", ReasonCode: reason, RequiredInputs: requiredInputs}},
-		ForbiddenActions: forbidden,
-	}
-}
-
 type reviewStatusCompactAuthority struct {
 	OriginalChangedLines   int
 	CorrectionBudget       int
@@ -377,7 +316,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 
 func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -385,13 +324,20 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		return errors.New("invalid negotiated review target identity")
 	}
 	if result.RepositoryContext != nil {
+		expectedRepositoryContextTarget := reviewAuthorityTargetIdentity(result)
+		correctionTerminalContext := result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
+			result.ValidationRequest == nil && result.NextTransition != nil && result.NextTransition.Kind == reviewNextTransitionStop
+		if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
+			expectedRepositoryContextTarget = result.ValidationRequest.CorrectionTargetIdentity
+		}
 		if result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
 			reviewtransaction.ValidateReviewRepositoryContextHandle(result.RepositoryContext.Handle) != nil ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
 			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
-			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
-			result.Authority == nil || result.RepositoryContext.Revision != result.Authority.Revision ||
-			result.RepositoryContext.TargetIdentity != reviewAuthorityTargetIdentity(result) {
+			result.Authority == nil ||
+			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
+				result.RepositoryContext.Revision != result.Authority.CapturePhaseRevision ||
+			!correctionTerminalContext && result.RepositoryContext.TargetIdentity != expectedRepositoryContextTarget {
 			return errors.New("negotiated STATUS repository context is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
 		}
 	}
@@ -408,21 +354,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	if result.TargetIdentity != result.Projection.CurrentSnapshotIdentity {
 		return errors.New("negotiated review target identity differs from its current projection")
 	}
-	if retry := result.FinalVerificationRetry; retry != nil {
-		if result.Applicability != reviewtransaction.TargetApplicabilityCurrent || result.Authority == nil ||
-			result.Authority.Version != reviewtransaction.AuthorityVersionCompact || result.Authority.State != reviewtransaction.StateEscalated ||
-			result.Action != reviewtransaction.TargetStatusActionRetryFinalVerification || result.ActionDisposition != reviewtransaction.RecoveryFinalVerificationRetry ||
-			retry.IncidentSchema != reviewtransaction.FinalVerificationIncidentSchema ||
-			retry.IncidentClass != reviewtransaction.FinalVerificationIncidentProceduralToolingFailure ||
-			retry.TargetIdentity != reviewAuthorityTargetIdentity(result) || !validReviewCapabilitySHA256(retry.ValidatingRevision) ||
-			!validReviewCapabilitySHA256(retry.FailedEvidenceHash) ||
-			retry.FailedEvidenceRecordDigest != "" && !validReviewCapabilitySHA256(retry.FailedEvidenceRecordDigest) ||
-			!validReviewCapabilitySHA256(retry.FinalizeRequestDigest) {
-			return errors.New("final-verification retry status metadata is invalid")
-		}
-	} else if result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification {
-		return errors.New("final-verification retry action lacks provider eligibility")
-	}
 	if result.Eligibility != nil {
 		if err := result.Eligibility.Validate(result); err != nil {
 			return err
@@ -435,33 +366,33 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		if err := result.validateNextTransitionTargets(); err != nil {
 			return err
 		}
+		if err := result.validateFrozenManifestBinding(); err != nil {
+			return err
+		}
 		if err := result.validateSubmissionDescriptors(); err != nil {
 			return err
 		}
 		transitionRequest := reviewTransitionValidationRequest(result.NextTransition)
-		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
-			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
-				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
-		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
-			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
+		providerTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
+			(result.NextTransition.ReasonCode == "targeted_validation_required" ||
+				result.NextTransition.ReasonCode == reviewInconclusiveTargetedValidationReason) && result.NextTransition.Collect != nil &&
+			len(result.NextTransition.Collect.Inputs) == 1 && result.NextTransition.Collect.Inputs[0].ProviderTask != nil
+		// A transition that collects something else first legitimately carries no
+		// validation request while the status still reports the one the review
+		// is waiting on. An untracked file appearing mid-correction is the
+		// ordinary way to reach that: the operator has to declare it before the
+		// validator can run, and the pending request does not stop being true
+		// meanwhile. Requiring presence parity there stranded the lineage, since
+		// exact-lineage STATUS is its only re-entry (#3647).
+		collectsUntrackedSelection := result.NextTransition.Kind == reviewNextTransitionCollect &&
+			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
+		if !providerTargetedValidation && !reviewValidationRequestCopiesAgree(transitionRequest, result.ValidationRequest, collectsUntrackedSelection) {
 			return errors.New("negotiated status validation request copies differ")
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
-			expectedBudget := 0
-			if result.Frozen != nil {
-				expectedBudget = result.Frozen.CorrectionBudget
-			}
-			if authority != nil {
-				budget, budgetErr := reviewtransaction.CompactExpectedBudget(authority.OriginalChangedLines, authority.CorrectionBudgetPolicy)
-				if budgetErr != nil || budget != authority.CorrectionBudget {
-					return errors.New("native compact status budget is invalid") // refusal:by-design world-action: provider-generated status and persisted compact authority budget require a code fix when they disagree
-				}
-				expectedBudget = authority.CorrectionBudget
-			}
-			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
-				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
-				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != reviewAuthorityTargetIdentity(result) ||
-				request.CorrectionBudget != expectedBudget {
+			if result.Authority == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
+				request.LineageID != result.Authority.LineageID || !validReviewCapabilitySHA256(request.ExpectedRevision) ||
+				result.Authority.CapturePhaseRevision != "" && request.ExpectedRevision != result.Authority.CapturePhaseRevision {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
 		}
@@ -528,21 +459,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			if result.Frozen != nil || result.AuthorityTargetIdentity != "" {
 				return errors.New("legacy current-target status cannot contain compact frozen inputs")
 			}
-			if result.Receipt.Status == ReviewReceiptPublicationPending {
-				return errors.New("legacy current-target status cannot use compact publication semantics")
-			}
-			if result.Authority.State == reviewtransaction.StateApproved && result.Receipt.Status != ReviewReceiptPresent {
-				return errors.New("approved legacy current-target status requires a present receipt")
-			}
 		default:
 			return errors.New("current-target authority version is unsupported")
-		}
-		if result.Receipt.Status == ReviewReceiptPresent && !validReviewCapabilitySHA256(result.Receipt.Identity) ||
-			result.Receipt.Status != ReviewReceiptPresent && result.Receipt.Identity != "" {
-			return errors.New("current-target receipt identity is invalid")
-		}
-		if result.Receipt.Status != ReviewReceiptPresent && result.Receipt.Status != ReviewReceiptExpectedMissing && result.Receipt.Status != ReviewReceiptPublicationPending {
-			return errors.New("current-target receipt status is invalid")
 		}
 	case reviewtransaction.TargetApplicabilityUnrelated:
 		// Candidates is intentionally NOT constrained to empty here: plural
@@ -551,15 +469,15 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// nothing governs, so nothing decides) while still listing those
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionSelectLineage || len(result.Candidates) < 2 {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionSelectLineage || len(result.Candidates) < 2 {
 			return errors.New("ambiguous target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityCorrupted:
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionRepairAuthority {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionRepairAuthority {
 			return errors.New("corrupted target status is inconsistent")
 		}
 	default:
@@ -567,13 +485,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	}
 	if strings.TrimSpace(string(result.Action)) == "" {
 		return errors.New("negotiated review status requires exactly one action")
-	}
-	if result.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
-		if result.Applicability != reviewtransaction.TargetApplicabilityCurrent || result.Reconciliation == nil || !result.Reconciliation.Required || result.Replayability != reviewtransaction.ReplayabilityStatusRequired {
-			return errors.New("pending finalize status requires current-target reconciliation")
-		}
-	} else if result.Reconciliation != nil {
-		return errors.New("only pending finalize status may contain reconciliation")
 	}
 	switch result.Replayability {
 	case reviewtransaction.ReplayabilityNotReplayable, reviewtransaction.ReplayabilityExactReplaySafe,
@@ -584,47 +495,27 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	if result.ValidationRequest != nil {
 		if result.Authority == nil || result.Authority.State != reviewtransaction.StateCorrectionRequired ||
 			result.ValidationRequest.LineageID != result.Authority.LineageID ||
-			result.ValidationRequest.ExpectedRevision != result.Authority.Revision ||
+			!validReviewCapabilitySHA256(result.ValidationRequest.ExpectedRevision) ||
+			result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.CapturePhaseRevision != "" &&
+				result.ValidationRequest.ExpectedRevision != result.Authority.CapturePhaseRevision ||
 			result.ValidationRequest.TargetIdentity != result.Projection.InitialSnapshotIdentity ||
 			result.ValidationRequest.Projection != result.Projection.Projection ||
 			result.ValidationRequest.CorrectionCandidateTree != result.Projection.CurrentCandidateTree ||
-			!reviewStatusPathsContain(result.Projection.Paths, result.ValidationRequest.CorrectionPaths) ||
 			reviewtransaction.ValidateTargetedValidationRequest(*result.ValidationRequest) != nil {
 			return errors.New("negotiated status validation request is invalid")
 		}
 	}
 	switch result.ActionDisposition {
 	case "":
-		if result.Action == reviewtransaction.TargetStatusActionRecover || result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification {
+		if result.Action == reviewtransaction.TargetStatusActionRecover {
 			return errors.New("recover status requires the recovery disposition recovery accepts")
 		}
 	case reviewtransaction.RecoveryScopeChanged, reviewtransaction.RecoveryInvalidated, reviewtransaction.RecoveryEscalated:
 		if result.Action != reviewtransaction.TargetStatusActionRecover {
 			return errors.New("only recover status may carry a recovery disposition")
 		}
-	case reviewtransaction.RecoveryFinalVerificationRetry:
-		if result.Action != reviewtransaction.TargetStatusActionRetryFinalVerification {
-			return errors.New("only final-verification retry status may carry its dedicated disposition")
-		}
 	default:
 		return errors.New("unsupported review status recovery disposition")
-	}
-	if result.Applicability == reviewtransaction.TargetApplicabilityCurrent && result.Authority != nil &&
-		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover {
-		if result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged {
-			return errors.New("approved recovery status requires a published scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
-		}
-		stagedScopeExpansion := result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
-			result.Projection.Projection == reviewtransaction.ProjectionStaged
-		// The second approved recovery shape (issue #1826): the live target
-		// keeps the approved delivery scope kind while its candidate tree
-		// changed, so START refuses a fresh lineage and only recovery of this
-		// exact predecessor continues.
-		sameScopeChangedCandidate := result.Projection.Kind == reviewtransaction.TargetCurrentChanges ||
-			result.Projection.Kind == reviewtransaction.TargetBaseDiff
-		if !stagedScopeExpansion && !sameScopeChangedCandidate {
-			return errors.New("approved recovery status requires a published staged scope-expansion or scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
-		}
 	}
 	return nil
 }
@@ -655,7 +546,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	for _, input := range transition.Collect.Inputs {
@@ -665,7 +556,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			}
 			continue
 		}
-		if result.Schema != ReviewIntegrationStatusSchemaV5 {
+		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 {
 			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
 		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
@@ -682,47 +573,63 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}
 		input := transition.Collect.Inputs[0]
-		if input.CaptureOperation != "external.plan_correction" || result.Authority == nil || transition.CorrectionRequest == nil || input.Submission == nil {
+		if input.CaptureOperation != reviewCaptureCorrectionPlanOperation || result.Authority == nil || transition.CorrectionRequest == nil || input.Submission == nil {
 			return errors.New("correction submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the correction request
 		}
 		context, err := input.submissionRepositoryContext()
 		if err != nil {
 			return err
 		}
+		// The capture is bound to the frozen candidate the reviewer event
+		// admitted (reviewAuthorityTargetIdentity), never to result.TargetIdentity,
+		// which tracks whatever the live worktree currently projects. Before
+		// #4094 this recomputed "want" against the live identity, so any
+		// working-tree drift ahead of capture-correction-plan made a correctly
+		// frozen-bound descriptor look unbound and failed STATUS pre_native.
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
-			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
-			TargetIdentity: result.TargetIdentity, RepositoryContext: context,
+			LineageID: result.Authority.LineageID, Revision: transition.CorrectionRequest.ExpectedRevision,
+			TargetIdentity: reviewAuthorityTargetIdentity(result), RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
 		}
-	case "targeted_validation_required":
+	// The inconclusive-recapture reason collects exactly the same input
+	// through the same capture operation and submission descriptor; only its
+	// reason code differs, so it is bound by the identical rules (#3378).
+	case "targeted_validation_required", reviewInconclusiveTargetedValidationReason:
 		if len(transition.Collect.Inputs) != 1 {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}
 		input := transition.Collect.Inputs[0]
-		if input.CaptureOperation != "external.run_targeted_validation" || result.Authority == nil || result.ValidationRequest == nil || input.Submission == nil {
+		if input.ProviderTask != nil {
+			// The OpenCode host-mediated form: a Go-issued provider validator
+			// task bound to the current correction authority. It carries no
+			// submission descriptor.
+			return result.validateTargetedValidatorProviderTaskInput(input)
+		}
+		if input.CaptureOperation == "external.run_provider_role" {
+			// A provider role collection input without its Go-issued task is
+			// never a valid targeted validation form.
 			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
 		}
-		context, err := input.submissionRepositoryContext()
-		if err != nil {
-			return err
+		if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+			// The pi host-relay form: a self-contained executable vector with
+			// no submission descriptor; bind it here to this exact authority
+			// and its frozen validation request.
+			arguments, err := reviewTransitionArgumentMap(input.Arguments)
+			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
+				(!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) && !reviewProviderCaptureRuntime(model.AgentID(arguments["agent"]))) ||
+				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
+				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
+				arguments["request-hash"] != result.ValidationRequest.RequestHash {
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			return nil
 		}
-		if arguments, err := reviewTransitionArgumentMap(input.Arguments); err != nil || len(arguments) != 6 ||
-			arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
-			arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity || arguments["repository-context"] != context ||
-			reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
-			arguments["purpose"] != reviewTargetedValidationPurpose || arguments["request-hash"] != result.ValidationRequest.RequestHash {
-			return errors.New("targeted validation transition lacks the corrected inspection binding") // refusal:by-design world-action: only STATUS can issue a complete corrected-candidate binding
-		}
-		want := reviewTargetedValidationSubmission(result.Contract, ReviewTransitionBinding{
-			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
-			TargetIdentity: result.ValidationRequest.CorrectionTargetIdentity, RepositoryContext: context,
-		}, *result.ValidationRequest)
-		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
-			return errors.New("targeted validation submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
-		}
-	case "reviewer_results_required":
+		return errors.New("targeted validation collection has no Go-owned capture operation") // refusal:by-design world-action: only a provider code fix can bind the validator to its frozen correction authority
+	case "intended_untracked_selection_required":
+		return result.validateIntendedUntrackedSelectionTransition()
+	case "reviewer_results_required", "provider_refuter_required":
 		// Only the pi host-relay capture input carries a submission: its
 		// materialize arguments are a non-advancing prelude, so the --input
 		// descriptor is what advances authority. Transition.Validate() above
@@ -735,35 +642,6 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			if err != nil || !reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) {
 				return errors.New("submission descriptor is attached to an unrelated collection input") // refusal:by-design world-action: only a provider code fix can remove the unrelated descriptor
 			}
-		}
-	case "verification_evidence_required", "correction_repository_verification_required":
-		if result.Schema == ReviewIntegrationStatusSchemaV4 {
-			for _, input := range transition.Collect.Inputs {
-				if input.Submission != nil {
-					return errors.New("v4 verification evidence transition contains a submission descriptor") // refusal:by-design world-action: only a provider code fix can preserve the v4 wire contract
-				}
-			}
-			return nil
-		}
-		if len(transition.Collect.Inputs) != 1 || result.Authority == nil {
-			return errors.New("verification evidence submission transition is incomplete") // refusal:by-design world-action: only a provider code fix can produce the required single input
-		}
-		input := transition.Collect.Inputs[0]
-		arguments, err := reviewTransitionArgumentMap(input.Arguments)
-		if err != nil || input.CaptureOperation != "review.capture-evidence" || input.Schema != reviewVerificationEvidenceSchemaID || input.Submission == nil {
-			return errors.New("verification evidence submission descriptor has no provider binding") // refusal:by-design world-action: only a provider code fix can bind the capture operation
-		}
-		target := reviewAuthorityTargetIdentity(result)
-		if result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
-			target = result.ValidationRequest.CorrectionTargetIdentity
-		}
-		binding := ReviewTransitionBinding{
-			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
-			TargetIdentity: target, RepositoryContext: arguments["repository-context"],
-		}
-		want := reviewCaptureEvidenceSubmission(result.Contract, binding)
-		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
-			return errors.New("verification evidence submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its authority
 		}
 	default:
 		for _, input := range transition.Collect.Inputs {
@@ -803,11 +681,43 @@ func validateReviewProviderTaskInput(input ReviewTransitionInput, arguments map[
 	return nil
 }
 
+func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
+	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7) || result.Authority == nil || result.ValidationRequest == nil ||
+		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
+		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
+		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
+	}
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		return err
+	}
+	if err := validateReviewProviderTaskInput(input, arguments); err != nil {
+		return err
+	}
+	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
+		arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity {
+		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
+	}
+	return nil
+}
+
 func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
+		if result.rddModeResolved && !result.rddMode.Enabled() {
+			// The kill switch answers before any selector-dependent invariant:
+			// a disabled fresh target stops with rdd_disabled whatever its
+			// projection, exactly as the transition builder decides it
+			// (issue #2981: the staged workspace-overlay STOP invariant below
+			// used to refuse that answer as a producer defect).
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
+				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
+				return errors.New("disabled fresh target lacks an RDD STOP transition")
+			}
+			return nil
+		}
 		if result.Action == reviewtransaction.TargetStatusActionStop {
 			if result.NextTransition.Kind != reviewNextTransitionStop {
 				// refusal:by-design world-action: a provider-built status envelope paired STOP with a non-STOP transition; only a producer code fix can make that invariant true
@@ -826,13 +736,6 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			default:
 				// refusal:by-design world-action: this negotiated status invariant supports only the explicitly classified fresh STOP projections; a producer must choose one of those projections
 				return errors.New("fresh target STOP action has an unsupported projection")
-			}
-			return nil
-		}
-		if result.Action == reviewtransaction.TargetStatusActionStart && result.rddModeResolved && !result.rddMode.Enabled() {
-			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
-				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
-				return errors.New("disabled fresh target lacks an RDD STOP transition")
 			}
 			return nil
 		}
@@ -862,10 +765,11 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return result.validateStartNextTransition()
 	}
 	expectedExecutionTarget := result.TargetIdentity
-	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
+	if result.Authority != nil && (result.Authority.State == reviewtransaction.StateValidating || result.NextTransition.Execute != nil && result.NextTransition.Execute.Operation == "review.acknowledge-approved") {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
 	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
-		result.ValidationRequest != nil && result.NextTransition.ReasonCode == "correction_repository_tooling_failed" {
+		result.ValidationRequest != nil && (result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
+		result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready") {
 		expectedExecutionTarget = result.ValidationRequest.CorrectionTargetIdentity
 	}
 	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {
@@ -879,38 +783,53 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			return err
 		}
 	}
-	if result.FinalVerificationRetry != nil {
-		if err := result.validateFinalVerificationRetryNextTransition(); err != nil {
-			return err
-		}
-	}
 	if result.NextTransition.Collect == nil {
 		return nil
 	}
 	for _, input := range result.NextTransition.Collect.Inputs {
-		if input.CaptureOperation == "review.capture-evidence" {
-			expectedTarget := reviewAuthorityTargetIdentity(result)
-			if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
-				expectedTarget = result.ValidationRequest.CorrectionTargetIdentity
-			}
-			arguments, err := reviewTransitionArgumentMap(input.Arguments)
-			if err != nil || arguments["target"] != expectedTarget {
-				return errors.New("negotiated status evidence target differs from the frozen authority target identity")
-			}
-			continue
-		}
 		if input.CaptureOperation != "review.capture-result" {
 			continue
 		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
 		if err != nil || arguments["target"] != result.Projection.InitialSnapshotIdentity || input.ArtifactSubject == nil ||
-			input.ArtifactSubject.TargetIdentity != result.Projection.InitialSnapshotIdentity || input.ChangedPathManifest == nil ||
-			!reflect.DeepEqual(manifestPathsForStatus(*input.ChangedPathManifest), result.Projection.Paths) {
+			input.ArtifactSubject.TargetIdentity != result.Projection.InitialSnapshotIdentity {
 			return errors.New("negotiated status capture target differs from the frozen target identity")
 		}
-		if result.Contract == ReviewIntegrationContractV1 && (input.CandidateDiff == nil || input.BaseTree != "" || input.CandidateTree != "") ||
+		// issue #3922 / #4199 / gentle-pi#543: the native-git (v2) transport no
+		// longer inlines the manifest on this per-lens input -- it is already
+		// committed to by artifact_subject.changed_path_manifest_sha256 -- so a
+		// nil manifest here is valid for v2. The legacy (v1) transport still
+		// requires it below. When a manifest is present anyway, its paths must
+		// still match the frozen projection.
+		if input.ChangedPathManifest != nil && !reflect.DeepEqual(manifestPathsForStatus(*input.ChangedPathManifest), result.Projection.Paths) {
+			return errors.New("negotiated status capture target differs from the frozen target identity")
+		}
+		if result.Contract == ReviewIntegrationContractV1 && (input.CandidateDiff == nil || input.BaseTree != "" || input.CandidateTree != "" || input.ChangedPathManifest == nil) ||
 			result.Contract == ReviewIntegrationContractV2 && (input.CandidateDiff != nil || input.BaseTree != result.Projection.BaseTree || input.CandidateTree != result.Projection.InitialReviewTree) {
 			return errors.New("negotiated status capture transport differs from its contract") // refusal:by-design world-action: provider-built STATUS mixed negotiated transports and requires a code fix
+		}
+	}
+	return nil
+}
+
+// validateFrozenManifestBinding proves every manifest-less capture input
+// describes the frozen candidate: its subject's manifest digest must equal
+// the envelope's frozen digest, which the facade re-derives from the
+// repository. It fails closed: without that digest a manifest-less input is
+// unbound and the envelope is refused, on every validation path.
+func (result ReviewTargetStatusResult) validateFrozenManifestBinding() error {
+	if result.NextTransition == nil || result.NextTransition.Collect == nil {
+		return nil
+	}
+	for _, input := range result.NextTransition.Collect.Inputs {
+		if input.CaptureOperation != "review.capture-result" || input.ChangedPathManifest != nil || input.ArtifactSubject == nil {
+			continue
+		}
+		if result.Frozen == nil || !validReviewCapabilitySHA256(result.Frozen.ChangedPathManifestSHA256) {
+			return errors.New("negotiated status offers a manifest-less capture without the frozen candidate manifest digest") // refusal:by-design world-action: the provider-built envelope omitted the digest it must publish and requires a code fix
+		}
+		if input.ArtifactSubject.ChangedPathManifestSHA256 != result.Frozen.ChangedPathManifestSHA256 {
+			return errors.New("negotiated status capture subject manifest digest differs from the frozen candidate manifest") // refusal:by-design world-action: the provider-built subject and frozen digest disagree and require a code fix
 		}
 	}
 	return nil
@@ -921,8 +840,18 @@ func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransit
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	input := result.NextTransition.Collect.Inputs[0]
+	// The submission rule is stated on submission validity, not on an
+	// explicit per-version equality check, so it holds for v7 without a new
+	// branch: v5 forbids a submission descriptor, v6 requires one (and it
+	// must validate), and v7's next_transition admits both shapes (submission
+	// optional) — a v7 envelope satisfies both legs simply by having neither
+	// requirement force it either way.
+	submissionInvalidWhenPresent := input.Submission != nil && input.Submission.Validate() != nil
+	v5ForbidsSubmission := result.Schema == ReviewIntegrationStatusSchemaV5 && input.Submission != nil
+	v6RequiresSubmission := result.Schema == ReviewIntegrationStatusSchemaV6 && input.Submission == nil
 	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema ||
-		input.CaptureOperation != "external.select_intended_untracked" || input.Submission != nil || len(input.Arguments) != 6 {
+		input.CaptureOperation != "external.select_intended_untracked" || len(input.Arguments) != 6 ||
+		submissionInvalidWhenPresent || v5ForbidsSubmission || v6RequiresSubmission {
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||
@@ -937,7 +866,7 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	if execution == nil || (execution.Operation != "review.validate" && execution.Operation != "review.recover") {
 		return nil
 	}
-	arguments, err := reviewTransitionArgumentMap(execution.Arguments)
+	arguments, err := reviewTransitionArgumentMap(execution.Arguments, execution.Operation)
 	if err != nil {
 		return err
 	}
@@ -946,8 +875,15 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	if selectorsPresent {
 		selectors = *execution.SelectorArguments
 	}
+	// intended-untracked legitimately repeats on a selection-replaying
+	// RECOVER (#1972), so echo membership is checked pairwise against the
+	// executable arguments rather than through the deduplicating map.
+	argumentPairs := make(map[ReviewTransitionArgument]bool, len(execution.Arguments))
+	for _, argument := range execution.Arguments {
+		argumentPairs[ReviewTransitionArgument{Name: argument.Name, Value: argument.Value}] = true
+	}
 	for _, selector := range selectors {
-		if arguments[selector.Name] != selector.Value {
+		if !argumentPairs[ReviewTransitionArgument{Name: selector.Name, Value: selector.Value}] {
 			return errors.New("negotiated transition changed its normalized selector")
 		}
 	}
@@ -955,7 +891,11 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	_, hasCommitted := arguments["committed-only"]
 	projection, hasProjection := arguments["projection"]
 	workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
-	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay) {
+	_, hasUntrackedScope := arguments["untracked-scope"]
+	_, hasUntrackedInventory := arguments["expected-untracked-inventory"]
+	_, hasIntendedUntracked := arguments["intended-untracked"]
+	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay ||
+		hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked) {
 		return errors.New("negotiated transition omitted its normalized selector")
 	}
 	if hasWorkspaceOverlay && workspaceOverlay != "true" {
@@ -974,11 +914,11 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 			return errors.New("current-changes RECOVER transition invented target selectors")
 		}
 	case reviewtransaction.TargetBaseDiff:
-		if !hasBase || !hasCommitted || hasWorkspaceOverlay {
+		if !hasBase || !hasCommitted || hasWorkspaceOverlay || hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked {
 			return errors.New("base-diff RECOVER transition lacks exact target selectors")
 		}
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
-		if !hasBase || hasCommitted {
+		if !hasBase || hasCommitted || hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked {
 			return errors.New("workspace-overlay RECOVER transition has incompatible target selectors")
 		}
 		if result.Projection.Projection == reviewtransaction.ProjectionStaged &&
@@ -1047,36 +987,6 @@ func reviewAuthorityTargetIdentity(status ReviewTargetStatusResult) string {
 	return status.TargetIdentity
 }
 
-func (result ReviewTargetStatusResult) validateFinalVerificationRetryNextTransition() error {
-	transition, retry := result.NextTransition, result.FinalVerificationRetry
-	if transition == nil || retry == nil || result.Authority == nil ||
-		transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "final_verification_retry_authorization_required" ||
-		transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
-		return errors.New("final-verification retry authorization transition is incomplete")
-	}
-	input := transition.Collect.Inputs[0]
-	arguments, err := reviewTransitionArgumentMap(input.Arguments)
-	want := map[string]string{
-		"predecessor-lineage":           result.Authority.LineageID,
-		"expected-predecessor-revision": result.Authority.Revision,
-		"validating-revision":           retry.ValidatingRevision,
-		"target":                        retry.TargetIdentity,
-		"failed-evidence-hash":          retry.FailedEvidenceHash,
-		"finalize-request-digest":       retry.FinalizeRequestDigest,
-		"incident-schema":               retry.IncidentSchema,
-		"incident-class":                retry.IncidentClass,
-	}
-	if retry.FailedEvidenceRecordDigest != "" {
-		want["failed-evidence-record-digest"] = retry.FailedEvidenceRecordDigest
-	}
-	if err != nil || input.Name != "final_verification_retry_authorization" ||
-		input.Schema != reviewtransaction.FinalVerificationRetryAuthorizationSchema ||
-		input.CaptureOperation != "external.authorize_final_verification_retry" || !reflect.DeepEqual(arguments, want) {
-		return errors.New("final-verification retry authorization transition is not provider-bound")
-	}
-	return nil
-}
-
 func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
 	transition := result.NextTransition
 	assessment, candidate := result.Repair, result.Repair.Candidate
@@ -1130,6 +1040,19 @@ func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
 	return nil
 }
 
+// frozenManifestDigestForProjection publishes the digest a manifest-less
+// capture input is bound to, and keeps the projection cross-check the inlined
+// manifest used to carry: the frozen manifest must describe exactly the
+// published projection paths before its digest can vouch for any subject, so
+// a STATUS whose subjects agree with each other but not with `projection.paths`
+// is refused at the provider instead of validating by construction.
+func frozenManifestDigestForProjection(manifest []reviewtransaction.ChangedPathManifestEntry, projectionPaths []string) (string, error) {
+	if !reflect.DeepEqual(manifestPathsForStatus(manifest), projectionPaths) {
+		return "", errors.New("frozen candidate manifest paths differ from the published projection paths") // refusal:by-design world-action: the frozen manifest and the published projection were derived from different candidates and require a code fix
+	}
+	return reviewtransaction.ChangedPathManifestDigest(manifest)
+}
+
 func manifestPathsForStatus(entries []reviewtransaction.ChangedPathManifestEntry) []string {
 	paths := make([]string, len(entries))
 	for index, entry := range entries {
@@ -1138,17 +1061,28 @@ func manifestPathsForStatus(entries []reviewtransaction.ChangedPathManifestEntry
 	return paths
 }
 
-func reviewStatusPathsContain(candidate, correction []string) bool {
-	available := make(map[string]struct{}, len(candidate))
-	for _, value := range candidate {
-		available[value] = struct{}{}
+// reviewValidationRequestCopiesAgree decides whether the transition's copy of
+// the targeted validation request and the status's copy are consistent.
+//
+// The invariant being enforced is that two copies of the same request must not
+// disagree. Presence parity is a stronger rule than that, and it is only right
+// while every transition that omits a request is asserting there is none. A
+// transition collecting something else first is not asserting anything about
+// it: an untracked file appearing mid-correction has to be declared before the
+// validator can run, and the pending request does not stop being true meanwhile
+// (#3647). That case relaxes presence parity and nothing else -- two copies that
+// both exist still have to agree.
+func reviewValidationRequestCopiesAgree(transitionRequest, statusRequest *reviewtransaction.TargetedValidationRequest, transitionCollectsSomethingElse bool) bool {
+	if transitionRequest == nil && statusRequest == nil {
+		return true
 	}
-	for _, value := range correction {
-		if _, exists := available[value]; !exists {
-			return false
-		}
+	if transitionRequest == nil {
+		return transitionCollectsSomethingElse
 	}
-	return len(correction) > 0
+	if statusRequest == nil {
+		return false
+	}
+	return reflect.DeepEqual(*transitionRequest, *statusRequest)
 }
 
 func reviewTransitionValidationRequest(transition *ReviewNextTransition) *reviewtransaction.TargetedValidationRequest {
@@ -1191,7 +1125,7 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence" || input.CaptureOperation == "review.capture-result"
+			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result" || input.CaptureOperation == "external.select_intended_untracked"
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1221,7 +1155,7 @@ func (transition ReviewNextTransition) Validate() error {
 					argumentCount += 2
 					expected := make([]string, 0, len(input.Arguments)-1)
 					for _, argument := range input.Arguments {
-						if argument.Name != "agent" && argument.Name != "materialize" {
+						if argument.Name != "materialize" {
 							expected = append(expected, reviewTransitionArgumentToken(argument))
 						}
 					}
@@ -1235,7 +1169,13 @@ func (transition ReviewNextTransition) Validate() error {
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
-					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
+					// issue #3922 / #4199 / gentle-pi#543: the native-git (v2)
+					// transport no longer requires an inlined manifest on this
+					// per-lens input -- artifact_subject.changed_path_manifest_sha256
+					// already commits to it. The legacy (v1) transport still
+					// requires the manifest, since its capture input carries no
+					// resolvable git tree to re-derive it from.
+					input.ArtifactSubject == nil || legacyTransport && input.ChangedPathManifest == nil ||
 					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
 					providerRuntime != "" && !providerCapture && !hostRelayMaterialize ||
 					hostRelayMaterialize && arguments["materialize"] != "true" ||
@@ -1244,14 +1184,24 @@ func (transition ReviewNextTransition) Validate() error {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
 				}
 				subject := input.ArtifactSubject
-				manifestDigest, manifestErr := reviewtransaction.ChangedPathManifestDigest(*input.ChangedPathManifest)
-				if reviewtransaction.ValidateArtifactSubject(*subject) != nil || manifestErr != nil ||
+				if reviewtransaction.ValidateArtifactSubject(*subject) != nil ||
 					subject.LineageID != arguments["lineage"] || subject.AuthorityRevision != arguments["expected-revision"] ||
 					subject.TargetIdentity != arguments["target"] || subject.Lens != arguments["lens"] || subject.SelectedOrder != order ||
-					subject.ChangedPathManifestSHA256 != manifestDigest ||
 					legacyTransport && subject.CandidateDiffSHA256 != input.CandidateDiff.SHA256 ||
 					nativeGitTransport && (subject.BaseTree != input.BaseTree || subject.CandidateTree != input.CandidateTree) {
 					return errors.New("review capture transition frozen subject or candidate context is invalid")
+				}
+				// When a manifest is present -- always for the legacy transport,
+				// optionally for the native-git transport -- its digest must
+				// still match the subject's committed identity. When absent (the
+				// now-common native-git case), the subject hash alone remains
+				// the binding; this struct-level validator has no repository
+				// access to re-derive the manifest from git.
+				if input.ChangedPathManifest != nil {
+					manifestDigest, manifestErr := reviewtransaction.ChangedPathManifestDigest(*input.ChangedPathManifest)
+					if manifestErr != nil || subject.ChangedPathManifestSHA256 != manifestDigest {
+						return errors.New("review capture transition frozen subject or candidate context is invalid")
+					}
 				}
 				if legacyTransport {
 					if _, diffErr := input.CandidateDiff.Bytes(); diffErr != nil || input.BaseTree != "" || input.CandidateTree != "" {
@@ -1263,20 +1213,51 @@ func (transition ReviewNextTransition) Validate() error {
 			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.BaseTree != "" || input.CandidateTree != "" || input.ChangedPathManifest != nil {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
-			if input.CaptureOperation == "review.capture-evidence" &&
-				((input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3) &&
-					(input.Schema != reviewVerificationEvidenceSchemaID || len(arguments) != 4 ||
-						reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil) ||
+			if input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+				// A pi host-relay role capture input is a self-contained
+				// executable vector: exactly the binding arguments plus
+				// --agent and --execute=true. Go materializes the role
+				// request, spawns its own locked-down pi process, and admits
+				// the raw bytes, so no submission descriptor may exist for a
+				// caller to author a verdict through.
+				providerRuntime := model.AgentID(arguments["agent"])
+				argumentCount, schema := 6, reviewRefuterSchemaID
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+					argumentCount, schema = 7, reviewValidatorSchemaID
+				}
+				// Fail closed on the argument count BEFORE any arithmetic over
+				// it: a hostile envelope with a truncated (or empty) argument
+				// vector must produce this refusal, never a panic.
+				if len(input.Arguments) != argumentCount || len(arguments) != argumentCount {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation &&
+					(input.ValidationRequest == nil || arguments["request-hash"] != input.ValidationRequest.RequestHash) {
+					return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+				}
+				if input.Schema != schema ||
+					(!reviewProviderHostRelayMaterializeRuntime(providerRuntime) && !reviewProviderCaptureRuntime(providerRuntime)) || arguments["execute"] != "true" ||
 					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
-					!validReviewCapabilitySHA256(arguments["target"])) {
-				return errors.New("verification evidence capture transition lacks an exact authority and candidate binding") // refusal:by-design world-action: only a producer-code repair can make a malformed machine transition trustworthy
+					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+					input.Submission != nil {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+			}
+			if input.CaptureOperation == reviewCaptureCorrectionPlanOperation &&
+				(input.Schema != "gentle-ai.review-correction-plan/v1" || len(arguments) != 5 ||
+					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
+					!validReviewCapabilitySHA256(arguments["target"]) || !validReviewCapabilitySHA256(arguments["request-hash"]) ||
+					reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil) {
+				return errors.New("correction-plan capture transition lacks an exact authority and request binding") // refusal:by-design world-action: only STATUS may bind the pre-edit correction forecast
 			}
 			if input.CaptureOperation == "external.run_targeted_validation" && input.ValidationRequest == nil {
 				return errors.New("targeted validation transition lacks its provider-owned request")
 			}
 			if input.ValidationRequest != nil {
 				request := input.ValidationRequest
-				if input.Schema != reviewtransaction.TargetedValidationRequestSchema || input.CaptureOperation != "external.run_targeted_validation" ||
+				externalForm := input.CaptureOperation == "external.run_targeted_validation" && input.Schema == reviewtransaction.TargetedValidationRequestSchema
+				hostRelayForm := input.CaptureOperation == reviewCaptureValidationCaptureOperation
+				if !externalForm && !hostRelayForm ||
 					arguments["lineage"] != request.LineageID || arguments["expected-revision"] != request.ExpectedRevision ||
 					arguments["target"] != request.CorrectionTargetIdentity || reviewtransaction.ValidateTargetedValidationRequest(*request) != nil {
 					return errors.New("targeted validation transition request is invalid")
@@ -1287,7 +1268,7 @@ func (transition ReviewNextTransition) Validate() error {
 		if transition.Collect != nil || transition.Execute == nil || transition.Execute.Arguments == nil || len(transition.Execute.Preconditions) == 0 || !validReviewCapabilitySHA256(transition.Execute.Binding.TargetIdentity) {
 			return errors.New("execution transition is incomplete")
 		}
-		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.finalize" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
+		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.status" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" && transition.Execute.Operation != "review.acknowledge-approved" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
 			return errors.New("execution transition operation or binding is invalid")
 		}
 		if transition.Execute.Binding.RepositoryContext != "" && reviewtransaction.ValidateReviewRepositoryContextHandle(transition.Execute.Binding.RepositoryContext) != nil {
@@ -1333,37 +1314,29 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	if submission.OperationToken == "capture-result" {
 		return submission.validateCaptureResult()
 	}
-	if submission.Value != nil {
-		return submission.validateFinalize()
+	if submission.OperationToken == "capture-correction-plan" {
+		return submission.validateCorrectionPlan()
 	}
-	if submission.OperationToken != "capture-evidence" || len(submission.Values) != 2 {
-		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	if submission.OperationToken == "status" {
+		return submission.validateIntendedUntrackedSelection()
 	}
-	for _, token := range submission.ArgumentTokens {
-		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
-			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
-		}
+	return errors.New("submission descriptor operation is unsupported") // refusal:by-design world-action: only result capture and correction-plan capture remain public submissions
+}
+
+func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
+	value, tokens := submission.Value, submission.ArgumentTokens
+	agent, hasAgent := "", false
+	if len(tokens) == 5 {
+		agent, hasAgent = strings.CutPrefix(tokens[2], "--agent=")
 	}
-	if len(submission.ArgumentTokens) != 6 || len(submission.Values) != 2 {
-		return errors.New("submission descriptor value substitution is malformed") // refusal:by-design world-action: only a provider code fix can restore the single value slot
+	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != 4 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
+		len(tokens) != 5 || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[3] != "--projection=workspace" || tokens[4] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
+		return errors.New("intended-untracked submission descriptor is invalid")
 	}
-	if !strings.HasPrefix(submission.ArgumentTokens[0], "--lineage=") || !validReviewIntegrationLineage(strings.TrimPrefix(submission.ArgumentTokens[0], "--lineage=")) ||
-		!strings.HasPrefix(submission.ArgumentTokens[1], "--expected-revision=") || !validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[1], "--expected-revision=")) ||
-		!strings.HasPrefix(submission.ArgumentTokens[2], "--target=") || !validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[2], "--target=")) ||
-		!strings.HasPrefix(submission.ArgumentTokens[3], "--repository-context=") ||
-		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(submission.ArgumentTokens[3], "--repository-context=")) != nil ||
-		submission.ArgumentTokens[4] != "--outcome={{outcome}}" || submission.ArgumentTokens[5] != "--input={{input}}" {
-		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
-	}
-	outcome, input := submission.Values[0], submission.Values[1]
-	if outcome.Slot != "outcome" || outcome.Domain != "verification_outcome" || outcome.Schema != "" || outcome.Minimum != 0 || outcome.Maximum != 0 ||
-		outcome.SubstitutionLocation != 4 || !reflect.DeepEqual(outcome.AllowedValues, []string{
-		string(reviewtransaction.VerificationOutcomePassed),
-		string(reviewtransaction.VerificationOutcomeFailed),
-		string(reviewtransaction.VerificationOutcomeProceduralFailure),
-	}) || input.Slot != "input" || input.Domain != "artifact_path_or_stdin" || input.Schema != reviewVerificationEvidenceSchemaID ||
-		input.Minimum != 0 || input.Maximum != 0 || len(input.AllowedValues) != 0 || input.SubstitutionLocation != 5 {
-		return errors.New("verification evidence submission descriptor values are invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domains
+	if _, err := reviewRuntimeWithImmutableTransport(agent); err != nil {
+		// refusal:by-design world-action: the provider-generated intended-untracked submission runtime requires a provider code fix.
+		return errors.New("intended-untracked submission runtime is unsupported")
 	}
 	return nil
 }
@@ -1391,51 +1364,36 @@ func (submission ReviewTransitionSubmission) validateCaptureResult() error {
 	return nil
 }
 
-func (submission ReviewTransitionSubmission) validateFinalize() error {
-	if submission.OperationToken != "finalize" || len(submission.Values) != 0 || submission.Value.SubstitutionLocation != 6 {
-		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+func (submission ReviewTransitionSubmission) validateCorrectionPlan() error {
+	if submission.Value == nil || len(submission.Values) != 0 || submission.Value.Slot != "correction_lines" ||
+		submission.Value.Domain != "positive_correction_lines" || submission.Value.Minimum != 1 ||
+		submission.Value.Maximum <= 0 || submission.Value.Schema != "" || len(submission.Value.AllowedValues) != 0 ||
+		submission.Value.SubstitutionLocation != 5 || len(submission.ArgumentTokens) != 6 {
+		return errors.New("correction-plan submission descriptor is invalid") // refusal:by-design world-action: only a provider code fix can alter the exact pre-edit forecast binding
 	}
 	for _, token := range submission.ArgumentTokens {
 		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
-			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+			return errors.New("correction-plan submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
 		}
 	}
-	if len(submission.ArgumentTokens) < 7 || submission.Value.SubstitutionLocation >= len(submission.ArgumentTokens) {
-		return errors.New("submission descriptor value substitution is malformed") // refusal:by-design world-action: only a provider code fix can restore the single value slot
-	}
-	common := submission.ArgumentTokens[:6]
-	if common[0] != "--contract="+ReviewIntegrationContractV2 ||
-		!strings.HasPrefix(common[1], "--lineage=") || !validReviewIntegrationLineage(strings.TrimPrefix(common[1], "--lineage=")) ||
-		!validReviewCapabilitySHA256(strings.TrimPrefix(common[2], "--expected-revision=")) ||
-		!validReviewCapabilitySHA256(strings.TrimPrefix(common[3], "--target=")) ||
-		!validReviewCapabilitySHA256(strings.TrimPrefix(common[4], "--request-hash=")) ||
-		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(common[5], "--repository-context=")) != nil ||
-		!strings.HasPrefix(common[2], "--expected-revision=") || !strings.HasPrefix(common[3], "--target=") ||
-		!strings.HasPrefix(common[4], "--request-hash=") || !strings.HasPrefix(common[5], "--repository-context=") {
-		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
-	}
-	switch submission.Value.Slot {
-	case "correction_lines":
-		if len(submission.ArgumentTokens) != 7 || submission.ArgumentTokens[6] != "--correction-lines="+reviewSubmissionValuePlaceholder ||
-			submission.Value.Domain != "positive_correction_lines" || submission.Value.Schema != "" ||
-			submission.Value.Minimum != 1 || submission.Value.Maximum < submission.Value.Minimum ||
-			submission.Value.Maximum > reviewtransaction.MaxCorrectionChangedLines || len(submission.Value.AllowedValues) != 0 {
-			return errors.New("correction submission descriptor value domain is invalid") // refusal:by-design world-action: only a provider code fix can restore the correction domain
-		}
-	case "validation":
-		if len(submission.ArgumentTokens) != 8 || submission.ArgumentTokens[6] != "--validation="+reviewSubmissionValuePlaceholder ||
-			submission.ArgumentTokens[7] != "--captured-evidence=true" || submission.Value.Domain != "artifact_path_or_stdin" ||
-			submission.Value.Schema != reviewValidatorSchemaID || submission.Value.Minimum != 0 || submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
-			return errors.New("validation submission descriptor value domain is invalid") // refusal:by-design world-action: only a provider code fix can restore the validation domain
-		}
-	default:
-		return errors.New("submission descriptor value slot is unsupported") // refusal:by-design world-action: only a provider code fix can restore a supported value slot
+	if !strings.HasPrefix(submission.ArgumentTokens[0], "--lineage=") ||
+		!validReviewIntegrationLineage(strings.TrimPrefix(submission.ArgumentTokens[0], "--lineage=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[1], "--expected-revision=") ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[1], "--expected-revision=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[2], "--target=") ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[2], "--target=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[3], "--request-hash=") ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[3], "--request-hash=")) ||
+		!strings.HasPrefix(submission.ArgumentTokens[4], "--repository-context=") ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(submission.ArgumentTokens[4], "--repository-context=")) != nil ||
+		submission.ArgumentTokens[5] != "--correction-lines="+reviewSubmissionValuePlaceholder {
+		return errors.New("correction-plan submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore the exact pre-edit forecast binding
 	}
 	return nil
 }
 
 func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation ...string) (map[string]string, error) {
-	allowIntendedUntracked := len(operation) == 1 && operation[0] == "review.start"
+	allowIntendedUntracked := len(operation) == 1 && (operation[0] == "review.start" || operation[0] == "review.recover")
 	values := make(map[string]string, len(arguments))
 	for _, argument := range arguments {
 		if previous, duplicate := values[argument.Name]; duplicate && (!allowIntendedUntracked || argument.Name != "intended-untracked" || previous == argument.Value) {
@@ -1444,6 +1402,25 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation
 		values[argument.Name] = argument.Value
 	}
 	return values, nil
+}
+
+func validateReviewApprovedAcknowledgementExecution(execution ReviewTransitionExecution) error {
+	transition := ReviewNextTransition{
+		Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: &execution,
+	}
+	return transition.Validate()
+}
+
+func validReviewAcknowledgementToken(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
@@ -1468,6 +1445,62 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		return true
 	}
 	switch execution.Operation {
+	case "review.acknowledge-approved":
+		if !exact([]string{"cwd", "lineage", "target", "expected-revision", "token"}, nil) ||
+			arguments["lineage"] != execution.Binding.LineageID || arguments["target"] != execution.Binding.TargetIdentity ||
+			arguments["expected-revision"] != execution.Binding.Revision || !validReviewAcknowledgementToken(arguments["token"]) ||
+			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateApproved)}) {
+			return errors.New("approved acknowledgement transition binding is invalid") // refusal:by-design world-action: only the exact pending acknowledgement continuation can burn approved authority
+		}
+		for _, argument := range execution.Arguments {
+			if argument.Token != reviewTransitionArgumentToken(argument) {
+				return errors.New("approved acknowledgement transition token is invalid") // refusal:by-design world-action: the published acknowledgement command must execute exactly its bound arguments
+			}
+		}
+	case "review.status":
+		// The reviewing START continuation (issue #3894): the provider-issued
+		// re-entry must be mechanically executable, so every argument row is a
+		// real tokenized flag and the scope selectors echo byte-identically in
+		// selector_arguments — a consumer replays them without re-deriving any
+		// spelling. It never carries --cwd: a negotiated START payload
+		// publishes no filesystem path, and the caller runs the command in the
+		// repository it already holds. The opaque repository context row
+		// (issue #3932) lets STATUS fail closed from a foreign process cwd.
+		required := []string{"contract", "next-transition", "lineage", "repository-context"}
+		if _, present := arguments["agent"]; present {
+			required = append(required, "agent")
+		}
+		wantSelectors := []ReviewTransitionArgument{}
+		for _, argument := range execution.Arguments {
+			switch argument.Name {
+			case "base-ref", "committed-only", "projection", "workspace-overlay":
+				wantSelectors = append(wantSelectors, argument)
+			}
+		}
+		if execution.SelectorArguments == nil || len(wantSelectors) == 0 || !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
+			return errors.New("review status transition selectors are invalid") // refusal:by-design world-action: only a provider code fix can echo the frozen scope selectors exactly
+		}
+		base, hasBase := arguments["base-ref"]
+		committed, hasCommitted := arguments["committed-only"]
+		projection, hasProjection := arguments["projection"]
+		overlay, hasOverlay := arguments["workspace-overlay"]
+		validProjection := projection == string(reviewtransaction.ProjectionWorkspace) || projection == string(reviewtransaction.ProjectionStaged)
+		committedScope := hasBase && hasCommitted && committed == "true" && !hasOverlay && !hasProjection
+		overlayScope := hasBase && hasOverlay && overlay == "true" && !hasCommitted &&
+			(!hasProjection || projection == string(reviewtransaction.ProjectionStaged))
+		currentScope := !hasBase && !hasCommitted && !hasOverlay && hasProjection && validProjection
+		if !exact(required, wantSelectors) || !committedScope && !overlayScope && !currentScope ||
+			arguments["contract"] != ReviewIntegrationContractV2 || arguments["next-transition"] != "true" ||
+			arguments["lineage"] != execution.Binding.LineageID || hasBase && !validReviewGitTree(base) ||
+			reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+			len(execution.Preconditions) != 1 || execution.Preconditions[0] != (ReviewTransitionArgument{Name: "state", Value: string(reviewtransaction.StateReviewing)}) {
+			return errors.New("review status transition binding is invalid") // refusal:by-design world-action: only a provider code fix can bind the exact reviewing re-entry
+		}
+		for _, argument := range execution.Arguments {
+			if argument.Token != reviewTransitionArgumentToken(argument) {
+				return errors.New("review status transition token is invalid") // refusal:by-design world-action: the published continuation must execute exactly its bound arguments
+			}
+		}
 	case "review.validate":
 		gate := reviewtransaction.GateKind(arguments["gate"])
 		wantSelectors := []ReviewTransitionArgument{}
@@ -1484,16 +1517,38 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			return errors.New("review validate transition selectors are invalid")
 		}
 	case "review.recover":
+		// intended-untracked repeats once per selected path (#1972), so the
+		// selector echo is rebuilt from the ordered executable arguments and
+		// the argument-count check uses distinct selector names because the
+		// argument map deduplicates the repeats.
+		recoverSelectorNames := map[string]bool{
+			"base-ref": true, "committed-only": true, "projection": true, "workspace-overlay": true,
+			"untracked-scope": true, "expected-untracked-inventory": true, "intended-untracked": true,
+		}
 		wantSelectors := []ReviewTransitionArgument{}
-		for _, name := range []string{"base-ref", "committed-only", "projection", "workspace-overlay"} {
-			if value, present := arguments[name]; present {
-				wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: name, Value: value})
+		distinctSelectors := map[string]bool{}
+		intendedPaths := []string{}
+		for _, argument := range execution.Arguments {
+			if !recoverSelectorNames[argument.Name] {
+				continue
+			}
+			wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: argument.Name, Value: argument.Value})
+			distinctSelectors[argument.Name] = true
+			if argument.Name == "intended-untracked" {
+				intendedPaths = append(intendedPaths, argument.Value)
 			}
 		}
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review recover transition selectors are invalid")
 		}
-		if !exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors) ||
+		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}
+		requiredPresent := true
+		for _, name := range required {
+			if _, present := arguments[name]; !present {
+				requiredPresent = false
+			}
+		}
+		if !requiredPresent || len(arguments) != len(required)+len(distinctSelectors) ||
 			arguments["predecessor-lineage"] != execution.Binding.LineageID ||
 			arguments["expected-predecessor-revision"] != execution.Binding.Revision ||
 			!validReviewIntegrationLineage(arguments["successor-lineage"]) ||
@@ -1515,6 +1570,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		committed, hasCommitted := arguments["committed-only"]
 		projection, hasProjection := arguments["projection"]
 		workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
+		untrackedScope, hasUntrackedScope := arguments["untracked-scope"]
+		inventory, hasInventory := arguments["expected-untracked-inventory"]
+		hasIntended := distinctSelectors["intended-untracked"]
 		if arguments["maintainer-authorization"] != wantAuthorization ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
@@ -1524,6 +1582,23 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 				projection != string(reviewtransaction.ProjectionStaged) || workspaceOverlay != "true") {
 			return errors.New("review recover transition selectors are invalid")
 		}
+		// The untracked selection replay (#1972) is only meaningful for a
+		// workspace current-changes successor: scope and inventory travel
+		// together, select carries at least one path, exclude carries none,
+		// and every path is a plain repository-relative spelling.
+		if hasUntrackedScope != hasInventory ||
+			hasIntended && untrackedScope != "select" ||
+			hasUntrackedScope && untrackedScope == "select" && !hasIntended ||
+			hasUntrackedScope && untrackedScope != "select" && untrackedScope != "exclude" ||
+			hasUntrackedScope && (hasBase || hasCommitted || hasWorkspaceOverlay || hasProjection) ||
+			hasInventory && strings.TrimSpace(inventory) == "" {
+			return errors.New("review recover transition selectors are invalid")
+		}
+		for _, path := range intendedPaths {
+			if !validReviewIntendedUntrackedPath(path) {
+				return errors.New("review recover transition selectors are invalid")
+			}
+		}
 	}
 	return nil
 }
@@ -1532,6 +1607,16 @@ func validReviewTransitionSelector(value string) bool {
 	fields := strings.Fields(value)
 	return len(fields) == 1 && fields[0] == value && !path.IsAbs(value) &&
 		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0)
+}
+
+// validReviewIntendedUntrackedPath admits the repository-relative spellings an
+// intended-untracked declaration may carry. Unlike a target selector, a path
+// may contain interior spaces, so only the shapes that would break argv
+// replay or escape the repository are rejected.
+func validReviewIntendedUntrackedPath(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && !path.IsAbs(value) &&
+		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0) &&
+		!strings.ContainsAny(value, "\n\r")
 }
 
 func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusResult) error {
@@ -1552,11 +1637,8 @@ func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusRes
 		return errors.New("disabled fresh target eligibility does not stop START")
 	}
 	seen := map[string]bool{allowed.Action: true}
-	if allowed.Action == "review.recover" || allowed.Action == ReviewIntegrationOperationRetryFinalVerification {
+	if allowed.Action == "review.recover" {
 		expectedTarget := status.TargetIdentity
-		if allowed.Action == ReviewIntegrationOperationRetryFinalVerification {
-			expectedTarget = reviewAuthorityTargetIdentity(status)
-		}
 		if allowed.Disposition != status.ActionDisposition || allowed.Binding == nil ||
 			allowed.Binding.TargetIdentity != expectedTarget || status.Authority == nil ||
 			allowed.Binding.LineageID != status.Authority.LineageID || allowed.Binding.Revision != status.Authority.Revision {
@@ -1574,33 +1656,6 @@ func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusRes
 	for _, action := range reviewManagedActions {
 		if !seen[action] {
 			return errors.New("review action eligibility does not classify every managed action")
-		}
-	}
-	return nil
-}
-
-// ValidateFinalize rejects authorization-bearing guidance from FINALIZE. A
-// recovery must be re-derived by target-scoped STATUS before it can carry a
-// binding, so FINALIZE can only publish a non-authorizing next action.
-func (eligibility ReviewActionEligibility) ValidateFinalize() error {
-	if len(eligibility.AllowedActions) != 1 || eligibility.ForbiddenActions == nil {
-		return errors.New("finalize action eligibility is incomplete")
-	}
-	allowed := eligibility.AllowedActions[0]
-	if allowed.Action != "stop" || allowed.ReasonCode != reviewActionForbiddenFinalizeStatus ||
-		!reflect.DeepEqual(allowed.RequiredInputs, []string{"target_scoped_status"}) || allowed.Disposition != "" || allowed.Binding != nil {
-		return errors.New("finalize action eligibility contains authorization guidance")
-	}
-	seen := map[string]bool{allowed.Action: true}
-	for _, forbidden := range eligibility.ForbiddenActions {
-		if strings.TrimSpace(forbidden.Action) == "" || strings.TrimSpace(forbidden.ReasonCode) == "" || seen[forbidden.Action] {
-			return errors.New("finalize action eligibility has overlapping or invalid actions")
-		}
-		seen[forbidden.Action] = true
-	}
-	for _, action := range reviewFinalizeManagedActions {
-		if !seen[action] {
-			return errors.New("finalize action eligibility does not classify every managed action")
 		}
 	}
 	return nil

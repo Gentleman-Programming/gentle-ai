@@ -30,6 +30,7 @@ func init() {
 		Name:     transitionAxis,
 		Title:    "Journeys that change mode or chain operations in the middle of a lifecycle",
 		BlackBox: true,
+		Review:   reviewOptedIn,
 		Properties: []string{
 			"Every state here is reached through the CLI alone. No fixture authors a store file, which is what separates this axis from damaged-store: these are sequences a user can type, not corruption a user cannot cause.",
 			"Each journey asserts the ledger is still READABLE after the sequence, not merely that the last command refused. A refusal that leaves the store unable to answer is a wedge, and that distinction is the reason this axis exists.",
@@ -43,6 +44,7 @@ func transitionJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "tr01-consecutive-rescope-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "Two rescopes in a row: whatever the second one answers, the ledger must still answer",
 			Source: "community report #2830 on published 2.4.0-rc.1",
 			// The reported shape, reproduced through the CLI only. The first
@@ -70,6 +72,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr02-reset-after-rescope-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "Narrow, spend the budget, then reset: the widening route, driven end to end",
 			Source: "#2769's documented exhaust-to-widen route + #2830's write-versus-replay surface",
 			// What this proves, stated narrowly because two decoys narrowed it:
@@ -105,6 +108,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr04-reset-then-rescope-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "The mirror of tr02: reset first, then narrow",
 			Source: "systematic pairing of the mutating ledger verbs",
 			// tr01 and tr02 cover rescope-then-X. This is X-then-rescope, and
@@ -128,14 +132,14 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr05-review-re-enabled-mid-change-keeps-sdd-moving",
+			Review: reviewOptedIn,
 			Title:  "Turn review back ON in the middle of a change that started without it",
 			Source: "the mirror of tr03; the switch is documented as reversible",
-			// tr03 proves work survives the switch going off. Nothing proved
-			// the other direction, and it is the riskier one: turning review ON
-			// mid-change means delivery starts demanding a receipt for work
-			// that has none yet. If that wedges, a user who enables review to
-			// be careful is punished for it, which is the opposite of what the
-			// switch is for.
+			// tr03 proves work survives the switch going off. This is the other
+			// direction: turning review on mid-change may surface review context,
+			// but it must not make SDD delivery demand a receipt or wedge work
+			// that started without one. A user who enables review to be careful
+			// must still keep moving under ordinary repository policy.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "turn review off before starting", Requires: modeCapability,
@@ -150,6 +154,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr06-mode-flip-during-an-active-attempt",
+			Review: reviewOptedIn,
 			Title:  "Flip the switch while an attempt is OPEN, not between attempts",
 			Source: "the sequence tr03 and tr05 both avoid: no terminal boundary to land on",
 			// tr03 and tr05 both flip the switch between attempts, which is the
@@ -171,6 +176,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr07-reset-then-reset-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "Reset twice: the same-verb pair tr01 proves is dangerous for rescope",
 			Source: "systematic pairing; tr01 shows a same-verb repeat can wedge",
 			// tr01 established that repeating a generation-advancing verb is a
@@ -193,6 +199,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr08-scope-change-after-a-delegated-handoff",
+			Review: reviewOptedIn,
 			Title:  "Hand the attempt to a linked worktree, then change the scope",
 			Source: "systematic pairing across surfaces; handoff rebinds the worktree an attempt belongs to",
 			// Handoff moves an attempt's effective worktree, and a scope change
@@ -214,6 +221,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr09-mode-flip-while-a-review-lineage-is-open",
+			Review: reviewOptedIn,
 			Title:  "Turn review off while a REVIEW is open, not merely while an attempt is",
 			Source: "tr03 and tr06 flip the switch against SDD state; this flips it against review state",
 			// The switch's own contract says delivery falls back to ordinary
@@ -237,31 +245,27 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr10-scope-change-after-the-review-is-bound",
-			Title:  "Bind an approved review to the change, then move the objective under it",
-			Source: "cross-surface pairing: the binding names an objective a scope change replaces",
-			// The highest-value pair left after tr08, and the most plausible in
-			// real use: you get a review approved, bind it to the change, and
-			// then discover the scope was wrong. The binding records the
-			// objective it was bound against; a rescope replaces that objective
-			// with a new generation. Two records now disagree about which
-			// objective is current, which is the same shape as #2830 one
-			// surface over.
+			Review: reviewOptedIn,
+			Title:  "Acknowledge a review, then move the SDD objective",
+			Source: "#3797 exact acknowledgement: SDD scope remains movable without durable review authority or binding",
+			// Approval awaits one exact acknowledgement. No receipt, authority, or
+			// SDD binding survives after that acknowledgement burns the transaction.
+			// The cross-surface invariant is structural absence before rescope
+			// creates a new objective generation.
 			//
-			// Whether the rescope should be admitted here is a product
-			// question. Whether both surfaces still answer afterwards is not.
+			// Whether the rescope succeeds is still secondary to #2830's safety
+			// property: every ordinary sequence must leave both stores readable.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "begin, fail, begin again", Requires: sddAttemptBeginCapability, Composite: sddBeginFailBegin},
 				{Name: "fixture: the bounded correction moves the candidate", Fixture: sddBoundedCorrection},
-				{Name: "review start on the corrected candidate", Requires: startCapability,
+				{Name: "review start on the corrected zero-lens candidate closes without creating an SDD binding", Requires: startCapability,
 					Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability,
-					Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "bind the approved review to the change", Requires: bindSDDCapability,
-					Composite: sddBindApprovedReview},
-				{Name: "now move the objective the binding names",
+				{Name: "acknowledge the terminal START and prove no authority or binding survives",
+					Composite: transitionProveReviewAcknowledgedAndUnbound},
+				{Name: "now move the unbound objective",
 					Requires:  sddAttemptRescopeCapability,
-					Composite: transitionRescope("bench-rescope-after-bind", "narrower after binding")},
+					Composite: transitionRescope("bench-rescope-after-acknowledgement", "narrower after review acknowledgement")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 				{Name: "and so does review status", Requires: statusCapability,
 					Args: productArgs("review", "status")},
@@ -269,6 +273,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr11-abandon-the-review-while-an-attempt-is-open",
+			Review: reviewOptedIn,
 			Title:  "Quarantine the review out from under a running SDD attempt",
 			Source: "cross-surface pairing: the two surfaces own separate state and nothing sequences them",
 			// SDD attempts and review lineages are separate authorities that a
@@ -279,6 +284,7 @@ func transitionJourneys() []Journey {
 			// the other.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
+				{Name: "fixture: stage high-risk review candidate alongside the open attempt", Fixture: stageAuthCode},
 				{Name: "begin an attempt and leave it open", Requires: sddAttemptBeginCapability,
 					Composite: transitionBeginOnly},
 				{Name: "start a review alongside it", Requires: startCapability,
@@ -292,6 +298,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr03-review-disabled-mid-change-keeps-sdd-moving",
+			Review: reviewOptedIn,
 			Title:  "Turn review off in the middle of a change: SDD must keep working under ordinary policy",
 			Source: "maintainer-named coverage gap: no journey changes mode mid-lifecycle",
 			// The kill switch is user-owned and documented as always available.
@@ -468,6 +475,30 @@ func transitionBeginAgain(r *journeyRun) error {
 		return err
 	}
 	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-transition-begin-again", sddObjective...), false)
+	return nil
+}
+
+// transitionProveReviewAcknowledgedAndUnbound proves #3797's cross-surface
+// boundary: exact acknowledgement removes review authority without an SDD binding.
+// The SDD attempt stays active and may be rescoped under ordinary ledger policy.
+func transitionProveReviewAcknowledgedAndUnbound(r *journeyRun) error {
+	if err := requireAtomicLineageAcknowledged(r, r.sandbox.Lineage); err != nil {
+		return fmt.Errorf("terminal review acknowledgement: %w", err)
+	}
+	head, err := proveAuthorities(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if len(head.Entries) != 0 {
+		return fmt.Errorf("acknowledged terminal review left durable authority: %+v", head.Entries)
+	}
+	status, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if status.Binding != nil || status.BindingRevision != "" {
+		return fmt.Errorf("terminal review burn invented an SDD binding: binding=%+v revision=%q", status.Binding, status.BindingRevision)
+	}
 	return nil
 }
 

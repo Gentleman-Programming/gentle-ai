@@ -133,7 +133,7 @@ func TestConsentFixtureNormalizationStripsRenderedWindowsCWDQuoting(t *testing.T
 }
 
 func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -215,7 +215,7 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 }
 
 func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -231,7 +231,7 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 
 	grantArgs := invocationArgs(t, question.Choices[0].Invocation)
 	started := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || started.LineageID != "review-consent-grant" ||
+	if started.Action != "created" || started.LineageID != "review-consent-grant" ||
 		started.RiskLevel != reviewtransaction.RiskHigh || len(started.SelectedLenses) != 4 {
 		t.Fatalf("granted consent did not reach the lens plan: %#v", started)
 	}
@@ -239,9 +239,9 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 		t.Fatalf("a negotiated grant must not touch the legacy latch: asked=%v err=%v", asked, err)
 	}
 
-	// The grant leg replays: the same invocation resumes the same authority.
+	// The grant leg replays the same compact authority.
 	replayed := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
-	if replayed.Action != string(reviewtransaction.CompactStartResumed) || replayed.LineageID != started.LineageID {
+	if replayed.Action != "replayed" || replayed.LineageID != started.LineageID {
 		t.Fatalf("replayed grant = %#v", replayed)
 	}
 
@@ -258,7 +258,7 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 }
 
 func TestPriorCloneLatchCannotSuppressNegotiatedRelay(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -295,8 +295,13 @@ func TestGlobalReviewModeEnabledPermitsButDoesNotGrantV2Consent(t *testing.T) {
 	}
 }
 
+// TestGlobalReviewModeOffRefusesBeforeV2Consent still tests an explicit off,
+// so it opts in first and then turns the switch off: the START transition it
+// disables has to exist before the refusal means anything. An unconfigured home
+// would refuse too, but for the shipped opt-in default rather than the explicit
+// global off this test is about.
 func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -318,7 +323,7 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 }
 
 func TestRelayedConsentDeclineIsScopedToTheCandidate(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -363,11 +368,14 @@ func TestRelayedConsentDeclineIsScopedToTheCandidate(t *testing.T) {
 
 // TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope pins the
 // no-declaration path: the negotiated envelope carries no consent fields (the
-// strict decoder refuses unknown fields), the start completes, and the
-// skip-and-notice behavior stays on the console. Byte-identity of the envelope
-// itself is pinned by TestNegotiatedReviewStartMatchesVersionedFixture.
+// strict decoder refuses unknown fields), the start completes in the
+// fail-safe direction, and the console stays byte-silent — the skip notices
+// are a human surface reserved for plain (non-negotiated) starts, because a
+// successful negotiated operation writes zero bytes to stderr. Byte-identity
+// of the envelope itself is pinned by
+// TestNegotiatedReviewStartMatchesVersionedFixture.
 func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -377,19 +385,19 @@ func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.
 		"--lineage", "review-undeclared",
 	}))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || len(started.SelectedLenses) != 4 {
+	if started.Action != "created" || len(started.SelectedLenses) != 4 {
 		t.Fatalf("undeclared negotiated START changed behavior: %#v", started)
 	}
 	if strings.Contains(output.String(), "consent") {
 		t.Fatalf("undeclared negotiated START leaked consent fields:\n%s", output.String())
 	}
-	if !strings.Contains(console.String(), reviewConsentSkippedNotice) {
-		t.Fatalf("undeclared headless START must keep the skip notice:\n%s", console.String())
+	if console.Len() != 0 {
+		t.Fatalf("undeclared negotiated START must stay silent on the console:\n%s", console.String())
 	}
 }
 
 func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "notes\n", 0o644)
@@ -398,7 +406,7 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 	output := runConsentRelayStart(t, transitionStartArgs(repo, status))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if started.RiskLevel != reviewtransaction.RiskLow || len(started.SelectedLenses) != 0 ||
-		started.Action != string(reviewtransaction.CompactStartCreated) {
+		started.Action != "closed" || started.State != reviewtransaction.StateApproved {
 		t.Fatalf("low-risk relay START = %#v", started)
 	}
 	if console.Len() != 0 {
@@ -407,7 +415,7 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 }
 
 func TestConsentDeclineOnLowRiskCandidateIsRefused(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "notes\n", 0o644)
@@ -444,39 +452,37 @@ func TestConsentFlagRequiresNegotiatedContract(t *testing.T) {
 	}
 }
 
-// TestHeadlessSkipNoticeNamesDefaultProvenance covers the provenance gap: when
-// the resolved mode source is `default`, the switch is on because nobody chose
-// anything, and the notice must say so, naming both mode commands. When the
-// user explicitly enabled reviews, the provenance sentence must not appear.
-func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
+// TestHeadlessSkipNoticeFollowsAnExplicitOptIn replaces a provenance notice
+// that can no longer happen. It used to cover the case where reviews ran
+// because nobody chose anything, and the notice had to admit that. Making
+// receipt-driven development opt-in deletes that case outright: a default-source
+// clone never reaches the consent ceremony, because the start is refused before
+// it. So the two halves of the old test become the two facts worth pinning --
+// an unconfigured headless clone is refused and told how to opt in, and an
+// explicitly enabled one gets the skip notice with no provenance excuse
+// attached, because there is no longer any way for reviews to be on by accident.
+func TestHeadlessSkipNoticeFollowsAnExplicitOptIn(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-provenance-default"}, &output); err != nil {
-		t.Fatalf("headless start: %v\n%s", err, output.String())
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-provenance-default"}, &output)
+	if err == nil {
+		t.Fatalf("an unconfigured clone started a review nobody asked for:\n%s", output.String())
 	}
-	notice := console.String()
-	if !strings.Contains(notice, reviewConsentSkippedNotice) {
-		t.Fatalf("headless start lost the skip notice:\n%s", notice)
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("the opt-in refusal names no way in: %v", err)
 	}
-	for _, want := range []string{"on by default", "never", "gentle-ai review mode enable", "gentle-ai review mode disable"} {
-		if !strings.Contains(notice, want) {
-			t.Fatalf("default-source notice missing %q:\n%s", want, notice)
-		}
+	if console.String() != "" {
+		t.Fatalf("a refused start reached the consent ceremony:\n%s", console.String())
 	}
 
-	// An explicit global choice removes the provenance sentence: the switch is
-	// no longer on by accident.
-	explicitHome := reviewModeHome(t)
-	_ = explicitHome
+	// An explicit opt-in is the only route to a review, and its headless notice
+	// carries no provenance sentence: the switch was chosen, not inherited.
+	reviewEnabledHome(t)
 	repoExplicit := initReviewCLIRepo(t)
-	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"enable", "--cwd", repoExplicit, "--json"}, &modeOutput); err != nil {
-		t.Fatalf("review mode enable: %v", err)
-	}
 	consoleExplicit := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repoExplicit, "scripts/deploy.sh", "echo deploy\n", 0o644)
 	output.Reset()
@@ -487,8 +493,8 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 	if !strings.Contains(explicitNotice, reviewConsentSkippedNotice) {
 		t.Fatalf("explicit-source start lost the skip notice:\n%s", explicitNotice)
 	}
-	if strings.Contains(explicitNotice, "on by default") {
-		t.Fatalf("explicitly chosen mode must not claim a default: %s", explicitNotice)
+	if strings.Contains(explicitNotice, "by default") {
+		t.Fatalf("an explicitly chosen mode must not claim a default: %s", explicitNotice)
 	}
 }
 
@@ -505,7 +511,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 		{name: "v2.1", contract: ReviewIntegrationContractV2, fixture: filepath.Join("v2", "fixtures", "consent-v3.fixture.json"), schema: filepath.Join("v2", "schemas", "consent-v3.schema.json")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			root, err := resolveReviewMutationRoot(context.Background(), repo)
 			if err != nil {

@@ -594,6 +594,86 @@ func TestInjectOpenCodeGentlemanDoesNotCreateSDDConductor(t *testing.T) {
 	if !strings.Contains(text, `"gentleman"`) {
 		t.Fatal("persona injection should still create the gentleman persona agent")
 	}
+	if strings.Contains(text, `"tools"`) {
+		t.Fatal("persona injection must not emit deprecated gentleman tools")
+	}
+}
+
+func TestInjectForSyncOpenCodeGentlemanRemovesOnlyStaleTools(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	before := `{
+  "user-setting": {"keep": true},
+  "agent": {
+    "gentleman": {
+      "mode": "primary",
+      "description": "keep this persona",
+      "tools": {"write": true, "edit": true}
+    },
+    "user-owned": {"tools": {"custom": true}}
+  }
+}
+`
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := InjectForSync(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("InjectForSync() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Gentleman sync did not remove stale tools")
+	}
+	payload, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(payload, &root); err != nil {
+		t.Fatal(err)
+	}
+	if got := root["user-setting"]; fmt.Sprint(got) != "map[keep:true]" {
+		t.Fatalf("user-owned setting changed: %#v", got)
+	}
+	agents := root["agent"].(map[string]any)
+	gentleman := agents["gentleman"].(map[string]any)
+	if _, exists := gentleman["tools"]; exists {
+		t.Fatalf("Gentleman sync retained stale tools: %#v", gentleman["tools"])
+	}
+	if got := gentleman["description"]; got != "keep this persona" {
+		t.Fatalf("Gentleman sync overwrote persona data: %#v", got)
+	}
+	if got := agents["user-owned"].(map[string]any)["tools"]; fmt.Sprint(got) != "map[custom:true]" {
+		t.Fatalf("Gentleman sync changed user-owned agent tools: %#v", got)
+	}
+
+	second, err := InjectForSync(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("second InjectForSync() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Gentleman sync changed already-clean settings")
+	}
+}
+
+func TestInjectForSyncOpenCodeGentlemanSucceedsWithoutSettings(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+
+	result, err := InjectForSync(home, opencodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("InjectForSync() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("first Gentleman sync should write the persona file")
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("settings file was created or stat failed: %v", err)
+	}
 }
 
 func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
@@ -1193,6 +1273,12 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(opencodeAdapter().SettingsPath(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(opencodeAdapter().SettingsPath(home), []byte(`{"theme":"dark","agent":{"gentleman":{"tools":{"write":true}},"user":{"tools":{"read":true}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	first, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)
 	if err != nil {
@@ -1200,6 +1286,18 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if !first.Changed {
 		t.Fatalf("Inject() first changed = false")
+	}
+	settings, err := os.ReadFile(opencodeAdapter().SettingsPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settings, &root); err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	if _, exists := agents["gentleman"].(map[string]any)["tools"]; exists || root["theme"] != "dark" || agents["user"].(map[string]any)["tools"].(map[string]any)["read"] != true {
+		t.Fatalf("stale managed tools cleanup changed user settings: %#v", root)
 	}
 
 	second, err := Inject(home, opencodeAdapter(), model.PersonaGentleman)

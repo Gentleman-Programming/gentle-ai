@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // AuthorityDispositionPlanSchema identifies AuthorityDispositionPlan's shape.
@@ -104,6 +102,23 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 	return selectors, nil
 }
 
+// historicalAuthorityDispositionPlanRecord returns the one released authority
+// record that can be planned for quarantine. Its own outdated diagnostic is the
+// sole admissible diagnostic: any malformed, unreadable, missing, or unexpected
+// additional authority entry prevents a historical plan from being published.
+func historicalAuthorityDispositionPlanRecord(report CompactRecoveryInspectionReport) (string, historicalCompactForensicRecord, bool) {
+	if len(report.historical) != 1 || len(report.EntryDiagnostics) != 1 {
+		return "", historicalCompactForensicRecord{}, false
+	}
+	for lineage, historical := range report.historical {
+		diagnostic := report.EntryDiagnostics[0]
+		if diagnostic.LineageID == lineage && diagnostic.Problem == compactInspectionEntryOutdated {
+			return lineage, historical, true
+		}
+	}
+	return "", historicalCompactForensicRecord{}, false
+}
+
 // deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
 // deterministically from report and records — both of which MUST come from
 // the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
@@ -120,12 +135,8 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
-	if len(requested) == 0 && len(selectors) == 0 && len(report.historical) == 1 && len(report.EntryDiagnostics) == 1 {
-		for lineage, historical := range report.historical {
-			diagnostic := report.EntryDiagnostics[0]
-			if diagnostic.LineageID != lineage || diagnostic.Problem != compactInspectionEntryOutdated {
-				break
-			}
+	if len(requested) == 0 && len(selectors) == 0 {
+		if lineage, historical, eligible := historicalAuthorityDispositionPlanRecord(report); eligible {
 			inventory, err := authorityInventoryRevision(records, report.historical)
 			if err != nil {
 				return AuthorityDispositionPlan{}, err
@@ -371,30 +382,6 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, ca
 		return errors.New("authority disposition plan refused: authorization does not bind to plan_digest and authority_inventory_revision")
 	}
 	return nil
-}
-
-// compactRepairCommandText renders the exact runnable `review repair`
-// invocation for one leaf authority disposition plan a caller already
-// confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
-// admitClosureDisposition — the same read-only prediction `review repair
-// --preflight` runs), with the persisted plan_digest and
-// authority_inventory_revision preflight would publish and the authorization
-// template execution verifies. plan_digest is actor/reason-independent
-// (authorityDispositionPlanDigest excludes both from its pre-image), so the
-// value rendered here is exactly the value execution re-derives and compares
-// against, for whichever actor/reason a maintainer later supplies — the
-// command printed is the command that runs. Only a caller whose own
-// read-only prediction accepted the plan may render this, mirroring
-// compactAbandonCommandText and compactReconcileCommandText
-// (compact_reconcile.go).
-func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
-	template := plan
-	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
-	return fmt.Sprintf("`gentle-ai review repair --cwd %s --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
-		" (`gentle-ai review repair --preflight --cwd %s` re-confirms these are still current);"+
-		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
-		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		pathquote.Quote(repo), plan.PlanDigest, plan.AuthorityInventoryRevision, pathquote.Quote(repo), authorityDispositionAuthorizationBinding(template))
 }
 
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of

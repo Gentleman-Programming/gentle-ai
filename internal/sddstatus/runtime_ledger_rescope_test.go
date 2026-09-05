@@ -454,11 +454,16 @@ func TestRuntimeLedgerRescopeReplayRefusesForgedWidenedRecord(t *testing.T) {
 	}
 }
 
-// TestRuntimeLedgerRescopeCarriedBudgetBindsTheNextBegin is mutation proof
-// (d): carry-forward is not cosmetic. Rescoping to a ceiling already at or
-// below the carried-forward CumulativeChangedLines must bind -- the very
-// next begin is refused budget-exhausted.
-func TestRuntimeLedgerRescopeCarriedBudgetBindsTheNextBegin(t *testing.T) {
+// TestRuntimeLedgerRescopeCarriedBudgetBindsAtAdmission is mutation proof
+// (d), moved to its truthful boundary by #2804: carry-forward is not
+// cosmetic, and the place it binds is rescope ADMISSION. Narrowing to a
+// ceiling the carried CumulativeChangedLines already meets would publish a
+// successor whose status advertises begin while its first acquire is refused
+// budget-exhausted, whose reset is refused for zero drift, and whose own
+// rescope cannot widen -- a wedge with no admitted continuation. That
+// rescope is refused before mutation, and the runnable ceiling the refusal
+// names is executed, not asserted as prose.
+func TestRuntimeLedgerRescopeCarriedBudgetBindsAtAdmission(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store, err := OpenRuntimeStore(context.Background(), repo, "rescope-budget-binds")
 	if err != nil {
@@ -486,27 +491,301 @@ func TestRuntimeLedgerRescopeCarriedBudgetBindsTheNextBegin(t *testing.T) {
 	}
 	consumed := interrupted.CumulativeChangedLines
 
-	// The candidate has not drifted further since Finish: rescope is
-	// admissible even though the OBJECTIVE already carries real charges.
-	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+	// A ceiling the carried charge already meets is refused with rescope's
+	// own exhaustion sentinel, never a reused generic one, and refuses
+	// BEFORE mutation.
+	_, exhaustedErr := store.Rescope(context.Background(), RescopeObjectiveRequest{
 		ExpectedRevision: interrupted.Revision, RequestID: "bind-rescope-1",
 		WorkUnit: "narrower-consumed-scope", EvidenceGoal: "prove carried budget binds narrower",
 		MaxAttempts: 3, MaxChangedLines: consumed - 1,
 		Reason: "maintainer narrowed the ceiling below what is already consumed", Actor: "maintainer",
 	})
-	if err != nil {
-		t.Fatalf("rescope with a ceiling below consumed history was refused: %v", err)
+	if !errors.Is(exhaustedErr, ErrRuntimeRescopeExhausted) {
+		t.Fatalf("rescope with a ceiling below consumed history = %v, want ErrRuntimeRescopeExhausted", exhaustedErr)
 	}
-	if rescoped.CumulativeChangedLines != consumed {
-		t.Fatalf("rescope did not carry the consumed charge forward exactly: got %d, want %d", rescoped.CumulativeChangedLines, consumed)
+	if errors.Is(exhaustedErr, ErrRuntimeRescopeWidened) || errors.Is(exhaustedErr, ErrRuntimeRescopeNotAllowed) {
+		t.Fatalf("exhaustion refusal reused a generic sentinel: %v", exhaustedErr)
+	}
+	for _, want := range []string{
+		"--max-changed-lines " + strconv.Itoa(consumed-1),
+		"carried " + strconv.Itoa(consumed),
+		"at most 400",
+	} {
+		if !strings.Contains(exhaustedErr.Error(), want) {
+			t.Fatalf("exhaustion refusal does not name %q: %v", want, exhaustedErr)
+		}
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil || status.Revision != interrupted.Revision || countRuntimeRecords(t, store.Dir) != 2 {
+		t.Fatalf("refused exhausted rescope mutated the ledger: status=%#v err=%v records=%d", status, statusErr, countRuntimeRecords(t, store.Dir))
 	}
 
-	_, err = store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: rescoped.Revision, RequestID: "bind-begin-2", WorkUnit: "narrower-consumed-scope",
-		EvidenceGoal: "prove carried budget binds narrower", MaxAttempts: 3, MaxChangedLines: consumed - 1,
+	// The runnable range the refusal names is executed: one line above the
+	// carried charge is admitted, carries the charge forward exactly, and
+	// its first begin proceeds instead of dying budget-exhausted.
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "bind-rescope-2",
+		WorkUnit: "narrower-consumed-scope", EvidenceGoal: "prove carried budget binds narrower",
+		MaxAttempts: 3, MaxChangedLines: consumed + 1,
+		Reason: "maintainer narrowed the ceiling to the smallest runnable allowance", Actor: "maintainer",
 	})
-	if !errors.Is(err, ErrRuntimeBudgetExhausted) {
-		t.Fatalf("begin after a rescope whose ceiling is already consumed = %v, want ErrRuntimeBudgetExhausted", err)
+	if err != nil {
+		t.Fatalf("the runnable rescope this refusal names was refused: %v", err)
+	}
+	if rescoped.CumulativeChangedLines != consumed || rescoped.DecisionRequired || rescoped.NextAction != RuntimeActionBegin {
+		t.Fatalf("runnable rescope status = %#v", rescoped)
+	}
+	next, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "bind-begin-2", WorkUnit: "narrower-consumed-scope",
+		EvidenceGoal: "prove carried budget binds narrower", MaxAttempts: 3, MaxChangedLines: consumed + 1,
+	})
+	if err != nil {
+		t.Fatalf("begin under the runnable rescoped ceiling was refused: %v", err)
+	}
+	if next.ActiveAttempt == nil || next.ActiveAttempt.ObjectiveID != rescoped.Objective.ID {
+		t.Fatalf("post-rescope begin status = %#v", next)
+	}
+}
+
+// TestRuntimeLedgerRescopeRefusesExhaustedAttemptAllowance is #2804's
+// write-time guard: rescope carries cumulative_attempts forward unchanged, so
+// a successor whose max_attempts the carried count already meets has no
+// runnable ordinal. Before this guard it was committed anyway: status
+// advertised begin, acquire refused budget-exhausted, reset refused for zero
+// drift, and a second rescope could not widen -- a published successor with
+// no admitted continuation. The refusal now lands before mutation and names
+// the exact runnable range, which is then executed.
+func TestRuntimeLedgerRescopeRefusesExhaustedAttemptAllowance(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "rescope-2804")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "2804-begin-1", WorkUnit: "failing-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "2804-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('9'), Diagnosis: "verification failed with the workspace unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.CumulativeAttempts != 1 || failed.DecisionRequired || failed.Complete {
+		t.Fatalf("pre-rescope failed status = %#v", failed)
+	}
+
+	// max_attempts equal to the carried cumulative_attempts is the exact
+	// #2804 reproduction: narrowing-valid, and immediately exhausted.
+	_, exhaustedErr := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "2804-rescope-1",
+		WorkUnit: "narrower-correction", EvidenceGoal: "prove the bounded correction",
+		MaxAttempts: 1, MaxChangedLines: 120,
+		Reason: "maintainer narrowed to a correction objective", Actor: "maintainer",
+	})
+	if !errors.Is(exhaustedErr, ErrRuntimeRescopeExhausted) {
+		t.Fatalf("exhausted-allowance rescope error = %v, want ErrRuntimeRescopeExhausted", exhaustedErr)
+	}
+	if errors.Is(exhaustedErr, ErrRuntimeRescopeWidened) || errors.Is(exhaustedErr, ErrRuntimeRescopeNotAllowed) {
+		t.Fatalf("exhaustion refusal reused a generic sentinel: %v", exhaustedErr)
+	}
+	for _, want := range []string{"--max-attempts 1", "carried 1", "at most 2"} {
+		if !strings.Contains(exhaustedErr.Error(), want) {
+			t.Fatalf("exhaustion refusal does not name %q: %v", want, exhaustedErr)
+		}
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil || status.Revision != failed.Revision || countRuntimeRecords(t, store.Dir) != 2 {
+		t.Fatalf("refused exhausted rescope mutated the ledger: status=%#v err=%v records=%d", status, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+
+	// The runnable allowance the refusal names is executed: one attempt above
+	// the carried count is admitted and its first begin proceeds.
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "2804-rescope-2",
+		WorkUnit: "narrower-correction", EvidenceGoal: "prove the bounded correction",
+		MaxAttempts: 2, MaxChangedLines: 120,
+		Reason: "maintainer narrowed to a runnable correction objective", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("the runnable rescope this refusal names was refused: %v", err)
+	}
+	if rescoped.CumulativeAttempts != 1 || rescoped.DecisionRequired || rescoped.NextAction != RuntimeActionBegin {
+		t.Fatalf("runnable rescope status = %#v", rescoped)
+	}
+	next, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "2804-begin-2", WorkUnit: "narrower-correction",
+		EvidenceGoal: "prove the bounded correction", MaxAttempts: 2, MaxChangedLines: 120,
+	})
+	if err != nil {
+		t.Fatalf("begin under the runnable rescoped allowance was refused: %v", err)
+	}
+	if next.ActiveAttempt == nil || next.ActiveAttempt.ObjectiveID != rescoped.Objective.ID {
+		t.Fatalf("post-rescope begin status = %#v", next)
+	}
+}
+
+// TestProjectLegacyExhaustedSuccessorIsScopedToTheFreshRescopeWedge pins the
+// projection's scope instead of asserting it in prose: only the exact
+// publication wedge -- the last transition is the rescope that opened the
+// current objective, and the successor has no attempt of its own -- may be
+// converted to decision-required. Every other exhausted shape must keep its
+// replayed projection, so an objective legitimately holding unused allowance
+// is never silently converted into a demanded reset.
+func TestProjectLegacyExhaustedSuccessorIsScopedToTheFreshRescopeWedge(t *testing.T) {
+	objective := &RuntimeObjective{ID: "objective-b", MaxAttempts: 1, MaxChangedLines: 10}
+
+	// Exhausted with no rescope transition at all: not the wedge.
+	noRescope := RuntimeStatus{Objective: objective, CumulativeAttempts: 1, NextAction: RuntimeActionBegin}
+	projectLegacyExhaustedSuccessor(&noRescope)
+	if noRescope.DecisionRequired || noRescope.NextAction != RuntimeActionBegin {
+		t.Fatalf("non-rescope exhausted state was converted: %#v", noRescope)
+	}
+
+	// Exhausted successor that already owns an attempt: not the wedge either
+	// (the pre-guard writer could never publish this -- its begin was refused).
+	ownAttempt := RuntimeStatus{
+		Objective: objective, CumulativeAttempts: 1, NextAction: RuntimeActionBegin,
+		LastRescope: &RuntimeRescope{ObjectiveID: objective.ID},
+		Attempts:    []RuntimeAttempt{{ObjectiveID: objective.ID, Outcome: AttemptFailed}},
+	}
+	projectLegacyExhaustedSuccessor(&ownAttempt)
+	if ownAttempt.DecisionRequired || ownAttempt.NextAction != RuntimeActionBegin {
+		t.Fatalf("successor with its own attempt was converted: %#v", ownAttempt)
+	}
+
+	// The publication wedge itself projects to decision-required/reset.
+	wedge := RuntimeStatus{
+		Objective: objective, CumulativeAttempts: 1, NextAction: RuntimeActionBegin,
+		LastRescope: &RuntimeRescope{ObjectiveID: objective.ID},
+		Attempts:    []RuntimeAttempt{{ObjectiveID: "objective-a", Outcome: AttemptFailed}},
+	}
+	projectLegacyExhaustedSuccessor(&wedge)
+	if !wedge.DecisionRequired || wedge.NextAction != RuntimeActionReset {
+		t.Fatalf("the publication wedge did not project: %#v", wedge)
+	}
+}
+
+// TestRuntimeLedgerLegacyExhaustedRescopeReplaysToDecisionRequired is #2804's
+// recovery half: builds before the write-time guard PUBLISHED exhausted
+// successors, and prevention alone does not repair them (the fresh occurrence
+// on #2804 says exactly that). The immutable record stays valid -- replay
+// never rewrites history -- but the projected state must tell the truth: an
+// objective with no runnable ordinal is a maintainer decision, exactly as
+// applyRuntimeConsecutiveRescopeRepairEvent already projects for the same
+// shape. Status stops advertising a begin acquire refuses, and the reset that
+// decision-required admits is executed all the way to a wider fresh budget.
+func TestRuntimeLedgerLegacyExhaustedRescopeReplaysToDecisionRequired(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "rescope-2804-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "legacy-begin-1", WorkUnit: "failing-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "legacy-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('8'), Diagnosis: "verification failed with the workspace unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objective := failed.Objective
+	last := failed.Attempts[len(failed.Attempts)-1]
+
+	// Publish the exact record a pre-guard writer committed for the #2804
+	// occurrence: internally consistent, truthfully narrowing, and already
+	// exhausted (max_attempts equal to the carried cumulative_attempts).
+	generation := failed.ObjectiveGeneration + 1
+	legacyObjectiveID := runtimeObjectiveID(store.Change, "narrower-correction", "prove the bounded correction", last.FinishCandidateIdentity, generation)
+	request := RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "legacy-rescope-1",
+		WorkUnit: "narrower-correction", EvidenceGoal: "prove the bounded correction",
+		MaxAttempts: 1, MaxChangedLines: 120,
+		Reason: "maintainer narrowed to a correction objective", Actor: "maintainer",
+	}
+	legacyRecord := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: failed.Revision,
+		Operation: runtimeOperationRescope, RequestID: request.RequestID,
+		RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request),
+		Rescope: &runtimeRescopeEvent{
+			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
+			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
+			RescopeCandidateIdentity: last.FinishCandidateIdentity, RescopeCandidateTree: last.FinishCandidateTree,
+			ObjectiveID: legacyObjectiveID, ObjectiveGeneration: generation,
+			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
+			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			Reason: request.Reason, Actor: request.Actor,
+		},
+	}
+	revision, payload, err := runtimeRecordRevision(legacyRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+
+	// The wedge is gone: replay projects the truth instead of an unusable
+	// begin. History, the successor objective, and the carried charges all
+	// survive untouched.
+	status, err := store.Status()
+	if err != nil {
+		t.Fatalf("replaying the published legacy exhausted rescope failed: %v", err)
+	}
+	if !status.DecisionRequired || status.Complete || status.NextAction != RuntimeActionReset {
+		t.Fatalf("legacy exhausted successor status = %#v, want decision-required with next_action reset", status)
+	}
+	if status.Objective == nil || status.Objective.ID != legacyObjectiveID || status.Objective.MaxAttempts != 1 ||
+		status.CumulativeAttempts != 1 || len(status.Attempts) != 1 {
+		t.Fatalf("legacy exhausted successor projection = %#v", status)
+	}
+
+	// Begin stays refused -- truthfully now, with status in agreement.
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: status.Revision, RequestID: "legacy-begin-2", WorkUnit: "narrower-correction",
+		EvidenceGoal: "prove the bounded correction", MaxAttempts: 1, MaxChangedLines: 120,
+	}); !errors.Is(err, ErrRuntimeBudgetExhausted) {
+		t.Fatalf("begin under the legacy exhausted successor = %v, want ErrRuntimeBudgetExhausted", err)
+	}
+
+	// The decision-required reset is admitted and opens the wider fresh
+	// budget the wedged reporter could never reach.
+	after, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: status.Revision, RequestID: "legacy-reset-1",
+		Reason: "recover the published exhausted successor with a fresh budget", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("reset of the legacy exhausted successor was refused: %v", err)
+	}
+	wider, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: after.Revision, RequestID: "legacy-begin-3", WorkUnit: "recovered-correction",
+		EvidenceGoal: "prove the recovered correction", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("begin after recovering the legacy exhausted successor was refused: %v", err)
+	}
+	if wider.Objective == nil || wider.Objective.MaxAttempts != 2 || wider.CumulativeAttempts != 1 {
+		t.Fatalf("post-recovery objective = %#v", wider)
 	}
 }
 
