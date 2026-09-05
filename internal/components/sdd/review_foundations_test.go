@@ -70,8 +70,10 @@ func TestSDDApplyModelSectionsPreserveRulesApplyContract(t *testing.T) {
 		if section == content {
 			t.Fatalf("sdd-apply has no model-%s section marker", capability)
 		}
-		if !strings.Contains(section, "rules.apply") {
-			t.Fatalf("sdd-apply model-%s section omits the openspec/config.yaml rules.apply instruction", capability)
+		for _, want := range []string{"rules.apply", "openspec/config.yaml"} {
+			if !strings.Contains(section, want) {
+				t.Fatalf("sdd-apply model-%s section omits %q from the rules.apply instruction", capability, want)
+			}
 		}
 	}
 }
