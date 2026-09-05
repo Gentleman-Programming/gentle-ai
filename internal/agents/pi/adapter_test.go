@@ -274,34 +274,12 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 		{"pi", "install", "npm:gentle-engram"},
 		{"pi", "install", "npm:pi-mcp-adapter"},
 		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
-		piSubagentsInstallCommand(system.PlatformProfile{}),
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
 		{"pi", "install", "npm:pi-btw"},
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("InstallCommand() = %#v, want %#v", commands, want)
-	}
-}
-
-func TestAdapterInstallCommandSequenceUsesSameSubagentsPackageForWindows(t *testing.T) {
-	a := &Adapter{
-		lookPath: func(file string) (string, error) {
-			if file == "pnpm" {
-				return "", os.ErrNotExist
-			}
-			return "/usr/local/bin/" + file, nil
-		},
-		statPath: defaultStat,
-	}
-	commands, err := a.InstallCommand(system.PlatformProfile{OS: "windows"})
-	if err != nil {
-		t.Fatalf("InstallCommand() error = %v", err)
-	}
-
-	want := []string{"pi", "install", "npm:pi-subagents-j0k3r"}
-	if !reflect.DeepEqual(commands[4], want) {
-		t.Fatalf("InstallCommand()[4] = %#v, want %#v", commands[4], want)
 	}
 }
 
@@ -326,6 +304,17 @@ func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t 
 	}
 }
 
+func TestAppendPiPackageKeepsSubagentsPackageWhileGentlePiIsPinnedBelowGentleAgents(t *testing.T) {
+	kept := appendPiPackage([]any{"npm:gentle-pi@2.4.0", "npm:pi-subagents-j0k3r@1.5.13"}, "npm:pi-mcp-adapter")
+	if !reflect.DeepEqual(kept, []any{"npm:gentle-pi@2.4.0", "npm:pi-subagents-j0k3r@1.5.13", "npm:pi-mcp-adapter"}) {
+		t.Fatalf("appendPiPackage() with an old gentle-pi pin = %v, want the subagents package kept", kept)
+	}
+	dropped := appendPiPackage([]any{"npm:gentle-pi@2.5.0", "npm:pi-subagents-j0k3r"}, "npm:pi-mcp-adapter")
+	if !reflect.DeepEqual(dropped, []any{"npm:gentle-pi@2.5.0", "npm:pi-mcp-adapter"}) {
+		t.Fatalf("appendPiPackage() with gentle-pi 2.5.0 = %v, want the subagents package dropped", dropped)
+	}
+}
+
 func TestMergePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
@@ -336,6 +325,8 @@ func TestMergePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
   "packages": [
     "npm:@juicesharp/rpiv-todo",
     "npm:@juicesharp/rpiv-todo@2.9.0",
+    "npm:pi-subagents-j0k3r",
+    "npm:pi-subagents-j0k3r@1.5.13",
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:other@1.0.0"
   ]
@@ -359,7 +350,7 @@ func TestMergePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
 		t.Fatalf("Unmarshal(settings) error = %v", err)
 	}
 	if !reflect.DeepEqual(settings.Packages, []string{"npm:@juicesharp/rpiv-ask-user-question", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
-		t.Fatalf("packages = %#v, want the retired todo package gone and the rest untouched", settings.Packages)
+		t.Fatalf("packages = %#v, want the retired todo and subagents-j0k3r packages gone and the rest untouched", settings.Packages)
 	}
 }
 
@@ -376,7 +367,7 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
     "npm:pi-subagents@1.0.0",
     "vendor/pi-subagents",
     "vendor/pi-subagents-fixed@0.0.1",
-    "npm:pi-subagents-j0k3r",
+    "npm:pi-web-access",
     "npm:other@1.0.0"
   ]
 }`
@@ -406,7 +397,7 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 			}
 		}
 	}
-	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-subagents-j0k3r", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-web-access", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
 		t.Fatalf("packages = %#v", settings.Packages)
 	}
 }

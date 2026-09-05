@@ -238,7 +238,7 @@ func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 		t.Fatalf("agentInstallStep.Run() error = %v", err)
 	}
 
-	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:pi-subagents-j0k3r", "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:pi-btw"}
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:pi-btw"}
 	if len(events) != len(wantPackages)*2 {
 		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
 	}
@@ -335,7 +335,6 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
 		engramInitCommandForTest,
-		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",
