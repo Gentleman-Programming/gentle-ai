@@ -831,7 +831,8 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
 			})
 		}
-		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
+		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) &&
+			(disposition != reviewtransaction.RecoveryInvalidated || input.Selector.Recovery.Kind != reviewtransaction.TargetCurrentChanges) {
 			return reviewStopTransition("recovery_scope_unchanged")
 		}
 		var representable bool
