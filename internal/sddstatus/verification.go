@@ -220,7 +220,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	}
 	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
 		if !sha256IdentityPattern.MatchString(fields[field]) {
-			return report, fmt.Sprintf("invalid %s in verify result envelope", field)
+			return report, fmt.Sprintf("%s must be sha256:<64 lowercase hex> in verify result envelope", field)
 		}
 	}
 	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {
