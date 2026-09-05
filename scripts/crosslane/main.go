@@ -58,6 +58,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "crosslane: binary %q is not usable: %v\n", *binary, err)
 		return 2
 	}
+	operatorHome := os.Getenv("HOME")
+	operatorPath := os.Getenv("PATH")
+	piEnvironment, piEnvironmentErr := piReviewEnvironment(operatorHome, operatorPath)
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crosslane: %v\n", err)
@@ -70,13 +73,15 @@ func run() int {
 	}
 
 	b := &battery{
-		binary:      resolved,
-		repoRoot:    repoRoot,
-		workRoot:    workRoot,
-		withModel:   *withModel,
-		withHost:    *withHost,
-		sandboxHome: filepath.Join(workRoot, "home"),
-		lineages:    map[string]lineageScope{},
+		binary:           resolved,
+		repoRoot:         repoRoot,
+		workRoot:         workRoot,
+		withModel:        *withModel,
+		withHost:         *withHost,
+		piEnvironment:    piEnvironment,
+		piEnvironmentErr: piEnvironmentErr,
+		sandboxHome:      filepath.Join(workRoot, "home"),
+		lineages:         map[string]lineageScope{},
 	}
 	if !*keepWork {
 		defer os.RemoveAll(workRoot)

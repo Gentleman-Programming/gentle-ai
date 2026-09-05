@@ -65,7 +65,7 @@ func (b *battery) runHostOpenCodeLane() {
 		b.fail(hostOpenCodeLane, "sandbox HOME setup", "enable sandbox RDD switch: "+firstLine(stderr))
 		return
 	}
-	if !b.hostNegotiatedMediumStart(hostOpenCodeLane, repo, "opencode", env) {
+	if !b.hostNegotiatedStart(hostOpenCodeLane, repo, "opencode", env, "medium") {
 		return
 	}
 	statusDoc, stderr, _ := b.statusEnv(repo, "opencode", env)

@@ -69,11 +69,13 @@ type battery struct {
 	// way everywhere, and keeps it from ever writing to the operator's state.
 	sandboxHome string
 
-	envelopes  []capturedEnvelope
-	checks     []check
-	hostCosts  []string
-	piRelayDir string
-	lineages   map[string]lineageScope
+	envelopes        []capturedEnvelope
+	checks           []check
+	hostCosts        []string
+	piEnvironment    []string
+	piEnvironmentErr string
+	piRelayDir       string
+	lineages         map[string]lineageScope
 }
 
 func (b *battery) pass(lane, name, note string) {

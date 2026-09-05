@@ -33,7 +33,7 @@ func (b *battery) runHostCodexLane() {
 	if !ok {
 		return
 	}
-	if !b.hostNegotiatedMediumStart(hostCodexLane, repo, "codex", nil) {
+	if !b.hostNegotiatedStart(hostCodexLane, repo, "codex", nil, "medium") {
 		return
 	}
 	statusDoc, stderr, _ := b.statusEnv(repo, "codex", nil)

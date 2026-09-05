@@ -14,8 +14,123 @@ import (
 	"testing"
 )
 
-const piAdapterHelperEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_PI_HELPER"
-const piAdapterPromptPathEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_PI_PROMPT_PATH"
+const piAdapterHelperModeArgument = "--pi-adapter-helper-mode="
+const piAdapterHelperOutputPathArgument = "--pi-adapter-helper-output-path="
+
+func TestPiAdapterPassesOnlyRuntimeEnvironmentAndOptionalAuthLocator(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		locator *string
+	}{
+		{name: "locator present", locator: ptr("/private/pi")},
+		{name: "locator absent"},
+		{name: "locator empty", locator: ptr("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PATH", "/runtime/path")
+			t.Setenv("HOME", "/runtime/home")
+			t.Setenv("OPENAI_API_KEY", "sentinel-api-key")
+			t.Setenv("UNRELATED_ENVIRONMENT", "sentinel-unrelated")
+			t.Setenv("GENTLE_ARBITRARY_ENVIRONMENT", "sentinel-gentle")
+			if tc.locator == nil {
+				unsetenv(t, "PI_CODING_AGENT_DIR")
+			} else {
+				t.Setenv("PI_CODING_AGENT_DIR", *tc.locator)
+			}
+
+			environmentPath := filepath.Join(t.TempDir(), "environment")
+			var command *exec.Cmd
+			adapter := &PiAdapter{
+				LookPath: func(string) (string, error) { return "pi", nil },
+				commandContext: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+					command = exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPiAdapterHelperProcess$", "--",
+						piAdapterHelperModeArgument+"environment",
+						piAdapterHelperOutputPathArgument+environmentPath)
+					return command
+				},
+			}
+			if _, err := adapter.Review(context.Background(), NewInvocation([]byte("prompt"))); err != nil {
+				t.Fatal(err)
+			}
+			if command.Env == nil {
+				t.Fatal("Pi command Env is nil; want an explicit allowlist")
+			}
+			explicit := environmentMap([]byte(strings.Join(command.Env, "\x00")))
+			if explicit["PATH"] != "/runtime/path" || explicit["HOME"] != "/runtime/home" {
+				t.Errorf("explicit environment = %q, want runtime PATH and HOME", command.Env)
+			}
+			if tc.locator == nil || *tc.locator == "" {
+				if _, found := explicit["PI_CODING_AGENT_DIR"]; found {
+					t.Errorf("explicit environment includes PI_CODING_AGENT_DIR=%q; want absent", explicit["PI_CODING_AGENT_DIR"])
+				}
+			} else if explicit["PI_CODING_AGENT_DIR"] != *tc.locator {
+				t.Errorf("explicit PI_CODING_AGENT_DIR = %q, want %q", explicit["PI_CODING_AGENT_DIR"], *tc.locator)
+			}
+			for _, name := range []string{"OPENAI_API_KEY", "UNRELATED_ENVIRONMENT", "GENTLE_ARBITRARY_ENVIRONMENT"} {
+				if _, found := explicit[name]; found {
+					t.Errorf("explicit environment leaks %s=%q", name, explicit[name])
+				}
+			}
+
+			environment, err := os.ReadFile(environmentPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := environmentMap(environment)
+			for _, name := range []string{"PATH", "HOME"} {
+				if got[name] == "" {
+					t.Errorf("child environment lacks required %s", name)
+				}
+			}
+			if tc.locator == nil || *tc.locator == "" {
+				if _, found := got["PI_CODING_AGENT_DIR"]; found {
+					t.Errorf("child environment includes PI_CODING_AGENT_DIR=%q; want absent", got["PI_CODING_AGENT_DIR"])
+				}
+			} else if got["PI_CODING_AGENT_DIR"] != *tc.locator {
+				t.Errorf("child PI_CODING_AGENT_DIR = %q, want %q", got["PI_CODING_AGENT_DIR"], *tc.locator)
+			}
+			for _, name := range []string{"OPENAI_API_KEY", "UNRELATED_ENVIRONMENT", "GENTLE_ARBITRARY_ENVIRONMENT"} {
+				if _, found := got[name]; found {
+					t.Errorf("child environment leaks %s=%q", name, got[name])
+				}
+			}
+			for name := range got {
+				if name == "PATH" || name == "HOME" || name == "PI_CODING_AGENT_DIR" || (runtime.GOOS == "windows" && (name == "SYSTEMROOT" || name == "USERPROFILE" || name == "HOMEDRIVE" || name == "HOMEPATH")) {
+					continue
+				}
+				t.Errorf("child environment includes non-runtime variable %s", name)
+			}
+		})
+	}
+}
+
+func ptr(value string) *string { return &value }
+
+func unsetenv(t *testing.T, name string) {
+	t.Helper()
+	value, found := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if found {
+			_ = os.Setenv(name, value)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	})
+}
+
+func environmentMap(environment []byte) map[string]string {
+	values := make(map[string]string)
+	for _, entry := range strings.Split(string(environment), "\x00") {
+		name, value, found := strings.Cut(entry, "=")
+		if found {
+			values[name] = value
+		}
+	}
+	return values
+}
 
 func TestPiAdapterReturnsNoBytesWhenUnavailable(t *testing.T) {
 	adapter := &PiAdapter{LookPath: func(string) (string, error) { return "", errors.New("not found") }}
@@ -30,15 +145,14 @@ func TestPiAdapterUsesStdinLockedDownArgumentsAndReturnsUntouchedRawOutput(t *te
 		t.Skip("the helper process uses POSIX argument handling")
 	}
 	promptPath := filepath.Join(t.TempDir(), "prompt")
-	t.Setenv(piAdapterHelperEnvironment, "1")
-	t.Setenv(piAdapterPromptPathEnvironment, promptPath)
 	var commandArguments []string
 	var command *exec.Cmd
 	adapter := &PiAdapter{
 		LookPath: func(string) (string, error) { return "pi", nil },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 			commandArguments = append([]string(nil), arguments...)
-			command = exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--"}, arguments...)...)
+			helperArguments := append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--", piAdapterHelperModeArgument + "success", piAdapterHelperOutputPathArgument + promptPath}, arguments...)
+			command = exec.CommandContext(ctx, os.Args[0], helperArguments...)
 			return command
 		},
 	}
@@ -68,13 +182,12 @@ func TestPiAdapterFailsClosedOnProcessFailureAndEmptyOutput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the helper process uses POSIX argument handling")
 	}
-	t.Setenv(piAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
 	for name, want := range map[string]string{"fail": "pi reviewer transport failed", "empty": "produced no final message"} {
-		t.Setenv(piAdapterHelperEnvironment, name)
 		adapter := &PiAdapter{
 			LookPath: func(string) (string, error) { return "pi", nil },
 			commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
-				return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--"}, arguments...)...)
+				helperArguments := append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--", piAdapterHelperModeArgument + name}, arguments...)
+				return exec.CommandContext(ctx, os.Args[0], helperArguments...)
 			},
 		}
 		raw, err := adapter.Review(context.Background(), NewInvocation([]byte("prompt")))
@@ -87,13 +200,24 @@ func TestPiAdapterFailsClosedOnProcessFailureAndEmptyOutput(t *testing.T) {
 // TestPiAdapterHelperProcess is the fake pi binary. It exits explicitly so a
 // helper run never prints Go test PASS noise into the captured raw stream.
 func TestPiAdapterHelperProcess(t *testing.T) {
-	mode := os.Getenv(piAdapterHelperEnvironment)
+	mode := piAdapterHelperOption(piAdapterHelperModeArgument)
 	if mode == "" {
 		return
 	}
-	prompt, err := io.ReadAll(os.Stdin)
-	if err != nil || os.WriteFile(os.Getenv(piAdapterPromptPathEnvironment), prompt, 0o600) != nil {
-		os.Exit(1)
+	if outputPath := piAdapterHelperOption(piAdapterHelperOutputPathArgument); outputPath != "" {
+		var output []byte
+		if mode == "environment" {
+			output = []byte(strings.Join(os.Environ(), "\x00"))
+		} else {
+			var err error
+			output, err = io.ReadAll(os.Stdin)
+			if err != nil {
+				os.Exit(1)
+			}
+		}
+		if err := os.WriteFile(outputPath, output, 0o600); err != nil {
+			os.Exit(1)
+		}
 	}
 	switch mode {
 	case "fail":
@@ -110,18 +234,26 @@ func TestPiAdapterHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func piAdapterHelperOption(prefix string) string {
+	for _, argument := range os.Args {
+		if strings.HasPrefix(argument, prefix) {
+			return strings.TrimPrefix(argument, prefix)
+		}
+	}
+	return ""
+}
+
 // Issue #3289: a pi child that prints its reason to stdout and exits non-zero
 // must surface that reason instead of an empty tail after the exit status.
 func TestPiAdapterFailureNamesStdoutReasonWhenStderrIsEmpty(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the helper process uses POSIX argument handling")
 	}
-	t.Setenv(piAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
-	t.Setenv(piAdapterHelperEnvironment, "stdout-failure")
 	adapter := &PiAdapter{
 		LookPath: func(string) (string, error) { return "pi", nil },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
-			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--"}, arguments...)...)
+			helperArguments := append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--", piAdapterHelperModeArgument + "stdout-failure"}, arguments...)
+			return exec.CommandContext(ctx, os.Args[0], helperArguments...)
 		},
 	}
 	raw, err := adapter.Review(context.Background(), NewInvocation([]byte("prompt")))
