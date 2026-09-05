@@ -17,7 +17,7 @@
 </p>
 
 <p>
-<a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
+<a href="https://gentle-ai.gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
 <a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a> &bull;
 <a href="https://engram.gentlemanprogramming.com/"><strong>Engram</strong></a>
 </p>
