@@ -447,15 +447,6 @@ func TestReviewRecoveryCollectionSameTargetSelectorGuard(t *testing.T) {
 	}
 }
 
-// TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema is
-// the RED-first proof for the 1745 follow-up: the "token" field 1745 added to
-// ReviewTransitionArgument for execution arguments must be admissible under
-// the published, byte-pinned review-integration/v1 status.schema.json
-// contract. Before the schema fix, $defs/transition_argument declared
-// "additionalProperties": false with only name/value, so this real
-// "--captured-results=true" execute payload was schema-illegal even though
-// the CLI has emitted it since 1745.
-func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema(t *testing.T) {
 // TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedSchema
 // keeps native reviewer-capture argv tokens valid under the published v1
 // transition schema.
