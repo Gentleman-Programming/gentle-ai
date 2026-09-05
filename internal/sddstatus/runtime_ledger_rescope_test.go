@@ -894,10 +894,13 @@ func TestRuntimeLedgerZeroDriftResetRefusalNamesBothExits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// HarnessReused, not HarnessInvalidated (#3152): this fixture means a
+	// real verification failure that must keep charging the budget, and
+	// HarnessInvalidated with zero changed lines is now refunded.
 	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "verify-finish-1", Outcome: AttemptFailed,
 		EvidenceRevision: runtimeTestHash('7'), Diagnosis: "verification failed with the workspace unchanged",
-		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification harness exited cleanly",
 		ProcessEvidence: "post-verification process scan found no descendants",
 	})
 	if err != nil {
@@ -964,10 +967,14 @@ func TestRuntimeLedgerExhaustedAttemptsAdmitTheResetForAWiderScope(t *testing.T)
 		if beginErr != nil {
 			t.Fatalf("begin %d: %v", ordinal+1, beginErr)
 		}
+		// HarnessReused, not HarnessInvalidated (#3152): this fixture means a
+		// real verification failure that must keep charging the budget, and
+		// HarnessInvalidated with zero changed lines is now refunded --
+		// exactly the narrow behavioral budget isolation #3152 added.
 		finished, finishErr := store.Finish(context.Background(), FinishAttemptRequest{
 			ExpectedRevision: started.Revision, RequestID: request + "-finish", Outcome: AttemptFailed,
 			EvidenceRevision: runtimeTestHash(byte('a' + ordinal)), Diagnosis: "verification failed with the workspace unchanged",
-			HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+			HarnessDisposition: HarnessReused, CleanupEvidence: "verification harness exited cleanly",
 			ProcessEvidence: "post-verification process scan found no descendants",
 		})
 		if finishErr != nil {
@@ -1025,10 +1032,13 @@ func TestRuntimeLedgerWidenedRescopeRefusalNamesTheExhaustRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// HarnessReused, not HarnessInvalidated (#3152): this fixture means a
+	// real verification failure that must keep charging the budget, so the
+	// "1 remaining attempt" accounting below stays exact.
 	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "widen-finish-1", Outcome: AttemptFailed,
 		EvidenceRevision: runtimeTestHash('3'), Diagnosis: "verification failed with the workspace unchanged",
-		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification harness exited cleanly",
 		ProcessEvidence: "post-verification process scan found no descendants",
 	})
 	if err != nil {
@@ -1062,10 +1072,13 @@ func TestRuntimeLedgerWidenedRescopeRefusalNamesTheExhaustRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// HarnessReused (#3152), same reason as the first attempt above: this
+	// second failure must also keep charging the budget so it actually
+	// reaches decision-required.
 	exhausted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: last.Revision, RequestID: "widen-finish-2", Outcome: AttemptFailed,
 		EvidenceRevision: runtimeTestHash('4'), Diagnosis: "verification failed again with the workspace unchanged",
-		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification harness exited cleanly",
 		ProcessEvidence: "post-verification process scan found no descendants",
 	})
 	if err != nil {
