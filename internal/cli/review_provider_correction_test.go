@@ -301,6 +301,114 @@ func TestRawInputCapturePreservesRejectedResultWithoutInvokingProvider(t *testin
 	}
 }
 
+// Issue #4027: the in-process reviewer sometimes echoed the transaction's
+// target_identity in the subject_hash field instead of the lens binding's own
+// subject_hash. Admission correctly refused it (the fail-closed default), but
+// that made the lens slot permanently unfillable whenever the model repeated
+// the same mistake. The fix corrects this one specific, explainable
+// confusion -- the model reading an adjacent field of the same prompt --
+// before admission, deterministically and without a second invocation.
+func TestProviderCaptureCorrectsSubjectHashEchoedAsTargetIdentity(t *testing.T) {
+	repo, binding, record, _ := newCandidateInspectionReview(t, "candidate\n", false)
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	correctSubjectHash := result.SubjectHash
+	if correctSubjectHash == record.State.InitialSnapshot.Identity {
+		t.Fatal("test fixture's subject hash coincides with target identity; cannot exercise the confusion")
+	}
+	result.SubjectHash = record.State.InitialSnapshot.Identity // the exact #4027 confusion
+	misbound, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := recordingProviderAdapter(t, func() ([]byte, error) { return misbound, nil })
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewCaptureResult(append(binding, "--agent", string(model.AgentClaudeCode)), &output); err != nil {
+		t.Fatalf("capture with a target-identity-echoed subject hash: %v\n%s", err, output.String())
+	}
+	if len(*prompts) != 1 {
+		t.Fatalf("provider reviewer invocations = %d, want exactly 1 (no correction round needed)", len(*prompts))
+	}
+	// This lineage selects exactly one lens, so capturing it closes the review:
+	// terminal approval -- reached only via a completed admitted lens result --
+	// is the strongest available proof that the corrected subject hash, not the
+	// echoed target identity, is what admission actually bound.
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Schema != reviewLastEventClosureSchema || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("terminal capture after subject hash correction = %#v", terminal)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
+}
+
+// A wrong subject_hash that is NOT explainable as the adjacent target_identity
+// field must still be refused exactly as before: the correction is narrowly
+// scoped to the one confusion #4027 reported, not a general "trust the
+// binding always" relaxation.
+func TestProviderCaptureStillRefusesAnUnexplainedWrongSubjectHash(t *testing.T) {
+	repo, binding, record, _ := newCandidateInspectionReview(t, "candidate\n", false)
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	result.SubjectHash = "sha256:" + strings.Repeat("b", 64)
+	wrong, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := recordingProviderAdapter(t,
+		func() ([]byte, error) { return wrong, nil },
+		func() ([]byte, error) { return wrong, nil },
+	)
+
+	err = RunReviewCaptureResult(append(binding, "--agent", string(model.AgentClaudeCode)), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "binding_mismatch") {
+		t.Fatalf("unexplained wrong subject hash = %v, want a binding_mismatch refusal", err)
+	}
+	if len(*prompts) != 2 {
+		t.Fatalf("provider reviewer invocations = %d, want exactly 2 (first attempt plus the one corrective retry)", len(*prompts))
+	}
+}
+
+// reviewProviderCorrectSubjectHashEcho itself, in isolation: the pure
+// substitution logic the two capture-level tests above exercise end to end.
+func TestReviewProviderCorrectSubjectHashEcho(t *testing.T) {
+	const target = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	const expected = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	tests := []struct {
+		name string
+		raw  []byte
+		want string // "" means the input must come back byte-identical
+	}{
+		{"rewrites an echoed target identity", []byte(`{"subject_hash":"` + target + `","findings":[]}`), expected},
+		{"leaves an unrelated wrong value untouched", []byte(`{"subject_hash":"sha256:` + strings.Repeat("9", 64) + `"}`), ""},
+		{"leaves a correct echo untouched", []byte(`{"subject_hash":"` + expected + `"}`), ""},
+		{"no-ops on malformed payloads instead of guessing", []byte("not json"), ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := reviewProviderCorrectSubjectHashEcho(test.raw, target, expected)
+			if test.want == "" {
+				if !bytes.Equal(got, test.raw) {
+					t.Fatalf("correction touched an input it should not have: %q", got)
+				}
+				return
+			}
+			var fields map[string]json.RawMessage
+			var echoed string
+			if err := json.Unmarshal(got, &fields); err != nil || json.Unmarshal(fields["subject_hash"], &echoed) != nil || echoed != test.want {
+				t.Fatalf("corrected subject_hash = %q (err=%v), want %q", got, err, test.want)
+			}
+			if _, present := fields["findings"]; !present {
+				t.Fatal("correction dropped an unrelated field")
+			}
+		})
+	}
+}
+
 func TestProviderCaptureRefusesPreflightBeforeInvocationOrPreservation(t *testing.T) {
 	repo, binding, record, _ := newCandidateInspectionReview(t, "candidate\n", false)
 	prompts := recordingProviderAdapter(t,
