@@ -35,7 +35,6 @@ func TestRenderDependencyTreePiOnlyEngramPlanShowsComponentAndPiInstallCopy(t *t
 		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
-		"pi install npm:@juicesharp/rpiv-todo",
 		"pi install npm:pi-btw",
 	} {
 		if !strings.Contains(out, want) {
@@ -78,7 +77,6 @@ func TestRenderDependencyTreeMixedPiEmptyPlanShowsPiInstallCopy(t *testing.T) {
 		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
-		"pi install npm:@juicesharp/rpiv-todo",
 		"pi install npm:pi-btw",
 	} {
 		if !strings.Contains(out, want) {

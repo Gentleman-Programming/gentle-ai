@@ -249,7 +249,6 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
   - `pi install npm:pi-subagents-j0k3r`
   - `pi install npm:@juicesharp/rpiv-ask-user-question`
   - `pi install npm:pi-web-access`
-  - `pi install npm:@juicesharp/rpiv-todo`
   - `pi install npm:pi-btw`
 - **`gentle-pi` package**: adds the Gentleman harness for Pi: SDD/OpenSpec workflow, strict TDD guidance, safety defaults, `/gentle-ai:*` commands, skill assets, prompts, SDD agents, and SDD chains. On normal `session_start`, it copies project assets into `.pi/agents/`, `.pi/chains/`, and `.pi/gentle-ai/support/` without overwriting local files unless the Pi recovery command uses `--force`. Starting Pi with `pi -ns` skips startup skill loading/hooks, so that automatic refresh does not run in that mode.
 - **Package metadata**: latest verified `gentle-pi` version is `0.2.6`; npm lists `alan_buscaglia` as maintainer, with source at [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi) and package docs at [npm: gentle-pi](https://www.npmjs.com/package/gentle-pi).
@@ -262,7 +261,7 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - CLI precedence is flag, non-empty environment, prior managed state, then `auto`; `auto` never enables by itself, unresolved non-interactive `auto` stays foreground, and the interactive Pi installer prompts only when that preference is unresolved.
 - The resolved on/off policy is projected to `~/.pi/gentle-ai/background-subagents.json` as `{"schema":"gentle-pi.background-subagents/v1","policy":"on"|"off"}` (the base directory honors `GENTLE_PI_CONFIG_HOME`); `off` rewrites the policy instead of deleting files, and a file at that path without the managed schema marker is never overwritten.
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
-- **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
+- **Pi companion packages**: `pi-web-access` and `pi-btw` add web access and companion workflow support. Todo tracking ships inside `gentle-pi` (Gentle Todo); an existing `@juicesharp/rpiv-todo` entry is dropped from `settings.json` on the next install or update, and Pi uninstalls it on its next package sync.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
 
 ### Hermes Ephemeral Delegation
