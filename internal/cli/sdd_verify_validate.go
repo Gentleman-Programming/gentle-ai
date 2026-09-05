@@ -148,6 +148,7 @@ func renderSDDVerifyValidateHelp(stdout io.Writer) error {
 	_, _ = fmt.Fprintln(stdout, "\nReport contract:")
 	_, _ = fmt.Fprintf(stdout, "  schema: %s\n", contract.Schema)
 	_, _ = fmt.Fprintf(stdout, "  required envelope fields: %s\n", strings.Join(contract.RequiredFields, ", "))
+	_, _ = fmt.Fprintln(stdout, "  evidence_revision, test_output_hash, and build_output_hash must each be sha256:<64 lowercase hex>.")
 	_, _ = fmt.Fprintf(stdout, "  accepted verdicts: %s\n", strings.Join(contract.Verdicts, ", "))
 	_, _ = fmt.Fprintf(stdout, "  maximum report size: %d bytes (%s)\n", contract.MaxBytes, formatSDDVerifyValidateByteLimit(contract.MaxBytes))
 	_, _ = fmt.Fprintln(stdout, "  the first non-empty line must be ```yaml (```yml and any letter case are admitted) and the envelope closes with ```.")
