@@ -1123,6 +1123,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									artifactErr = frozenErr
 								} else {
 									captureContext, artifactErr = newReviewCaptureContext(record.State, record.State.CapturePhaseRevision, frozen)
+									if artifactErr == nil && result.Frozen != nil {
+										result.Frozen.ChangedPathManifestSHA256, artifactErr = frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+									}
 								}
 							}
 						}
