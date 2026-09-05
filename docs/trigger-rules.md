@@ -84,7 +84,7 @@ user's behalf. Review context may remain visible when available, but it never
 authorizes or blocks commit, push, PR, release, or archive. Native delivery gates
 report `disabled/unmanaged` when no exact receipt applies and never fabricate approval.
 
-In stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0), prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), and unreleased `main`, disabled SDD status skips review authority and leaves `reviewGate` structurally absent. Pre-verify continues without routing to review. When visible, `reviewGate` is informational only; SDD requirements, tasks, and verification determine archive readiness, while ordinary repository policy owns delivery. Native compatibility commands may report `disabled/unmanaged` review context, but no receipt state or validation result governs delivery. See the [SDD status contract](../internal/assets/skills/_shared/sdd-status-contract.md).
+In stable [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0) and unreleased `main`, disabled SDD status skips review authority and leaves `reviewGate` structurally absent. Pre-verify continues without routing to review. When visible, `reviewGate` is informational only; SDD requirements, tasks, and verification determine archive readiness, while ordinary repository policy owns delivery. Native compatibility commands may report `disabled/unmanaged` review context, but no receipt state or validation result governs delivery. See the [SDD status contract](../internal/assets/skills/_shared/sdd-status-contract.md).
 
 ## Review store reset
 
