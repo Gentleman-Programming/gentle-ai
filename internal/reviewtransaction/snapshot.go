@@ -788,9 +788,20 @@ func (builder SnapshotBuilder) StillUntrackedIntended(ctx context.Context, inten
 	tracked := nulSeparatedPathSet(trackedOutput)
 	remaining := make([]string, 0, len(intended))
 	for _, path := range intended {
-		if _, isTracked := tracked[path]; !isTracked {
-			remaining = append(remaining, path)
+		if _, isTracked := tracked[path]; isTracked {
+			continue
 		}
+		// A recorded path that no longer exists in the working tree has left
+		// the candidate just as surely as one that became tracked: carrying it
+		// forward would make every later capture fail on the missing file
+		// instead of classifying the discard as drift (#4055).
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("intended-untracked path %q: %w", path, err)
+		}
+		remaining = append(remaining, path)
 	}
 	return remaining, nil
 }
