@@ -146,22 +146,16 @@ func reviewPiRelayHandshakeIsSoleMissingCondition(agent model.AgentID) bool {
 // declared contract away from eligible, and a reader who follows it concludes
 // the runtime was dropped.
 //
-// The guidance names the variable but NOT its value, and that is deliberate
-// rather than an oversight. This prose reaches the operator only as the
-// negotiated envelope's `cause`, which every refusal crosses
-// reviewScrubDefectReportField to reach: that gate rewrites any `KEY=VALUE`
-// token to `<redacted>` in full, and any `/`-rooted run to `<redacted>` from
-// the slash onward. The exact handshake collides with both rules, so
-// `GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1` renders as
-// `<redacted>` and `gentle-pi.review-relay/v1` renders as
-// `gentle-pi.review-relay<redacted>`. Naming the variable alone survives the
-// gate byte for byte (pinned by
-// TestPiRelayHandshakeGuidanceSurvivesTheFailureCausePrivacyGate), so it is
-// the most actionable cause that can actually reach the operator without
-// relaxing a privacy boundary from a diagnostics change.
+// The guidance spells the exact handshake out. This prose reaches the
+// operator only as the negotiated envelope's `cause`, which every refusal
+// crosses reviewScrubDefectReportField to reach; that gate now keeps the
+// product's own public identifiers (pinned by
+// TestPiRelayHandshakeGuidanceSurvivesTheFailureCausePrivacyGate), so the
+// cause can name the runnable exit instead of a variable whose value the
+// reader had to find in gentle-pi's source.
 func reviewPiRelayHandshakeGuidance() string {
-	return "; pi is eligible only while " + reviewPiHostRelayContractEnvironment +
-		" declares the exact relay contract this binary admits, which the gentle-pi host exports on every invocation it relays; export it in this shell and re-run"
+	return "; pi is eligible only while " + reviewPiHostRelayContractEnvironment + "=" + reviewPiHostRelayContract +
+		" is exported, which the gentle-pi host does on every invocation it relays; export it in this shell and re-run"
 }
 
 // reviewTransportRefusalGuidanceFor selects the guidance the refused runtime
