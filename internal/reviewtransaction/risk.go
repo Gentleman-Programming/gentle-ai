@@ -575,6 +575,17 @@ func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]tr
 	return blobs, nil
 }
 
+// processBoundaryPattern is the case-insensitive extended regular expression
+// the frozen-tree scan hands to git grep. A bare spawn word (`subprocess`,
+// `child_process`, `execute_process`, `exec` as in `os/exec` or `exec "$@"`)
+// counts only when it is not a member of another value: `db.Exec(`,
+// `stmt.Exec(`, and `/re/.exec(` are database statements and regular
+// expressions, not process boundaries (#2542). Spawn calls that only exist in
+// member form are named explicitly instead.
+const processBoundaryPattern = `(^#!)` +
+	`|((^|[^[:alnum:]_.])(subprocess|child_process|execute_process|exec)([^[:alnum:]_]|$))` +
+	`|(getRuntime\(\)\.exec\(|ProcessBuilder|os\.system\(|os\.exec[lv]p?e?\(|posix_spawn|proc_open\(|shell_exec\(|passthru\(|popen\(|Process\.Start\()`
+
 func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
@@ -611,7 +622,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		// same bounded pass looks for either inside the frozen bytes.
 		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
-			`(^#!)|((^|[^[:alnum:]_])(subprocess|execute_process|exec)([^[:alnum:]_]|$))`, tree, "--",
+			processBoundaryPattern, tree, "--",
 		}
 		prefixLength := gitArgvPrefixLength(repo, fixedArgs...)
 		for _, batch := range batchLiteralPathspecs(treePaths, prefixLength) {

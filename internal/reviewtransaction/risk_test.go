@@ -694,6 +694,36 @@ func TestTierIsClassifiedByContentNotExtension(t *testing.T) {
 			files: []candidateFile{{path: "README-install.sh", content: "#!/bin/sh\nexec \"$@\"\n"}},
 			want:  RiskHigh,
 		},
+		{
+			name:  "database Exec method is not a spawn construct",
+			files: []candidateFile{{path: "internal/storage/repository.go", content: "package storage\n\nimport \"database/sql\"\n\nfunc insert(db *sql.DB, text string) error {\n\t_, err := db.Exec(\"INSERT INTO verses(text) VALUES (?)\", text)\n\treturn err\n}\n"}},
+			want:  RiskMedium,
+		},
+		{
+			name:  "RegExp exec method is not a spawn construct",
+			files: []candidateFile{{path: "src/parse.js", content: "const match = /^(\\d+)/.exec(input);\n"}},
+			want:  RiskMedium,
+		},
+		{
+			name:  "Go source proving a spawn construct",
+			files: []candidateFile{{path: "internal/tools/run.go", content: "package tools\n\nimport \"os/exec\"\n\nfunc run() error { return exec.Command(\"git\", \"status\").Run() }\n"}},
+			want:  RiskHigh,
+		},
+		{
+			name:  "Node source proving a spawn construct",
+			files: []candidateFile{{path: "src/run.js", content: "const { execFile } = require(\"child_process\");\n"}},
+			want:  RiskHigh,
+		},
+		{
+			name:  "Java source proving a spawn construct",
+			files: []candidateFile{{path: "src/Run.java", content: "class Run { void go() throws Exception { Runtime.getRuntime().exec(\"ls\"); } }\n"}},
+			want:  RiskHigh,
+		},
+		{
+			name:  "Python source proving a spawn construct",
+			files: []candidateFile{{path: "tools/run.py", content: "import os\nos.system(\"ls\")\n"}},
+			want:  RiskHigh,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
