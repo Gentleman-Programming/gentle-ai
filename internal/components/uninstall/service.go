@@ -1088,9 +1088,8 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 				}
 				return true, true, nil
 			}
-			// Preserve the file's existing mode: ~/.claude.json is injected
-			// with 0600 because it holds the OAuth session, and an uninstall
-			// rewrite must not widen it.
+			// Preserve the agent settings/MCP config file's existing mode so an
+			// uninstall rewrite never widens permissions the user or agent set.
 			perm := os.FileMode(0o644)
 			if info, statErr := os.Lstat(path); statErr == nil {
 				perm = info.Mode().Perm()
