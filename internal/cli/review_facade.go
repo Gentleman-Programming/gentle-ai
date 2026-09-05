@@ -808,10 +808,22 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		builder := reviewtransaction.SnapshotBuilder{Repo: root}
 		requestedLineage := strings.TrimSpace(*lineage)
 		requestedLineageOccupied := false
-		if *nextTransition && requestedLineage != "" {
+		if requestedLineage != "" {
 			requestedLineageOccupied, err = reviewtransaction.ExactReviewLineageOccupied(ctx, root, requestedLineage)
 			if err != nil {
 				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
+			}
+			// #1997 residual: outside the negotiated START/continuation flow
+			// (--next-transition), a plain contracted status query naming a
+			// lineage that does not exist must fail closed with the same
+			// typed refusal the uncontracted path uses (status.go's
+			// InventoryAuthorityForLineage), instead of silently falling
+			// through to report the unrelated live current target at exit 0.
+			// --next-transition legitimately names an unoccupied lineage to
+			// start it fresh, so this check is scoped to the plain query.
+			if !*nextTransition && !requestedLineageOccupied {
+				// refusal:by-design operator-knowledge: named lineage was never created or has already been pruned
+				return fmt.Errorf("inventory review authority: review authority inventory contains no entries for lineage %q", requestedLineage)
 			}
 		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
