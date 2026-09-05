@@ -293,8 +293,13 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
-		persistErr := fmt.Errorf("persist install state: %w", err)
+	// Atomic-commit the gentle-ai.managed-assets/v1 manifest alongside the
+	// install state: a successful install MUST persist the managed-bundle
+	// identity so doctor can correlate the running binary against managed
+	// assets (#1884, AC1, AC8).
+	installRunID := fmt.Sprintf("install-%d", time.Now().UTC().UnixNano())
+	if err := PublishInstallManagedAssetsManifest(homeDir, newState, agentIDs, flags, writer, installRunID); err != nil {
+		persistErr := fmt.Errorf("publish install state and manifest: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
 			persistErr = errors.Join(persistErr, rollback.Err)

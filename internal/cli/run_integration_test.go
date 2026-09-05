@@ -119,7 +119,7 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	}
 
 	_, err = RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
-	if err == nil || !strings.Contains(err.Error(), "persist install state") {
+	if err == nil || !strings.Contains(err.Error(), "publish install state and manifest") {
 		t.Fatalf("RunInstall() error = %v, want state persistence failure", err)
 	}
 	if _, readErr := os.ReadFile(configPath); !os.IsNotExist(readErr) {
