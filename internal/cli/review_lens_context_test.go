@@ -408,6 +408,70 @@ func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t 
 	}
 }
 
+// TestReviewLensContextAfterCollectionClosesNamesTheFindingsSurface is issue
+// #4019: once the last lens capture closes collection to correction_required,
+// the CURRENT repository-context handle is genuinely bound to the live
+// authority, yet no next_transition ever re-offers lens-context tokens for it
+// again -- so the generic "refresh the transition, then run this operation
+// again" hint can never be followed. lens-context must instead name the
+// provider-owned surface that actually carries the admitted findings a
+// correction must target: review status's own
+// next_transition.correction_request.findings (added by issue #4087).
+func TestReviewLensContextAfterCollectionClosesNamesTheFindingsSurface(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	started := startHighRiskCLIReview(t, repo)
+	for order := 0; order < len(started.SelectedLenses)-1; order++ {
+		captureCleanCLIReviewerResult(t, repo, started, order, &bytes.Buffer{})
+	}
+	captureCLIReviewerResultWithFindings(t, repo, started, len(started.SelectedLenses)-1, []facadeFinding{{
+		ID: "R3-001", Location: "internal/auth/session.go:4", Severity: "CRITICAL",
+		Claim:         "the candidate introduces an observable authentication failure",
+		ProofRefs:     []string{"the changed line deterministically causes the reproduced failure"},
+		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, &bytes.Buffer{})
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("fixture state = %q, want correction_required", record.State.State)
+	}
+
+	// The current bound handle: exactly the tokens a fresh next_transition
+	// would carry for this live authority, not a stale one from before
+	// collection closed.
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: started.LineageID, TargetIdentity: started.TargetIdentity, Revision: record.State.CapturePhaseRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", handle,
+		"--lineage", started.LineageID, "--target", started.TargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", started.SelectedLenses[0],
+	}, &output)
+	if err == nil {
+		t.Fatal("lens-context with the current bound handle after collection closed succeeded, want a followable refusal")
+	}
+	var refusal *reviewLensContextError
+	if !errors.As(err, &refusal) || refusal.Code != "lens_context_unavailable_after_collection" {
+		t.Fatalf("lens-context after collection closed error = %v, want lens_context_unavailable_after_collection", err)
+	}
+	if !strings.Contains(refusal.Action, "next_transition.correction_request.findings") ||
+		!strings.Contains(refusal.Action, reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("lens-context after collection closed action = %q, want it to name the findings surface", refusal.Action)
+	}
+}
+
 func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperationContext(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -128,18 +128,21 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// may be refused before any authority exists. A settlement resolves a
 	// declaration when the caller makes one, and lets the ledger -- the only
 	// reader of what the attempt began against -- decide whether one was owed.
+	// Rescope shares this exact division of labor (#4195): a fresh successor
+	// selection is optional, so it is resolved here alongside finish/settle
+	// rather than forced through the begin/acquire preflight above.
 	//
-	// Unlike begin/acquire, finish/settle do NOT read the workspace here: the
-	// runtime ledger already recomputes the current live inventory and
-	// performs pairing, canonicalization, freshness, and eligibility checks
-	// better than a duplicate CLI-side read could (design decision 7). Only
-	// the flag-shape is validated here, because the ledger only receives
+	// Unlike begin/acquire, finish/settle/rescope do NOT read the workspace
+	// here: the runtime ledger already recomputes the current live inventory
+	// and performs pairing, canonicalization, freshness, and eligibility
+	// checks better than a duplicate CLI-side read could (design decision 7).
+	// Only the flag-shape is validated here, because the ledger only receives
 	// `IntendedUntracked *[]string` and cannot recover the declared mode on
 	// its own -- silently dropping it would turn `--untracked-scope=exclude
 	// --intended-untracked=x` into a select, or accept `--untracked-scope=bogus`.
 	var settlementUntracked *[]string
 	settlementInventory := ""
-	if (operation == "finish" || operation == "settle") && declaredUntracked {
+	if (operation == "finish" || operation == "settle" || operation == "rescope") && declaredUntracked {
 		if shapeErr := intendedUntrackedDeclarationShape(untrackedScope, intendedUntracked, expectedUntrackedInventory, expectedUntrackedInventory.value, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation); shapeErr != nil {
 			return shapeErr
 		}
@@ -203,6 +206,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+			IntendedUntracked: settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "repair":
 		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
@@ -347,6 +351,14 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		// Optional maintainer-authorized fresh successor selection (#4195):
+		// admits eligible untracked files authored after the predecessor's
+		// terminal settlement, outside any active attempt, which the
+		// predecessor's recorded selection could never include. Omitting all
+		// three keeps replaying the predecessor's recorded selection.
+		{name: "untracked-scope", usage: "optional; declares a fresh successor selection instead of replaying history; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
 	}},
 	{name: "repair", purpose: "Repair the historical consecutive-rescope publication defect", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,

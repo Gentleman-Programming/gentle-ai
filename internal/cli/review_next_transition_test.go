@@ -99,26 +99,33 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 		if err := json.Unmarshal(payload, &document); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"} {
+		for _, field := range []string{"artifact_subject", "base_tree", "candidate_tree"} {
 			if len(document[field]) == 0 {
 				t.Fatalf("restart reviewer input %d omits %q: %s", order, field, payload)
 			}
 		}
+		// issue #3922 / #4199 / gentle-pi#543: the native-git transport no
+		// longer inlines the manifest on this per-lens input -- it is already
+		// committed to by artifact_subject.changed_path_manifest_sha256.
+		if _, found := document["changed_path_manifest"]; found {
+			t.Fatalf("restart reviewer input %d still inlines changed_path_manifest: %s", order, payload)
+		}
 		var subject reviewtransaction.ArtifactSubject
-		var manifest []reviewtransaction.ChangedPathManifestEntry
 		if err := json.Unmarshal(document["artifact_subject"], &subject); err != nil {
 			t.Fatal(err)
 		}
-		if err := json.Unmarshal(document["changed_path_manifest"], &manifest); err != nil {
+		wantManifestDigest, err := reviewtransaction.ChangedPathManifestDigest(wantContext.ChangedPathManifest)
+		if err != nil {
 			t.Fatal(err)
 		}
 		if subject.LineageID != record.State.LineageID || subject.AuthorityRevision != record.State.CapturePhaseRevision ||
 			subject.TargetIdentity != record.State.InitialSnapshot.Identity || subject.Lens != record.State.SelectedLenses[order] ||
-			subject.SelectedOrder != order || subject.BaseTree != wantContext.BaseTree || subject.CandidateTree != wantContext.CandidateTree {
+			subject.SelectedOrder != order || subject.BaseTree != wantContext.BaseTree || subject.CandidateTree != wantContext.CandidateTree ||
+			subject.ChangedPathManifestSHA256 != wantManifestDigest {
 			t.Fatalf("restart subject %d = %#v", order, subject)
 		}
-		if input.BaseTree != wantContext.BaseTree || input.CandidateTree != wantContext.CandidateTree || !reflect.DeepEqual(manifest, wantContext.ChangedPathManifest) {
-			t.Fatalf("restart context %d differs from frozen candidate\ngot trees=%s..%s manifest=%#v\nwant trees=%s..%s manifest=%#v", order, input.BaseTree, input.CandidateTree, manifest, wantContext.BaseTree, wantContext.CandidateTree, wantContext.ChangedPathManifest)
+		if input.BaseTree != wantContext.BaseTree || input.CandidateTree != wantContext.CandidateTree {
+			t.Fatalf("restart context %d differs from frozen candidate\ngot trees=%s..%s\nwant trees=%s..%s", order, input.BaseTree, input.CandidateTree, wantContext.BaseTree, wantContext.CandidateTree)
 		}
 	}
 }
@@ -454,8 +461,11 @@ func TestReviewNextTransitionCollectContextValidatesAgainstPublishedSchema(t *te
 	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
 		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
 	})
+	// issue #3922 / #4199 / gentle-pi#543: the native-git transport no longer
+	// inlines the manifest on this per-lens input -- it is already committed
+	// to by artifact_subject.changed_path_manifest_sha256.
 	if got.Collect == nil || len(got.Collect.Inputs) != 1 || got.Collect.Inputs[0].ArtifactSubject == nil ||
-		got.Collect.Inputs[0].ChangedPathManifest == nil {
+		got.Collect.Inputs[0].ChangedPathManifest != nil {
 		t.Fatalf("capture context = %#v", got)
 	}
 	payload, err := json.Marshal(got)

@@ -312,6 +312,11 @@ type RuntimeRescope struct {
 	MaxChangedLines          int    `json:"max_changed_lines"`
 	Reason                   string `json:"reason"`
 	Actor                    string `json:"actor"`
+	// IntendedUntracked carries the maintainer-declared fresh successor
+	// selection (#4195) when the rescope declared one; nil when the
+	// successor replays the predecessor's recorded selection instead
+	// (runtimeRescopeSuccessorIntendedUntracked prefers this field).
+	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
 }
 
 type RuntimeRepair struct {
@@ -447,6 +452,18 @@ type RescopeObjectiveRequest struct {
 	MaxChangedLines  int    `json:"max_changed_lines"`
 	Reason           string `json:"reason"`
 	Actor            string `json:"actor"`
+
+	// An optional maintainer-authorized fresh untracked selection for the
+	// successor's initial candidate (#4195): eligible untracked files
+	// authored after the predecessor's terminal settlement -- outside any
+	// active attempt -- can never appear in the predecessor's recorded
+	// selection, so replaying it forever excludes them. Both fields mirror
+	// FinishAttemptRequest's shape exactly, including the omitempty digest
+	// binding that keeps a request declaring nothing byte-identical to one
+	// written before these fields existed. IntendedUntracked is nil when
+	// nothing was declared and non-nil (possibly empty) when something was.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	ExpectedUntrackedInventory string    `json:"expected_untracked_inventory,omitempty"`
 }
 
 // GrantRootsRequest records a per-change edit-authority grant (#2540 S2).
@@ -627,6 +644,21 @@ type runtimeRescopeEvent struct {
 	MaxChangedLines          int    `json:"max_changed_lines"`
 	Reason                   string `json:"reason"`
 	Actor                    string `json:"actor"`
+
+	// A maintainer-declared fresh successor untracked selection (#4195).
+	// Both are omitempty so a rescope declaring nothing marshals exactly as
+	// it did before these fields existed, keeping every legacy rescope
+	// request digest byte-identical. IntendedUntracked is nil when nothing
+	// was declared (the successor replays the predecessor's recorded
+	// selection, unchanged behavior) and non-nil when something was --
+	// mirroring runtimeFinishEvent's IntendedUntracked/
+	// DeclaredUntrackedInventory convention.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	DeclaredUntrackedInventory string    `json:"declared_untracked_inventory,omitempty"`
+	// SuccessorCandidateDigest binds the candidate to the replayed
+	// predecessor FinishCandidateTree (#4195 R3/R4-002); present only when
+	// IntendedUntracked is (a declared selection legitimately widens it).
+	SuccessorCandidateDigest string `json:"successor_candidate_digest,omitempty"`
 }
 
 type runtimeRepairEvent struct {
@@ -1676,6 +1708,29 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, store.runtimeRescopeExhaustedRefusal(
 				"--max-changed-lines", request.MaxChangedLines, status.CumulativeChangedLines, objective.MaxChangedLines)
 		}
+		// #4195: a maintainer may declare a fresh successor selection instead
+		// of replaying the predecessor's recorded one. It is validated
+		// against the CURRENT eligible inventory exactly like begin/acquire/
+		// finish/settle (freshness digest, then eligible membership), reusing
+		// the same reviewtransaction helper those commands validate through
+		// -- no new validation path. A path already part of the verified
+		// zero-drift terminal candidate may never be dropped back out either
+		// (settlementUntrackedSelection's "widen, never narrow" rule,
+		// applied here to the successor instead of a settlement).
+		successorIntended, declaredInventory := intended, ""
+		if request.IntendedUntracked != nil {
+			selection, validateErr := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).
+				ValidateIntendedUntrackedSelection(ctx, request.ExpectedUntrackedInventory, *request.IntendedUntracked)
+			if validateErr != nil {
+				return runtimeRecord{}, fmt.Errorf("%w: %v; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt rescope`", ErrRuntimeUndeclaredUntracked, validateErr)
+			}
+			for _, path := range intended {
+				if !slices.Contains(selection, path) {
+					return runtimeRecord{}, fmt.Errorf("%w: this objective's terminal candidate already includes %q, and rescope cannot take it back out; rerun `gentle-ai sdd-attempt rescope` with --intended-untracked=%s included", ErrRuntimeUndeclaredUntracked, path, path)
+				}
+			}
+			successorIntended, declaredInventory = selection, request.ExpectedUntrackedInventory
+		}
 		// The zero-drift `drift` snapshot above was captured with
 		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
 		// so its Identity is only comparable against another
@@ -1689,16 +1744,29 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 		// on it exactly because there is zero drift -- so this second capture
 		// is provably the same underlying content the drift check just
 		// verified, not a fresh unguarded read.
-		fresh, err := captureRuntimeCandidate(ctx, store.Repo, intended)
+		//
+		// A widened selection makes `drift` the wrong comparand, but the
+		// redundant-capture principle still applies (#4195 R4-001): recapture
+		// the SAME proof with the NEW selection, so a concurrent tracked
+		// write here is still caught, instead of skipping the guard.
+		successorDrift := drift
+		if request.IntendedUntracked != nil {
+			successorDrift, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, successorIntended)
+			if err != nil {
+				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", err)
+			}
+		}
+		runtimeRescopeBeforeSecondCaptureHook()
+		fresh, err := captureRuntimeCandidate(ctx, store.Repo, successorIntended)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective rescope: %w", err)
 		}
-		if fresh.CandidateTree != drift.CandidateTree {
+		if fresh.CandidateTree != successorDrift.CandidateTree {
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		generation := status.ObjectiveGeneration + 1
 		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation)
-		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: &runtimeRescopeEvent{
+		event := &runtimeRescopeEvent{
 			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
 			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
 			RescopeCandidateIdentity: fresh.Identity, RescopeCandidateTree: fresh.CandidateTree,
@@ -1706,7 +1774,15 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Reason: request.Reason, Actor: request.Actor,
-		}}, nil
+		}
+		if request.IntendedUntracked != nil {
+			declared := slices.Clone(successorIntended)
+			event.IntendedUntracked, event.DeclaredUntrackedInventory = &declared, declaredInventory
+			// #4195 R3/R4-002: bind the candidate to the replayed Finish tree.
+			event.SuccessorCandidateDigest = runtimeRescopeSuccessorCandidateDigest(
+				last.FinishCandidateTree, declared, declaredInventory, fresh.Identity, fresh.CandidateTree)
+		}
+		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: event}, nil
 	})
 }
 
@@ -2275,8 +2351,17 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	// is comparable across them. RescopeCandidateIdentity is NOT compared
 	// here for the same reason; it is still shape-validated and reused
 	// verbatim to derive ObjectiveID below.
+	//
+	// #4195: a declared selection legitimately overlays more than Finish did,
+	// so this equality guards only the legacy shape; SuccessorCandidateDigest
+	// (below) guards the declared shape against this SAME replayed tree.
 	if (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
-		last.FinishCandidateTree != event.RescopeCandidateTree {
+		(event.IntendedUntracked == nil && last.FinishCandidateTree != event.RescopeCandidateTree) {
+		return rejectRuntimeRecord("objective_rescope_candidate_match")
+	}
+	if event.IntendedUntracked != nil && runtimeRescopeSuccessorCandidateDigest(
+		last.FinishCandidateTree, *event.IntendedUntracked, event.DeclaredUntrackedInventory,
+		event.RescopeCandidateIdentity, event.RescopeCandidateTree) != event.SuccessorCandidateDigest {
 		return rejectRuntimeRecord("objective_rescope_candidate_match")
 	}
 	generation := event.ObjectiveGeneration
@@ -2300,7 +2385,7 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		RescopeCandidateIdentity: event.RescopeCandidateIdentity, RescopeCandidateTree: event.RescopeCandidateTree,
 		ObjectiveID: event.ObjectiveID, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-		Reason: event.Reason, Actor: event.Actor,
+		Reason: event.Reason, Actor: event.Actor, IntendedUntracked: event.IntendedUntracked,
 	}
 	// NextOrdinal, CumulativeAttempts, CumulativeChangedLines,
 	// LifetimeAttempts, and LifetimeChangedLines are deliberately left
@@ -2753,14 +2838,32 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			// recomputes narrowing against the REPLAYED objective, which a
 			// forged PreviousMax* cannot fool (see its doc comment).
 			event.MaxAttempts > event.PreviousMaxAttempts || event.MaxChangedLines > event.PreviousMaxChangedLines ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil ||
+			(event.IntendedUntracked == nil) != (event.DeclaredUntrackedInventory == "") ||
+			(event.DeclaredUntrackedInventory != "" && !runtimeRevisionPattern.MatchString(event.DeclaredUntrackedInventory)) ||
+			(event.IntendedUntracked == nil) != (event.SuccessorCandidateDigest == "") ||
+			(event.SuccessorCandidateDigest != "" && !runtimeRevisionPattern.MatchString(event.SuccessorCandidateDigest)) {
 			return rejectRuntimeRecord("invalid_rescope_event")
+		}
+		if event.IntendedUntracked != nil {
+			canonical, canonicalErr := canonicalRuntimeIntendedUntracked(*event.IntendedUntracked)
+			if canonicalErr != nil || !slices.Equal(canonical, *event.IntendedUntracked) {
+				return rejectRuntimeRecord("invalid_rescope_intended_untracked_provenance")
+			}
 		}
 		request := RescopeObjectiveRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
 			WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			Reason: event.Reason, Actor: event.Actor,
+		}
+		// The event records the fresh selection this rescope declared; the
+		// request carried one only when the caller declared, which is exactly
+		// when the event carries the digest they declared against (mirrors
+		// the Finish case above).
+		if event.DeclaredUntrackedInventory != "" {
+			request.IntendedUntracked = event.IntendedUntracked
+			request.ExpectedUntrackedInventory = event.DeclaredUntrackedInventory
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request) != record.RequestDigest {
 			return rejectRuntimeRecord("rescope_request_digest_match")
@@ -3080,6 +3183,25 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
 	}
+	// Mirrors normalizeFinishAttemptRequest's untracked-declaration shape
+	// validation exactly (#4195): a declaration needs both its selection and
+	// the inventory digest it was made against, and the selection itself
+	// must be canonical. The live eligible-inventory freshness/membership
+	// check happens in Rescope, against the repository, the same division of
+	// labor Finish already uses.
+	if (request.IntendedUntracked == nil) != (request.ExpectedUntrackedInventory == "") {
+		return RescopeObjectiveRequest{}, errors.New("an untracked declaration needs both its selection and the inventory digest it was made against; rerun `gentle-ai sdd-attempt rescope` with --untracked-scope and --expected-untracked-inventory together")
+	}
+	if request.ExpectedUntrackedInventory != "" && !runtimeRevisionPattern.MatchString(request.ExpectedUntrackedInventory) {
+		return RescopeObjectiveRequest{}, errors.New("expected_untracked_inventory must be sha256:<64-lowercase-hex>; rerun `gentle-ai sdd-attempt rescope` with the digest `gentle-ai review status --next-transition` publishes")
+	}
+	if request.IntendedUntracked != nil {
+		canonical, canonicalErr := canonicalRuntimeIntendedUntracked(*request.IntendedUntracked)
+		if canonicalErr != nil {
+			return RescopeObjectiveRequest{}, canonicalErr
+		}
+		request.IntendedUntracked = &canonical
+	}
 	return request, nil
 }
 
@@ -3372,6 +3494,23 @@ func runtimeValueHash(domain string, value any) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// runtimeRescopeSuccessorCandidateDigest binds a declared-selection rescope's
+// candidate to the predecessor's FinishCandidateTree (#4195 R3/R4-002),
+// recomputed at replay from REPLAYED state, never from the record's claim.
+func runtimeRescopeSuccessorCandidateDigest(finishCandidateTree string, intendedUntracked []string, declaredUntrackedInventory, rescopeCandidateIdentity, rescopeCandidateTree string) string {
+	return runtimeValueHash("gentle-ai.sdd-runtime-rescope-successor-candidate/v1", struct {
+		FinishCandidateTree        string   `json:"finish_candidate_tree"`
+		IntendedUntracked          []string `json:"intended_untracked"`
+		DeclaredUntrackedInventory string   `json:"declared_untracked_inventory"`
+		RescopeCandidateIdentity   string   `json:"rescope_candidate_identity"`
+		RescopeCandidateTree       string   `json:"rescope_candidate_tree"`
+	}{
+		FinishCandidateTree: finishCandidateTree, IntendedUntracked: intendedUntracked,
+		DeclaredUntrackedInventory: declaredUntrackedInventory,
+		RescopeCandidateIdentity:   rescopeCandidateIdentity, RescopeCandidateTree: rescopeCandidateTree,
+	})
+}
+
 func runtimeRecordRevision(record runtimeRecord) (string, []byte, error) {
 	payload, err := json.Marshal(record)
 	if err != nil {
@@ -3406,6 +3545,10 @@ func (store RuntimeStore) consecutiveRescopeRepairContinuation(revision string) 
 }
 
 var runtimeRepairBeforePublishHook = func() {}
+
+// runtimeRescopeBeforeSecondCaptureHook is a test-only seam (mirrors
+// runtimeRepairBeforePublishHook) in Rescope's TOCTOU window (#4195 R4-001).
+var runtimeRescopeBeforeSecondCaptureHook = func() {}
 
 func (store RuntimeStore) ensureDirectories() error {
 	if filepath.Clean(store.commonDir) == "." || !filepath.IsAbs(store.commonDir) {

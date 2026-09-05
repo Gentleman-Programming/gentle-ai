@@ -226,8 +226,14 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			compactHistoricalFailedValidator(state) && compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)) {
 			continue
 		}
-		if request.LineageID != "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection != ProjectionStaged &&
-			!compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
+		// An explicitly named reviewing lineage whose live candidate drifted is
+		// resumed or recovered from its frozen selector, whether the caller
+		// bound a current-changes target or the committed base-diff one a
+		// `--base-ref --committed-only` STATUS carries; the frozen record
+		// already knows its own kind, so a base-diff request must not fall
+		// through to a fresh START that silently abandons the lineage.
+		if request.LineageID != "" && (request.Target.Kind == TargetCurrentChanges || request.Target.Kind == TargetBaseDiff) &&
+			request.Target.Projection != ProjectionStaged && !compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			eligible, pendingSlots, eligibilityErr := explicitReviewingCompactCandidate(ctx, repo, candidate)
 			if eligibilityErr != nil {
 				return targetStatusFailure(base, eligibilityErr)
