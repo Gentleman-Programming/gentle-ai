@@ -588,7 +588,27 @@ func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, r
 	capture := reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
 		ExpectedRequest: request.ValidationRequest, Payload: payload, Evidence: &evidence, Validation: &native,
 	}
-	if reviewProviderTargetedValidatorOutcome(native) == "failed" {
+	outcome := reviewProviderTargetedValidatorOutcome(native)
+	if outcome == "passed" {
+		// Issue #4080: the correction-budget preflight must run before the
+		// validator admission is durably written. A passed verdict used to be
+		// admitted first, with the budget check only running afterward inside
+		// closeCorrectionOnCapturedValidator's own, later write -- so an
+		// over-budget correction still consumed the sixth admitted-role slot
+		// before being refused, and the prescribed shrink-and-retry then hit the
+		// fixed six-admitted-roles cap and wedged the lineage. Checking here,
+		// before any write, keeps an over-budget correction from ever being
+		// admitted, matching the "failed" branch below which already gates its
+		// own completion atomically with the write.
+		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
+		if err != nil {
+			return nil, err
+		}
+		if remaining := state.CorrectionBudget - state.CumulativeCorrectionLines; actual < 0 || actual > remaining {
+			return nil, fmt.Errorf("actual correction is %d changed lines, exceeding the frozen budget of %d; shrink the correction to at most %d changed lines and rerun `gentle-ai review capture-validation` with the exact tokens STATUS reoffers", actual, state.CorrectionBudget, remaining)
+		}
+	}
+	if outcome == "failed" {
 		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
 		if err != nil {
 			return nil, err
@@ -608,7 +628,7 @@ func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
-	if reviewProviderTargetedValidatorOutcome(native) == "passed" {
+	if outcome == "passed" {
 		return closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
 	}
 	return newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
