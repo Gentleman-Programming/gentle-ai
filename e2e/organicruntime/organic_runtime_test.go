@@ -1199,7 +1199,7 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the grouped Go-bound reviewer tasks")
+	command := organicCommandContext(ctx, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the grouped Go-bound reviewer tasks")
 	command.Dir = harness.repo.worktree
 	command.Env = append(harness.environment(),
 		"OPENCODE_CONFIG_DIR="+configDirectory,
@@ -1231,7 +1231,9 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		// Snapshot the scheduling state without the handler lock so the failure
 		// message reports which stage stalled instead of naming a component that
-		// may never have executed.
+		// may never have executed. Cancel the subprocess and drain its output so
+		// the failure also carries what OpenCode itself printed; WaitDelay bounds
+		// the pipe drain.
 		lock.Lock()
 		arrivedNow, inFlightNow, maxInFlightNow, settledNow := arrived, inFlight, maxInFlight, settled
 		titleAnsweredNow, tasksIssuedNow, handlerFailureNow := titleAnswered, tasksIssued, handlerFailure
@@ -1240,12 +1242,14 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 			arrivalsNow[lens] = count
 		}
 		lock.Unlock()
-		if arrivedNow == 0 && !titleAnsweredNow {
-			t.Fatalf("OpenCode never issued its first provider request within 30s; its runtime bootstrap did not complete (external egress attempts denied: %d). Diagnostics: arrivals=%v maxInFlight=%d settled=%d tasksIssued=%t handlerFailure=%q",
-				proxy.deniedRequests(), arrivalsNow, maxInFlightNow, settledNow, tasksIssuedNow, handlerFailureNow)
+		cancel()
+		result := <-run
+		if arrivedNow == 0 && !titleAnsweredNow && handlerFailureNow == "" {
+			t.Fatalf("OpenCode never issued its first provider request within 30s; its runtime bootstrap did not complete (external egress attempts denied: %d). Diagnostics: arrivals=%v maxInFlight=%d settled=%d tasksIssued=%t handlerFailure=%q\nsubprocess err=%v output:\n%s",
+				proxy.deniedRequests(), arrivalsNow, maxInFlightNow, settledNow, tasksIssuedNow, handlerFailureNow, result.err, result.output)
 		}
-		t.Fatalf("OpenCode did not schedule all four foreground reviewer requests within 30s: arrived=%d arrivals=%v inFlight=%d maxInFlight=%d settled=%d titleAnswered=%t tasksIssued=%t handlerFailure=%q externalEgressDenied=%d",
-			arrivedNow, arrivalsNow, inFlightNow, maxInFlightNow, settledNow, titleAnsweredNow, tasksIssuedNow, handlerFailureNow, proxy.deniedRequests())
+		t.Fatalf("OpenCode did not schedule all four foreground reviewer requests within 30s: arrived=%d arrivals=%v inFlight=%d maxInFlight=%d settled=%d titleAnswered=%t tasksIssued=%t handlerFailure=%q externalEgressDenied=%d\nsubprocess err=%v output:\n%s",
+			arrivedNow, arrivalsNow, inFlightNow, maxInFlightNow, settledNow, titleAnsweredNow, tasksIssuedNow, handlerFailureNow, proxy.deniedRequests(), result.err, result.output)
 	}
 	lock.Lock()
 	if maxInFlight != len(wantLenses) {
