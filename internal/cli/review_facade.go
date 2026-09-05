@@ -31,7 +31,8 @@ const reviewContractRequiredForActionEligibilityReason = "--action-eligibility a
 // exact contract value for the other set of --contract-gated review status
 // flags (target selectors such as --lineage, --base-ref, --base-tree,
 // --workspace-overlay, --projection, --gate, and the recovery selectors).
-const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " + ReviewIntegrationContractV1
+const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " +
+	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStartTargetRequiresContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above, naming the same
@@ -807,10 +808,33 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		builder := reviewtransaction.SnapshotBuilder{Repo: root}
 		requestedLineage := strings.TrimSpace(*lineage)
 		requestedLineageOccupied := false
-		if *nextTransition && requestedLineage != "" {
+		if requestedLineage != "" {
 			requestedLineageOccupied, err = reviewtransaction.ExactReviewLineageOccupied(ctx, root, requestedLineage)
 			if err != nil {
 				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
+			}
+			// #1997 residual: outside the negotiated START/continuation flow
+			// (--next-transition), a plain contracted status query naming a
+			// lineage that does not exist must fail closed, instead of
+			// silently falling through to report the unrelated live current
+			// target at exit 0. --next-transition legitimately names an
+			// unoccupied lineage to start it fresh, so this check is scoped
+			// to the plain query.
+			//
+			// R3 correction: existence is decided by the exact same
+			// inventory predicate the uncontracted path uses
+			// (InventoryAuthorityForLineage), not by occupancy.
+			// requestedLineageOccupied only reports a live store directory;
+			// occupancy and inventory presence can diverge (a lineage that
+			// is approved-and-burned, abandoned, or invalidated may still
+			// hold auditable inventory state after its live directory is
+			// gone), and refusing those as nonexistent on this path while
+			// the uncontracted path admits them would be two independently
+			// maintained existence checks that can silently drift apart.
+			if !*nextTransition && !requestedLineageOccupied {
+				if _, inventoryErr := reviewtransaction.InventoryAuthorityForLineage(ctx, root, requestedLineage); inventoryErr != nil {
+					return fmt.Errorf("inventory review authority: %w", inventoryErr)
+				}
 			}
 		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
@@ -1282,14 +1306,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
-	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}
-	report, err := reviewtransaction.InventoryAuthority(ctx, root)
+	var report reviewtransaction.AuthorityStatusReport
+	if trimmedLineage := strings.TrimSpace(*lineage); trimmedLineage != "" {
+		report, err = reviewtransaction.InventoryAuthorityForLineage(ctx, root, trimmedLineage)
+	} else {
+		report, err = reviewtransaction.InventoryAuthority(ctx, root)
+	}
 	if err != nil {
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
