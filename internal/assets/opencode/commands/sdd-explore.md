@@ -1,7 +1,6 @@
 ---
 description: Explore and investigate an idea or feature — reads codebase and compares approaches
 agent: gentle-orchestrator
-subtask: true
 ---
 
 You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-explore` sub-agent only after the orchestration gates below pass.

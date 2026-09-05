@@ -1,7 +1,6 @@
 ---
 description: Archive a completed SDD change — syncs specs and closes the cycle
 agent: gentle-orchestrator
-subtask: true
 ---
 
 You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-archive` sub-agent only after the orchestration gates below pass.
