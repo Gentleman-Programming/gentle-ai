@@ -33,13 +33,13 @@ func runSDDArchiveCompose(args []string, stdout io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected sdd-archive-compose argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected sdd-archive-compose argument %q; rerun with only --canonical <path> --delta <path> [--output <path|->]", flags.Arg(0))
 	}
 	if strings.TrimSpace(*canonicalPath) == "" {
-		return errors.New("sdd-archive-compose requires --canonical")
+		return errors.New("sdd-archive-compose requires --canonical <path to openspec/specs/<domain>/spec.md>; rerun with it")
 	}
 	if strings.TrimSpace(*deltaPath) == "" {
-		return errors.New("sdd-archive-compose requires --delta")
+		return errors.New("sdd-archive-compose requires --delta <path to openspec/changes/<change>/specs/<domain>/spec.md>; rerun with it")
 	}
 
 	canonicalBytes, err := os.ReadFile(*canonicalPath)
