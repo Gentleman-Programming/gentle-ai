@@ -82,23 +82,88 @@ func journeySources() []journeySource {
 	return sources
 }
 
-// TestJourneyIDsAreUniqueAcrossSourceFiles is the focused duplicate-ID check.
+func TestJourneyIDCollisionsNameBothOffenders(t *testing.T) {
+	tests := []struct {
+		name    string
+		sources []journeySource
+		want    string
+	}{
+		{
+			name: "same full ID",
+			sources: []journeySource{
+				{File: "journeys_alpha.go", Journeys: []Journey{{ID: "j110-alpha"}}},
+				{File: "journeys_beta.go", Journeys: []Journey{{ID: "j110-alpha"}}},
+			},
+			want: `journey ID "j110-alpha" is defined in both journeys_alpha.go and journeys_beta.go; pick an ID no journeys_*.go file uses yet`,
+		},
+		{
+			name: "same numeric prefix",
+			sources: []journeySource{
+				{File: "journeys_alpha.go", Journeys: []Journey{{ID: "j110-alpha"}}},
+				{File: "journeys_beta.go", Journeys: []Journey{{ID: "j110-beta"}}},
+			},
+			want: `journey numeric prefix "j110" is shared by "j110-alpha" in journeys_alpha.go and "j110-beta" in journeys_beta.go; pick a number no journeys_*.go file uses yet`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collisions := journeyIDCollisions(tt.sources)
+			if len(collisions) != 1 {
+				t.Fatalf("journeyIDCollisions() returned %d collisions, want 1: %v", len(collisions), collisions)
+			}
+			if collisions[0] != tt.want {
+				t.Fatalf("journeyIDCollisions() = %q, want %q", collisions[0], tt.want)
+			}
+		})
+	}
+}
+
+type journeyIDOwner struct {
+	ID   string
+	File string
+}
+
+func journeyIDCollisions(sources []journeySource) []string {
+	fullOwners := map[string]string{}
+	prefixOwners := map[string]journeyIDOwner{}
+	collisions := []string{}
+
+	for _, source := range sources {
+		for _, journey := range source.Journeys {
+			if owner, taken := fullOwners[journey.ID]; taken {
+				collisions = append(collisions, fmt.Sprintf(
+					"journey ID %q is defined in both %s and %s; pick an ID no journeys_*.go file uses yet",
+					journey.ID, owner, source.File))
+				continue
+			}
+			fullOwners[journey.ID] = source.File
+
+			prefix := journey.ID
+			if separator := strings.IndexByte(journey.ID, '-'); separator >= 0 {
+				prefix = journey.ID[:separator]
+			}
+			if owner, taken := prefixOwners[prefix]; taken {
+				collisions = append(collisions, fmt.Sprintf(
+					"journey numeric prefix %q is shared by %q in %s and %q in %s; pick a number no journeys_*.go file uses yet",
+					prefix, owner.ID, owner.File, journey.ID, source.File))
+				continue
+			}
+			prefixOwners[prefix] = journeyIDOwner{ID: journey.ID, File: source.File}
+		}
+	}
+
+	return collisions
+}
+
+// TestJourneyIDsAreUniqueAcrossSourceFiles is the focused full-ID and numeric-prefix collision check.
 // Before it existed, a colliding ID was only caught downstream by the
 // registration test, whose seen[journey.ID] failure is generic and arrives
 // next to an unrelated count mismatch. This failure names both defining
 // files at the point of the mistake.
 func TestJourneyIDsAreUniqueAcrossSourceFiles(t *testing.T) {
-	owners := map[string]string{}
-	for _, source := range journeySources() {
-		for _, journey := range source.Journeys {
-			owner, taken := owners[journey.ID]
-			if !taken {
-				owners[journey.ID] = source.File
-				continue
-			}
-			t.Errorf("journey ID %q is defined in both %s and %s; pick an ID no journeys_*.go file uses yet",
-				journey.ID, owner, source.File)
-		}
+	for _, collision := range journeyIDCollisions(journeySources()) {
+		t.Error(collision)
 	}
 }
 
