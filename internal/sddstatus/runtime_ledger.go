@@ -46,10 +46,19 @@ const (
 	runtimeOperationHandoff                  = "attempt/handoff"
 	runtimeOperationGrant                    = "authority/grant"
 	maximumRuntimeGrantRoots                 = 32
-	maximumRuntimeIntendedUntracked          = 32
-	runtimeLockAcquireAttempts               = 3
-	finalVerifyWorkUnit                      = "verify"
-	finalVerifyAttestationWorkUnit           = "verify-attestation"
+	// maximumRuntimeIntendedUntracked bounds one attempt's untracked
+	// declaration (#4029). 256 is chosen over a chunked multi-call
+	// declaration path: it keeps the existing single-call digest/inventory
+	// binding exact (one declared list, one canonical digest, one capture) at
+	// a size that already covers the large real work units reported stuck at
+	// 32 (40 born-during files was enough to deadlock one), while a chunked
+	// path would need a new partial-declaration protocol, its own ledger
+	// event shape, and cross-call inventory-digest reconciliation for a
+	// problem a bigger constant already solves.
+	maximumRuntimeIntendedUntracked = 256
+	runtimeLockAcquireAttempts      = 3
+	finalVerifyWorkUnit             = "verify"
+	finalVerifyAttestationWorkUnit  = "verify-attestation"
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -2916,7 +2925,7 @@ func canonicalRuntimeIntendedUntracked(paths []string) ([]string, error) {
 		return []string{}, nil
 	}
 	if len(canonical) > maximumRuntimeIntendedUntracked {
-		return nil, fmt.Errorf("intended_untracked must name at most %d paths; rerun `gentle-ai sdd-attempt acquire` or `gentle-ai sdd-attempt begin` with an inventory-validated selection", maximumRuntimeIntendedUntracked)
+		return nil, fmt.Errorf("intended_untracked must name at most %d paths; `git add` the excess born-during paths so they are tracked (tracked changes and the index are always captured, uncapped) and declare only the remaining untracked paths, or declare none with --untracked-scope=exclude if every born-during path is now tracked; rerun `gentle-ai sdd-attempt acquire`, `gentle-ai sdd-attempt begin`, `gentle-ai sdd-attempt settle`, or `gentle-ai sdd-attempt finish` with that selection", maximumRuntimeIntendedUntracked)
 	}
 	slices.Sort(canonical)
 	for index, path := range canonical {
