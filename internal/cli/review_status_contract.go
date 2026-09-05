@@ -820,10 +820,10 @@ func (result ReviewTargetStatusResult) validateFrozenManifestBinding() error {
 			continue
 		}
 		if result.Frozen == nil || !validReviewCapabilitySHA256(result.Frozen.ChangedPathManifestSHA256) {
-			return errors.New("negotiated status offers a manifest-less capture without the frozen candidate manifest digest")
+			return errors.New("negotiated status offers a manifest-less capture without the frozen candidate manifest digest") // refusal:by-design world-action: the provider-built envelope omitted the digest it must publish and requires a code fix
 		}
 		if input.ArtifactSubject.ChangedPathManifestSHA256 != result.Frozen.ChangedPathManifestSHA256 {
-			return errors.New("negotiated status capture subject manifest digest differs from the frozen candidate manifest")
+			return errors.New("negotiated status capture subject manifest digest differs from the frozen candidate manifest") // refusal:by-design world-action: the provider-built subject and frozen digest disagree and require a code fix
 		}
 	}
 	return nil
@@ -1042,7 +1042,7 @@ func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
 // is refused at the provider instead of validating by construction.
 func frozenManifestDigestForProjection(manifest []reviewtransaction.ChangedPathManifestEntry, projectionPaths []string) (string, error) {
 	if !reflect.DeepEqual(manifestPathsForStatus(manifest), projectionPaths) {
-		return "", errors.New("frozen candidate manifest paths differ from the published projection paths")
+		return "", errors.New("frozen candidate manifest paths differ from the published projection paths") // refusal:by-design world-action: the frozen manifest and the published projection were derived from different candidates and require a code fix
 	}
 	return reviewtransaction.ChangedPathManifestDigest(manifest)
 }
