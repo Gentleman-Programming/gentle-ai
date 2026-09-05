@@ -277,7 +277,6 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 		piSubagentsInstallCommand(system.PlatformProfile{}),
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:@juicesharp/rpiv-todo"},
 		{"pi", "install", "npm:pi-btw"},
 	}
 	if !reflect.DeepEqual(commands, want) {
@@ -324,6 +323,43 @@ func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t 
 	want := []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 	if !reflect.DeepEqual(commands[3], want) {
 		t.Fatalf("InstallCommand()[3] = %#v, want %#v", commands[3], want)
+	}
+}
+
+func TestMergePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	initial := `{
+  "packages": [
+    "npm:@juicesharp/rpiv-todo",
+    "npm:@juicesharp/rpiv-todo@2.9.0",
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:other@1.0.0"
+  ]
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := mergePiSettingsFile(settingsPath); err != nil {
+		t.Fatalf("mergePiSettingsFile() error = %v", err)
+	}
+
+	var settings struct {
+		Packages []string `json:"packages"`
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("Unmarshal(settings) error = %v", err)
+	}
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:@juicesharp/rpiv-ask-user-question", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
+		t.Fatalf("packages = %#v, want the retired todo package gone and the rest untouched", settings.Packages)
 	}
 }
 

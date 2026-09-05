@@ -33,7 +33,6 @@ npm exec --yes --package gentle-engram@latest -- pi-engram init
 pi install npm:pi-subagents-j0k3r
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-web-access
-pi install npm:@juicesharp/rpiv-todo
 pi install npm:pi-btw
 ```
 
@@ -46,7 +45,6 @@ pi install npm:pi-btw
 | `pi-subagents-j0k3r`                                      | Runs SDD agents discovered from `.pi/agents/`; installed from the published Pi package `npm:pi-subagents-j0k3r`.                 |
 | `@juicesharp/rpiv-ask-user-question`                     | Lets Pi child agents ask the active user session for clarification when they need human input.                            |
 | `pi-web-access`                                          | Adds web access tools for Pi.                                                                                             |
-| `@juicesharp/rpiv-todo`                                  | Adds todo/task tracking support for Pi sessions.                                                                          |
 | `pi-btw`                                                 | Adds BTW companion workflow support for Pi.                                                                               |
 
 `gentle-pi` owns Pi's runtime behavior. Its current harness enforces parent-only delegation triggers: delegate exploration after 4+ files, use one writer for multi-file changes, require fresh review before PRs, run fresh audits after incidents, and pause long monolithic sessions before they drift.

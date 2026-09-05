@@ -37,6 +37,13 @@ var legacyPiSubagentPackageIdentities = map[string]struct{}{
 	"vendor/pi-subagents-fixed": {},
 }
 
+// Retired Pi companion packages: their replacement ships inside gentle-pi,
+// so every install or update drops them from the user's settings and Pi
+// uninstalls them on its next package sync.
+var retiredPiPackageIdentities = map[string]struct{}{
+	"npm:@juicesharp/rpiv-todo": {},
+}
+
 var piWalkDir = filepath.WalkDir
 
 func piSubagentsInstallCommand(system.PlatformProfile) []string {
@@ -246,7 +253,6 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 		piSubagentsInstallCommand(profile),
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:@juicesharp/rpiv-todo"},
 		{"pi", "install", "npm:pi-btw"},
 	}, nil
 }
@@ -395,7 +401,7 @@ func appendPiPackage(existing any, desired string) []any {
 	filtered := make([]any, 0, len(packages)+1)
 	for _, pkg := range packages {
 		identity := piPackageIdentity(pkg)
-		if identity == piMCPAdapterPackage || isLegacyPiSubagentPackage(identity) {
+		if identity == piMCPAdapterPackage || isLegacyPiSubagentPackage(identity) || isRetiredPiPackage(identity) {
 			continue
 		}
 		filtered = append(filtered, pkg)
@@ -446,11 +452,21 @@ func piPackageIdentity(pkg any) string {
 			return legacy
 		}
 	}
+	for retired := range retiredPiPackageIdentities {
+		if source == retired || strings.HasPrefix(source, retired+"@") {
+			return retired
+		}
+	}
 	return source
 }
 
 func isLegacyPiSubagentPackage(identity string) bool {
 	_, ok := legacyPiSubagentPackageIdentities[identity]
+	return ok
+}
+
+func isRetiredPiPackage(identity string) bool {
+	_, ok := retiredPiPackageIdentities[identity]
 	return ok
 }
 
