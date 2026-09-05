@@ -15,6 +15,42 @@ import (
 // ReviewStoreResetSchema identifies the user-facing store reset projection.
 const ReviewStoreResetSchema = "gentle-ai.review-store-reset-result/v1"
 
+// ErrReviewStoreResetRequiresGitRepository reports that review store-reset
+// was attempted outside a Git repository.
+// refusal:by-design operator-knowledge: review store-reset requires a Git repository; only the operator knows where the Git repository checkout is located
+var ErrReviewStoreResetRequiresGitRepository = errors.New("review store-reset requires a Git repository")
+
+// ReviewStoreResetRepositoryRequiredError represents a typed failure when
+// store-reset is executed outside a Git repository, providing actionable guidance.
+type ReviewStoreResetRepositoryRequiredError struct {
+	Cause error
+}
+
+func (err *ReviewStoreResetRepositoryRequiredError) Unwrap() error { return err.Cause }
+
+func (err *ReviewStoreResetRepositoryRequiredError) Error() string {
+	// refusal:by-design operator-knowledge: running store-reset requires an existing Git repository; only the operator knows where the repository checkout is located
+	return "review store-reset requires a Git repository; rerun the command from inside a Git repository, or rerun with --cwd pointing at one"
+}
+
+func (err *ReviewStoreResetRepositoryRequiredError) Is(target error) bool {
+	return target == ErrReviewStoreResetRequiresGitRepository
+}
+
+func reviewStoreResetRepositoryRequiredRefusal(err error) error {
+	if err == nil {
+		return nil
+	}
+	var typed *reviewtransaction.StoreResetRepositoryRequiredError
+	if errors.As(err, &typed) {
+		return &ReviewStoreResetRepositoryRequiredError{Cause: err}
+	}
+	if reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return &ReviewStoreResetRepositoryRequiredError{Cause: err}
+	}
+	return nil
+}
+
 // ReviewStoreResetResult is the command's machine-readable output.
 type ReviewStoreResetResult struct {
 	Schema    string                             `json:"schema"`
@@ -81,6 +117,9 @@ func RunReviewStoreReset(args []string, stdout io.Writer) error {
 		if emitErr := emitReviewStoreReset(stdout, report, attempted, *confirm, *emitJSON); emitErr != nil && err == nil {
 			return emitErr
 		}
+	}
+	if refusal := reviewStoreResetRepositoryRequiredRefusal(err); refusal != nil {
+		return refusal
 	}
 	return err
 }

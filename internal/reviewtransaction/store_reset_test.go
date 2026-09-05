@@ -1075,3 +1075,44 @@ func TestReviewStoreResetFreedBytesNeverGoesNegative(t *testing.T) {
 		})
 	}
 }
+
+// TestSurveyReviewStoreOutsideGitReturnsTypedError proves survey on a non-git
+// directory produces the typed StoreResetRepositoryRequiredError rather than
+// raw subprocess stderr.
+func TestSurveyReviewStoreOutsideGitReturnsTypedError(t *testing.T) {
+	nonGitDir := t.TempDir()
+	_, err := SurveyReviewStore(context.Background(), nonGitDir, StoreResetRequest{})
+	if err == nil {
+		t.Fatal("survey on non-git directory succeeded, want error")
+	}
+	var typed *StoreResetRepositoryRequiredError
+	if !errors.As(err, &typed) {
+		t.Fatalf("survey error = %T %v, want *StoreResetRepositoryRequiredError", err, err)
+	}
+	if !errors.Is(err, ErrStoreResetRequiresGitRepository) {
+		t.Fatalf("errors.Is(err, ErrStoreResetRequiresGitRepository) = false for %v", err)
+	}
+	if strings.Contains(err.Error(), "exit code 128") {
+		t.Fatalf("error message exposes raw git exit code: %v", err)
+	}
+}
+
+// TestResetReviewStoreOutsideGitReturnsTypedError proves reset on a non-git
+// directory produces the typed StoreResetRepositoryRequiredError.
+func TestResetReviewStoreOutsideGitReturnsTypedError(t *testing.T) {
+	nonGitDir := t.TempDir()
+	_, err := ResetReviewStore(context.Background(), nonGitDir, StoreResetRequest{})
+	if err == nil {
+		t.Fatal("reset on non-git directory succeeded, want error")
+	}
+	var typed *StoreResetRepositoryRequiredError
+	if !errors.As(err, &typed) {
+		t.Fatalf("reset error = %T %v, want *StoreResetRepositoryRequiredError", err, err)
+	}
+	if !errors.Is(err, ErrStoreResetRequiresGitRepository) {
+		t.Fatalf("errors.Is(err, ErrStoreResetRequiresGitRepository) = false for %v", err)
+	}
+	if strings.Contains(err.Error(), "exit code 128") {
+		t.Fatalf("error message exposes raw git exit code: %v", err)
+	}
+}

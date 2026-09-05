@@ -780,6 +780,9 @@ type Model struct {
 	ReviewStoreResetSurveyErr error
 	// ReviewStoreResetErr records the outcome of an applied reset.
 	ReviewStoreResetErr error
+	// ReviewStoreResetHasGitFn reports whether the current workspace resolves
+	// to a usable Git repository for review store operations. Injected for tests.
+	ReviewStoreResetHasGitFn func() bool
 	// ReviewModeCwdFn, ReviewModeStatusFn, and ReviewModeSetGlobalFn are injected
 	// so the screen can be tested without filesystem state or CLI process calls.
 	ReviewModeCwdFn       func() (string, error)
@@ -1402,6 +1405,7 @@ func (m Model) View() string {
 		return screens.RenderWelcomeWithAdvisory(
 			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone,
 			m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(),
+			m.hasGitRepository(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
@@ -2054,6 +2058,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			next++
 
 			if m.Cursor == next {
+				if !m.hasGitRepository() {
+					return m, nil
+				}
 				return m.startReviewStoreResetSurvey()
 			}
 			next++
@@ -4050,7 +4057,7 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.hasGitRepository()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0
@@ -5248,6 +5255,22 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 // hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
 func (m Model) hasAgentBuilderEngines() bool {
 	return len(m.detectAgentBuilderEngines()) > 0
+}
+
+// hasGitRepository reports whether the current workspace resolves to a usable
+// Git repository without reading or mutating review store state.
+func (m Model) hasGitRepository() bool {
+	if m.ReviewStoreResetHasGitFn != nil {
+		return m.ReviewStoreResetHasGitFn()
+	}
+	repo := "."
+	if m.ReviewModeCwdFn != nil {
+		if dir, err := m.ReviewModeCwdFn(); err == nil && dir != "" {
+			repo = dir
+		}
+	}
+	_, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(context.Background())
+	return err == nil
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.
