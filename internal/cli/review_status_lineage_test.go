@@ -135,3 +135,45 @@ func TestReviewStatusContractedLineageScopesInventoryInsteadOfLiveTarget(t *test
 		t.Fatalf("unselected contracted status did not report the live current target: %s", out.String())
 	}
 }
+
+// TestReviewStatusContractedAbandonedLineageMatchesUncontractedExistenceCheck
+// is the R3 correction: the contracted branch's fail-closed refusal above
+// must decide existence with the exact same inventory predicate the
+// uncontracted path uses (InventoryAuthorityForLineage), not by occupancy
+// (a live store directory) alone. A lineage that once existed and was
+// abandoned has no live store directory (occupancy is false, same as a
+// lineage that never existed), so this proves the contracted and
+// uncontracted paths now fail identically for it instead of each running
+// its own, independently maintained existence check that could silently
+// drift apart.
+func TestReviewStatusContractedAbandonedLineageMatchesUncontractedExistenceCheck(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
+	if err := RunReview(staleReviewingAbandonArgs(repo, revision, staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)), &bytes.Buffer{}); err != nil {
+		t.Fatalf("abandon failed: %v", err)
+	}
+
+	var uncontracted bytes.Buffer
+	uncontractedErr := RunReviewStatus([]string{"--cwd", repo, "--lineage", "abandon-stale-reviewing"}, &uncontracted)
+	if uncontractedErr == nil {
+		t.Fatalf("expected the abandoned lineage to fail closed uncontracted, got success: %s", uncontracted.String())
+	}
+
+	var contracted bytes.Buffer
+	contractedErr := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--lineage", "abandon-stale-reviewing"}, &contracted)
+	if contractedErr == nil {
+		t.Fatalf("expected the abandoned lineage to fail closed under --contract, got success: %s", contracted.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, contracted.Bytes())
+
+	// Both paths must report the identical underlying cause: one predicate,
+	// not two. Before the R3 correction, the contracted path decided
+	// nonexistence from occupancy alone and never consulted this cause text.
+	if failure.Cause != uncontractedErr.Error() {
+		t.Fatalf("contracted and uncontracted existence checks disagree for an abandoned lineage:\ncontracted cause: %q\nuncontracted error: %q", failure.Cause, uncontractedErr.Error())
+	}
+	if !strings.Contains(failure.Cause, "abandon-stale-reviewing") {
+		t.Fatalf("contracted failure does not name the abandoned lineage: %#v", failure)
+	}
+}

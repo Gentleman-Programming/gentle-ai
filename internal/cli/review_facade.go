@@ -815,15 +815,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			// #1997 residual: outside the negotiated START/continuation flow
 			// (--next-transition), a plain contracted status query naming a
-			// lineage that does not exist must fail closed with the same
-			// typed refusal the uncontracted path uses (status.go's
-			// InventoryAuthorityForLineage), instead of silently falling
-			// through to report the unrelated live current target at exit 0.
-			// --next-transition legitimately names an unoccupied lineage to
-			// start it fresh, so this check is scoped to the plain query.
+			// lineage that does not exist must fail closed, instead of
+			// silently falling through to report the unrelated live current
+			// target at exit 0. --next-transition legitimately names an
+			// unoccupied lineage to start it fresh, so this check is scoped
+			// to the plain query.
+			//
+			// R3 correction: existence is decided by the exact same
+			// inventory predicate the uncontracted path uses
+			// (InventoryAuthorityForLineage), not by occupancy.
+			// requestedLineageOccupied only reports a live store directory;
+			// occupancy and inventory presence can diverge (a lineage that
+			// is approved-and-burned, abandoned, or invalidated may still
+			// hold auditable inventory state after its live directory is
+			// gone), and refusing those as nonexistent on this path while
+			// the uncontracted path admits them would be two independently
+			// maintained existence checks that can silently drift apart.
 			if !*nextTransition && !requestedLineageOccupied {
-				// refusal:by-design operator-knowledge: named lineage was never created or has already been pruned
-				return fmt.Errorf("inventory review authority: review authority inventory contains no entries for lineage %q", requestedLineage)
+				if _, inventoryErr := reviewtransaction.InventoryAuthorityForLineage(ctx, root, requestedLineage); inventoryErr != nil {
+					return fmt.Errorf("inventory review authority: %w", inventoryErr)
+				}
 			}
 		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
