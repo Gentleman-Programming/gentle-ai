@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // TestSharedPromptDir verifies the expected directory path is returned.
@@ -141,13 +142,7 @@ func sddJudgmentDaySubAgentsForCodeGraphTest() []string {
 }
 
 func sddReviewSubAgentsForCodeGraphTest() []string {
-	return []string{
-		"review-risk",
-		"review-readability",
-		"review-reliability",
-		"review-resilience",
-		"review-refuter",
-	}
+	return opencode.ReviewPhases()
 }
 
 func sddShellDisabledSubAgentsForCodeGraphTest() []string {
@@ -160,20 +155,16 @@ func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any,
 	if !ok {
 		t.Fatalf("agent %q missing or not an object", agentName)
 	}
-	tools, ok := agent["tools"].(map[string]any)
+	permission, ok := agent["permission"].(map[string]any)
 	if !ok {
-		t.Fatalf("agent %q tools have type %T, want object", agentName, agent["tools"])
+		t.Fatalf("agent %q permission has type %T, want object", agentName, agent["permission"])
 	}
-	for tool, want := range map[string]bool{
-		"read":  true,
-		"write": false,
-		"edit":  false,
-		"bash":  false,
-		"task":  false,
-	} {
-		got, ok := tools[tool].(bool)
-		if !ok || got != want {
-			t.Fatalf("agent %q tool %q = %v, want %t", agentName, tool, tools[tool], want)
+	if _, exists := agent["tools"]; exists {
+		t.Fatalf("agent %q emits deprecated tools: %#v", agentName, agent)
+	}
+	for _, name := range []string{"write", "edit", "bash", "task"} {
+		if permission[name] != "deny" {
+			t.Fatalf("agent %q permission %q = %#v, want deny", agentName, name, permission[name])
 		}
 	}
 }
@@ -232,8 +223,7 @@ func withoutStrings(values []string, excluded ...string) []string {
 	return kept
 }
 
-// TestWriteSharedPromptFilesCreates10Files verifies that WriteSharedPromptFiles
-// creates exactly the 10 expected prompt files under {homeDir}/.config/opencode/prompts/sdd/.
+// TestWriteSharedPromptFilesCreates11Files verifies the complete phase inventory.
 func TestWriteSharedPromptFilesCreates10Files(t *testing.T) {
 	home := t.TempDir()
 
@@ -248,6 +238,7 @@ func TestWriteSharedPromptFilesCreates10Files(t *testing.T) {
 	expectedFiles := []string{
 		"sdd-init.md",
 		"sdd-explore.md",
+		"sdd-research.md",
 		"sdd-propose.md",
 		"sdd-spec.md",
 		"sdd-design.md",
@@ -311,6 +302,7 @@ func TestWriteSharedPromptFilesContent(t *testing.T) {
 	}{
 		{"sdd-init.md", "init"},
 		{"sdd-explore.md", "explore"},
+		{"sdd-research.md", "research"},
 		{"sdd-propose.md", "propose"},
 		{"sdd-spec.md", "spec"},
 		{"sdd-design.md", "design"},
@@ -355,6 +347,7 @@ func TestWriteSharedPromptFilesLanguageContract(t *testing.T) {
 	phases := []string{
 		"sdd-init.md",
 		"sdd-explore.md",
+		"sdd-research.md",
 		"sdd-propose.md",
 		"sdd-spec.md",
 		"sdd-design.md",
@@ -546,7 +539,7 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 	}
 
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	bashCapableAgents := append(SharedPromptPhases(), "jd-fix-agent")
+	bashCapableAgents := append(withoutStrings(SharedPromptPhases(), "sdd-research"), "jd-fix-agent", opencode.ReviewValidatorAgent)
 	for _, agentName := range bashCapableAgents {
 		prompt := agentPrompt(t, agentsMap, agentName)
 		if !strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
@@ -562,6 +555,10 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
 		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
+	}
+	researchPrompt := agentPrompt(t, agentsMap, "sdd-research")
+	if strings.Contains(researchPrompt, "<!-- gentle-ai:codegraph-guidance -->") {
+		t.Fatal("sdd-research must not receive shell-based CodeGraph guidance with bash disabled")
 	}
 }
 
@@ -597,6 +594,10 @@ func TestInjectOpenCodeMultiModeSubagentPromptFilesIncludeCodeGraphGuidanceWhenE
 		}
 		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
 	}
+	researchPrompt := agentPrompt(t, agentsMap, "sdd-research")
+	if strings.Contains(researchPrompt, "<!-- gentle-ai:codegraph-guidance -->") {
+		t.Fatal("sdd-research must not receive shell-based CodeGraph guidance with bash disabled")
+	}
 }
 
 func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.T) {
@@ -622,6 +623,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 			}
 
 			foundRefuter := false
+			foundEmptyTools := false
 			for _, fileName := range nativeMarkdownSubAgentFilesForCodeGraphTest(t, adapter) {
 				foundRefuter = foundRefuter || fileName == "review-refuter.md"
 				path := filepath.Join(adapter.SubAgentsDir(home), fileName)
@@ -635,11 +637,23 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 				}
 
 				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
+				emptyToolsContract := false
 				if tc.toolGrant != "" {
-					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
+					// The asset carries {{ENGRAM_TOOL_PREFIX}}; injection expands it to
+					// both Engram MCP shapes (#2698). Compare against the same
+					// expansion production performs rather than restating it here.
+					sourceTools := expandEngramToolNames(nativeToolsLineForCodeGraphTest(t, source))
+					emptyToolsContract = strings.TrimSpace(strings.TrimPrefix(sourceTools, "tools:")) == "[]"
+					foundEmptyTools = foundEmptyTools || emptyToolsContract
 					wantTools := sourceTools + ", " + tc.toolGrant
 					if tc.agentID == model.AgentKiroIDE {
 						wantTools = strings.TrimSuffix(sourceTools, "]") + `, "` + tc.toolGrant + `"]`
+					}
+					if emptyToolsContract {
+						// Tool-free reviewers keep their empty tools contract:
+						// appending the grant would corrupt the frontmatter and
+						// refuse every lens spawn (issues #3168, #3648).
+						wantTools = sourceTools
 					}
 					if got := nativeToolsLineForCodeGraphTest(t, text); got != wantTools {
 						t.Fatalf("%s tools = %q, want %q", fileName, got, wantTools)
@@ -647,7 +661,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 				}
 				for _, grant := range []string{claudeCodeGraphToolGrant, kiroCodeGraphToolGrant} {
 					wantCount := 0
-					if grant == tc.toolGrant {
+					if grant == tc.toolGrant && !emptyToolsContract {
 						wantCount = 1
 					}
 					if count := strings.Count(text, grant); count != wantCount {
@@ -661,6 +675,9 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 			if !foundRefuter {
 				t.Fatal("dynamic native asset coverage missing review-refuter.md")
 			}
+			if tc.agentID == model.AgentClaudeCode && !foundEmptyTools {
+				t.Fatal("dynamic native asset coverage missing an empty-tools review lens")
+			}
 
 			second, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{CodeGraphGuidanceMarkdown: guidance})
 			if err != nil {
@@ -668,6 +685,25 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 			}
 			if second.Changed {
 				t.Fatalf("Inject(%s) second changed = true, want idempotent output", tc.name)
+			}
+		})
+	}
+}
+
+func TestInjectCodeGraphToolGrantPreservesEmptyToolsContract(t *testing.T) {
+	guidance := communitytool.CodeGraphGuidanceMarkdown()
+	for _, tc := range []struct {
+		name    string
+		agentID model.AgentID
+		prompt  string
+	}{
+		{name: "claude empty flow sequence", agentID: model.AgentClaudeCode, prompt: "---\ntools: []\n---\nBody\n"},
+		{name: "claude empty value", agentID: model.AgentClaudeCode, prompt: "---\ntools:\n---\nBody\n"},
+		{name: "kiro empty flow sequence", agentID: model.AgentKiroIDE, prompt: "---\ntools: []\n---\nBody\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := injectCodeGraphToolGrantIntoPrompt(tc.prompt, tc.agentID, guidance); got != tc.prompt {
+				t.Fatalf("empty tools contract changed: got %q, want %q", got, tc.prompt)
 			}
 		})
 	}

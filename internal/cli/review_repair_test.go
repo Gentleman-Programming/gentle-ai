@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,83 +17,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
-
-func TestNegotiatedStatusPublishesClassifiedRepairAuthorizationTransition(t *testing.T) {
-	repo, lineage, head := classifiedRepairCLIFixture(t, "status-classified-repair")
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", repo}
-	var unauthorized bytes.Buffer
-	if err := RunReview(args, &unauthorized); err != nil {
-		t.Fatal(err)
-	}
-	var status ReviewTargetStatusResult
-	decoder := json.NewDecoder(bytes.NewReader(unauthorized.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&status); err != nil {
-		t.Fatal(err)
-	}
-	if err := status.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if status.Applicability != reviewtransaction.TargetApplicabilityCorrupted ||
-		status.Repair.Status != reviewtransaction.AuthorityRepairEligible || status.Repair.Candidate == nil ||
-		status.Repair.Candidate.LineageID != lineage || status.Repair.Candidate.Revision != head ||
-		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-		status.NextTransition.ReasonCode != "repair_authorization_required" || status.NextTransition.Collect == nil ||
-		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "external.authorize_repair" ||
-		status.NextTransition.Collect.Inputs[0].Schema != reviewtransaction.AuthorityRepairAuthorizationSchema {
-		t.Fatalf("unauthorized classified repair status = %#v\n%s", status, unauthorized.String())
-	}
-	if status.Eligibility == nil || len(status.Eligibility.AllowedActions) != 1 ||
-		status.Eligibility.AllowedActions[0].Action != "review.repair" ||
-		!reflect.DeepEqual(status.Eligibility.AllowedActions[0].RequiredInputs, []string{"actor", "reason", "maintainer_authorization"}) {
-		t.Fatalf("classified repair eligibility = %#v", status.Eligibility)
-	}
-	if strings.Contains(unauthorized.String(), repo) || strings.Contains(unauthorized.String(), "maintainer@example.com") {
-		t.Fatalf("repair collection leaked private path or invented authorization: %s", unauthorized.String())
-	}
-
-	actor, reason := "maintainer@example.com", "quarantine the approved historical alias"
-	authorization := classifiedRepairAuthorization(status.Repair, actor, reason)
-	authorizedArgs := append(append([]string{}, args...),
-		"--repair-actor", actor, "--repair-reason", reason, "--repair-authorization", authorization,
-	)
-	var authorized bytes.Buffer
-	if err := RunReview(authorizedArgs, &authorized); err != nil {
-		t.Fatal(err)
-	}
-	status = ReviewTargetStatusResult{}
-	decoder = json.NewDecoder(bytes.NewReader(authorized.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&status); err != nil {
-		t.Fatal(err)
-	}
-	if err := status.Validate(); err != nil {
-		t.Fatalf("authorized status validation: %v\n%s\n%#v", err, authorized.String(), status.NextTransition)
-	}
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
-		status.NextTransition.ReasonCode != "repair_authorized" || status.NextTransition.Execute == nil ||
-		status.NextTransition.Execute.Operation != "review.repair" ||
-		status.NextTransition.Execute.Binding.LineageID != lineage || status.NextTransition.Execute.Binding.Revision != head {
-		t.Fatalf("authorized classified repair status = %#v", status.NextTransition)
-	}
-	if strings.Contains(authorized.String(), authorization) {
-		t.Fatalf("authorized classified repair status leaked completed authorization: %s", authorized.String())
-	}
-	unsafe := status
-	unsafeTransition := *status.NextTransition
-	unsafeExecution := *status.NextTransition.Execute
-	unsafeExecution.Arguments = append([]ReviewTransitionArgument{}, unsafeExecution.Arguments...)
-	for index := range unsafeExecution.Arguments {
-		if unsafeExecution.Arguments[index].Name == "maintainer-authorization" {
-			unsafeExecution.Arguments[index].Value = authorization
-		}
-	}
-	unsafeTransition.Execute = &unsafeExecution
-	unsafe.NextTransition = &unsafeTransition
-	if err := unsafe.Validate(); err == nil {
-		t.Fatal("classified repair status accepted a completed public authorization")
-	}
-}
 
 func TestNegotiatedStatusKeepsExplicitHealthyTargetIsolatedFromUnrelatedRepair(t *testing.T) {
 	repo := initReviewCLIRepo(t)
@@ -293,6 +217,7 @@ func TestClassifiedRepairAuthorizationHelperIsExact(t *testing.T) {
 }
 
 func TestReviewRepairPreflightIsReadOnlyAndExactExecutionReplays(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, head := classifiedRepairCLIFixture(t, "repair-command")
 	store, err := reviewtransaction.AuthoritativeStore(context.Background(), repo, lineage)
 	if err != nil {
@@ -399,6 +324,7 @@ func TestReviewRepairPreflightSelectorStillClassifiesCompleteInventory(t *testin
 }
 
 func TestNegotiatedReviewRepairFailureNeverPublishesAuthorizationOrPaths(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, _ := classifiedRepairCLIFixture(t, "repair-private-failure")
 	assessment, err := reviewtransaction.AssessAuthorityRepair(context.Background(), repo)
 	if err != nil {
@@ -471,6 +397,150 @@ func authorityDispositionAuthorization(plan reviewtransaction.AuthorityDispositi
 // content_mismatched_recovery_authorization class rather than the
 // pre-contract malformed_recovery_authorization AnomalyClasses class.
 const dispositionForgedAuthorization = "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=impossible-mismatch\npredecessor_revision=impossible\ntarget_identity=impossible\nactor=maintainer@example.com\nreason=impossible"
+
+func TestReviewRepairPreflightBlocksHistoricalPlanForAdditionalAuthorityDiagnostic(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		problem string
+		prepare func(t *testing.T, statePath string)
+	}{
+		{
+			name: "malformed", problem: "malformed_compact_state",
+			prepare: func(t *testing.T, statePath string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(statePath, []byte("{\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "missing", problem: "missing_compact_state",
+			prepare: func(t *testing.T, statePath string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "unreadable", problem: "unreadable_compact_state",
+			prepare: func(t *testing.T, statePath string) {
+				t.Helper()
+				if err := os.MkdirAll(statePath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, _, store, record := newArtifactReview(t, true)
+			historicalLineage := record.State.LineageID
+			fixture := retireCompactAuthorityForReviewRepairTest(t, store, record)
+			historicalPath := store.StatePath()
+			unrelatedPath := filepath.Join(filepath.Dir(filepath.Dir(historicalPath)), "z-unrelated", "review-state.json")
+			test.prepare(t, unrelatedPath)
+
+			var inspectionOutput bytes.Buffer
+			if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspectionOutput); err != nil {
+				t.Fatal(err)
+			}
+			var inspection ReviewInspectAuthorityResult
+			decodeStrictReviewJSON(t, inspectionOutput.Bytes(), &inspection)
+			wantDiagnostics := []reviewtransaction.CompactRecoveryEntryDiagnostic{
+				{LineageID: historicalLineage, Problem: "outdated_compact_state"},
+				{LineageID: "z-unrelated", Problem: test.problem},
+			}
+			if !reflect.DeepEqual(inspection.EntryDiagnostics, wantDiagnostics) {
+				t.Fatalf("inspection diagnostics = %#v, want %#v", inspection.EntryDiagnostics, wantDiagnostics)
+			}
+
+			var preflightOutput bytes.Buffer
+			if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &preflightOutput); err != nil {
+				t.Fatal(err)
+			}
+			var preflight ReviewRepairResult
+			decodeStrictReviewJSON(t, preflightOutput.Bytes(), &preflight)
+			if err := preflight.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if preflight.DispositionProviderInputs != nil || len(preflight.DispositionSelectors) != 0 ||
+				preflight.ProviderInputs != nil || len(preflight.RequiredInputs) != 0 || preflight.Execution != nil || preflight.DispositionExecution != nil {
+				t.Fatalf("additional %s diagnostic published a repair plan or mutation: %#v", test.problem, preflight)
+			}
+			if after, err := os.ReadFile(historicalPath); err != nil || !bytes.Equal(after, fixture) {
+				t.Fatalf("historical authority changed after read-only preflight: %v, %v", err, after)
+			}
+			info, err := os.Stat(unrelatedPath)
+			switch test.problem {
+			case "missing_compact_state":
+				if !os.IsNotExist(err) {
+					t.Fatalf("missing authority state changed after preflight: info=%v err=%v", info, err)
+				}
+			case "unreadable_compact_state":
+				if err != nil || !info.IsDir() {
+					t.Fatalf("unreadable authority state changed after preflight: info=%v err=%v", info, err)
+				}
+			default:
+				if after, readErr := os.ReadFile(unrelatedPath); readErr != nil || !bytes.Equal(after, []byte("{\n")) {
+					t.Fatalf("malformed authority state changed after preflight: %v, %v", readErr, after)
+				}
+			}
+		})
+	}
+}
+
+func retireCompactAuthorityForReviewRepairTest(t *testing.T, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord) []byte {
+	t.Helper()
+	state := record.State
+	for _, snapshot := range []*reviewtransaction.Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot} {
+		snapshot.Identity = retiredReviewSnapshotIdentityForRepairTest(*snapshot)
+	}
+	statePayload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+	record.State = state
+	record.Revision = "sha256:" + hex.EncodeToString(sum[:])
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func retiredReviewSnapshotIdentityForRepairTest(snapshot reviewtransaction.Snapshot) string {
+	hash := sha256.New()
+	if snapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if snapshot.Projection == reviewtransaction.ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(snapshot.Kind), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	if snapshot.Projection == reviewtransaction.ProjectionStaged {
+		values = []string{string(snapshot.Kind), string(snapshot.Projection), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	}
+	write := func(value string) { _, _ = fmt.Fprintf(hash, "%d\x00%s\x00", len(value), value) }
+	for _, value := range values {
+		write(value)
+	}
+	for _, value := range snapshot.IntendedUntracked {
+		write(value)
+	}
+	for _, value := range snapshot.LedgerIDs {
+		write(value)
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
 
 // TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf
 // satisfies tasks.md 3.1: review repair --preflight emits the derived plan's
@@ -628,6 +698,7 @@ func TestReviewRepairDispositionExecutionRequiresAllFlagsBeforeLockAcquisition(t
 // nothing left to derive; this test proves that follow-on preflight then
 // reports it has nothing more to surface, not a second identical execution.
 func TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-execute", false, dispositionForgedAuthorization)
 	authorityRoot := reviewCLIAuthorityRoot(t, repo)
@@ -699,6 +770,7 @@ func TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf(t *testing.T) {
 // appended a saved-defect-report clause even though nothing mutated and
 // nothing is actually wrong with the tool.
 func TestReviewRepairDispositionExecutionDigestMismatchRefusesWithoutDefectReport(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-digest-mismatch", false, dispositionForgedAuthorization)
 
@@ -742,6 +814,7 @@ func TestReviewRepairDispositionExecutionDigestMismatchRefusesWithoutDefectRepor
 // with empty actor/reason) MUST equal the digest execution re-derives (with
 // the real actor/reason) for the same graph state.
 func TestReviewRepairDispositionExecutionAcceptsPreflightPublishedDigest(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-preflight-digest", false, dispositionForgedAuthorization)
 
@@ -879,6 +952,26 @@ func TestReviewRepairSchemasRejectShortContractArrays(t *testing.T) {
 	if err := repairSchema.Validate(document); err != nil {
 		t.Fatalf("valid repair fixture rejected: %v", err)
 	}
+	// issue #3409: the truncated preflight's way forward travels on the wire,
+	// under a schema whose additionalProperties is false, and it is required
+	// exactly where nothing else is offered.
+	truncatedAssessment := reviewtransaction.UnsupportedAuthorityRepairAssessment()
+	truncatedAssessment.Status = reviewtransaction.AuthorityRepairTruncated
+	truncatedPayload, err := json.Marshal(newReviewRepairPreflightResult(truncatedAssessment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var truncatedDocument map[string]any
+	if err := json.Unmarshal(truncatedPayload, &truncatedDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairSchema.Validate(truncatedDocument); err != nil {
+		t.Fatalf("truncated preflight naming its way forward rejected: %v", err)
+	}
+	delete(truncatedDocument, "continuation")
+	if err := repairSchema.Validate(truncatedDocument); err == nil {
+		t.Fatal("repair schema accepted a truncated preflight that names no way forward")
+	}
 	shortInputs := cloneReviewJSONDocument(t, document)
 	shortInputs["required_inputs"] = []any{"actor", "reason"}
 	if err := repairSchema.Validate(shortInputs); err == nil {
@@ -949,5 +1042,99 @@ func TestWindowsRuntimeIncludesRepairAndMaintenanceLockRegressions(t *testing.T)
 		if !bytes.Contains(payload, []byte(name)) {
 			t.Fatalf("Windows PR runtime allowlist is missing %s", name)
 		}
+	}
+}
+
+// TestReviewRepairPreflightNamesAWayForwardWhenTheStoreExceedsTheBound is
+// issue #3409. `gentle-ai review repair --preflight` exists so a maintainer
+// can classify a damaged authority store and act on it. Its assessment is
+// bounded, and the bound is honest: exceeding it yields a typed `truncated`
+// status rather than a partial classification presented as complete, which is
+// the right failure direction and is not what this test changes.
+//
+// What this test pins is what a `truncated` preflight LEAVES the maintainer
+// holding. A store crosses that bound by ordinary use, because lineages
+// accumulate and nothing reaps them (retention is #1656, out of scope here);
+// from that point preflight classified nothing, named nothing, and the
+// documented repair route simply closed -- on exactly the stores most likely
+// to need it. So the truncated result must name a way forward, and that way
+// forward must actually work on the same oversized store, which is why this
+// test runs it rather than only asserting a string.
+//
+// The store here is real: authority entries are planted on disk past the
+// bound and the assessment is driven through the CLI, never constructed.
+func TestReviewRepairPreflightNamesAWayForwardWhenTheStoreExceedsTheBound(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	compactRoot := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2")
+	// Comfortably past the bounded assessment's ceiling, and past the
+	// 271-lineage store the report measured, without this test naming an
+	// internal constant it does not own.
+	const oversizedLineages = 512
+	for index := 0; index < oversizedLineages; index++ {
+		entry := filepath.Join(compactRoot, fmt.Sprintf("oversized-store-lineage-%04d", index))
+		if err := os.MkdirAll(entry, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &output); err != nil {
+		t.Fatalf("repair preflight over an oversized store: %v\n%s", err, output.String())
+	}
+	var preflight ReviewRepairResult
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&preflight); err != nil {
+		t.Fatal(err)
+	}
+	if err := preflight.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Still fails closed: no candidate, no provider inputs, no required
+	// inputs, and no partial classification dressed up as a complete one.
+	if preflight.Assessment.Status != reviewtransaction.AuthorityRepairTruncated ||
+		preflight.Assessment.Candidate != nil || preflight.ProviderInputs != nil || len(preflight.RequiredInputs) != 0 {
+		t.Fatalf("oversized-store preflight = %#v", preflight)
+	}
+	if preflight.Continuation != reviewRepairTruncatedContinuation {
+		t.Fatalf("truncated preflight continuation = %q, want the named way forward %q", preflight.Continuation, reviewRepairTruncatedContinuation)
+	}
+	if !strings.Contains(output.String(), "gentle-ai review inspect-authority") {
+		t.Fatalf("truncated preflight named no runnable continuation:\n%s", output.String())
+	}
+
+	// The named continuation is not a string: it classifies this exact store
+	// the bounded assessment refused to walk.
+	var inspection bytes.Buffer
+	if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspection); err != nil {
+		t.Fatalf("the continuation named by a truncated preflight does not run on the store that truncated: %v\n%s", err, inspection.String())
+	}
+	var inspected ReviewInspectAuthorityResult
+	decodeStrictReviewJSON(t, inspection.Bytes(), &inspected)
+	if inspected.Totals.CompactEntries != oversizedLineages || inspected.Totals.EntryDiagnostics != oversizedLineages {
+		t.Fatalf("the continuation classified %d of %d entries: %#v", inspected.Totals.EntryDiagnostics, oversizedLineages, inspected.Totals)
+	}
+}
+
+// TestReviewRepairResultRejectsAMisplacedContinuation keeps the way forward
+// bound to the one status that has no other exit: a completed classification
+// must never carry it, and a truncated one must never lose it.
+func TestReviewRepairResultRejectsAMisplacedContinuation(t *testing.T) {
+	truncated := reviewtransaction.UnsupportedAuthorityRepairAssessment()
+	truncated.Status = reviewtransaction.AuthorityRepairTruncated
+
+	missing := newReviewRepairPreflightResult(truncated)
+	missing.Continuation = ""
+	if err := missing.Validate(); err == nil {
+		t.Fatal("a truncated preflight validated with no way forward at all")
+	}
+
+	unsupported := newReviewRepairPreflightResult(reviewtransaction.UnsupportedAuthorityRepairAssessment())
+	if unsupported.Continuation != "" {
+		t.Fatalf("a completed classification carried a truncation continuation: %q", unsupported.Continuation)
+	}
+	unsupported.Continuation = reviewRepairTruncatedContinuation
+	if err := unsupported.Validate(); err == nil {
+		t.Fatal("a completed classification validated while claiming it was truncated")
 	}
 }

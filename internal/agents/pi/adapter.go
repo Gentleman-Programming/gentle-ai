@@ -18,17 +18,16 @@ import (
 )
 
 const (
-	piMCPAdapterPackage         = "npm:pi-mcp-adapter"
-	piMCPAdapterPackageSpec     = "npm:pi-mcp-adapter"
-	piMCPAdapterDependency      = "pi-mcp-adapter"
-	piMCPAdapterVersion         = "2.6.0"
-	piMCPAdapterVersionRange    = "^2.6.0"
-	piAppendSystemFile          = "APPEND_SYSTEM.md"
-	piEngramMCPConfigFile       = "mcp.json"
-	piSettingsFile              = "settings.json"
-	piNPMDirectory              = "npm"
-	piNPMPackageFile            = "package.json"
-	piSubagentsJ0k3rPackageSpec = "npm:pi-subagents-j0k3r"
+	piMCPAdapterPackage      = "npm:pi-mcp-adapter"
+	piMCPAdapterPackageSpec  = "npm:pi-mcp-adapter"
+	piMCPAdapterDependency   = "pi-mcp-adapter"
+	piMCPAdapterVersion      = "2.6.0"
+	piMCPAdapterVersionRange = "^2.6.0"
+	piAppendSystemFile       = "APPEND_SYSTEM.md"
+	piEngramMCPConfigFile    = "mcp.json"
+	piSettingsFile           = "settings.json"
+	piNPMDirectory           = "npm"
+	piNPMPackageFile         = "package.json"
 )
 
 var legacyPiSubagentPackageIdentities = map[string]struct{}{
@@ -37,11 +36,19 @@ var legacyPiSubagentPackageIdentities = map[string]struct{}{
 	"vendor/pi-subagents-fixed": {},
 }
 
-var piWalkDir = filepath.WalkDir
+// Retired Pi companion packages: their replacement ships inside gentle-pi,
+// so every install or update drops them from the user's settings and Pi
+// uninstalls them on its next package sync.
+// Gentle Agents (the subagent_* tools) ships in gentle-pi 2.5.0; a settings
+// file that pins an older gentle-pi keeps the retired subagents package.
+const gentleAgentsGentlePiVersion = "2.5.0"
 
-func piSubagentsInstallCommand(system.PlatformProfile) []string {
-	return []string{"pi", "install", piSubagentsJ0k3rPackageSpec}
+var retiredPiPackageIdentities = map[string]struct{}{
+	"npm:@juicesharp/rpiv-todo": {},
+	"npm:pi-subagents-j0k3r":    {},
 }
+
+var piWalkDir = filepath.WalkDir
 
 type statResult struct {
 	isDir bool
@@ -243,18 +250,13 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 		{"pi", "install", "npm:gentle-engram"},
 		{"pi", "install", "npm:pi-mcp-adapter"},
 		a.engramInitCommand(),
-		piSubagentsInstallCommand(profile),
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:@juicesharp/rpiv-todo"},
 		{"pi", "install", "npm:pi-btw"},
 	}, nil
 }
 
 func (a *Adapter) engramInitCommand() []string {
-	if _, err := a.lookPath("pnpm"); err == nil {
-		return []string{"pnpm", "dlx", "gentle-engram@latest", "pi-engram", "init"}
-	}
 	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
 }
 
@@ -396,9 +398,11 @@ func readPiJSONObject(path string) (map[string]any, error) {
 func appendPiPackage(existing any, desired string) []any {
 	packages := piPackagesAsSlice(existing)
 	filtered := make([]any, 0, len(packages)+1)
+	keepSubagents := !gentlePiShipsSubagents(packages)
 	for _, pkg := range packages {
 		identity := piPackageIdentity(pkg)
-		if identity == piMCPAdapterPackage || isLegacyPiSubagentPackage(identity) {
+		retired := isRetiredPiPackage(identity) && !(keepSubagents && identity == "npm:pi-subagents-j0k3r")
+		if identity == piMCPAdapterPackage || isLegacyPiSubagentPackage(identity) || retired {
 			continue
 		}
 		filtered = append(filtered, pkg)
@@ -449,11 +453,35 @@ func piPackageIdentity(pkg any) string {
 			return legacy
 		}
 	}
+	for retired := range retiredPiPackageIdentities {
+		if source == retired || strings.HasPrefix(source, retired+"@") {
+			return retired
+		}
+	}
 	return source
 }
 
 func isLegacyPiSubagentPackage(identity string) bool {
 	_, ok := legacyPiSubagentPackageIdentities[identity]
+	return ok
+}
+
+func gentlePiShipsSubagents(packages []any) bool {
+	for _, pkg := range packages {
+		source, _ := pkg.(string)
+		if !strings.HasPrefix(source, "npm:gentle-pi@") {
+			continue
+		}
+		var major, minor, wantMajor, wantMinor int
+		fmt.Sscanf(strings.TrimPrefix(source, "npm:gentle-pi@"), "%d.%d", &major, &minor)
+		fmt.Sscanf(gentleAgentsGentlePiVersion, "%d.%d", &wantMajor, &wantMinor)
+		return major > wantMajor || (major == wantMajor && minor >= wantMinor)
+	}
+	return true
+}
+
+func isRetiredPiPackage(identity string) bool {
+	_, ok := retiredPiPackageIdentities[identity]
 	return ok
 }
 

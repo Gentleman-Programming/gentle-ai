@@ -40,6 +40,8 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 		"id: trust-anchors",
 		"./scripts/release-signing-preflight.sh",
 		"./scripts/verify-release-assets.sh",
+		"Verify provider contract bundle",
+		"providercontractbundlecmd verify --archive",
 		"MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}",
 		"MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}",
 		"MINISIGN_SECRET_KEY_FILE:",
@@ -99,6 +101,9 @@ func TestStablePromotionWorkflowUsesBoundSourceAndProtectedPublication(t *testin
 		"RELEASE_VERIFICATION_TAG: ${{ inputs.stable_tag }}",
 		"./scripts/verify-release-assets.sh",
 		"stable published recovery state changed",
+		"Read immutable provider contract semver",
+		"provider_contract_semver",
+		"PROVIDER_CONTRACT_SEMVER: ${{ needs.preflight.outputs.provider_contract_semver }}",
 		"RELEASE_ENVIRONMENT_POLICY_TOKEN",
 		"--method DELETE",
 	} {
@@ -182,7 +187,7 @@ printf '%s\n' "$*" >>"$GH_CALL_LOG"
 tag=${RELEASE_VERIFICATION_TAG:-$GITHUB_REF_NAME}
 if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$tag" ]]; then
   cat <<JSON
-{"tag_name":"$tag","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
+{"tag_name":"$tag","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"gentle-ai-review-provider-contract-1.2.0.tar.gz"},{"name":"gentle-ai-release-provenance-v1.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
 JSON
   exit 0
 fi
@@ -200,7 +205,9 @@ if [[ "$1" == release && "$2" == download && "$3" == "$tag" ]]; then
   for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
     printf 'archive %s\n' "$platform" >"$directory/gentle-ai_1.2.3_${platform}.tar.gz"
   done
-  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz >checksums.txt)
+  printf 'provider contract\n' >"$directory/gentle-ai-review-provider-contract-1.2.0.tar.gz"
+  printf 'release provenance\n' >"$directory/gentle-ai-release-provenance-v1.tar.gz"
+  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz gentle-ai-review-provider-contract-1.2.0.tar.gz gentle-ai-release-provenance-v1.tar.gz >checksums.txt)
   printf 'test signature\n' >"$directory/checksums.txt.minisig"
   exit 0
 fi
@@ -349,6 +356,12 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
 		`github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
 		"-trimpath",
+		"go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2",
+		"id: release-provenance",
+		"gentle-ai-release-provenance-v1",
+		"src: .goreleaser-provenance/manifest.json",
+		"mode: 0644",
+		"mtime: \"1970-01-01T00:00:00Z\"",
 	} {
 		if !strings.Contains(config, required) {
 			t.Errorf("GoReleaser config is missing %q", required)
@@ -362,6 +375,23 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 	}
 	if strings.Contains(config, `.Env.MINISIGN_PUBLIC_KEYS }}`) {
 		t.Error("GoReleaser injects the unvalidated raw MINISIGN_PUBLIC_KEYS value")
+	}
+}
+
+func TestGoReleaserRecreatesCleanProvenanceStaging(t *testing.T) {
+	config := readRepositoryFile(t, ".goreleaser.yaml")
+	cleanup := "rm -rf .goreleaser-provenance"
+	mkdir := "mkdir -p .goreleaser-provenance"
+	generate := "go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2"
+
+	cleanupIndex := strings.Index(config, cleanup)
+	mkdirIndex := strings.Index(config, mkdir)
+	generateIndex := strings.Index(config, generate)
+	if cleanupIndex < 0 || mkdirIndex < 0 || generateIndex < 0 || !(cleanupIndex < mkdirIndex && mkdirIndex < generateIndex) {
+		t.Errorf("provenance staging hooks must run cleanup, mkdir, then generate; indexes = %d, %d, %d", cleanupIndex, mkdirIndex, generateIndex)
+	}
+	if !strings.Contains(readRepositoryFile(t, ".gitignore"), ".goreleaser-provenance/") {
+		t.Error(".gitignore does not ignore provenance staging")
 	}
 }
 
@@ -433,6 +463,7 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 				`MINISIGN_PUBLIC_KEYS`,
 				`sha256sum --check --strict`,
 				`gentle-ai_${version}_linux_amd64.tar.gz`,
+				`gentle-ai-release-provenance-v1.tar.gz`,
 				`checksums.txt.minisig`,
 			},
 		},

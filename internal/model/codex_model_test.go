@@ -45,11 +45,11 @@ func TestCodexPresetsCoverAllPhases(t *testing.T) {
 	for _, tc := range presets {
 		t.Run(tc.name, func(t *testing.T) {
 			m := tc.fn()
-			if len(m) != 13 {
-				t.Errorf("%s preset has %d keys, want 13", tc.name, len(m))
+			if len(m) != 14 {
+				t.Errorf("%s preset has %d keys, want 14", tc.name, len(m))
 			}
 			requiredKeys := []string{
-				"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+				"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
 				"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 				"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
 			}
@@ -179,7 +179,7 @@ func checkCarrilRow(t *testing.T, table string, profile string, wantEffort model
 // ─── WU-1 RED: carril helpers and defaults ───────────────────────────────────
 
 func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
-	// Validates that CodexTierGroups covers all 13 known phases exactly once
+	// Validates that CodexTierGroups covers all 14 known phases exactly once
 	// and maps each to one of the three valid carrils.
 	tiers := model.CodexTierGroups()
 	validCarrils := map[string]bool{
@@ -200,7 +200,7 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 		}
 	}
 	wantPhases := []string{
-		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+		"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
 		"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 		"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
 	}
@@ -209,8 +209,8 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 			t.Errorf("CodexTierGroups: phase %q not covered by any carril", phase)
 		}
 	}
-	if len(seen) != 13 {
-		t.Errorf("expected 13 phases total, got %d", len(seen))
+	if len(seen) != 14 {
+		t.Errorf("expected 14 phases total, got %d", len(seen))
 	}
 }
 
@@ -413,7 +413,7 @@ func TestRenderCodexPhaseEfforts_NonDefaultModel(t *testing.T) {
 	checkCarrilRowModel(t, out, "sdd-cheap", "gpt-5.4-mini")
 }
 
-// ─── WU-1: CodexAvailableModels + FilterCodexModels ─────────────────────────
+// ─── WU-1: CodexAvailableModels + FilterCodexModelList ─────────────────────
 
 func TestCodexAvailableModels_Contents(t *testing.T) {
 	models := model.CodexAvailableModels()
@@ -428,21 +428,21 @@ func TestCodexAvailableModels_Contents(t *testing.T) {
 	}
 }
 
-func TestFilterCodexModels_EmptyQuery(t *testing.T) {
+func TestFilterCodexModelList_EmptyQuery(t *testing.T) {
 	// Empty query returns all models.
-	result := model.FilterCodexModels("")
 	all := model.CodexAvailableModels()
+	result := model.FilterCodexModelList(all, "")
 	if len(result) != len(all) {
-		t.Errorf("FilterCodexModels(\"\") len = %d, want %d", len(result), len(all))
+		t.Errorf("FilterCodexModelList(\"\") len = %d, want %d", len(result), len(all))
 	}
 	for i, m := range all {
 		if result[i] != m {
-			t.Errorf("FilterCodexModels(\"\")[%d] = %q, want %q", i, result[i], m)
+			t.Errorf("FilterCodexModelList(\"\")[%d] = %q, want %q", i, result[i], m)
 		}
 	}
 }
 
-func TestFilterCodexModels_Match(t *testing.T) {
+func TestFilterCodexModelList_Match(t *testing.T) {
 	tests := []struct {
 		query    string
 		wantAny  []string
@@ -484,31 +484,32 @@ func TestFilterCodexModels_Match(t *testing.T) {
 			wantNone: []string{"gpt-5.5", "gpt-5.4"},
 		},
 	}
+	all := model.CodexAvailableModels()
 	for _, tc := range tests {
 		t.Run(tc.query, func(t *testing.T) {
-			result := model.FilterCodexModels(tc.query)
+			result := model.FilterCodexModelList(all, tc.query)
 			resultSet := make(map[string]bool, len(result))
 			for _, r := range result {
 				resultSet[r] = true
 			}
 			for _, want := range tc.wantAny {
 				if !resultSet[want] {
-					t.Errorf("FilterCodexModels(%q): expected %q in result %v", tc.query, want, result)
+					t.Errorf("FilterCodexModelList(%q): expected %q in result %v", tc.query, want, result)
 				}
 			}
 			for _, noWant := range tc.wantNone {
 				if resultSet[noWant] {
-					t.Errorf("FilterCodexModels(%q): unexpected %q in result %v", tc.query, noWant, result)
+					t.Errorf("FilterCodexModelList(%q): unexpected %q in result %v", tc.query, noWant, result)
 				}
 			}
 		})
 	}
 }
 
-func TestFilterCodexModels_NoMatch(t *testing.T) {
-	result := model.FilterCodexModels("zzz-no-match")
+func TestFilterCodexModelList_NoMatch(t *testing.T) {
+	result := model.FilterCodexModelList(model.CodexAvailableModels(), "zzz-no-match")
 	if len(result) != 0 {
-		t.Errorf("FilterCodexModels(no match) = %v, want empty", result)
+		t.Errorf("FilterCodexModelList(no match) = %v, want empty", result)
 	}
 }
 

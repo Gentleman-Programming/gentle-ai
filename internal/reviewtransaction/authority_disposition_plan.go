@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // AuthorityDispositionPlanSchema identifies AuthorityDispositionPlan's shape.
@@ -72,6 +70,8 @@ type AuthorityDispositionSelector struct {
 // — a dead end (design decision 2).
 const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_recovery_authorization"
 
+const compactHistoricalSnapshotIdentityClass = "retired_compact_snapshot_identity"
+
 // errAuthorityDispositionPlanNotDerivable is returned, always wrapped with a
 // specific cause, whenever derivation refuses to produce a plan: an
 // unclassifiable shape, a mixed/ambiguous set of eligible edges, or a
@@ -102,6 +102,23 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 	return selectors, nil
 }
 
+// historicalAuthorityDispositionPlanRecord returns the one released authority
+// record that can be planned for quarantine. Its own outdated diagnostic is the
+// sole admissible diagnostic: any malformed, unreadable, missing, or unexpected
+// additional authority entry prevents a historical plan from being published.
+func historicalAuthorityDispositionPlanRecord(report CompactRecoveryInspectionReport) (string, historicalCompactForensicRecord, bool) {
+	if len(report.historical) != 1 || len(report.EntryDiagnostics) != 1 {
+		return "", historicalCompactForensicRecord{}, false
+	}
+	for lineage, historical := range report.historical {
+		diagnostic := report.EntryDiagnostics[0]
+		if diagnostic.LineageID == lineage && diagnostic.Problem == compactInspectionEntryOutdated {
+			return lineage, historical, true
+		}
+	}
+	return "", historicalCompactForensicRecord{}, false
+}
+
 // deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
 // deterministically from report and records — both of which MUST come from
 // the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
@@ -109,7 +126,7 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 // obligation (a)). It refuses (no plan) unless the inspection that produced
 // selected closure carries no entry diagnostics and exactly one report edge
 // re-derives into the one closed content_mismatched_recovery_authorization
-// class.
+// class, except one forensic historical entry whose only diagnostic is outdated.
 func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	if len(requested) > 1 {
 		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
@@ -117,6 +134,17 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	selectors, err := authorityDispositionSelectors(report, records)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
+	}
+	if len(requested) == 0 && len(selectors) == 0 {
+		if lineage, historical, eligible := historicalAuthorityDispositionPlanRecord(report); eligible {
+			inventory, err := authorityInventoryRevision(records, report.historical)
+			if err != nil {
+				return AuthorityDispositionPlan{}, err
+			}
+			plan := AuthorityDispositionPlan{Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding, AuthorityInventoryRevision: inventory, AnomalyClass: compactHistoricalSnapshotIdentityClass, SeedSet: []string{lineage}, Closure: []string{lineage}, ExpectedRevisions: map[string]string{lineage: historical.RawDigest}, Actor: strings.TrimSpace(actor), Reason: strings.TrimSpace(reason)}
+			plan.PlanDigest, err = authorityDispositionPlanDigest(plan)
+			return plan, err
+		}
 	}
 	var selector *AuthorityDispositionSelector
 	if len(requested) == 1 {
@@ -150,7 +178,7 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 		}
 		expectedRevisions[lineage] = record.Revision
 	}
-	inventoryRevision, err := authorityInventoryRevision(records)
+	inventoryRevision, err := authorityInventoryRevision(records, report.historical)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
@@ -251,10 +279,13 @@ func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed st
 // including outside the closure. encoding/json sorts map keys, so this is
 // already deterministic (the same idiom classifiedAuthorityRepairDigest's own
 // doc comment relies on).
-func authorityInventoryRevision(records map[string]CompactRecord) (string, error) {
-	revisions := make(map[string]string, len(records))
+func authorityInventoryRevision(records map[string]CompactRecord, historical map[string]historicalCompactForensicRecord) (string, error) {
+	revisions := make(map[string]string, len(records)+len(historical))
 	for lineage, record := range records {
 		revisions[lineage] = record.Revision
+	}
+	for lineage, record := range historical {
+		revisions[lineage] = record.RawDigest
 	}
 	return classifiedAuthorityRepairDigest("gentle-ai.review-authority-inventory-revision/v1", revisions)
 }
@@ -351,30 +382,6 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, ca
 		return errors.New("authority disposition plan refused: authorization does not bind to plan_digest and authority_inventory_revision")
 	}
 	return nil
-}
-
-// compactRepairCommandText renders the exact runnable `review repair`
-// invocation for one leaf authority disposition plan a caller already
-// confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
-// admitClosureDisposition — the same read-only prediction `review repair
-// --preflight` runs), with the persisted plan_digest and
-// authority_inventory_revision preflight would publish and the authorization
-// template execution verifies. plan_digest is actor/reason-independent
-// (authorityDispositionPlanDigest excludes both from its pre-image), so the
-// value rendered here is exactly the value execution re-derives and compares
-// against, for whichever actor/reason a maintainer later supplies — the
-// command printed is the command that runs. Only a caller whose own
-// read-only prediction accepted the plan may render this, mirroring
-// compactAbandonCommandText and compactReconcileCommandText
-// (compact_reconcile.go).
-func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
-	template := plan
-	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
-	return fmt.Sprintf("`gentle-ai review repair --cwd %s --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
-		" (`gentle-ai review repair --preflight --cwd %s` re-confirms these are still current);"+
-		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
-		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		pathquote.Quote(repo), plan.PlanDigest, plan.AuthorityInventoryRevision, pathquote.Quote(repo), authorityDispositionAuthorizationBinding(template))
 }
 
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of

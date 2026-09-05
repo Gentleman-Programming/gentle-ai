@@ -98,7 +98,17 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	configDir := ConfigPath(homeDir)
+	jsoncPath := filepath.Join(configDir, "opencode.jsonc")
+	if regularFileExists(jsoncPath) {
+		return jsoncPath
+	}
+	return filepath.Join(configDir, "opencode.json")
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // --- Config strategies ---
@@ -116,7 +126,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 	// OpenCode merges into opencode.json, but this provides the path
 	// for components that use the separate-file strategy fallback.
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	return a.SettingsPath(homeDir)
 }
 
 // EffectiveCodeGraphWiring validates OpenCode's effective MCP entry while

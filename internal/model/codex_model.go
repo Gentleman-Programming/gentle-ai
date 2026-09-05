@@ -1,8 +1,13 @@
 package model
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 // codexModelCatalog is Gentle AI's curated selectable Codex model catalog for
@@ -29,16 +34,94 @@ func CodexAvailableModels() []string {
 	return out
 }
 
-// FilterCodexModels returns the subset of CodexAvailableModels whose ID contains
-// query as a case-insensitive substring. An empty query returns all models.
-func FilterCodexModels(query string) []string {
-	all := CodexAvailableModels()
+var codexModelDiscoveryTimeout = 3 * time.Second
+
+const codexModelDiscoveryOutputLimit = 1 << 20
+
+var codexLookPath = exec.LookPath
+var codexCommand = exec.CommandContext
+
+type codexDiscoveryOutput struct {
+	data     strings.Builder
+	limit    int
+	overflow bool
+}
+
+func (w *codexDiscoveryOutput) Write(p []byte) (int, error) {
+	remaining := w.limit - w.data.Len()
+	if remaining <= 0 {
+		w.overflow = true
+		return 0, io.ErrShortWrite
+	}
+	if len(p) > remaining {
+		_, _ = w.data.Write(p[:remaining])
+		w.overflow = true
+		return remaining, io.ErrShortWrite
+	}
+	return w.data.Write(p)
+}
+
+type codexDiscoveredModelCatalog struct {
+	Models []codexCatalogModel `json:"models"`
+}
+
+type codexCatalogModel struct {
+	Slug           string `json:"slug"`
+	Visibility     string `json:"visibility"`
+	SupportedInAPI *bool  `json:"supported_in_api"`
+}
+
+// DiscoverCodexModels returns selectable models from the locally installed Codex
+// CLI. It falls back to the curated catalog if Codex is unavailable, times out,
+// returns invalid JSON, or reports no selectable models.
+func DiscoverCodexModels(ctx context.Context) []string {
+	discoveryCtx, cancel := context.WithTimeout(ctx, codexModelDiscoveryTimeout)
+	defer cancel()
+
+	codexPath, err := codexLookPath("codex")
+	if err != nil {
+		return CodexAvailableModels()
+	}
+	cmd := codexCommand(discoveryCtx, codexPath, "debug", "models")
+	output := &codexDiscoveryOutput{limit: codexModelDiscoveryOutputLimit}
+	cmd.Stdout = output
+	if err := cmd.Run(); err != nil || output.overflow {
+		return CodexAvailableModels()
+	}
+
+	var catalog codexDiscoveredModelCatalog
+	if err := json.Unmarshal([]byte(output.data.String()), &catalog); err != nil {
+		return CodexAvailableModels()
+	}
+
+	models := make([]string, 0, len(catalog.Models))
+	seen := make(map[string]struct{}, len(catalog.Models))
+	for _, entry := range catalog.Models {
+		slug := strings.TrimSpace(entry.Slug)
+		if slug == "" || (entry.Visibility != "" && entry.Visibility != "list") || (entry.SupportedInAPI != nil && !*entry.SupportedInAPI) {
+			continue
+		}
+		if _, ok := seen[slug]; ok {
+			continue
+		}
+		seen[slug] = struct{}{}
+		models = append(models, slug)
+	}
+	if len(models) == 0 {
+		return CodexAvailableModels()
+	}
+	return models
+}
+
+// FilterCodexModelList returns the subset of models whose ID contains query as a
+// case-insensitive substring. An empty query returns a copy of models.
+func FilterCodexModelList(models []string, query string) []string {
 	if strings.TrimSpace(query) == "" {
-		return all
+		return append([]string(nil), models...)
 	}
 	q := strings.ToLower(query)
-	out := make([]string, 0, len(all))
-	for _, m := range all {
+	out := make([]string, 0, len(models))
+	for _, m := range models {
 		if strings.Contains(strings.ToLower(m), q) {
 			out = append(out, m)
 		}
@@ -176,7 +259,7 @@ func MigrateLegacyCodexCarrilDefaults(assignments map[string]string) map[string]
 
 func codexPresetEfforts(preset string) map[string]CodexEffort {
 	defaults := CodexPresetCarrilDefaults(preset)
-	out := make(map[string]CodexEffort, 13)
+	out := make(map[string]CodexEffort, 14)
 	for _, tier := range codexTierGroups {
 		effort := defaults[tier.Profile].Effort
 		for _, phase := range tier.Phases {
@@ -243,7 +326,7 @@ var codexTierGroups = []CodexTierGroup{
 		Profile:       "sdd-strong",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Effort,
-		Phases:        []string{"sdd-explore", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
+		Phases:        []string{"sdd-explore", "sdd-research", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
 	},
 	{
 		Profile:       "sdd-mid",
@@ -368,7 +451,7 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 // codexPhaseOrder is the canonical phase ordering for the per-phase table,
 // matching codexTierGroups phase groupings.
 var codexPhaseOrder = []string{
-	"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
+	"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
 	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
 }

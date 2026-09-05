@@ -1,4 +1,4 @@
-# Gentle-AI Codebase Guide
+# Gentle-AI™ Codebase Guide
 
 This guide helps maintainers find the right code path before changing Gentle-AI. It is an index, not a full API reference.
 
@@ -13,7 +13,7 @@ This guide helps maintainers find the right code path before changing Gentle-AI.
 
 ## 90-second mental model
 
-Gentle-AI is a Go CLI/TUI that configures AI coding agents. It installs and syncs managed assets such as SDD prompts, skills, MCP entries, permissions, personas, GGA support, Engram wiring, skill registries, and community tool/plugin helpers.
+Gentle-AI is a Go CLI/TUI that configures AI coding agents. It installs and syncs managed assets such as SDD prompts, skills, MCP entries, permissions, personas, GGA support, Engram™ wiring, skill registries, and community tool/plugin helpers.
 
 ```text
 User

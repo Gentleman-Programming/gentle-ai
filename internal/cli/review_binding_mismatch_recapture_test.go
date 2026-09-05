@@ -38,11 +38,12 @@ func mismatchedSubjectReviewerPayload(t *testing.T, repo string, record reviewtr
 //
 // This test proves the recovery is the SAME one, rather than assuming it: it
 // asserts the slot is unconsumed and authority unmoved after the mismatch, then
-// re-captures on the same lineage and lens and requires the lineage to finalize
-// normally. It also requires the rejection to hand back the subject hash the
+// re-captures on the same lineage and lens and requires terminal capture
+// closure. It also requires the rejection to hand back the subject hash the
 // binding actually expects, because that is the one value the operator cannot
 // derive from the failure alone.
 func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 
@@ -50,7 +51,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, lens, 0, "")
+	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, frozen, lens, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,9 +87,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 
 	// The claim the message makes must be true: the rejection consumed no slot
 	// and moved no authority.
-	if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected binding_mismatch admission consumed the immutable result slot: %v", statErr)
-	}
+	assertNoAdmittedReviewerResults(t, store)
 	assertArtifactRevision(t, store, record.Revision)
 
 	// Run EXACTLY the continuation the message names: capture again on the same
@@ -102,15 +101,12 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 	if err := RunReviewCaptureResult(correctedArgs, &captured); err != nil {
 		t.Fatalf("recapture after binding_mismatch was refused (named continuation dead-ends): %v", err)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
-	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
-		t.Fatalf("recapture admission = %q, want completed", artifact.AdmissionDecision)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, captured.Bytes(), &terminal)
+	if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != "review/capture-result" ||
+		terminal.LineageID != started.LineageID || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("binding_mismatch recapture terminal result = %#v", terminal)
 	}
-	// The block is only cleared when the lineage completes.
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(captured.String()),
-	}, io.Discard); err != nil {
-		t.Fatalf("finalize after binding_mismatch recapture failed: %v", err)
-	}
+	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
+	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }

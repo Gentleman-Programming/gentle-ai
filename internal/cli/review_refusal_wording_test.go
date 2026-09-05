@@ -1,9 +1,8 @@
 package cli
 
 import (
-	"context"
+	"bytes"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,54 +59,21 @@ func TestReviewValidateRequiresGateNamesValidGates(t *testing.T) {
 	}
 }
 
-// TestReviewValidateCompactReceiptRequiresNativeAuthorityFlagsNamesThem pins
-// that combining a compact receipt with --request names the concrete native
-// authority flags (--lineage and --gate) the caller must use instead.
-func TestReviewValidateCompactReceiptRequiresNativeAuthorityFlagsNamesThem(t *testing.T) {
+// TestReviewValidateDoesNotConsultAnActiveLineage pins that delivery remains
+// non-deciding even while an active review lifecycle exists.
+func TestReviewValidateDoesNotConsultAnActiveLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lineage := "compact-receipt-needs-native-flags"
-	approveTrackedGoChangeWithWarningFinding(t, repo, lineage)
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = RunReviewValidate([]string{
-		"--cwd", repo, "--receipt", store.ReceiptPath(), "--request", filepath.Join(t.TempDir(), "request.json"),
-	}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "--lineage") || !strings.Contains(err.Error(), "--gate") {
-		t.Fatalf("compact receipt + --request error = %v, want it to name --lineage and --gate", err)
-	}
-}
-
-// TestReviewFinalizeNoDiscoverableLineageNamesStartCommand pins that the
-// dead-end reached by running finalize before any review start names the
-// exact continuation command instead of only stating the concept, and that
-// the wording stays honest for both a lineage that was never started and one
-// started under a different --cwd (it never claims nothing was attempted).
-func TestReviewFinalizeNoDiscoverableLineageNamesStartCommand(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	err := RunReviewFacadeFinalize([]string{"--cwd", repo}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "gentle-ai review start") || !strings.Contains(err.Error(), "--cwd") {
-		t.Fatalf("finalize with no discoverable lineage error = %v, want it to name gentle-ai review start and --cwd", err)
-	}
-}
-
-// TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage pins
-// that reaching a gate before the discovered lineage was ever finalized
-// names the exact continuation command and the concrete lineage ID, not only
-// the concept of finalizing.
-func TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	lineage := "receipt-not-available-needs-finalize"
+	lineage := "receipt-not-available-before-closure"
 	writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", lineage, "--gate", "pre-commit"}, io.Discard)
-	want := "gentle-ai review finalize --lineage " + lineage
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("validate before finalize error = %v, want it to contain %q", err, want)
+	var output bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", lineage, "--gate", "pre-commit"}, &output); err != nil {
+		t.Fatalf("delivery with active lineage: %v\n%s", err, output.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, output.Bytes(), reviewtransaction.GatePreCommit)
 }
 
 // TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand pins that
@@ -117,6 +83,7 @@ func TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage(t *tes
 // says who must run it (the parent orchestrator holds --cwd; this opaque
 // caller does not).
 func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "opaque-capture-binding-mismatch")
@@ -124,6 +91,7 @@ func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.
 		t.Fatalf("START result = %#v", started)
 	}
 	err := RunReviewCaptureResult([]string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

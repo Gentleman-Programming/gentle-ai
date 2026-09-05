@@ -46,15 +46,94 @@ func decodeConsentQuestion(t *testing.T, payload []byte) ReviewIntegrationConsen
 // literally runnable rather than merely descriptive.
 func invocationArgs(t *testing.T, invocation string) []string {
 	t.Helper()
-	fields := strings.Fields(invocation)
-	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" || fields[2] != "start" {
+	words, err := SplitPrintedCommandWords(invocation)
+	if err != nil {
+		t.Fatalf("parse consent invocation: %v", err)
+	}
+	if len(words) < 3 || words[0] != "gentle-ai" || words[1] != "review" || words[2] != "start" {
 		t.Fatalf("consent invocation is not a runnable gentle-ai review start command: %q", invocation)
 	}
-	return fields[2:]
+	return words[2:]
+}
+
+func normalizeConsentFixtureCWD(t *testing.T, payload []byte, root string) []byte {
+	t.Helper()
+	var envelope struct {
+		Choices []struct {
+			Invocation string `json:"invocation"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("decode consent fixture: %v", err)
+	}
+
+	normalized := append([]byte(nil), payload...)
+	for _, choice := range envelope.Choices {
+		args := invocationArgs(t, choice.Invocation)
+		cwd := -1
+		for index, arg := range args {
+			if arg != "--cwd" {
+				continue
+			}
+			if cwd >= 0 {
+				t.Fatalf("consent invocation repeats --cwd: %q", choice.Invocation)
+			}
+			cwd = index
+		}
+		if cwd < 0 || cwd+1 >= len(args) || args[cwd+1] != root {
+			t.Fatalf("consent invocation CWD = %q, want %q: %q", args, root, choice.Invocation)
+		}
+		args[cwd+1] = "/repo"
+
+		words := append([]string{"gentle-ai", "review"}, args...)
+		for index, word := range words {
+			words[index] = reviewTransitionShellWord(word)
+		}
+		normalizedInvocation := strings.Join(words, " ")
+		encodedInvocation, err := json.Marshal(choice.Invocation)
+		if err != nil {
+			t.Fatalf("encode consent invocation: %v", err)
+		}
+		encodedNormalizedInvocation, err := json.Marshal(normalizedInvocation)
+		if err != nil {
+			t.Fatalf("encode normalized consent invocation: %v", err)
+		}
+		if next := bytes.ReplaceAll(normalized, encodedInvocation, encodedNormalizedInvocation); bytes.Equal(next, normalized) {
+			t.Fatalf("consent invocation not found in fixture payload: %q", choice.Invocation)
+		} else {
+			normalized = next
+		}
+	}
+	return normalized
+}
+
+func TestInvocationArgsParsesQuotedWindowsConsentFollowUp(t *testing.T) {
+	root := `C:\Users\Jane Doe\repo`
+	invocation := "gentle-ai review start --cwd '" + root + "' --contract " + ReviewIntegrationContractV1
+
+	want := []string{"start", "--cwd", root, "--contract", ReviewIntegrationContractV1}
+	if got := invocationArgs(t, invocation); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("invocation args = %#v, want %#v", got, want)
+	}
+}
+
+func TestConsentFixtureNormalizationStripsRenderedWindowsCWDQuoting(t *testing.T) {
+	root := `C:\Users\Jane Doe\repo`
+	payload, err := json.Marshal(ReviewIntegrationConsentResult{Choices: []ReviewIntegrationConsentChoice{{
+		Invocation: "gentle-ai review start --cwd '" + root + "' --contract " + ReviewIntegrationContractV1,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	normalized := normalizeConsentFixtureCWD(t, payload, root)
+	if !bytes.Contains(normalized, []byte("--cwd /repo")) || bytes.Contains(normalized, []byte("--cwd '/repo'")) {
+		t.Fatalf("normalized fixture CWD = %s, want canonical --cwd /repo", normalized)
+	}
 }
 
 func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -136,7 +215,7 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 }
 
 func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -152,7 +231,7 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 
 	grantArgs := invocationArgs(t, question.Choices[0].Invocation)
 	started := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || started.LineageID != "review-consent-grant" ||
+	if started.Action != "created" || started.LineageID != "review-consent-grant" ||
 		started.RiskLevel != reviewtransaction.RiskHigh || len(started.SelectedLenses) != 4 {
 		t.Fatalf("granted consent did not reach the lens plan: %#v", started)
 	}
@@ -160,9 +239,9 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 		t.Fatalf("a negotiated grant must not touch the legacy latch: asked=%v err=%v", asked, err)
 	}
 
-	// The grant leg replays: the same invocation resumes the same authority.
+	// The grant leg replays the same compact authority.
 	replayed := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
-	if replayed.Action != string(reviewtransaction.CompactStartResumed) || replayed.LineageID != started.LineageID {
+	if replayed.Action != "replayed" || replayed.LineageID != started.LineageID {
 		t.Fatalf("replayed grant = %#v", replayed)
 	}
 
@@ -179,7 +258,7 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 }
 
 func TestPriorCloneLatchCannotSuppressNegotiatedRelay(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -216,8 +295,13 @@ func TestGlobalReviewModeEnabledPermitsButDoesNotGrantV2Consent(t *testing.T) {
 	}
 }
 
+// TestGlobalReviewModeOffRefusesBeforeV2Consent still tests an explicit off,
+// so it opts in first and then turns the switch off: the START transition it
+// disables has to exist before the refusal means anything. An unconfigured home
+// would refuse too, but for the shipped opt-in default rather than the explicit
+// global off this test is about.
 func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -239,7 +323,7 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 }
 
 func TestRelayedConsentDeclineIsScopedToTheCandidate(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -284,11 +368,14 @@ func TestRelayedConsentDeclineIsScopedToTheCandidate(t *testing.T) {
 
 // TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope pins the
 // no-declaration path: the negotiated envelope carries no consent fields (the
-// strict decoder refuses unknown fields), the start completes, and the
-// skip-and-notice behavior stays on the console. Byte-identity of the envelope
-// itself is pinned by TestNegotiatedReviewStartMatchesVersionedFixture.
+// strict decoder refuses unknown fields), the start completes in the
+// fail-safe direction, and the console stays byte-silent — the skip notices
+// are a human surface reserved for plain (non-negotiated) starts, because a
+// successful negotiated operation writes zero bytes to stderr. Byte-identity
+// of the envelope itself is pinned by
+// TestNegotiatedReviewStartMatchesVersionedFixture.
 func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -298,19 +385,19 @@ func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.
 		"--lineage", "review-undeclared",
 	}))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
-	if started.Action != string(reviewtransaction.CompactStartCreated) || len(started.SelectedLenses) != 4 {
+	if started.Action != "created" || len(started.SelectedLenses) != 4 {
 		t.Fatalf("undeclared negotiated START changed behavior: %#v", started)
 	}
 	if strings.Contains(output.String(), "consent") {
 		t.Fatalf("undeclared negotiated START leaked consent fields:\n%s", output.String())
 	}
-	if !strings.Contains(console.String(), reviewConsentSkippedNotice) {
-		t.Fatalf("undeclared headless START must keep the skip notice:\n%s", console.String())
+	if console.Len() != 0 {
+		t.Fatalf("undeclared negotiated START must stay silent on the console:\n%s", console.String())
 	}
 }
 
 func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "notes\n", 0o644)
@@ -319,7 +406,7 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 	output := runConsentRelayStart(t, transitionStartArgs(repo, status))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if started.RiskLevel != reviewtransaction.RiskLow || len(started.SelectedLenses) != 0 ||
-		started.Action != string(reviewtransaction.CompactStartCreated) {
+		started.Action != "closed" || started.State != reviewtransaction.StateApproved {
 		t.Fatalf("low-risk relay START = %#v", started)
 	}
 	if console.Len() != 0 {
@@ -328,7 +415,7 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 }
 
 func TestConsentDeclineOnLowRiskCandidateIsRefused(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "notes\n", 0o644)
@@ -365,39 +452,37 @@ func TestConsentFlagRequiresNegotiatedContract(t *testing.T) {
 	}
 }
 
-// TestHeadlessSkipNoticeNamesDefaultProvenance covers the provenance gap: when
-// the resolved mode source is `default`, the switch is on because nobody chose
-// anything, and the notice must say so, naming both mode commands. When the
-// user explicitly enabled reviews, the provenance sentence must not appear.
-func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
+// TestHeadlessSkipNoticeFollowsAnExplicitOptIn replaces a provenance notice
+// that can no longer happen. It used to cover the case where reviews ran
+// because nobody chose anything, and the notice had to admit that. Making
+// receipt-driven development opt-in deletes that case outright: a default-source
+// clone never reaches the consent ceremony, because the start is refused before
+// it. So the two halves of the old test become the two facts worth pinning --
+// an unconfigured headless clone is refused and told how to opt in, and an
+// explicitly enabled one gets the skip notice with no provenance excuse
+// attached, because there is no longer any way for reviews to be on by accident.
+func TestHeadlessSkipNoticeFollowsAnExplicitOptIn(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-provenance-default"}, &output); err != nil {
-		t.Fatalf("headless start: %v\n%s", err, output.String())
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-provenance-default"}, &output)
+	if err == nil {
+		t.Fatalf("an unconfigured clone started a review nobody asked for:\n%s", output.String())
 	}
-	notice := console.String()
-	if !strings.Contains(notice, reviewConsentSkippedNotice) {
-		t.Fatalf("headless start lost the skip notice:\n%s", notice)
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("the opt-in refusal names no way in: %v", err)
 	}
-	for _, want := range []string{"on by default", "never", "gentle-ai review mode enable", "gentle-ai review mode disable"} {
-		if !strings.Contains(notice, want) {
-			t.Fatalf("default-source notice missing %q:\n%s", want, notice)
-		}
+	if console.String() != "" {
+		t.Fatalf("a refused start reached the consent ceremony:\n%s", console.String())
 	}
 
-	// An explicit global choice removes the provenance sentence: the switch is
-	// no longer on by accident.
-	explicitHome := reviewModeHome(t)
-	_ = explicitHome
+	// An explicit opt-in is the only route to a review, and its headless notice
+	// carries no provenance sentence: the switch was chosen, not inherited.
+	reviewEnabledHome(t)
 	repoExplicit := initReviewCLIRepo(t)
-	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"enable", "--cwd", repoExplicit, "--json"}, &modeOutput); err != nil {
-		t.Fatalf("review mode enable: %v", err)
-	}
 	consoleExplicit := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repoExplicit, "scripts/deploy.sh", "echo deploy\n", 0o644)
 	output.Reset()
@@ -408,8 +493,8 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 	if !strings.Contains(explicitNotice, reviewConsentSkippedNotice) {
 		t.Fatalf("explicit-source start lost the skip notice:\n%s", explicitNotice)
 	}
-	if strings.Contains(explicitNotice, "on by default") {
-		t.Fatalf("explicitly chosen mode must not claim a default: %s", explicitNotice)
+	if strings.Contains(explicitNotice, "by default") {
+		t.Fatalf("an explicitly chosen mode must not claim a default: %s", explicitNotice)
 	}
 }
 
@@ -426,7 +511,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 		{name: "v2.1", contract: ReviewIntegrationContractV2, fixture: filepath.Join("v2", "fixtures", "consent-v3.fixture.json"), schema: filepath.Join("v2", "schemas", "consent-v3.schema.json")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			root, err := resolveReviewMutationRoot(context.Background(), repo)
 			if err != nil {
@@ -443,11 +528,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 			if err := question.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			encodedRoot, err := json.Marshal(root)
-			if err != nil {
-				t.Fatalf("encode fixture repository root: %v", err)
-			}
-			normalized := bytes.ReplaceAll(output.Bytes(), encodedRoot[1:len(encodedRoot)-1], []byte("/repo"))
+			normalized := normalizeConsentFixtureCWD(t, output.Bytes(), root)
 			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.fixture)
 			if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
 				if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {

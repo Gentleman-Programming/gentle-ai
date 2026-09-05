@@ -12,9 +12,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// pristineReviewingCLIFixture persists one pristine reviewing compact lineage
-// directly into the v2 store, then restores the clean workspace so the lineage
-// is also stale relative to the live worktree. It is the reviewing sibling of
+// pristineReviewingCLIFixture starts one reviewing compact lineage through the
+// atomic START boundary, then restores the clean workspace so the lineage is
+// stale relative to the live worktree. It is the reviewing sibling of
 // pristineInvalidatedCLIFixture: the exact shape issue #2528 reports locked in,
 // a review that was started, never captured a lens result, and went stale.
 func pristineReviewingCLIFixture(t *testing.T, repo string) (revision, snapshotIdentity string) {
@@ -23,30 +23,21 @@ func pristineReviewingCLIFixture(t *testing.T, repo string) (revision, snapshotI
 	if err := os.WriteFile(stale, []byte("package stale\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	snapshot, err := builder.Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{"stale.go"},
-	})
+	runReviewCLIGit(t, repo, "add", "stale.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "stale baseline")
+	if err := os.WriteFile(stale, []byte("package stale\n\nvar Value = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := atomicStartV2(t, repo, "abandon-stale-reviewing")
+	store := atomicCompactStartStore(t, repo, started.LineageID)
+	record, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	risk, lines, err := builder.ClassifySnapshotRisk(context.Background(), snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "abandon-stale-reviewing", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
-		Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("ab", 32), RiskLevel: risk,
-		SelectedLenses: []string{"review-reliability"}, OriginalChangedLines: &lines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision = writeReconcileCLIRecord(t, repo, state)
 	if err := os.Remove(stale); err != nil {
 		t.Fatal(err)
 	}
-	return revision, state.InitialSnapshot.Identity
+	return record.Revision, record.State.InitialSnapshot.Identity
 }
 
 func abandonBindingFromInventory(t *testing.T, repo, lineage, revision, snapshotIdentity, actor, reason string) string {
@@ -85,7 +76,7 @@ func staleReviewingAbandonArgs(repo, revision, authorization string) []string {
 // denial; gating cleanup behind the switch locked in exactly the state that
 // caused the denial.
 func TestReviewAbandonSucceedsWhileKillSwitchDisabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
 	disableReviewForClone(t, repo)
@@ -115,7 +106,7 @@ func TestReviewAbandonSucceedsWhileKillSwitchDisabled(t *testing.T) {
 // authorization: a wrong binding is refused while disabled exactly as while
 // enabled, and the refused abandon mutates nothing.
 func TestReviewAbandonWhileDisabledStillRequiresTheExactBinding(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")
@@ -138,9 +129,9 @@ func TestReviewAbandonWhileDisabledStillRequiresTheExactBinding(t *testing.T) {
 
 // TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks proves the
 // cleanup classification does not admit arbitrary destruction: a stale revision
-// and terminal authority both remain refused with the switch off.
+// remains refused with the switch off.
 func TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")
@@ -157,37 +148,6 @@ func TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks(t *testing.
 	if err != nil || !bytes.Equal(current, payload) {
 		t.Fatalf("stale revision mutated pristine authority: %v", err)
 	}
-
-	terminalRepo := initReviewCLIRepo(t)
-	approveDiscoveryMarkdown(t, terminalRepo, "abandon-disabled-terminal", "docs/terminal.md", "terminal\n")
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), terminalRepo, "abandon-disabled-terminal")
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err = os.ReadFile(store.StatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	disableReviewForClone(t, terminalRepo)
-
-	const actor = "maintainer@example.com"
-	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
-	authorization := abandonBindingFromInventory(t, terminalRepo, record.State.LineageID, record.Revision, record.State.InitialSnapshot.Identity, actor, reason)
-	if err := RunReview([]string{
-		"abandon", "--cwd", terminalRepo, "--lineage", record.State.LineageID,
-		"--expected-revision", record.Revision, "--reason", reason, "--actor", actor,
-		"--maintainer-authorization", authorization,
-	}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `holds terminal "approved" authority`) {
-		t.Fatalf("terminal abandon while disabled = %v", err)
-	}
-	current, err = os.ReadFile(store.StatePath())
-	if err != nil || !bytes.Equal(current, payload) {
-		t.Fatalf("refused abandon mutated terminal authority: %v", err)
-	}
 }
 
 // TestReviewStartStaysRefusedWhileKillSwitchDisabled is the companion pin: the
@@ -201,14 +161,16 @@ func TestReviewStartStaysRefusedWhileKillSwitchDisabled(t *testing.T) {
 	}
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	disableReviewForClone(t, repo)
+	before := snapshotAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
 
 	var output bytes.Buffer
 	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-disabled-start"}, &output)
 	if err == nil || !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
 		t.Fatalf("review start while disabled = %v\n%s", err, output.String())
 	}
-	if _, statErr := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "review-disabled-start")); !os.IsNotExist(statErr) {
-		t.Fatalf("refused start created review authority: %v", statErr)
+	after := snapshotAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+	if before != after {
+		t.Fatalf("refused start mutated review authority:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
 
@@ -236,5 +198,77 @@ func TestReviewStartBooleanFlagHelpDoesNotSuggestSeparateValue(t *testing.T) {
 	if err := RunReview([]string{"start", "--committed-only", "true"}, &bytes.Buffer{}); err == nil ||
 		!strings.Contains(err.Error(), "not a separate value") {
 		t.Fatalf("space-separated boolean value error = %v", err)
+	}
+}
+
+// breakForeignCompactSnapshotIdentity rewrites one persisted compact record's
+// frozen snapshot identity so the record no longer loads. Validate() runs
+// before the checksum comparison in parseCompactRecord, so the load failure is
+// the same typed semantic "compact snapshot identity does not match its
+// metadata" a released binary reports for a record it can no longer read --
+// the exact shape issue #3124 and its occurrences describe.
+func breakForeignCompactSnapshotIdentity(t *testing.T, repo, lineage string) {
+	t.Helper()
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := store.StatePath()
+	payload, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("fixture lineage %q does not load before it is broken: %v", lineage, err)
+	}
+	retired := "sha256:" + strings.Repeat("c", 64)
+	broken := strings.ReplaceAll(string(payload), loaded.State.InitialSnapshot.Identity, retired)
+	if broken == string(payload) {
+		t.Fatalf("fixture lineage %q carries no snapshot identity to retire", lineage)
+	}
+	if err := os.WriteFile(statePath, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, loadErr := store.Load(); loadErr == nil {
+		t.Fatalf("fixture lineage %q still loads after its snapshot identity was retired", lineage)
+	} else if !strings.Contains(loadErr.Error(), "identity does not match its metadata") {
+		t.Fatalf("fixture lineage %q load error = %v, want a snapshot identity mismatch", lineage, loadErr)
+	}
+}
+
+// TestReviewAbandonOfAPristineLineageIgnoresAnUnrelatedUnloadableLineage is
+// issue #3124 driven through the live `gentle-ai review abandon` command. An
+// unreadable foreign compact entry must not refuse the sanctioned exit for a
+// pristine reviewing lineage.
+func TestReviewAbandonOfAPristineLineageIgnoresAnUnrelatedUnloadableLineage(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "foreign.go", "package foreign\n", 0o644)
+	foreignStarted := atomicStartV2(t, repo, "abandon-foreign-active")
+	runReviewCLIGit(t, repo, "commit", "-qm", "foreign active candidate")
+	breakForeignCompactSnapshotIdentity(t, repo, foreignStarted.LineageID)
+
+	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
+	binding := staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)
+
+	var output bytes.Buffer
+	if err := RunReview(staleReviewingAbandonArgs(repo, revision, binding), &output); err != nil {
+		t.Fatalf("an unrelated unloadable lineage refused the sanctioned exit of a pristine one: %v\n%s", err, output.String())
+	}
+	var result ReviewAbandonResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Record.Status != reviewtransaction.CompactReclaimCommitted || result.Record.LineageID != "abandon-stale-reviewing" {
+		t.Fatalf("abandonment record = %#v", result.Record)
+	}
+
+	// Scoping never widens authority: the unrelated entry is untouched and
+	// still unreadable, so nothing was silently repaired to make this pass.
+	foreign, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, foreignStarted.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, loadErr := foreign.Load(); loadErr == nil {
+		t.Fatal("the unrelated lineage became readable, so this test proved nothing about scoping")
 	}
 }

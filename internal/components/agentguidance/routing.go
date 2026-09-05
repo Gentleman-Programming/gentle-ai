@@ -38,8 +38,10 @@ func RenderRouting(agent model.AgentID) (string, error) {
 
 	var output strings.Builder
 	output.WriteString("## Implementation Routing\n\n")
-	output.WriteString("Route work for the requested outcome with the smallest useful topology. ")
-	output.WriteString("Every change takes exactly one implementation route: direct inline, delegated direct, or optional SDD.\n\n")
+	output.WriteString("First establish whether the requested outcome explicitly authorizes a change. Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only unless the user explicitly requests implementation or another mutation.\n")
+	output.WriteString("- Read-only work may inspect, explain, compare, and recommend, but must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts.\n")
+	output.WriteString("- If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.\n\n")
+	output.WriteString("After explicit change intent is established, route work for the requested outcome with the smallest useful topology. Every authorized change takes exactly one implementation route: direct inline, delegated direct, or optional SDD.\n\n")
 
 	_, _ = fmt.Fprintf(
 		&output,
@@ -55,6 +57,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	)
 	output.WriteString("- **Optional SDD:** propose SDD only when durable proposal, spec, design, and tasks would materially reduce substantial ambiguity. SDD is selected only by an explicit request or an accepted proposal.\n")
 	output.WriteString("- File count, changed lines, size, or perceived risk alone never selects SDD and never forces a heavier route.\n")
+	output.WriteString("- Automatic SDD pace is not mutation authorization; once implementation is explicitly authorized, it continues under the selected route.\n")
 	output.WriteString("- These are implementation routes, not a ban on per-action delegation. Tests, builds, installs, and review actors may still use fresh workers without changing the selected route.\n")
 	output.WriteString("- Direct and delegated work never create SDD artifacts, prompts, phase attempts, or synthetic SDD runs.\n")
 
@@ -64,8 +67,9 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	// not exist for the user, who would otherwise ask to stop using
 	// receipt-driven development and be argued with instead of obeyed.
 	output.WriteString("\n### Receipt-driven development is user-owned\n\n")
-	output.WriteString("The user controls receipt-driven development with a kill switch: `gentle-ai review mode enable|disable|status`.\n\n")
-	output.WriteString("- `status` is read-only. It reports the deciding source and the effective mode, and changes nothing.\n")
+	output.WriteString("The user controls receipt-driven development with a switch: `gentle-ai review mode enable|disable|status`.\n\n")
+	output.WriteString("- It is **opt-in and off by default**. Until the user explicitly enables it, reviews do not run and delivery follows ordinary repository policy. Do not treat that as a fault to diagnose or work around.\n")
+	output.WriteString("- `status` is read-only. It reports the deciding source and the effective mode, and changes nothing. A `default` deciding source means nobody has chosen, so the effective mode is off.\n")
 	output.WriteString("- When the user asks to stop using receipt-driven development, run `disable`. Do not argue, do not work around it, and do not propose alternatives first.\n")
 	output.WriteString("- While it is disabled, keep implementing organically through direct inline, delegated direct, or optional SDD: do not start reviews, do not retry, do not reactivate it, and do not fall back to any retired path.\n")
 	output.WriteString("- Delivery under a disabled switch follows ordinary repository policy and reports `disabled/unmanaged`, never a fabricated approval.\n")

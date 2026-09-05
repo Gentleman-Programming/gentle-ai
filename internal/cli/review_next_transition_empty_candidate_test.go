@@ -31,7 +31,7 @@ func emptyWorkspaceCandidateStatus() ReviewTargetStatusResult {
 }
 
 func TestNegotiatedStatusCollectsBaseRefForEmptyWorkspaceCandidate(t *testing.T) {
-	got := newReviewNextTransition(emptyWorkspaceCandidateStatus(), nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+	got := newReviewNextTransition(emptyWorkspaceCandidateStatus(), nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
 	if got.Kind != reviewNextTransitionCollect {
 		t.Fatalf("empty workspace candidate transition kind = %q, want %q; re-offering an executable START loops on a preflight refusal", got.Kind, reviewNextTransitionCollect)
@@ -59,7 +59,7 @@ func TestNegotiatedStatusCollectsBaseRefForEmptyWorkspaceCandidate(t *testing.T)
 // that shipped a base value would silently choose a review scope the caller
 // never asked for.
 func TestNegotiatedEmptyCandidateCollectionDoesNotDeriveBaseRef(t *testing.T) {
-	got := newReviewNextTransition(emptyWorkspaceCandidateStatus(), nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+	got := newReviewNextTransition(emptyWorkspaceCandidateStatus(), nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
 	if got.Collect == nil || len(got.Collect.Inputs) != 1 {
 		t.Fatalf("empty workspace candidate collection = %#v, want exactly one input", got.Collect)
@@ -79,7 +79,7 @@ func TestNegotiatedEmptyCandidateCollectionDoesNotDeriveBaseRef(t *testing.T) {
 // negotiated transition crosses; an unrepresentable collection would strand
 // the caller exactly like the looping START did.
 func TestNegotiatedEmptyCandidateCollectionIsRepresentable(t *testing.T) {
-	got := newReviewNextTransition(emptyWorkspaceCandidateStatus(), nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+	got := newReviewNextTransition(emptyWorkspaceCandidateStatus(), nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
 	if err := got.Validate(); err != nil {
 		t.Fatalf("empty workspace candidate transition Validate() = %v, want nil", err)
@@ -94,7 +94,7 @@ func TestNegotiatedEmptyCandidateCollectionIsRepresentable(t *testing.T) {
 func TestNegotiatedEmptyCandidateCollectionSatisfiesStatusTargetValidation(t *testing.T) {
 	result := emptyWorkspaceCandidateStatus()
 	result.NextTransition = &ReviewNextTransition{}
-	*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+	*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
 	if err := result.validateNextTransitionTargets(); err != nil {
 		t.Fatalf("empty workspace candidate validateNextTransitionTargets() = %v, want nil", err)
@@ -148,7 +148,7 @@ func TestNegotiatedEmptyCandidateCollectionRejectsMalformedStatusTarget(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			result := emptyWorkspaceCandidateStatus()
 			result.NextTransition = &ReviewNextTransition{}
-			*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+			*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 			tt.mutate(result.NextTransition)
 
 			if err := result.validateNextTransitionTargets(); err == nil {
@@ -165,12 +165,39 @@ func TestNegotiatedStatusKeepsStartForNonEmptyWorkspaceCandidate(t *testing.T) {
 	status.Projection.Paths = []string{"internal/cli/review_next_transition.go"}
 	status.Projection.CurrentCandidateTree = strings.Repeat("d", 40)
 
-	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
+	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
 	if got.Kind != reviewNextTransitionExecute || got.ReasonCode != "fresh_target_ready" {
 		t.Fatalf("non-empty fresh candidate transition = %q/%q, want %q/%q", got.Kind, got.ReasonCode, reviewNextTransitionExecute, "fresh_target_ready")
 	}
 	if got.Execute == nil || got.Execute.Operation != "review.start" {
 		t.Fatalf("non-empty fresh candidate execute = %#v, want review.start", got.Execute)
+	}
+}
+
+// Issue #3102: the empty-root bootstrap policy from #1641 requires a typed
+// STOP when a committed base-diff names the candidate itself. START rejects
+// this exact zero-path scope before authority evaluation, so STATUS must not
+// offer that START or collect the already-supplied base reference again.
+func TestNegotiatedStatusStopsZeroPathBaseDiffCandidate(t *testing.T) {
+	status := emptyWorkspaceCandidateStatus()
+	status.Projection.Kind = reviewtransaction.TargetBaseDiff
+	status.Action = reviewtransaction.TargetStatusActionStop
+	status.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+
+	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-base-diff"})
+
+	if got.Kind != reviewNextTransitionStop {
+		t.Fatalf("zero-path base-diff transition kind = %q, want %q", got.Kind, reviewNextTransitionStop)
+	}
+	if got.ReasonCode != "empty_base_diff_bootstrap_required" {
+		t.Fatalf("zero-path base-diff reason code = %q, want empty_base_diff_bootstrap_required", got.ReasonCode)
+	}
+	if got.Execute != nil || got.Collect != nil {
+		t.Fatalf("zero-path base-diff STOP exposed continuation data: %#v", got)
+	}
+	status.NextTransition = &got
+	if err := status.validateNextTransitionTargets(); err != nil {
+		t.Fatalf("zero-path base-diff validateNextTransitionTargets() = %v, want nil", err)
 	}
 }

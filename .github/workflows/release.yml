@@ -64,6 +64,9 @@ jobs:
           printf '%s\n' "$run_id" >"$marker"
           printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
           printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s\n' "$run_id" >>"$GITHUB_ENV"
+          PROVIDER_CONTRACT_SEMVER=$(tr -d '\n' < contracts/review-provider-contract/CONTRACT_SEMVER)
+          [[ "$PROVIDER_CONTRACT_SEMVER" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          printf 'PROVIDER_CONTRACT_SEMVER=%s\n' "$PROVIDER_CONTRACT_SEMVER" >>"$GITHUB_ENV"
 
       - name: Resolve release distribution plan without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -75,6 +78,9 @@ jobs:
 
       - name: Verify release distribution policy
         run: ./scripts/verify-release-distribution-policy.sh
+
+      - name: Verify provider contract bundle
+        run: go run ./internal/providercontractbundlecmd verify --archive "dist/gentle-ai-review-provider-contract-${PROVIDER_CONTRACT_SEMVER}.tar.gz"
 
       - name: Verify tag, main, trust anchors, and module immutability
         run: ./scripts/release-preflight.sh
@@ -135,6 +141,9 @@ jobs:
         run: |
           printf 'MINISIGN_SECRET_KEY_FILE=%s/gentle-ai-release.key\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
           printf 'MINISIGN_SIGNING_PUBLIC_KEY_FILE=%s/gentle-ai-release-signing.pub\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
+          PROVIDER_CONTRACT_SEMVER=$(tr -d '\n' < contracts/review-provider-contract/CONTRACT_SEMVER)
+          [[ "$PROVIDER_CONTRACT_SEMVER" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          printf 'PROVIDER_CONTRACT_SEMVER=%s\n' "$PROVIDER_CONTRACT_SEMVER" >>"$GITHUB_ENV"
 
       - name: Install Minisign
         run: |

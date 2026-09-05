@@ -120,9 +120,12 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := ParseTransaction(payload)
-	if err != nil {
-		t.Fatalf("ParseTransaction() error = %v", err)
+	var parsed Transaction
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(Transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err != nil {
+		t.Fatalf("Transaction.validate() error = %v", err)
 	}
 	if len(parsed.SelectedLenses) != 1 || len(parsed.LensResults) != 1 || parsed.Counters.ReliabilityExecutions != 1 || parsed.OriginalChangedLines == nil || *parsed.OriginalChangedLines != 2 || parsed.CorrectionBudget == nil || *parsed.CorrectionBudget != 1 {
 		t.Fatalf("round-tripped bounded state = %#v", parsed)
@@ -287,8 +290,12 @@ func TestOrdinaryBoundedDerivesLensIdentityFromStructuredContent(t *testing.T) {
 	}
 	forged.LensResults[0].Evidence[0] = "tampered evidence"
 	forgedPayload, _ := json.Marshal(forged)
-	if _, err := ParseTransaction(forgedPayload); err == nil {
-		t.Fatal("ParseTransaction() accepted content that no longer matches its canonical lens result hash")
+	var parsed Transaction
+	if err := json.Unmarshal(forgedPayload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(forged transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err == nil {
+		t.Fatal("Transaction.validate() accepted content that no longer matches its canonical lens result hash")
 	}
 }
 

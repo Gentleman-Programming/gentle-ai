@@ -13,10 +13,12 @@
     "assessment": {"$ref": "../../v1/schemas/repair.schema.json#/properties/assessment"},
     "provider_inputs": {"$ref": "../../v1/schemas/repair.schema.json#/properties/provider_inputs"},
     "required_inputs": {"$ref": "../../v1/schemas/repair.schema.json#/properties/required_inputs"},
-    "execution": {"$ref": "../../v1/schemas/repair.schema.json#/properties/execution"}
+    "execution": {"$ref": "../../v1/schemas/repair.schema.json#/properties/execution"},
+    "continuation": {"$ref": "../../v1/schemas/repair.schema.json#/properties/continuation"}
   },
   "allOf": [
     {"$ref": "../../v1/schemas/repair.schema.json#/allOf/0"},
-    {"$ref": "../../v1/schemas/repair.schema.json#/allOf/1"}
+    {"$ref": "../../v1/schemas/repair.schema.json#/allOf/1"},
+    {"$ref": "../../v1/schemas/repair.schema.json#/allOf/2"}
   ]
 }

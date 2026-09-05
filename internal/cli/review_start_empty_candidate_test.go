@@ -97,6 +97,7 @@ func TestNegotiatedEmptyCandidateRefusalNamesBaseRefWithoutDerivingIt(t *testing
 // --base-ref naming a real prior commit still builds a non-empty candidate
 // and proceeds normally.
 func TestNegotiatedStartWithExplicitBaseRefOverCommittedWorkStillStarts(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "second commit\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
@@ -118,6 +119,7 @@ func TestNegotiatedStartWithExplicitBaseRefOverCommittedWorkStillStarts(t *testi
 // TestNegotiatedStartWithPendingChangesIsUnaffected proves the guard never
 // fires when the worktree actually has pending changes.
 func TestNegotiatedStartWithPendingChangesIsUnaffected(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "pending change\n", 0o644)
 
@@ -130,7 +132,7 @@ func TestNegotiatedStartWithPendingChangesIsUnaffected(t *testing.T) {
 // TestDirectReviewStartRefusesEmptyCandidateWithoutAuthority is the direct-
 // route repro from issue #2586: before this fix, a plain (non-negotiated)
 // `review start` (no --contract) on a clean, fully-committed worktree
-// created a lineage and finalized it to an approved receipt that inspected
+// created a lineage and closed it as an approved receipt that inspected
 // nothing (base_tree == candidate_tree == HEAD) -- exactly the zero-delta
 // receipt the issue reports being discovered as "governing" a later,
 // genuinely unreviewed candidate that happens to share its final tree. The

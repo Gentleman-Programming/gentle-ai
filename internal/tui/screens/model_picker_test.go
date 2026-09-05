@@ -3,8 +3,6 @@ package screens
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +86,9 @@ func TestModelPickerRows_SubAgentsStartAtIndexTwo(t *testing.T) {
 		if got != phase {
 			t.Errorf("ModelPickerRows()[%d] = %q, want %q", i+2, got, phase)
 		}
+	}
+	if rows[3] != "sdd-explore" || rows[4] != "sdd-research" || rows[5] != "sdd-propose" {
+		t.Fatalf("model picker phase order = %v", rows[2:6])
 	}
 }
 
@@ -528,14 +529,12 @@ func TestHandleModelNav_NonReasoningModelSkipsEffortPicker(t *testing.T) {
 }
 
 // TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker covers the
-// realistic scenario where the model-variants plugin has not run yet (or failed
-// silently): a reasoning-capable model is loaded from the cache but its
-// Variants field is nil because EnrichWithVariants found no JSON. The picker
-// must skip ModeEffortSelect instead of presenting an empty list.
+// runtime scenario where a reasoning-capable model has no reported variants.
+// The picker must skip ModeEffortSelect instead of presenting an empty list.
 func TestHandleModelNav_ReasoningModelWithoutVariantsSkipsEffortPicker(t *testing.T) {
 	const providerID = "test-provider"
 	testModels := []opencode.Model{
-		// Reasoning: true but Variants: nil — plugin cache absent.
+		// Reasoning: true but no variants are reported.
 		{ID: "model-reason", Name: "Reasoning Model", Reasoning: true, ToolCall: true},
 	}
 	state := &ModelPickerState{
@@ -974,247 +973,6 @@ func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
 	}
 }
 
-// ─── NewModelPickerState: custom provider merging ─────────────────────────────
-
-// catalogJSON is a minimal OpenCode models cache with one built-in provider.
-const catalogJSON = `{
-  "built-in": {
-    "id": "built-in",
-    "name": "Built-In Provider",
-    "env": ["BUILTIN_API_KEY"],
-    "models": {
-      "builtin-model": {
-        "id": "builtin-model",
-        "name": "Built-In Model",
-        "tool_call": true
-      }
-    }
-  }
-}`
-
-// writeTempFile writes content to a file in a temp dir and returns the path.
-func writeTempFile(t *testing.T, name, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write temp file %q: %v", path, err)
-	}
-	return path
-}
-
-func TestNewModelPickerState(t *testing.T) {
-	tests := []struct {
-		name              string
-		cacheContent      string   // non-empty means write a cache file; empty means skip
-		settingsContent   string   // non-empty means write settings file; empty means use missing path
-		wantProviderIDs   []string // provider IDs that must appear in Providers map
-		wantAvailable     int      // minimum number of AvailableIDs (custom providers always count)
-		wantConfigWarning bool     // whether ConfigWarning must be non-empty
-	}{
-		{
-			name:              "missing opencode.json falls back to catalog only",
-			cacheContent:      catalogJSON,
-			settingsContent:   "", // no file written → path points to nonexistent file
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     0, // no env var set → built-in not available; just checking providers map
-			wantConfigWarning: false,
-		},
-		{
-			name:              "opencode.json with no provider key gives catalog only",
-			cacheContent:      catalogJSON,
-			settingsContent:   `{"agent": {}}`,
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     0,
-			wantConfigWarning: false,
-		},
-		{
-			name:         "opencode.json with 2 custom providers adds both to picker",
-			cacheContent: catalogJSON,
-			settingsContent: `{
-				"provider": {
-					"custom-a": {
-						"name": "Custom A",
-						"models": {"model-a1": {"name": "Model A1", "tool_call": true}}
-					},
-					"custom-b": {
-						"name": "Custom B",
-						"models": {"model-b1": {"name": "Model B1", "tool_call": true}}
-					}
-				}
-			}`,
-			wantProviderIDs:   []string{"built-in", "custom-a", "custom-b"},
-			wantAvailable:     2, // custom-a and custom-b are always available as custom providers
-			wantConfigWarning: false,
-		},
-		{
-			name:         "name collision: custom provider wins over catalog",
-			cacheContent: catalogJSON,
-			settingsContent: `{
-				"provider": {
-					"built-in": {
-						"name": "My Override",
-						"models": {
-							"builtin-model": {"name": "Custom Override Name", "tool_call": true}
-						}
-					}
-				}
-			}`,
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     1, // "built-in" now treated as custom → always available
-			wantConfigWarning: false,
-		},
-		{
-			name:              "malformed opencode.json produces config warning",
-			cacheContent:      catalogJSON,
-			settingsContent:   `{"provider":`, // truncated / invalid JSON
-			wantProviderIDs:   []string{"built-in"},
-			wantAvailable:     0,
-			wantConfigWarning: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Write the cache file.
-			cachePath := writeTempFile(t, "models.json", tt.cacheContent)
-
-			// Determine settings path — missing when settingsContent is empty.
-			var settingsPath string
-			if tt.settingsContent != "" {
-				settingsPath = writeTempFile(t, "opencode.json", tt.settingsContent)
-			} else {
-				settingsPath = filepath.Join(t.TempDir(), "nonexistent.json")
-			}
-
-			state := NewModelPickerState(cachePath, settingsPath)
-
-			// All expected provider IDs must appear in the Providers map.
-			for _, id := range tt.wantProviderIDs {
-				if _, ok := state.Providers[id]; !ok {
-					t.Errorf("Providers missing %q; got keys: %v", id, providerKeys(state.Providers))
-				}
-			}
-
-			// AvailableIDs count must meet the minimum.
-			if len(state.AvailableIDs) < tt.wantAvailable {
-				t.Errorf("AvailableIDs = %v (count %d), want at least %d",
-					state.AvailableIDs, len(state.AvailableIDs), tt.wantAvailable)
-			}
-
-			// ConfigWarning check.
-			if tt.wantConfigWarning && state.ConfigWarning == "" {
-				t.Error("expected ConfigWarning to be set, got empty string")
-			}
-			if !tt.wantConfigWarning && state.ConfigWarning != "" {
-				t.Errorf("expected no ConfigWarning, got %q", state.ConfigWarning)
-			}
-		})
-	}
-}
-
-func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
-	state := NewModelPickerState(writeTempFile(t, "models.json", `{`), writeTempFile(t, "opencode.json", `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1","models":{"model":{"tool_call":true}}}}}`))
-	if state.Providers == nil || state.lmStudioURL != "http://gateway:1234/v1" || len(state.AvailableIDs) != 1 || !strings.Contains(state.ConfigWarning, "model cache") || state.DiscoverLMStudioCmd() == nil {
-		t.Fatalf("cache fallback state = %+v", state)
-	}
-}
-
-// TestNewModelPickerStateCollisionCustomWins verifies that when a model ID exists
-// in both the catalog cache and opencode.json, the custom entry takes precedence.
-func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
-	cachePath := writeTempFile(t, "models.json", catalogJSON)
-	settingsPath := writeTempFile(t, "opencode.json", `{
-		"provider": {
-			"built-in": {
-				"name": "Built-In Provider",
-				"models": {
-					"builtin-model": {"name": "Custom Override Name", "tool_call": true}
-				}
-			}
-		}
-	}`)
-
-	state := NewModelPickerState(cachePath, settingsPath)
-
-	p, ok := state.Providers["built-in"]
-	if !ok {
-		t.Fatal("expected built-in provider in state")
-	}
-	m, ok := p.Models["builtin-model"]
-	if !ok {
-		t.Fatal("expected builtin-model in built-in provider")
-	}
-	if m.Name != "Custom Override Name" {
-		t.Errorf("model name = %q, want %q (custom should win on collision)", m.Name, "Custom Override Name")
-	}
-}
-
-func lmStudioState(t *testing.T, catalog, settings string) ModelPickerState {
-	t.Helper()
-	return NewModelPickerState(writeTempFile(t, "models.json", catalog), writeTempFile(t, "opencode.json", settings))
-}
-
-func TestLMStudioDiscovery(t *testing.T) {
-	for name, tt := range map[string]struct{ settings, url string }{
-		"default URL":    {`{}`, "http://127.0.0.1:1234/v1"},
-		"configured URL": {`{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			calls, gotURL, original := 0, "", fetchDynamicModels
-			fetchDynamicModels = func(ctx context.Context, url string) ([]opencode.ConfigModel, error) {
-				calls++
-				gotURL = url
-				return nil, nil
-			}
-			t.Cleanup(func() { fetchDynamicModels = original })
-			state := lmStudioState(t, catalogJSON, tt.settings)
-			if calls != 0 {
-				t.Fatalf("NewModelPickerState made %d discovery calls", calls)
-			}
-			msg := state.DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
-			if calls != 1 || gotURL != tt.url || msg.BaseURL != tt.url {
-				t.Fatalf("discovery = calls:%d URL:%q message:%q", calls, gotURL, msg.BaseURL)
-			}
-		})
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`)) }))
-	defer server.Close()
-	fetched := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"`+server.URL+`"}}}`).DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
-	if len(fetched.Models) != 1 || fetched.Models[0].Name != "model" || fetched.Models[0].ToolCall {
-		t.Fatalf("unexpected fetched models: %+v", fetched.Models)
-	}
-	state := lmStudioState(t, `{"lmstudio":{"models":{"unloaded":{"id":"unloaded","tool_call":true},"static":{"id":"static","name":"Static","tool_call":true},"configured":{"id":"configured"}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"name":"User","tool_call":true}}}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Models: []opencode.ConfigModel{{Name: "configured"}, {Name: "static"}, {Name: "unknown"}}})
-	lm := state.Providers["lmstudio"]
-	if _, ok := lm.Models["unloaded"]; ok || lm.Models["configured"].Name != "User" || !lm.Models["configured"].ToolCall || lm.Models["static"].Name != "Static" || lm.Models["unknown"].ToolCall || len(state.SDDModels["lmstudio"]) != 2 {
-		t.Fatalf("unexpected models: %+v", lm.Models)
-	}
-	state = lmStudioState(t, `{}`, `{}`).Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "unknown"}}})
-	if len(state.AvailableIDs) != 0 || !strings.Contains(state.ConfigWarning, "tool_call: true") {
-		t.Fatalf("unsafe unknown model state: %+v", state)
-	}
-	state = lmStudioState(t, `{"lmstudio":{"models":{"catalog":{"id":"catalog","tool_call":true}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"tool_call":true}}}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Err: errors.New("connection refused")})
-	if _, ok := state.Providers["lmstudio"].Models["catalog"]; !ok || !state.Providers["lmstudio"].Models["configured"].ToolCall || !strings.Contains(state.ConfigWarning, "discovery failed") {
-		t.Fatalf("fallback lost: %+v", state)
-	}
-	state = lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`)
-	state = state.Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "stale"}}})
-	if _, ok := state.Providers["lmstudio"].Models["stale"]; ok || state.ConfigWarning != "" {
-		t.Fatalf("stale response changed state: %+v", state)
-	}
-}
-
-// providerKeys returns the keys of a Provider map for test error messages.
-func providerKeys(providers map[string]opencode.Provider) []string {
-	keys := make([]string, 0, len(providers))
-	for k := range providers {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // ─── Separator row (non-selectable) ────────────────────────────────────────
 
 func TestSeparatorRowIdx_Value(t *testing.T) {
@@ -1389,5 +1147,306 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 				t.Fatalf("profile rows must use global reviewer %q, got: %v", reviewAgent, rows)
 			}
 		}
+	}
+}
+
+func TestModelPickerRowsForState_WithCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents: []string{"my-custom-agent-1", "my-custom-agent-2"},
+	}
+	rows := ModelPickerRowsForState(state)
+
+	var hasCustomSep, hasSetAllCustom, hasAgent1, hasAgent2 bool
+	for _, r := range rows {
+		if r == "--- Custom / Native agents ---" {
+			hasCustomSep = true
+		}
+		if r == "Set all custom agents" {
+			hasSetAllCustom = true
+		}
+		if r == "my-custom-agent-1" {
+			hasAgent1 = true
+		}
+		if r == "my-custom-agent-2" {
+			hasAgent2 = true
+		}
+	}
+
+	if !hasCustomSep || !hasSetAllCustom || !hasAgent1 || !hasAgent2 {
+		t.Fatalf("ModelPickerRowsForState() missing custom agent rows: got %v", rows)
+	}
+}
+
+func TestModelPickerRowsForState_ProfileExcludesCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		ForProfile:   true,
+		CustomAgents: []string{"custom-profile-agent"},
+	}
+	want := ModelPickerRowsForProfile()
+	got := ModelPickerRowsForState(state)
+
+	if len(got) != len(want) {
+		t.Fatalf("ModelPickerRowsForState(profile) len = %d, want %d; got %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ModelPickerRowsForState(profile)[%d] = %q, want %q; got %v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestRuntimeModelPickerStateDiscoversCustomAgents(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	settings := `{
+  "agent": {
+    "gentle-orchestrator": { "model": "anthropic/claude-sonnet-4" },
+    "custom-coder-v1": { "model": "openai/gpt-4o-mini" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	state := NewRuntimeModelPickerStateWithDiscoverer(settingsPath, nil)
+	if len(state.CustomAgents) != 1 || state.CustomAgents[0] != "custom-coder-v1" {
+		t.Fatalf("NewRuntimeModelPickerStateWithDiscoverer CustomAgents = %v, want [custom-coder-v1]", state.CustomAgents)
+	}
+}
+
+func TestRuntimeCatalogDiscoveryUpdatesPickerWithoutPrivateFixtures(t *testing.T) {
+	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing-opencode.json"), nil)
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "Discovering models from OpenCode") {
+		t.Fatal("picker did not show loading state")
+	}
+	var cwd string
+	state.catalogDiscover = func(_ context.Context, dir string) (map[string]opencode.Provider, error) {
+		cwd = dir
+		return map[string]opencode.Provider{
+			"custom": {ID: "custom", Name: "Custom", Models: map[string]opencode.Model{
+				"qwen/qwen3": {ID: "qwen/qwen3", Name: "Qwen 3", ToolCall: true, Reasoning: true, Variants: []string{"high"}},
+			}},
+			"no-tools": {ID: "no-tools", Models: map[string]opencode.Model{"plain": {ID: "plain"}}},
+		}, nil
+	}
+	state = state.Update(state.StartRuntimeCatalogDiscovery(1, "active-project")().(RuntimeCatalogDiscoveryMsg))
+	if cwd != "active-project" || len(state.AvailableIDs) != 1 || state.AvailableIDs[0] != "custom" || state.SDDModels["custom"][0].ID != "qwen/qwen3" {
+		t.Fatalf("runtime picker cwd=%q models=%+v / %+v", cwd, state.AvailableIDs, state.SDDModels)
+	}
+	if strings.Contains(RenderModelPicker(nil, state, 0), "private cache") {
+		t.Fatal("runtime picker referenced private catalog data")
+	}
+	state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "active-project", Providers: map[string]opencode.Provider{}})
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "reported no tool-capable models") {
+		t.Fatal("picker did not distinguish an empty catalog")
+	}
+	state = state.Update(RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "active-project", Err: errors.New("unavailable")})
+	if !strings.Contains(RenderModelPicker(nil, state, 0), "Could not discover models from OpenCode") {
+		t.Fatal("picker did not show discovery fallback")
+	}
+}
+
+func TestRuntimeCatalogDiscoveryFailureKeepsConfiguredProviders(t *testing.T) {
+	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing-opencode.json"), func(context.Context, string) (map[string]opencode.Provider, error) {
+		return nil, errors.New("catalog unavailable")
+	})
+	state.ConfiguredProviders = map[string]opencode.Provider{
+		"configured": {ID: "configured", Name: "Configured", Models: map[string]opencode.Model{
+			"configured/model": {ID: "configured/model", ToolCall: true},
+		}},
+	}
+
+	state = state.Update(state.StartRuntimeCatalogDiscovery(1, "active-project")().(RuntimeCatalogDiscoveryMsg))
+
+	if state.CatalogStatus != RuntimeCatalogReady {
+		t.Fatalf("CatalogStatus = %v, want RuntimeCatalogReady", state.CatalogStatus)
+	}
+	if len(state.AvailableIDs) != 1 || state.AvailableIDs[0] != "configured" {
+		t.Fatalf("AvailableIDs = %v, want [configured]", state.AvailableIDs)
+	}
+	if got := state.SDDModels["configured"]; len(got) != 1 || got[0].ID != "configured/model" {
+		t.Fatalf("configured SDD models = %+v, want configured/model", got)
+	}
+}
+
+func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:     []string{"custom-1", "custom-2"},
+		SelectedPhaseIdx: 0,
+	}
+	rows := ModelPickerRowsForState(state)
+	setAllIdx := -1
+	for i, r := range rows {
+		if r == "Set all custom agents" {
+			setAllIdx = i
+			break
+		}
+	}
+	if setAllIdx < 0 {
+		t.Fatalf("Set all custom agents row not found in %v", rows)
+	}
+
+	state.SelectedPhaseIdx = setAllIdx
+	assignments := make(map[string]model.ModelAssignment)
+	assigned := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-3-5-haiku"}
+
+	res := applyAssignment(state, assignments, assigned)
+	if res["custom-1"] != assigned || res["custom-2"] != assigned {
+		t.Fatalf("applyAssignment Set all custom agents = %v, want assigned %v for custom-1 and custom-2", res, assigned)
+	}
+}
+
+func TestHandleModelPickerNav_SetAllCustomAgentsWithoutEffortAssignsEachAgent(t *testing.T) {
+	state := makeTestState(0)
+	state.CustomAgents = []string{"custom-1", "custom-2"}
+	for i, row := range ModelPickerRowsForState(*state) {
+		if row == "Set all custom agents" {
+			state.SelectedPhaseIdx = i
+			break
+		}
+	}
+
+	handled, assignments := HandleModelPickerNav("enter", state, nil)
+	want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+	if !handled || assignments["custom-1"] != want || assignments["custom-2"] != want {
+		t.Fatalf("HandleModelPickerNav() handled=%v assignments=%v, want each custom agent assigned %v", handled, assignments, want)
+	}
+	if state.AllCustomAgentsModel != want {
+		t.Fatalf("AllCustomAgentsModel = %v, want %v", state.AllCustomAgentsModel, want)
+	}
+}
+
+func TestClearModelPickerAssignment_SetAllCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:         []string{"custom-1", "custom-2"},
+		AllCustomAgentsModel: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+	rows := ModelPickerRowsForState(state)
+	setAllIdx := -1
+	for i, r := range rows {
+		if r == "Set all custom agents" {
+			setAllIdx = i
+			break
+		}
+	}
+	if setAllIdx < 0 {
+		t.Fatalf("Set all custom agents row not found in %v", rows)
+	}
+
+	state.SelectedPhaseIdx = setAllIdx
+	assignments := map[string]model.ModelAssignment{
+		"custom-1": {ProviderID: "openai", ModelID: "gpt-4o-mini"},
+		"custom-2": {ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+
+	res := ClearModelPickerAssignment(&state, assignments)
+	if _, ok := res["custom-1"]; ok {
+		t.Error("custom-1 should be cleared")
+	}
+	if _, ok := res["custom-2"]; ok {
+		t.Error("custom-2 should be cleared")
+	}
+	if state.AllCustomAgentsModel.ProviderID != "" {
+		t.Errorf("AllCustomAgentsModel = %v, want empty after clear", state.AllCustomAgentsModel)
+	}
+}
+
+func TestHandleModelPickerNav_CustomAgentLabelsDoNotChangeRowIdentity(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		agentName string
+	}{
+		{name: "bulk label", agentName: "Set all custom agents"},
+		{name: "custom separator label", agentName: "--- Custom / Native agents ---"},
+		{name: "review separator label", agentName: "--- Review agents ---"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := makeTestState(0)
+			state.CustomAgents = []string{tt.agentName, "other-custom-agent"}
+			selectedIdx := -1
+			for index, row := range ModelPickerRowsForStateWithIdentity(*state) {
+				if row.Kind == ModelPickerRowKindAgent && row.AgentID == tt.agentName {
+					selectedIdx = index
+					break
+				}
+			}
+			if selectedIdx < 0 {
+				t.Fatalf("custom agent row %q not found", tt.agentName)
+			}
+			state.SelectedPhaseIdx = selectedIdx
+
+			old := model.ModelAssignment{ProviderID: "old-provider", ModelID: "old-model", Effort: "high"}
+			assignments := map[string]model.ModelAssignment{"other-custom-agent": old}
+			handled, got := HandleModelPickerNav("enter", state, assignments)
+			want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+			if !handled || got[tt.agentName] != want {
+				t.Fatalf("HandleModelPickerNav() handled=%v assignment=%v, want %v for %q", handled, got[tt.agentName], want, tt.agentName)
+			}
+			if got["other-custom-agent"] != old {
+				t.Fatalf("collision row changed another custom agent: got %v, want %v", got["other-custom-agent"], old)
+			}
+			if state.AllCustomAgentsModel != (model.ModelAssignment{}) {
+				t.Fatalf("custom agent row changed bulk state: %v", state.AllCustomAgentsModel)
+			}
+		})
+	}
+}
+
+func TestHandleModelPickerNav_CustomAgentBulkLabelPreservesEffortPath(t *testing.T) {
+	state := makeTestState(0)
+	state.CustomAgents = []string{"Set all custom agents", "other-custom-agent"}
+	state.SDDModels["test-provider"][0].Variants = []string{"low", "high"}
+	for index, row := range ModelPickerRowsForStateWithIdentity(*state) {
+		if row.Kind == ModelPickerRowKindAgent && row.AgentID == "Set all custom agents" {
+			state.SelectedPhaseIdx = index
+			break
+		}
+	}
+	old := model.ModelAssignment{ProviderID: "old-provider", ModelID: "old-model", Effort: "high"}
+	assignments := map[string]model.ModelAssignment{"other-custom-agent": old}
+
+	handled, assignments := HandleModelPickerNav("enter", state, assignments)
+	if !handled || state.Mode != ModeEffortSelect {
+		t.Fatalf("enter should open effort selection: handled=%v mode=%v", handled, state.Mode)
+	}
+	handled, assignments = HandleModelPickerNav("enter", state, assignments)
+	want := model.ModelAssignment{ProviderID: "test-provider", ModelID: "model-alpha"}
+	if !handled || assignments["Set all custom agents"] != want {
+		t.Fatalf("effort selection assignment = %v, want %v", assignments["Set all custom agents"], want)
+	}
+	if assignments["other-custom-agent"] != old {
+		t.Fatalf("effort selection changed another custom agent: got %v, want %v", assignments["other-custom-agent"], old)
+	}
+	if state.AllCustomAgentsModel != (model.ModelAssignment{}) {
+		t.Fatalf("effort selection changed bulk state: %v", state.AllCustomAgentsModel)
+	}
+}
+
+func TestClearModelPickerAssignment_CustomAgentBulkLabelPreservesOtherRows(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:         []string{"Set all custom agents", "other-custom-agent"},
+		AllCustomAgentsModel: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+	for index, row := range ModelPickerRowsForStateWithIdentity(state) {
+		if row.Kind == ModelPickerRowKindAgent && row.AgentID == "Set all custom agents" {
+			state.SelectedPhaseIdx = index
+			break
+		}
+	}
+	bulk := state.AllCustomAgentsModel
+	assignments := map[string]model.ModelAssignment{
+		"Set all custom agents": bulk,
+		"other-custom-agent":    bulk,
+	}
+
+	result := ClearModelPickerAssignment(&state, assignments)
+	if _, ok := result["Set all custom agents"]; ok {
+		t.Fatal("custom agent named like the bulk row should be cleared")
+	}
+	if result["other-custom-agent"] != bulk {
+		t.Fatalf("clear changed another custom agent: got %v, want %v", result["other-custom-agent"], bulk)
+	}
+	if state.AllCustomAgentsModel != bulk {
+		t.Fatalf("custom agent clear changed bulk state: got %v, want %v", state.AllCustomAgentsModel, bulk)
 	}
 }

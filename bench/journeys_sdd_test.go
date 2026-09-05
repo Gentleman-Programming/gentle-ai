@@ -6,12 +6,9 @@ import (
 )
 
 var portableSDDFailClosedAuthorityJourneyIDs = []string{
-	"j52-sdd-stale-authority-does-not-shadow-approved-candidate",
-	"j53-sdd-ambiguous-authorities-fail-closed",
-	"j54-sdd-missing-authority-receipt-fails-closed",
-	"j55-sdd-mismatched-authority-receipt-fails-closed",
-	"j56-sdd-non-allow-post-apply-gate-fails-closed",
-	"j58-sdd-foreign-openspec-path-fails-closed",
+	"j59-current-status-and-start-ignore-sibling-worktree-transaction",
+	"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j80-rescope-authorized-evidence-only-retry",
 	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
@@ -36,24 +33,15 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 85 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
-	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
-	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
-	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
-	// only-retry (#2621).
-	// j81's RC-created repair fixture (#2839) follows the independently-owned
-	// #2621 journey. j85 proves #1956's START and FINALIZE parser refusals are preflight.
-	// j82 proves #2127's reviewed full candidate can publish an unpublished
-	// monotonic subset without reopening review.
-	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
-	// while the advertised main ref remains a moving publication boundary. j87
-	// proves #2871's correction binds the immutable failure across a later interrupt;
-	// j88 proves #2843's unborn STATUS collects explicit untracked intent first.
-	// Bump this deliberately when a journey is added, and name it here: the
-	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 87 {
-		t.Errorf("core journey count = %d, want 87", got)
-	}
+	// The corpus total used to be asserted here as a hand-written integer. It
+	// moved to bench/testdata/journeys.manifest, because two branches that each
+	// add one journey each write the same next number and git resolves that
+	// silently by taking one side. See TestRegisteredJourneysMatchTheManifest.
+	//
+	// #3417 retired the former durable-receipt and delivery-gate authority
+	// fixtures because a completed transaction no longer remains discoverable.
+	// The three atomic journeys above preserve the executable proof surface:
+	// selected-worktree isolation, explicit active continuation, and terminal burn.
 	for id, found := range want {
 		if !found {
 			t.Errorf("required SDD authority journey %q is not registered", id)

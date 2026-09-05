@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -23,36 +24,32 @@ type reviewImmutableTransport string
 const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
-	// reviewImmutableTransportOpenCodeProviderInjected is the shared advisory
-	// transport (rdd-advisory-transport SKILL.md): the OpenCode plugin
-	// (review-result-artifacts.ts) asks `review lens-context` for the
-	// finished reviewer context through its shell-less runNative channel and
-	// injects those exact bytes into the reviewer task's prompt before the
-	// reviewer ever launches. The provider materializes the evidence, applies
-	// the budget, and resolves every refusal; the plugin assembles nothing,
-	// interprets no binding field, and captures no result -- it hands the
-	// model's raw final text back for native admission. The generated lens
-	// holds no bash and no read tool. An ordinary already-running OpenCode
-	// session is sufficient: no restart, no child process, no special
-	// user-visible session, and no OPENCODE_DISABLE_* variable, because the
-	// runtime's output is advisory and cannot mint authority until Go admits
-	// it.
+	// reviewImmutableTransportOpenCodeProviderInjected is a one-Task,
+	// one-process relay. Go owns the provider contract, prompt materialization,
+	// admission, capture, and completion binding; the OpenCode plugin only
+	// relays opaque frames through its live child process.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
-	// reviewImmutableTransportCodexAdvisoryScratchProcess is the shared
-	// advisory transport's Codex boundary (rdd-advisory-transport SKILL.md):
-	// internal/advisoryreview's CodexAdapter launches a brand-new `codex
-	// exec` process in an empty scratch directory it creates and deletes
-	// itself, handing it only the canonical provider-rendered prompt
-	// (advisoryreview.PromptFor). Codex's own shell tool stays permitted even
-	// under --sandbox read-only (that flag bounds writes and network, not
-	// reads), so the enforced boundary is the empty directory, not a
-	// no-tool agent config this CLI does not have for Codex. Proven
-	// organically by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and
-	// its fail-closed companions in e2e/organicruntime: the reviewer's raw
-	// output reached native admission and a terminal receipt while a
-	// poisoned live worktree never did.
+	// reviewImmutableTransportCodexAdvisoryScratchProcess retains the canonical
+	// Go-owned provider contract across a fresh Codex subprocess boundary.
 	reviewImmutableTransportCodexAdvisoryScratchProcess reviewImmutableTransport = "codex_advisory_scratch_process"
+	// reviewImmutableTransportPiHostRelay is host-mediated like OpenCode's
+	// transport, but with the launcher owned by gentle-pi: the Pi host reads
+	// the negotiated collection input, launches a brand-new print-mode pi
+	// subprocess in an empty scratch directory with every discovery surface
+	// disabled, forwards the Go-issued opaque prompt untouched, and returns
+	// the raw final bytes through the exact capture operation. Go keeps
+	// prompt materialization, admission, budgets, receipts, and gates.
+	reviewImmutableTransportPiHostRelay reviewImmutableTransport = "pi_host_relay"
 )
+
+// reviewPiHostRelayContract is the exact relay contract this binary admits.
+// The Pi launcher lives in gentle-pi and is versioned independently; it
+// declares this identity on every invocation it relays, and any other value
+// (or none) keeps Pi fail-closed at admission instead of freezing review
+// authority no installed host can ever collect.
+const reviewPiHostRelayContract = "gentle-pi.review-relay/v1"
+
+const reviewPiHostRelayContractEnvironment = "GENTLE_PI_REVIEW_RELAY_CONTRACT"
 
 type reviewImmutableRuntimePolicy struct {
 	Eligible  bool
@@ -68,9 +65,16 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Eligible = true
 	case model.AgentCodex:
 		policy.Eligible = true
-	case model.AgentKilocode:
-		policy.Eligible = true
 	case model.AgentOpenCode:
+		policy.Eligible = true
+	case model.AgentPi:
+		// The relay's declared contract is a required conjunct: it can only
+		// narrow the compiled boundary, never expand it. Without the exact
+		// handshake, `review start --agent pi` refuses before any repository,
+		// target, or authority work, and Pi never appears as a suggested exit.
+		if os.Getenv(reviewPiHostRelayContractEnvironment) != reviewPiHostRelayContract {
+			return policy
+		}
 		policy.Eligible = true
 	default:
 		return policy
@@ -86,6 +90,8 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Transport = reviewImmutableTransportOpenCodeProviderInjected
 	case model.AgentCodex:
 		policy.Transport = reviewImmutableTransportCodexAdvisoryScratchProcess
+	case model.AgentPi:
+		policy.Transport = reviewImmutableTransportPiHostRelay
 	}
 	return policy
 }
@@ -93,7 +99,8 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
 	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
 		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected ||
-		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess
+		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess ||
+		capability.Transport == reviewImmutableTransportPiHostRelay
 }
 
 // reviewTransportSupportedRuntimeIDs derives the actionable runtime list from
@@ -113,6 +120,55 @@ func reviewTransportRefusalExitGuidance() string {
 		strings.Join(reviewTransportSupportedRuntimeIDs(), ", ")
 }
 
+// reviewPiRelayHandshakeIsSoleMissingCondition reports whether Pi's refusal is
+// caused by nothing but the absent relay handshake: every other compiled
+// conjunct already holds, so declaring the exact contract is the single
+// remaining step. It decides which cause the operator reads and nothing else;
+// reviewImmutableRuntimeCapability stays the only admission authority, and no
+// runtime becomes eligible because of what this reports.
+func reviewPiRelayHandshakeIsSoleMissingCondition(agent model.AgentID) bool {
+	if agent != model.AgentPi {
+		return false
+	}
+	if os.Getenv(reviewPiHostRelayContractEnvironment) == reviewPiHostRelayContract {
+		return false
+	}
+	manifest, err := capabilitymanifest.ForAgent(agent)
+	return err == nil && manifest.Advertises(capabilitymanifest.ContractImmutableReviewExecutorV1)
+}
+
+// reviewPiRelayHandshakeGuidance names the one missing condition instead of
+// the kill switch. reviewTransportSupportedRuntimeIDs can never name `pi`
+// here, because it is computed by calling reviewImmutableRuntimeCapability in
+// this same process, under the exact condition that is failing. Offering
+// `review mode disable` is worse than unhelpful: leaving receipt-driven
+// review is a legitimate choice, but it is not the remedy for a runtime one
+// declared contract away from eligible, and a reader who follows it concludes
+// the runtime was dropped.
+//
+// The guidance spells the exact handshake out. This prose reaches the
+// operator only as the negotiated envelope's `cause`, which every refusal
+// crosses reviewScrubDefectReportField to reach; that gate now keeps the
+// product's own public identifiers (pinned by
+// TestPiRelayHandshakeGuidanceSurvivesTheFailureCausePrivacyGate), so the
+// cause can name the runnable exit instead of a variable whose value the
+// reader had to find in gentle-pi's source.
+func reviewPiRelayHandshakeGuidance() string {
+	return "; pi is eligible only while " + reviewPiHostRelayContractEnvironment + "=" + reviewPiHostRelayContract +
+		" is exported, which the gentle-pi host does on every invocation it relays; export it in this shell and re-run"
+}
+
+// reviewTransportRefusalGuidanceFor selects the guidance the refused runtime
+// can actually act on. Every runtime other than a handshake-less Pi keeps the
+// generic exit guidance unchanged, so the env-var remedy never leaks to a
+// runtime it cannot help.
+func reviewTransportRefusalGuidanceFor(agent model.AgentID) string {
+	if reviewPiRelayHandshakeIsSoleMissingCondition(agent) {
+		return reviewPiRelayHandshakeGuidance()
+	}
+	return reviewTransportRefusalExitGuidance()
+}
+
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
 // identities. It never selects a substitute transport for an unsupported one.
 func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
@@ -124,11 +180,11 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 	capability := reviewImmutableRuntimeCapability(identity)
 	if !capability.Eligible {
 		// refusal:by-design world-action: runtimes outside the fixed RDD policy cannot receive immutable review authority
-		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalExitGuidance())
+		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalGuidanceFor(identity))
 	}
 	if !capability.supportsImmutableReceiptReview() {
 		// refusal:by-design world-action: unsupported transport cannot bind immutable evidence or capture an admissible result
-		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalExitGuidance())
+		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalGuidanceFor(identity))
 	}
 	return identity, nil
 }

@@ -14,26 +14,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+// START is deliberately absent: compact atomic START coexists with retained
+// v1/v3 siblings, as TestAtomicStartIgnoresSiblingAuthorityAcrossVersions proves.
 func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
-		name          string
-		wantOperation string
-		run           func(t *testing.T, repo, lineage, revision string, chain reviewtransaction.ValidatedChain) error
+		name               string
+		wantOperation      string
+		wantCompactAbsence bool
+		run                func(t *testing.T, repo, lineage, revision string, chain reviewtransaction.ValidatedChain) error
 	}{
-		{
-			name:          "start collision",
-			wantOperation: "review/start",
-			run: func(t *testing.T, repo, lineage, _ string, _ reviewtransaction.ValidatedChain) error {
-				return RunReview([]string{"start", "--cwd", repo, "--lineage", lineage}, &bytes.Buffer{})
-			},
-		},
-		{
-			name:          "finalize",
-			wantOperation: "review/finalize",
-			run: func(t *testing.T, repo, lineage, _ string, _ reviewtransaction.ValidatedChain) error {
-				return RunReview([]string{"finalize", "--cwd", repo, "--lineage", lineage}, &bytes.Buffer{})
-			},
-		},
 		{
 			name:          "invalidate",
 			wantOperation: "review/invalidate",
@@ -68,13 +58,6 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
-			// The "start collision" case drives a real `review start`, which
-			// issue #2586's unified empty-candidate guard would otherwise
-			// refuse first on a clean worktree, masking the legacy-collision
-			// refusal this test exists to pin. A staged, low-risk change
-			// gives every subtest a non-empty candidate; the other subtests
-			// never build a fresh candidate at all, so it is inert for them.
-			writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 			lineage := "legacy-route-" + strings.ReplaceAll(tt.name, " ", "-")
 			store := addPristineLegacyAuthority(t, repo, lineage)
 			chain, err := store.LoadChain()
@@ -98,6 +81,7 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 }
 
 func TestReviewInvalidateDeniesLegacyWithTypedReadOnlyErrorWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	store := addPristineLegacyAuthority(t, repo, "legacy-invalidate-read-only")
 	chain, err := store.LoadChain()
@@ -158,39 +142,6 @@ func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {
 	}
 }
 
-// TestReviewInvalidateRefusesApprovedLineageUnconditionally supersedes
-// TestReviewInvalidateRefusesHealthyApprovedLineage (Wave 5 Slice 7, design
-// decision 2): `review invalidate` no longer re-derives a gate result to
-// decide whether an approved lineage may be invalidated at all -- it
-// refuses UNCONDITIONALLY for any approved (or already-invalidated-with-evidence)
-// compact lineage, naming `review validate --gate <gate>` as the runnable
-// alternative, and never touches authority bytes either way.
-func TestReviewInvalidateRefusesApprovedLineageUnconditionally(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-healthy-cli", "approved.md", "approved\n")
-	runReviewCLIGit(t, repo, "add", "approved.md")
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeState, _ := os.ReadFile(store.StatePath())
-	beforeReceipt, _ := os.ReadFile(store.ReceiptPath())
-
-	err = RunReview([]string{
-		"invalidate", "--cwd", repo, "--lineage", started.LineageID,
-		"--expected-revision", record.Revision, "--gate", string(reviewtransaction.GatePreCommit),
-	}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "no longer performs gate-derived invalidation") ||
-		!strings.Contains(err.Error(), "review validate") {
-		t.Fatalf("approved CLI invalidation error = %v", err)
-	}
-	afterState, _ := os.ReadFile(store.StatePath())
-	afterReceipt, _ := os.ReadFile(store.ReceiptPath())
-	if !bytes.Equal(afterState, beforeState) || !bytes.Equal(afterReceipt, beforeReceipt) {
-		t.Fatal("approved CLI invalidation changed authority bytes")
-	}
-}
-
 // TestReviewInvalidateRefusalIsIdempotentForApprovedLineage supersedes
 // TestReviewInvalidateReplaysCompletedApprovedInvalidation: the refusal is a
 // pure function of the request (no write, no derivation), so calling it
@@ -198,15 +149,15 @@ func TestReviewInvalidateRefusesApprovedLineageUnconditionally(t *testing.T) {
 // byte-identical output -- the replay-stability claim survives even though
 // there is no longer a completed write to replay against.
 func TestReviewInvalidateRefusalIsIdempotentForApprovedLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-replay", "approved.md", "approved\n")
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "approved.md", "approved\n", 0o644)
+	historical := seedHistoricalCompatibilityApprovedCompactReceipt(t, repo, "invalidate-approved-replay", reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
 	args := []string{
-		"invalidate", "--cwd", repo, "--lineage", started.LineageID,
-		"--expected-revision", record.Revision, "--gate", string(reviewtransaction.GatePostApply),
+		"invalidate", "--cwd", repo, "--lineage", historical.Record.State.LineageID,
+		"--expected-revision", historical.Record.Revision, "--gate", string(reviewtransaction.GatePostApply),
 	}
 
 	var first bytes.Buffer

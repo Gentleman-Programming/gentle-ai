@@ -1,12 +1,9 @@
 package sddstatus
 
 import (
-	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -25,62 +22,13 @@ var compactBlockedCallRegexp = regexp.MustCompile(`compactBlocked\((CompactBlock
 // hand-copied.
 var compactBlockReasonConstRegexp = regexp.MustCompile(`(CompactBlock[A-Za-z]+)\s+CompactBlockReason\s*=\s*"([a-z_]+)"`)
 
-// TestCompactSettleRemediationRefusalIsClassifiedNotAuthorityFailure is the RED
-// reproduction for #2249: a compact `sdd-attempt settle --outcome passed` with
-// otherwise valid inputs, issued against an attempt whose candidate drifted
-// after Begin while a review binding is in place, used to collapse into
-// {"state":"blocked","reason":"authority_failure"} while status kept
-// reporting outcome: running, next_action: finish — a dead end. Root cause:
-// compactMutationFailure's switch had no case for
-// ErrRuntimeRemediationSuccessorRequired, so it fell through to the default
-// branch and threw away runtimeRemediationExitRefusal's actionable message.
-func TestCompactSettleRemediationRefusalIsClassifiedNotAuthorityFailure(t *testing.T) {
-	change := "compact-remediation-legibility"
-	fixture := newRuntimeUnchangedBindingFixture(t, change)
-
-	// Drift the candidate after Begin: the ordinary continuation for a
-	// passing finish bound to a review is now the remediation trio, not a
-	// bare pass.
-	write(t, filepath.Join(fixture.store.Repo, "openspec", "changes", change, "tasks.md"), "- [x] 1.1 Done\n# post-begin drift\n")
-
-	result, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
-		Token: fixture.active.Revision, RequestID: change + "-settle", Outcome: AttemptPassed,
-		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "drifted candidate settle reproduces #2249",
-		HarnessDisposition: HarnessReused, CleanupEvidence: "settle cleanup completed",
-		ProcessEvidence: "settle process scan found no descendants",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.State != CompactStateBlocked {
-		t.Fatalf("drifted compact settle result = %#v, want state=blocked", result)
-	}
-	if result.Reason == CompactBlockAuthorityFailure {
-		t.Fatalf("drifted compact settle reason = %q, want a specific classification, not the opaque default authority_failure dead end", result.Reason)
-	}
-	if result.Reason != CompactBlockRemediationRequired {
-		t.Fatalf("drifted compact settle reason = %q, want %q", result.Reason, CompactBlockRemediationRequired)
-	}
-	if result.Detail == "" || result.Exit == "" {
-		t.Fatalf("drifted compact settle result = %#v, want non-empty Detail/Exit carrying the wrapped refusal instead of throwing it away", result)
-	}
-	for _, want := range []string{"--expected-binding-revision", "--successor-lineage", "--remediates-evidence-revision"} {
-		if !strings.Contains(result.Detail, want) {
-			t.Fatalf("drifted compact settle detail = %q, want it to name the remediation trio exit including %s", result.Detail, want)
-		}
-	}
-}
-
 // TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel is the
 // table-driven sentinel enumeration test required alongside the #2249 fix. It
-// audits every ErrRuntime*/ErrBindingRevisionConflict sentinel declared in the
-// var block at runtime_ledger.go:61-92 against whether Begin or Finish (the
-// only two mutations Acquire/Settle drive through compactMutationFailure) can
-// actually produce it, and fails if a sentinel marked reachable still lands on
-// the opaque CompactBlockAuthorityFailure default. This is a genuine
-// regression guard: deleting the ErrRuntimeRemediationSuccessorRequired or
-// ErrBindingRevisionConflict case from compactMutationFailure's switch makes
-// this test fail, not just the #2249 repro above.
+// audits every current ErrRuntime* sentinel declared in runtime_ledger.go
+// against whether Begin or Finish (the only two mutations Acquire/Settle drive
+// through compactMutationFailure) can actually produce it, and fails if a
+// sentinel marked reachable still lands on the opaque
+// CompactBlockAuthorityFailure default.
 func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -97,9 +45,9 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 		{name: "ErrRuntimeConcurrentUpdate", err: ErrRuntimeConcurrentUpdate, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeRequestConflict", err: ErrRuntimeRequestConflict, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeNoActiveAttempt", err: ErrRuntimeNoActiveAttempt, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
-		{name: "ErrRuntimeRemediationSuccessorRequired", err: ErrRuntimeRemediationSuccessorRequired, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockRemediationRequired},
 		{name: "ErrRuntimeWorktreeMismatch", err: ErrRuntimeWorktreeMismatch, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockWorktreeMismatch},
-		{name: "ErrBindingRevisionConflict", err: ErrBindingRevisionConflict, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
+		{name: "ErrRuntimeCandidateUnavailable", err: ErrRuntimeCandidateUnavailable, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockCandidateUnavailable},
+		{name: "ErrRuntimeUndeclaredUntracked", err: ErrRuntimeUndeclaredUntracked, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockUndeclaredUntracked},
 		// Reset is the only mutation that can produce these two; Begin/Finish
 		// never do, so Acquire/Settle never route them into
 		// compactMutationFailure. They stay intentionally unclassified.

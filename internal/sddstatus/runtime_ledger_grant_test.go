@@ -179,7 +179,7 @@ func TestRuntimeLedgerGrantReplayRefusesForgedWidenedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.Status(); err == nil || !strings.Contains(err.Error(), "grant request digest does not match record") {
+	if _, err := store.Status(); !isRuntimeRecordRejection(err, "grant_request_digest_match") {
 		t.Fatalf("replay of forged widened grant = %v, want the digest-recompute rejection", err)
 	}
 }
@@ -203,7 +203,7 @@ func TestRuntimeLedgerLegacyChainWithoutGrantsReplaysUnchanged(t *testing.T) {
 	}
 	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "legacy-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('7'), Diagnosis: "interrupted with the workspace unchanged",
+		Diagnosis:          "interrupted with the workspace unchanged",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})
@@ -408,12 +408,10 @@ func TestRuntimeLedgerGrantReplayRefusesForgedInstanceMarker(t *testing.T) {
 		return statusErr
 	}
 
-	if err := forge(t, "grant-instance-rebound", "second-change-instance"); err == nil ||
-		!strings.Contains(err.Error(), "grant request digest does not match record") {
+	if err := forge(t, "grant-instance-rebound", "second-change-instance"); !isRuntimeRecordRejection(err, "grant_request_digest_match") {
 		t.Fatalf("replay of rebound instance marker = %v, want the digest-recompute rejection", err)
 	}
-	if err := forge(t, "grant-instance-stripped", ""); err == nil ||
-		!strings.Contains(err.Error(), "invalid SDD runtime grant change-instance identity") {
+	if err := forge(t, "grant-instance-stripped", ""); !isRuntimeRecordRejection(err, "invalid_grant_change_instance") {
 		t.Fatalf("replay of stripped instance marker = %v, want the invalid-identity rejection", err)
 	}
 }

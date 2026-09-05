@@ -63,6 +63,59 @@ func TestCompatibilitySkillsRefreshStepRefreshesExistingOrdinaryAndSDDAssets(t *
 	}
 }
 
+func TestCompatibilitySkillsRefreshRemovesLegacySharedSkillMarker(t *testing.T) {
+	home := t.TempDir()
+	skillsDir := filepath.Join(home, ".agents", "skills")
+	legacyMarker := filepath.Join(skillsDir, "_shared", "SKILL.md")
+	writeStale(t, legacyMarker)
+	if err := os.Truncate(legacyMarker, 17<<20); err != nil {
+		t.Fatal(err)
+	}
+
+	var changed []string
+	step := compatibilitySkillsRefreshStep{
+		homeDir:      home,
+		components:   []model.ComponentID{model.ComponentSDD},
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacyMarker); !os.IsNotExist(err) {
+		t.Fatalf("legacy shared marker %q still exists or could not be checked: %v", legacyMarker, err)
+	}
+	if !slices.Contains(changed, legacyMarker) {
+		t.Fatalf("changed files missing removed legacy marker %q: %v", legacyMarker, changed)
+	}
+	for _, name := range []string{"README.md", "persistence-contract.md", "sdd-phase-common.md", "skill-resolver.md"} {
+		path := filepath.Join(skillsDir, "_shared", name)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("shared support file %q was not preserved: %v", path, err)
+		}
+	}
+}
+
+func TestWindowsCompatibilityTransactionUsesAnchoredLegacyMarkerRemoval(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	sourcePath := filepath.Join(filepath.Dir(testFile), "compatibility_transaction_windows.go")
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", sourcePath, err)
+	}
+
+	const anchoredSDDInjection = "sdd.InjectSkillDirectoryWithCompatibilityWriter(t.writer.root, \"\", t.writer.Write, t.writer.Remove)"
+	if !strings.Contains(string(source), anchoredSDDInjection) {
+		t.Fatalf("Windows compatibility transaction does not route legacy marker cleanup through its anchored writer: missing %q", anchoredSDDInjection)
+	}
+	const rollbackRemoval = "if _, err := t.writer.Remove(path); err != nil {"
+	if !strings.Contains(string(source), rollbackRemoval) {
+		t.Fatalf("Windows compatibility transaction does not consume the anchored remover changed-state result: missing %q", rollbackRemoval)
+	}
+}
+
 func TestRunSyncDryRunMatchesZeroAgentCompatibilityRefresh(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
@@ -490,6 +543,7 @@ func TestAdapterSkillFilesAreBackupTargets(t *testing.T) {
 	for _, targets := range [][]string{installTargets, syncTargets} {
 		for _, relative := range []string{
 			"go-testing/references/examples.md",
+			// The obsolete marker is a backup target because sync removes it.
 			"_shared/SKILL.md",
 			"sdd-onboard/SKILL.md",
 			"judgment-day/SKILL.md",

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -43,6 +42,7 @@ const gitObjectPermissionStderr = "fatal: cannot access the object database: Per
 // refusal, an absent authority record and an unparsable one all converge here.
 // Four genuinely different roots, one string.
 func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string)
@@ -106,10 +106,18 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 // point reported as #2411: everything past admission answered with one
 // repository_context_capture_failed sentence, which is why a preflight that
 // cannot reach any of these paths appeared to "pass" while capture "failed".
+//
+// The property is that the causes are DISTINGUISHABLE, not that they share a
+// code. An occupied slot now carries its own, because #2411's rc.6 occurrence
+// showed the shared code's action ("retry the same exact binding") is the one
+// thing that cannot work while the slot is occupied. So the code is asserted
+// per case; a cause that stops being distinguishable still fails here.
 func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string, binding []string)
+		code    string
 		want    string
 	}{
 		{
@@ -120,17 +128,16 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 					t.Fatalf("first capture failed: %v", err)
 				}
 			},
-			want: "different canonical bytes",
+			code: reviewerResultSlotOccupiedCode,
+			want: reviewNextTransitionRefreshCommandV21,
 		},
 		{
-			name: "results-directory-unusable",
+			name: "compact-authority-unwritable",
 			arrange: func(t *testing.T, repo, lineage string, _ []string) {
-				blocked := filepath.Join(reviewCLICompactStoreDir(repo, lineage), reviewtransaction.CompactReviewerResultsDir)
-				if err := os.WriteFile(blocked, []byte("not a directory\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				blockCanonicalAuthorityWrite(t, repo, lineage)
 			},
-			want: opaqueNativeCause("not a directory", "unsafe RAR authority path"),
+			code: "repository_context_capture_failed",
+			want: "permission denied",
 		},
 	}
 	messages := make(map[string]string, len(cases))
@@ -146,11 +153,18 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 				t.Fatal("capture succeeded despite an unusable authority store")
 			}
 			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_capture_failed", tt.want, repo)
+			assertOpaqueFailureNamesCause(t, message, tt.code, tt.want, repo)
 			messages[tt.name] = message
 		})
 	}
-	assertPairwiseDistinct(t, messages, len(cases))
+	wantMessages := len(cases)
+	if runtime.GOOS == "windows" {
+		// blockCanonicalAuthorityWrite requires POSIX permissions, so Windows
+		// exercises only the occupied-slot root while retaining its
+		// distinct-cause proof.
+		wantMessages--
+	}
+	assertPairwiseDistinct(t, messages, wantMessages)
 }
 
 // TestOpaqueRepositoryContextCauseIsScrubbed is the other half of the contract:
@@ -158,6 +172,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 // gone and the rest of the cause intact. Forwarding an unscrubbed cause and
 // forwarding nothing are both failures.
 func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
+	reviewEnabledHome(t)
 	lineage := "opaque-scrub-cause"
 	args, _, repo := startedOpaqueCaptureBinding(t, lineage)
 	if err := os.Remove(reviewCLICompactStatePath(repo, lineage)); err != nil {
@@ -254,62 +269,4 @@ func admissibleOpaqueReviewerResult(t *testing.T, binding []string, evidence str
 		Evidence: []string{evidence},
 	})
 	return path
-}
-
-// TestOpaqueRepositoryContextPreserveNamesDistinctCauses covers the preserve
-// path, which is where reviewer payloads land when capture fails. It shares the
-// same defect: every preservation failure answered with one sentence, so a
-// reporter whose lens results were all stranded as incidents (#2446) had no way
-// to say why.
-func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
-	cases := []struct {
-		name    string
-		arrange func(t *testing.T, repo, lineage string)
-		want    string
-	}{
-		{
-			name: "incidents-path-is-a-file",
-			arrange: func(t *testing.T, repo, lineage string) {
-				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Remove(incidents); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(incidents, []byte("not a directory\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "unsafe RAR authority path",
-		},
-		{
-			name: "incidents-directory-is-shared",
-			arrange: func(t *testing.T, repo, lineage string) {
-				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
-				if err != nil {
-					t.Fatal(err)
-				}
-				makeOpaqueSharedDirectory(t, filepath.Dir(incidents))
-			},
-			want: "unsafe RAR authority path",
-		},
-	}
-	messages := make(map[string]string, len(cases))
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			lineage := "opaque-preserve-" + tt.name
-			args, input, repo := startedOpaqueCaptureBinding(t, lineage)
-			tt.arrange(t, repo, lineage)
-
-			err := RunReviewPreserveResult(append(append([]string{}, args...), "--input", input), io.Discard)
-			if err == nil {
-				t.Fatal("preserve-result succeeded despite an unusable incidents directory")
-			}
-			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_preserve_failed", tt.want, repo)
-			messages[tt.name] = message
-		})
-	}
-	assertPairwiseDistinct(t, messages, len(cases))
 }

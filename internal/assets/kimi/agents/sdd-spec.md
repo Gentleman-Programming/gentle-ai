@@ -17,7 +17,7 @@ Read the skill file at `~/.config/agents/skills/sdd-spec/SKILL.md` and follow it
 Also read shared conventions at `~/.config/agents/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read proposal artifact (required): `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
+1. Read proposal artifact (required): read the `proposal` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Write requirements using RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
 3. Write acceptance scenarios in Given/When/Then format for each requirement
 4. Persist spec to active backend

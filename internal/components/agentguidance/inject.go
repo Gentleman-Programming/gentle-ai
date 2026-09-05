@@ -54,6 +54,13 @@ type templateBootstrapper interface {
 	BootstrapTemplate(homeDir string) error
 }
 
+// RoutingOptions supplies a caller-resolved settings path for adapters whose
+// guidance is delivered through a managed orchestrator definition. The adapter
+// retains its normal targetDir-derived path when SettingsPath is empty.
+type RoutingOptions struct {
+	SettingsPath string
+}
+
 // InjectRouting installs the organic routing guidance for one supported agent
 // under targetDir, which is the installation root the adapter resolves its
 // configuration paths from.
@@ -65,6 +72,13 @@ type templateBootstrapper interface {
 // Only the marked section is owned by Gentle AI: everything a user wrote around
 // it is preserved verbatim, and a second identical injection is a no-op.
 func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
+	return InjectRoutingWithOptions(targetDir, agent, RoutingOptions{})
+}
+
+// InjectRoutingWithOptions installs routing guidance using a caller-resolved
+// settings path when the adapter's effective configuration authority differs
+// from its ordinary targetDir-derived path.
+func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) (Result, error) {
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
 	rendered, err := RenderRouting(agent)
@@ -72,7 +86,7 @@ func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
 		return Result{}, err
 	}
 
-	delivery, err := resolveRoutingDelivery(targetDir, agent)
+	delivery, err := resolveRoutingDelivery(targetDir, agent, options)
 	if err != nil {
 		return Result{}, err
 	}
@@ -97,7 +111,13 @@ func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
 // same delivery resolution, so the backup contract cannot drift away from what
 // the injector actually writes.
 func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
-	delivery, err := resolveRoutingDelivery(targetDir, agent)
+	return RoutingPathsWithOptions(targetDir, agent, RoutingOptions{})
+}
+
+// RoutingPathsWithOptions reports the same paths InjectRoutingWithOptions would
+// write, including any caller-resolved effective settings path.
+func RoutingPathsWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) ([]string, error) {
+	delivery, err := resolveRoutingDelivery(targetDir, agent, options)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +154,7 @@ type routingDelivery struct {
 // an unreachable target is exactly the failure this component exists to
 // prevent — and reporting a path the injector cannot write is the same defect
 // seen from the backup side.
-func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDelivery, error) {
+func resolveRoutingDelivery(targetDir string, agent model.AgentID, options RoutingOptions) (routingDelivery, error) {
 	if strings.TrimSpace(targetDir) == "" {
 		return routingDelivery{}, fmt.Errorf("%w: %q", ErrInvalidTarget, targetDir)
 	}
@@ -146,7 +166,10 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDeliv
 
 	switch {
 	case DeliversThroughOrchestratorPrompt(agent):
-		settingsPath := adapter.SettingsPath(targetDir)
+		settingsPath := options.SettingsPath
+		if strings.TrimSpace(settingsPath) == "" {
+			settingsPath = adapter.SettingsPath(targetDir)
+		}
 		if strings.TrimSpace(settingsPath) == "" {
 			return routingDelivery{}, fmt.Errorf("%w: adapter %q exposes no settings path", ErrInvalidTarget, agent)
 		}

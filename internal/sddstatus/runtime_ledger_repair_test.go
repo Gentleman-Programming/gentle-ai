@@ -18,7 +18,26 @@ func TestRuntimeLedgerRepairsPublishedConsecutiveRescope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := store.Rescope(context.Background(), RescopeObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "rescope-a-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 1, MaxChangedLines: 10, Reason: "narrow A to B", Actor: "maintainer"})
+	// The historical v2.4.0-rc.1 writer published successor B already
+	// exhausted (max_attempts equal to the carried cumulative_attempts).
+	// Today's writer refuses that shape before mutation (#2804), so the
+	// historical chain is reproduced the way it actually exists in the
+	// wild: as an already-published record.
+	lastA := failed.Attempts[0]
+	generationB := failed.ObjectiveGeneration + 1
+	requestB := RescopeObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "rescope-a-b", WorkUnit: "objective-b", EvidenceGoal: "prove B", MaxAttempts: 1, MaxChangedLines: 10, Reason: "narrow A to B", Actor: "maintainer"}
+	recordB := runtimeRecord{Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: failed.Revision, Operation: runtimeOperationRescope, RequestID: requestB.RequestID, RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", requestB), Rescope: &runtimeRescopeEvent{PreviousObjectiveID: failed.Objective.ID, PreviousGeneration: failed.Objective.Generation, PreviousMaxAttempts: failed.Objective.MaxAttempts, PreviousMaxChangedLines: failed.Objective.MaxChangedLines, RescopeCandidateIdentity: lastA.FinishCandidateIdentity, RescopeCandidateTree: lastA.FinishCandidateTree, ObjectiveID: runtimeObjectiveID(store.Change, requestB.WorkUnit, requestB.EvidenceGoal, lastA.FinishCandidateIdentity, generationB), ObjectiveGeneration: generationB, WorkUnit: requestB.WorkUnit, EvidenceGoal: requestB.EvidenceGoal, MaxAttempts: requestB.MaxAttempts, MaxChangedLines: requestB.MaxChangedLines, Reason: requestB.Reason, Actor: requestB.Actor}}
+	revisionB, payloadB, err := runtimeRecordRevision(recordB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revisionB, payloadB); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revisionB); err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.Status()
 	if err != nil {
 		t.Fatal(err)
 	}

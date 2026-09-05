@@ -11,7 +11,7 @@ func TestHelpContainsAllCommands(t *testing.T) {
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 
-	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "sdd-attempt", "sdd-verify-validate", "review start", "review finalize", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
+	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "sdd-attempt", "sdd-verify-validate", "review start", "review capture-result", "review capture-correction-plan", "review capture-refuter", "review capture-validation", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
 	for _, cmd := range commands {
 		if !strings.Contains(output, cmd) {
 			t.Errorf("help output missing command %q", cmd)
@@ -42,7 +42,7 @@ func TestHelpPresentsFlatReviewCommandsAsCompatibilityPaths(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
-	if !strings.Contains(output, "COMPATIBILITY COMMANDS\n  review-start") || !strings.Contains(output, "Normal review path; ordinary authority is compact state plus receipt") {
+	if !strings.Contains(output, "COMPATIBILITY COMMANDS\n  review-start") || !strings.Contains(output, "Read-only legacy v1 surface; rejects new v1 authority") {
 		t.Fatalf("help does not separate facade from compatibility commands:\n%s", output)
 	}
 }
@@ -60,15 +60,15 @@ func TestHelpDescribesCurrentReviewAuthorityAndCompatibilitySyntax(t *testing.T)
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 	for _, want := range []string{
-		"ordinary authority is compact state plus receipt",
+		"the final capture closes and burns its review",
 		"Read-only legacy v1 surface; rejects new v1 authority",
 		"Read-only legacy v1 surface; rejects mutation",
 		"Read shipped v1 authority without mutation",
-		"Export compact current-state transport or a legacy v1 chain transport",
-		"receipt/request extras apply only to legacy v1 transport",
+		"Export a read-only legacy v1 chain transport",
+		"Import a read-only legacy v1 transport",
 		"--receipt <path> (--request <path> | --lineage <id> --gate <gate>)",
-		"native mode needs lineage/gate and derives authority",
-		"optional compatibility or exceptional inputs",
+		"ordinary repository policy decides delivery",
+		"compatibility inputs",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q", want)
@@ -86,6 +86,9 @@ func TestHelpRejectsStaleMutableAndMandatoryReviewWording(t *testing.T) {
 		"Export the validated full chain as a portable content-addressed bundle",
 		"--bundle <path> --policy <path> --ledger <path> --evidence <path>",
 		"Canonical empty ledger bytes",
+		"review finalize",
+		"retry-final-verification",
+		"capture-evidence",
 	} {
 		if strings.Contains(output, stale) {
 			t.Fatalf("help output retains stale review contract %q:\n%s", stale, output)
@@ -102,17 +105,20 @@ func TestHelpDocumentsUserControlledReviewModeKillSwitch(t *testing.T) {
 		"--scope <global|clone>",
 		"off wins",
 		"status never mutates",
-		"asks once per clone",
+		"asks per candidate",
+		"nothing is granted for later candidates",
 		"'not now' applies to that candidate only",
 		"gentle-ai review mode disable",
+		"[--locale <en|es>]",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing review mode documentation %q:\n%s", want, output)
 		}
 	}
 	// The permanent disable stopped being a numbered answer, so the help must
-	// not keep advertising it as one.
-	for _, stale := range []string{"never ask again", "Never ask again"} {
+	// not keep advertising it as one; issue #3445: the per-clone latch is
+	// retired, consent is asked per candidate and never recorded for later ones.
+	for _, stale := range []string{"never ask again", "Never ask again", "asks once per clone", "records that answer"} {
 		if strings.Contains(output, stale) {
 			t.Fatalf("help output still offers a permanent disable as an answer %q:\n%s", stale, output)
 		}

@@ -18,7 +18,7 @@ Para implementar una integración temprana sin depender de APIs externas y **sin
 3. **Amnesia Controlada (Load State)**
    Al iniciar la siguiente fase (ej. `sdd-spec`), Antigravity NO DEBE confiar en su historial de chat. Su primera acción obligatoria es usar la herramienta de lectura (`Read`) para cargar el archivo generado en el paso anterior. Esto refresca el contexto exacto necesario para la fase actual.
 
-4. **Uso Correcto de Engram**
+4. **Uso Correcto de Engram™**
    Engram (`mem_save`) se preserva ÚNICAMENTE para registrar decisiones arquitectónicas globales, convenciones y bugfixes. NO debe usarse para guardar el estado intermedio de un SDD en curso (para eso están los archivos `.sdd/*.md`).
 
 ## Conclusión

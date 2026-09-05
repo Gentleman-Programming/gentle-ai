@@ -16,7 +16,7 @@ Open your AI agent in a project and start working. For richer project context, t
 
 ---
 
-## Engram (Memory) -- Automatic, But You CAN Use It
+## Engram™ (Memory) -- Automatic, But You CAN Use It
 
 Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it via MCP tools (`mem_save`, `mem_search`, etc.).
 
@@ -117,7 +117,7 @@ The orchestrator must stop acting as a monolithic executor when complexity appea
 
 - **4-file rule**: reading 4+ files to understand a flow means delegate exploration or run an exploration phase.
 - **Multi-file write rule**: touching 2+ non-trivial files means use one writer or require fresh review before completion.
-- **PR rule**: before commit, push, or PR after code changes, run fresh review unless the diff is trivial (tier 1).
+- **PR rule**: review can provide fresh evidence for a commit, push, or PR, but it never authorizes delivery. Receipt-driven development is opt-in with `gentle-ai review mode enable --scope global`; whether it is on or off, ordinary repository policy decides delivery.
 - **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
 - **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
 - **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
@@ -144,7 +144,7 @@ Once installed, your agent detects what you're working on and loads the relevant
 How it works:
 
 1. **The registry refreshes at startup where the agent supports hooks.** Normal Pi startup runs the `gentle-pi` session hook. Codex, Claude Code, and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
-2. **The refresh is cached.** Gentle-AI fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
+2. **The refresh is cached.** Gentle-AI™ fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
 3. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes exact matching `SKILL.md` paths to sub-agents. You don't interact with the registry after that.
 4. **Manual fallback stays available** -- run `gentle-ai skill-registry refresh --force` from a project if you want to regenerate immediately.
 

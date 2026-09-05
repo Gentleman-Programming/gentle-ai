@@ -13,7 +13,7 @@
   "receipt": {
     "status": "expected_missing"
   },
-  "action": "finalize",
+  "action": "stop",
   "replayability": "not_replayable",
   "frozen": {
     "tier": "medium",
@@ -68,10 +68,6 @@
     "forbidden_actions": [
       {
         "action": "review.abandon",
-        "reason_code": "forbidden_required_inputs_unavailable"
-      },
-      {
-        "action": "review.finalize",
         "reason_code": "forbidden_required_inputs_unavailable"
       },
       {
@@ -175,16 +171,7 @@
             "byte_size": 209
           },
           "changed_path_manifest": [
-            {
-              "path": "tracked.txt",
-              "status": "M",
-              "old_mode": "100644",
-              "new_mode": "100644",
-              "deleted": false,
-              "type_changed": false,
-              "mode_only": false,
-              "intended_untracked": false
-            }
+            {"path":"tracked.txt","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}
           ]
         }
       ]

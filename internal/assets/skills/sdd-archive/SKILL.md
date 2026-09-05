@@ -47,10 +47,9 @@ The archive report is the terminal record of the cycle. It describes the state o
 
 When sources disagree about a fact, rank them — most authoritative first:
 
-1. **Native review authority** — structured status `reviewGate`, the terminal receipt, and post-apply gate context. Validated delivery facts; they win for everything they cover.
-2. **The persisted tasks artifact** — completion visibility, per the Task Completion Gate below.
-3. **Explicit final-state facts in the orchestrator's launch prompt** — e.g. "these verify warnings were fixed in later commits", "this blocker was resolved and the gate passed". The launch prompt is the most recent account of the change and outranks intermediate snapshots.
-4. **`verify-report` and `apply-progress`** — intermediate snapshots. Lowest rank: valid history of what was true at their time, never evidence of final state.
+1. **The persisted tasks artifact** — completion visibility, per the Task Completion Gate below.
+2. **Explicit final-state facts in the orchestrator's launch prompt** — e.g. "these verify warnings were fixed in later commits", "this blocker was resolved and verification passed". The launch prompt is the most recent account of the change and outranks intermediate snapshots.
+3. **`verify-report` and `apply-progress`** — intermediate snapshots. Lowest rank: valid history of what was true at their time, never evidence of final state.
 
 Reporting rules that follow:
 
@@ -60,28 +59,22 @@ Reporting rules that follow:
 - Carry final numbers (test counts, warnings, open issues) from the highest-ranked source that covers them; do not copy numbers from `verify-report` or `apply-progress` when later work changed them.
 - Never merge distinct defects or failures into a single causal story. A cause is recorded as confirmed only with evidence; otherwise record the failure as undiagnosed.
 
-This hierarchy governs how the archive REPORTS facts. It does not weaken gates: CRITICAL issues in `verify-report` still block archive with no prompt override (a claim that a CRITICAL was fixed requires re-running `sdd-verify`, not a prompt assertion), and the Native Review Receipt Gate and Task Completion Gate below keep their own authority rules.
+This hierarchy governs how the archive REPORTS facts. CRITICAL issues in `verify-report` still block archive with no prompt override (a claim that a CRITICAL was fixed requires re-running `sdd-verify`, not a prompt assertion), and the Task Completion Gate below remains authoritative.
 
 ## Execution and Persistence Contract
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` (all required). Read the exact `sdd/{change-name}/review/{transaction,ledger,receipt,gate-context}` topics only when the Native Review Receipt Gate below finds `reviewGate` present (a review was actually discovered) — when `reviewGate` is structurally absent, no review ever happened for this candidate and none of those topics exist to read. Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
+- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` (all required). Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
 - **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Perform merge and archive folder moves.
 - **hybrid**: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
 - **none**: Return closure summary only. Do not perform archive file operations.
 
-### Native Review Receipt Gate
+### Archive Readiness
 
-Before any task reconciliation, spec sync, or archive move, require structured status. `reviewGate` is a structurally ABSENT key — not a populated value — in every case except a genuine, discovered review artifact for this candidate:
+Before any task reconciliation, spec sync, or archive move, require structured status. Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`. A post-verify `reviewOffer` is an invitation only and is never read as archive state.
 
-- **`reviewGate` absent, archive proceeds under ordinary repository policy** in both of these cases; there is no `disabled/unmanaged` value to check for, and no explicit-artifact carve-out either:
-  - **the kill switch is off**: receipt-driven development does not exist for this candidate, so zero review code ran and there is nothing to read or block on.
-  - **the kill switch is on, verify has passed, and no review was ever started for this candidate**: the post-verify offer (`reviewOffer`) is present in the SAME status output — an invitation, never a gate. Declining is proceeding to archive without acting on it, not a verb; nothing about the decline is recorded, and `dependencies.archive: ready` here means proceed, not "investigate why the gate is missing".
-- **`reviewGate` present with `result: allow`** (a discovered receipt that governs this candidate and validates): proceed. Read the exact transaction, frozen ledger, approved terminal receipt, and post-apply gate context referenced by status; the receipt must match final candidate tree, paths digest, policy, ledger, fix delta, current independent verification evidence, mode counters, and base relationship.
-- **`reviewGate` present with any other result** (pending, malformed, `scope-changed`, `invalidated`, or `escalated` — a review was actually discovered and failed validation): blocks archive with no override and no automatic reviewer launch. The gate never manufactures `allow`, and re-enabling a disabled switch revalidates from the current state.
-
-Do not treat `reviewGate`'s absence itself as a defect to investigate or as grounds to demand a receipt — only a present, non-`allow` value blocks.
+The Task Completion Gate and strict independent verification decide whether archive can proceed; ordinary repository policy decides delivery.
 
 ### Task Completion Gate
 
@@ -212,16 +205,43 @@ fi
 ```bash
 # Run this block as one shell transaction so the EXIT trap remains active.
 # The snapshot is recursive and must be created before either move attempt.
+source="openspec/changes/{change-name}"
+destination="openspec/changes/archive/YYYY-MM-DD-{change-name}"
 snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/sdd-archive.XXXXXX")"
 trap 'rm -rf -- "$snapshot_root"' EXIT
-cp -R "openspec/changes/{change-name}" "$snapshot_root/source"
+cp -R "$source" "$snapshot_root/source"
 
 # Mechanical move (MANDATORY): git mv when tracked, mv otherwise
 mkdir -p openspec/changes/archive
-if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+  printf 'archive destination collision: source %s and destination %s remain unchanged. Resolve the destination collision, then rerun this archive step.\n' "$source" "$destination" >&2
+  exit 1
+fi
+
+if git mv "$source" "$destination"; then
   :
 else
-  if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+  git_mv_status=$?
+  if [ -e "$source" ] || [ -L "$source" ]; then
+    :
+  else
+    printf 'git mv failed with status %s and source %s is absent; refusing plain mv fallback.\n' "$git_mv_status" "$source" >&2
+    exit "$git_mv_status"
+  fi
+  if diff -r "$snapshot_root/source" "$source"; then
+    fallback_source_diff_status=0
+  else
+    fallback_source_diff_status=$?
+  fi
+  if [ "$fallback_source_diff_status" -ne 0 ]; then
+    printf 'git mv failed with status %s and source %s changed; refusing plain mv fallback.\n' "$git_mv_status" "$source" >&2
+    exit "$git_mv_status"
+  fi
+  if [ -e "$destination" ] || [ -L "$destination" ]; then
+    printf 'archive destination collision: source %s and destination %s remain unchanged. Resolve the destination collision, then rerun this archive step.\n' "$source" "$destination" >&2
+    exit 1
+  fi
+  if mv "$source" "$destination"; then
     :
   else
     move_status=$?
@@ -230,13 +250,13 @@ else
 fi
 
 # The source must be gone before comparing the archived tree with its snapshot.
-if [ -e "openspec/changes/{change-name}" ] || [ -L "openspec/changes/{change-name}" ]; then
+if [ -e "$source" ] || [ -L "$source" ]; then
   printf 'archive move left the source directory in place\n' >&2
   exit 1
 fi
 
 # MANDATORY readback: only empty diff output passes.
-if diff -r "$snapshot_root/source" "openspec/changes/archive/YYYY-MM-DD-{change-name}"; then
+if diff -r "$snapshot_root/source" "$destination"; then
   diff_status=0
 else
   diff_status=$?
@@ -249,6 +269,29 @@ fi
 Use today's date in ISO format (e.g., `2026-02-16`).
 
 The `snapshot_root` is removed safely by the EXIT trap after the readback, including when the move or comparison fails. Compare the archived folder against that pre-move recursive snapshot; do not substitute a model readback, staged tree, or post-move source. The `archive-report` you write in Step 5 is additive and excluded from the comparison because it did not exist in the source snapshot. Any non-empty `diff -r` output or non-zero status is truncation, alteration, or an operational failure and FAILS the phase; a missing `diff -r` also FAILS the phase.
+
+The portable destination guard rejects a destination that already exists before either move attempt; it does not provide an atomic cross-process no-clobber guarantee. Do not add a suffix, overwrite, merge, delete, or otherwise choose a destination automatically.
+
+### Historical Malformed Nesting Recovery (Manual Only)
+
+This guidance is only for the historical malformed shape `archive/YYYY-MM-DD-{change-name}/{change-name}/`. Run this block manually only after inspecting the paths:
+
+```bash
+active_source="openspec/changes/{change-name}"
+outer_destination="openspec/changes/archive/YYYY-MM-DD-{change-name}"
+nested_source="$outer_destination/{change-name}"
+
+if [ -e "$active_source" ] || [ -L "$active_source" ] ||
+   [ ! -d "$outer_destination" ] || [ -L "$outer_destination" ] ||
+   [ ! -d "$nested_source" ] || [ -L "$nested_source" ]; then
+  printf 'historical archive recovery refused: active source must be absent, and outer destination and nested source must be real directories; all paths remain unchanged. Resolve the ambiguous shape manually.\n' >&2
+  exit 1
+fi
+
+mv "$nested_source" "$active_source"
+```
+
+Never automatically delete, overwrite, or merge the outer archive directory. If the active source exists or is a symlink, the outer destination or nested source is not a real directory, or the shape is otherwise ambiguous, stop and resolve the paths manually. After the active source is restored and the collision is resolved, rerun this archive step.
 
 ### Step 4: Verify Archive
 

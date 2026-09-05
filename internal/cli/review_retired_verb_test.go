@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -10,6 +12,55 @@ import (
 // "CLI verb dispatch loses cases... An unknown verb must return the
 // existing `unknown review command %q`, never a panic or silent no-op").
 // One test per retired verb, added in the same slice that retires it.
+
+// TestReviewRetiredVerbAdvisoryIsUnknownCommand verifies both former advisory
+// command shapes refuse before they can alter the fixture's source or shared
+// Git-common-dir authority.
+func TestReviewRetiredVerbAdvisoryIsUnknownCommand(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, contextArgs, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	handle := contextArgs[slices.Index(contextArgs, "--repository-context")+1]
+	lens := contextArgs[slices.Index(contextArgs, "--lens")+1]
+	sourceBefore := [3]string{
+		runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"),
+		runReviewCLIGit(t, repo, "rev-parse", "HEAD"),
+		runReviewCLIGit(t, repo, "diff", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"),
+	}
+	authorityBefore := snapshotAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "prompt", args: []string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "claude-code"}},
+		{name: "validate", args: []string{"advisory", "validate", "--repository-context", handle, "--lens", lens, "--input", "result.json"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview(test.args, &output)
+			if err == nil {
+				t.Fatal("retired verb advisory was accepted, want unknown-command refusal")
+			}
+			if want := `unknown review command "advisory"`; err.Error() != want {
+				t.Fatalf("retired verb advisory error = %q, want %q", err.Error(), want)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("retired verb advisory wrote output before refusing: %q", output.String())
+			}
+			if sourceAfter := [3]string{
+				runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"),
+				runReviewCLIGit(t, repo, "rev-parse", "HEAD"),
+				runReviewCLIGit(t, repo, "diff", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"),
+			}; sourceAfter != sourceBefore {
+				t.Fatalf("retired verb advisory mutated tracked source: before=%q after=%q", sourceBefore, sourceAfter)
+			}
+			if authorityAfter := snapshotAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(authorityAfter, authorityBefore) {
+				t.Fatalf("retired verb advisory mutated review authority: before=%#v after=%#v", authorityBefore, authorityAfter)
+			}
+		})
+	}
+}
 
 // TestReviewRetiredVerbReconcileAuthorityIsUnknownCommand is WU7's (S3a)
 // threat-matrix proof: once RunReviewReconcileAuthority and its dispatch

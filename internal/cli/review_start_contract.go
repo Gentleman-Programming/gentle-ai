@@ -13,8 +13,12 @@ const ReviewIntegrationStartSchemaV1 = "gentle-ai.review-integration.start/v1"
 const ReviewIntegrationStartSchemaIDV1 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/start.schema.json"
 const ReviewIntegrationStartSchemaV2 = "gentle-ai.review-integration.start/v2"
 const ReviewIntegrationStartSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/start-v2.schema.json"
-const ReviewIntegrationStartSchema = "gentle-ai.review-integration.start/v3"
-const ReviewIntegrationStartSchemaID = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/start.schema.json"
+const ReviewIntegrationStartSchemaV3 = "gentle-ai.review-integration.start/v3"
+const ReviewIntegrationStartSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/start.schema.json"
+const ReviewIntegrationStartSchemaV4 = "gentle-ai.review-integration.start/v4"
+const ReviewIntegrationStartSchemaIDV4 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/start-v4.schema.json"
+const ReviewIntegrationStartSchema = ReviewIntegrationStartSchemaV4
+const ReviewIntegrationStartSchemaID = ReviewIntegrationStartSchemaIDV4
 
 // ReviewIntegrationStartResult is the explicitly negotiated START response.
 // The legacy ReviewFacadeStartResult remains byte- and schema-compatible.
@@ -41,6 +45,8 @@ type ReviewIntegrationStartResult struct {
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	RepositoryContext   *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
+	Acknowledgement     *ReviewTransitionExecution                    `json:"acknowledgement,omitempty"`
+	NextTransition      *ReviewNextTransition                         `json:"next_transition,omitempty"`
 }
 
 // ReviewRepositoryContextReference is the path-free provider context that a
@@ -52,7 +58,7 @@ type ReviewRepositoryContextReference struct {
 	TargetIdentity string `json:"target_identity"`
 }
 
-func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment reviewtransaction.RiskAssessment, targetMode reviewtransaction.TargetKind, frozenContext *reviewtransaction.FrozenCandidateContext, repositoryContext *ReviewRepositoryContextReference, contracts ...string) (ReviewIntegrationStartResult, error) {
+func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment reviewtransaction.RiskAssessment, targetMode reviewtransaction.TargetKind, frozenContext *reviewtransaction.FrozenCandidateContext, repositoryContext *ReviewRepositoryContextReference, nextTransition *ReviewNextTransition, contracts ...string) (ReviewIntegrationStartResult, error) {
 	assessment, err := reviewStartAssessmentForFrozenAuthority(legacy, assessment)
 	if err != nil {
 		return ReviewIntegrationStartResult{}, err
@@ -75,6 +81,10 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 		Projection: legacy.Projection, ChangedFiles: legacy.ChangedFiles, ChangedLines: legacy.ChangedLines,
 		CorrectionBudget: legacy.CorrectionBudget, RiskReasons: append([]reviewtransaction.RiskReason{}, assessment.Reasons...),
 		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, RepositoryContext: repositoryContext,
+	}
+	if !legacyTransport {
+		result.Acknowledgement = legacy.Acknowledgement
+		result.NextTransition = nextTransition
 	}
 	if targetMode == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = targetMode
@@ -136,7 +146,7 @@ func reviewStartAssessmentForFrozenAuthority(legacy ReviewFacadeStartResult, ass
 	if assessment.Level == legacy.RiskLevel {
 		return assessment, nil
 	}
-	if legacy.Action == string(reviewtransaction.CompactStartResumed) && legacy.RiskLevel == reviewtransaction.RiskMedium &&
+	if (legacy.Action == "resumed" || legacy.Action == "replayed") && legacy.RiskLevel == reviewtransaction.RiskMedium &&
 		assessment.Level == reviewtransaction.RiskHigh && len(assessment.Reasons) > 0 && assessment.Reasons[0].Path != "" &&
 		validateReviewStartLenses(legacy.RiskLevel, legacy.SelectedLenses) == nil {
 		assessment.Level, assessment.DominantLens = legacy.RiskLevel, ""
@@ -160,18 +170,29 @@ func reviewStartAssessmentForFrozenAuthority(legacy ReviewFacadeStartResult, ass
 
 func (result ReviewIntegrationStartResult) Validate() error {
 	legacyTransport := result.Schema == ReviewIntegrationStartSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := result.Schema == ReviewIntegrationStartSchema && result.Contract == ReviewIntegrationContractV2
+	// Frozen start/v3 payloads (the pinned contract fixture and historical
+	// captures) remain decodable; only the live start/v4 identity carries the
+	// provider-issued status continuation.
+	nativeGitTransport := (result.Schema == ReviewIntegrationStartSchemaV4 || result.Schema == ReviewIntegrationStartSchemaV3) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.start" {
 		return errors.New("invalid negotiated START identity")
 	}
 	if strings.TrimSpace(result.LineageID) == "" || result.SelectedLenses == nil || result.RiskReasons == nil || result.ArtifactSubjects == nil {
 		return errors.New("negotiated START response is incomplete")
 	}
-	switch result.Action {
-	case string(reviewtransaction.CompactStartCreated), string(reviewtransaction.CompactStartResumed),
-		string(reviewtransaction.CompactStartReuseReceipt), string(reviewtransaction.CompactStartBlocked):
-	default:
-		return fmt.Errorf("unsupported negotiated START action %q", result.Action)
+	switch {
+	case legacyTransport:
+		switch result.Action {
+		case "created", "resumed", "closed", "reuse-receipt", "blocked-scope-action":
+		default:
+			return fmt.Errorf("unsupported negotiated v1 START action %q", result.Action) // refusal:by-design world-action: a provider-built v1 START action outside the published enum is a contract implementation defect; only a code fix can make it representable
+		}
+	case nativeGitTransport:
+		switch result.Action {
+		case "created", "replayed", "closed":
+		default:
+			return fmt.Errorf("unsupported negotiated v2 START action %q", result.Action) // refusal:by-design world-action: a provider-built v2 START action outside the published enum is a contract implementation defect; only a code fix can make it representable
+		}
 	}
 	if result.Projection != reviewtransaction.ProjectionWorkspace && result.Projection != reviewtransaction.ProjectionStaged {
 		return fmt.Errorf("unsupported negotiated START projection %q", result.Projection)
@@ -215,9 +236,40 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		return errors.New("negotiated START selected lenses require frozen candidate context")
 	}
 	needsRepositoryContext := result.State == reviewtransaction.StateReviewing &&
-		(result.Action == string(reviewtransaction.CompactStartCreated) || result.Action == string(reviewtransaction.CompactStartResumed))
+		(result.Action == "created" || result.Action == "resumed" || result.Action == "replayed")
 	if needsRepositoryContext != (result.RepositoryContext != nil) {
 		return errors.New("negotiated START repository context does not match the active reviewing authority")
+	}
+	needsNextTransition := result.Schema == ReviewIntegrationStartSchemaV4 && needsRepositoryContext
+	if needsNextTransition != (result.NextTransition != nil) {
+		return errors.New("negotiated START status continuation does not match the active reviewing authority") // refusal:by-design world-action: a reviewing start/v4 must publish its exact provider-issued re-entry and no other START may carry one
+	}
+	if result.NextTransition != nil {
+		if result.NextTransition.ReasonCode != "review_status_required" ||
+			result.NextTransition.Kind != reviewNextTransitionExecute || result.NextTransition.Execute == nil ||
+			result.NextTransition.Execute.Operation != "review.status" {
+			return errors.New("negotiated START status continuation is not the reviewing re-entry") // refusal:by-design world-action: only a provider code fix can publish the exact follow-up STATUS invocation
+		}
+		if err := result.NextTransition.Validate(); err != nil {
+			return err
+		}
+		binding := result.NextTransition.Execute.Binding
+		if binding.LineageID != result.LineageID ||
+			result.RepositoryContext != nil && binding.TargetIdentity != result.RepositoryContext.TargetIdentity {
+			return errors.New("negotiated START status continuation does not bind the reviewing authority") // refusal:by-design world-action: only a provider code fix can bind the continuation to its frozen authority
+		}
+	}
+	needsAcknowledgement := nativeGitTransport && result.Action == "closed" && result.State == reviewtransaction.StateApproved
+	if needsAcknowledgement != (result.Acknowledgement != nil) {
+		return errors.New("negotiated START acknowledgement does not match the approved zero-lens authority") // refusal:by-design world-action: STATUS must re-render the exact pending acknowledgement from active authority
+	}
+	if result.Acknowledgement != nil {
+		if err := validateReviewApprovedAcknowledgementExecution(*result.Acknowledgement); err != nil {
+			return err
+		}
+		if result.Acknowledgement.Binding.LineageID != result.LineageID {
+			return errors.New("negotiated START acknowledgement does not bind the approved zero-lens authority") // refusal:by-design world-action: STATUS must re-render the exact pending acknowledgement from active authority
+		}
 	}
 	if needsRepositoryContext {
 		if len(result.ArtifactSubjects) != len(result.SelectedLenses) {

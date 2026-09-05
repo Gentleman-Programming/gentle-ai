@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -336,5 +338,101 @@ func TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs(t *testing.T)
 		if _, ok := rootSet[want]; !ok {
 			t.Errorf("ConfigRootsForBackup() missing %q in roots %v", want, roots)
 		}
+	}
+}
+
+// ─── DiscoverSelected ────────────────────────────────────────────────────
+
+// writeInstalledAgentsState persists an install state listing only ids.
+func writeInstalledAgentsState(t *testing.T, home string, ids ...model.AgentID) {
+	t.Helper()
+	installed := make([]string, 0, len(ids))
+	for _, id := range ids {
+		installed = append(installed, string(id))
+	}
+	if err := state.Write(home, state.InstallState{InstalledAgents: installed}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+}
+
+// TestDiscoverSelected_HonoursSelectionInBothDirections is the regression test
+// Scope is the intersection: an agent installed but never
+// selected is excluded (the reported bug — Codex and Cursor were rewritten on
+// every sync), and an agent selected but not installed is excluded too, so
+// selection never conjures a config directory that is not there.
+func TestDiscoverSelected_HonoursSelectionInBothDirections(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	codexDir := filepath.Join(home, ".codex")
+	cursorDir := filepath.Join(home, ".cursor")
+	for _, dir := range []string{opencodeDir, codexDir, cursorDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+	// .claude is selected below but deliberately never created on disk.
+	writeInstalledAgentsState(t, home, model.AgentOpenCode, model.AgentClaudeCode)
+
+	reg := newStubRegistry(t,
+		stubAdapter{agent: model.AgentOpenCode, configDir: opencodeDir},
+		stubAdapter{agent: model.AgentCodex, configDir: codexDir},
+		stubAdapter{agent: model.AgentCursor, configDir: cursorDir},
+		stubAdapter{agent: model.AgentClaudeCode, configDir: filepath.Join(home, ".claude")},
+	)
+
+	got := DiscoverSelected(reg, home)
+
+	if len(got) != 1 || got[0].ID != model.AgentOpenCode {
+		t.Fatalf("DiscoverSelected() = %v, want only %q", got, model.AgentOpenCode)
+	}
+}
+
+// TestReadSelectionScope is the semantic matrix shared by every selection
+// consumer. Only an explicit configured-empty selection is authoritative; missing
+// and incidental state retain filesystem fallback, while unreadable state fails
+// closed.
+func TestReadSelectionScope(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		state     *state.InstallState
+		malformed bool
+		wantMode  SelectionScopeMode
+		wantIDs   []model.AgentID
+	}{
+		{name: "missing state falls back to filesystem", wantMode: SelectionScopeFilesystemFallback},
+		{name: "unreadable state fails closed", malformed: true, wantMode: SelectionScopeUnavailable},
+		{name: "configured empty selection is authoritative", state: &state.InstallState{SelectionConfigured: true}, wantMode: SelectionScopeConfigured},
+		{name: "cooldown state falls back to filesystem", state: &state.InstallState{LastUpdateCheck: &now}, wantMode: SelectionScopeFilesystemFallback},
+		{name: "non-empty selection is authoritative", state: &state.InstallState{InstalledAgents: []string{"opencode", "codex"}}, wantMode: SelectionScopeConfigured, wantIDs: []model.AgentID{model.AgentOpenCode, model.AgentCodex}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tt.malformed {
+				if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(state.Path(home), []byte("{not json"), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			} else if tt.state != nil {
+				if err := state.Write(home, *tt.state); err != nil {
+					t.Fatalf("state.Write: %v", err)
+				}
+			}
+
+			got := ReadSelectionScope(home)
+			if got.Mode != tt.wantMode || len(got.AgentIDs) != len(tt.wantIDs) {
+				t.Fatalf("ReadSelectionScope() = %+v, want mode %v and IDs %v", got, tt.wantMode, tt.wantIDs)
+			}
+			for i, want := range tt.wantIDs {
+				if got.AgentIDs[i] != want {
+					t.Errorf("ReadSelectionScope().AgentIDs[%d] = %q, want %q", i, got.AgentIDs[i], want)
+				}
+			}
+		})
 	}
 }

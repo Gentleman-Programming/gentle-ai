@@ -1,6 +1,6 @@
-# Contributing to Gentle AI
+# Contributing to Gentle AI™
 
-Thank you for your interest in contributing to **Gentle AI** (`gga`) — a Go TUI installer for AI agent environments.
+Thank you for your interest in contributing to **Gentle AI** (`gentle-ai`) — a Go CLI/TUI ecosystem configurator for AI coding agents.
 
 Before you dive in, please read this guide fully. We have a structured workflow to keep the project organized and maintainable.
 
@@ -9,9 +9,11 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 ## Table of Contents
 
 - [Issue-First Workflow](#issue-first-workflow)
+- [AI-Assisted Contributions](#ai-assisted-contributions)
 - [Label System](#label-system)
 - [Development Setup](#development-setup)
 - [Testing](#testing)
+- [Running the Cross-Lane Battery](#running-the-cross-lane-battery)
 - [Commit Convention](#commit-convention)
 - [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
 - [Pull Request Rules](#pull-request-rules)
@@ -26,7 +28,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 This project follows a strict issue-first workflow:
 
 1. **Open an issue** using the appropriate template ([Bug Report](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml) or [Feature Request](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml))
-2. **Wait for approval** — a maintainer will add the `status:approved` label when the issue is ready to be worked on
+2. **Wait for approval** — work may begin only when the issue has `status:approved` under the canonical issue-creation workflow contract. Without a current direct instruction and target-host capability granting the exact action, comment and wait.
 3. **Comment on the issue** to let others know you're working on it
 4. **Open a PR** referencing the approved issue
 
@@ -41,6 +43,21 @@ Start at the **[Community Roadmap](docs/community-roadmap.md)**.
 Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, carries `status:approved` so a PR can be opened, and is unclaimed. Comment that you are taking it and go.
 
 An issue **without** that label is usually waiting on information (`status:needs-info`) or on an architectural decision (`status:needs-design`). Those want discussion first — implementing before the decision lands means the work gets thrown away.
+
+## AI-Assisted Contributions
+
+**AI assistance is allowed, but you must understand and own the complete submission.** Before opening a PR:
+
+- [ ] Confirm the change matches the approved issue scope.
+- [ ] Inspect every changed line.
+- [ ] Remove invented, unverifiable, or unrelated output.
+- [ ] Identify the responsible cause or invariant; confirm the fix resolves it rather than masking or shifting the symptom.
+- [ ] Remove duplicate authority, unnecessary abstractions, and unrelated complexity; keep the fix proportionate.
+- [ ] Run applicable tests and report the actual outcomes.
+- [ ] Be ready to explain the design and tradeoffs.
+- [ ] Disclose material AI assistance in the PR.
+
+For disclosure boundaries, required details, attribution rules, and reviewer expectations, see the canonical [AI-Assisted Contribution Policy](AI_POLICY.md).
 
 ## Label System
 
@@ -88,20 +105,20 @@ An issue **without** that label is usually waiting on information (`status:needs
 
 - Go 1.25.10+
 - Docker (for E2E tests)
-- Git
+- Git 2.38+
 
 ### Clone and Build
 
 ```bash
 git clone https://github.com/Gentleman-Programming/gentle-ai.git
 cd gentle-ai
-go build -o gga .
+go build -o gentle-ai ./cmd/gentle-ai
 ```
 
 ### Run Locally
 
 ```bash
-./gga
+./gentle-ai
 ```
 
 ---
@@ -140,6 +157,33 @@ chmod +x docker-test.sh
 
 > ⚠️ E2E tests spin up containers to simulate real installation environments. They may take a few minutes to complete.
 
+### Running the Cross-Lane Battery
+
+The cross-lane battery ([`scripts/cross-lane-battery.sh`](scripts/cross-lane-battery.sh), implemented in [`scripts/crosslane/`](scripts/crosslane/)) is a local, out-of-CI regression net. It drives one real `gentle-ai` binary end to end across the supported agent-host review integration boundaries. It is deliberately not wired into CI because its optional tiers spend real reviewer model runs and real host sessions.
+
+Build a binary first, then run the tier you can afford:
+
+```bash
+go build -o /tmp/gentle-ai ./cmd/gentle-ai
+./scripts/cross-lane-battery.sh --binary /tmp/gentle-ai [--with-model] [--with-host] [--keep-work]
+```
+
+| Tier | Flags | Cost profile | What it covers |
+|------|-------|--------------|----------------|
+| Deterministic | none (always runs) | Free and fast | The real OpenCode transport plugin bytes through an emulated Task hook surface (host-frame emulation), one full Claude-lane lifecycle plus a medium-candidate consent round-trip, and schema conformance of every captured envelope against `contracts/review-integration/`. |
+| Model | `--with-model` | Real reviewer model runs (model spend) | Additionally runs the real compiled claude-code reviewer runtime. |
+| Host | `--with-host` | Real host sessions plus model spend | Spawns real host applications: `codex exec` through the compiled Codex adapter, the installed `gentle-pi` print-mode Pi relay, and a headless `opencode run` session in a sandboxed HOME with the real transport plugin. |
+
+Behavior to expect:
+
+- Every host command is bounded (12 minutes per host command, 20 minutes per non-host command), so a hung host surfaces as a bounded lane failure instead of hanging the battery.
+- The run prints a PASS/FAIL/SKIP table per check and the real model runs spent; any failing check makes the battery exit non-zero. Known-red checks still fail — red at the exact seam where a defect escaped is the battery working.
+- The scratch work root is removed on every exit, including failing ones; pass `--keep-work` to keep it for inspection.
+
+Run the battery before merging changes that touch a review-lifecycle surface (facade, transports, contracts, host adapters) and after building a new binary you intend to exercise. Running it and reporting red checks is itself a valuable contribution — open an issue with the PASS/FAIL/SKIP table and the binary/commit you tested.
+
+The sibling `gentle-pi` repository carries its own battery: `pnpm test:cross-lane` in [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi).
+
 ### Benchmark Validation
 
 [`bench/`](bench/README.md) is a separate Go module, so root-module tests do not validate it. For benchmark-module changes, run these commands from `bench/`:
@@ -150,17 +194,10 @@ go vet ./...
 go test ./...
 ```
 
-The portable core includes `j52` through `j56` and `j58` under a normal product
-binary. `j57` is source-coupled, so build its tagged product binary from the
-repository root, then run it from `bench/`:
-
-```bash
-# From the repository root.
-go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
-
-# From bench/, after building gentle-ai-bench above.
-./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed
-```
+The `model-picker` axis (`j97`) and damaged-store crash-recovery journeys use
+the `bench_fixture` product build tag. Build that product binary from the
+repository root only when running those opt-in axes; their exact driven commands
+are documented in [`bench/README.md`](bench/README.md).
 
 Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
 
@@ -316,6 +353,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] Commits follow Conventional Commits format
 - [ ] Code is self-reviewed
+- [ ] I understand and take responsibility for the complete submission, and have disclosed any material AI assistance in the PR
 
 ### PR Title
 
@@ -334,7 +372,7 @@ All PRs go through automated checks:
 |-------|-----------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
-| **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
+| **Check Issue Has status:approved** | The linked issue has `status:approved` under the canonical issue-creation workflow contract |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |
 | **Unit Tests** | `go test ./...` passes |
 | **E2E Tests** | `cd e2e && ./docker-test.sh` passes |
