@@ -274,6 +274,9 @@ func TestLowRiskReviewPathPolicyUsesCanonicalPOSIXOperationalBoundaries(t *testi
 		{name: "MDX", stat: DiffStat{Path: "docs/guide.mdx", Additions: 1, NewMode: "100644"}, want: true},
 		{name: "source comment", stat: DiffStat{Path: "internal/view.go", Additions: 1, NewMode: "100644"}},
 		{name: "binary Markdown", stat: DiffStat{Path: "docs/guide.md", Binary: true, NewMode: "100644"}},
+		{name: "binary image asset", stat: DiffStat{Path: "assets/logo.png", Binary: true, NewMode: "100644"}, want: true},
+		{name: "binary image under agents", stat: DiffStat{Path: ".claude/agents/logo.png", Binary: true, NewMode: "100644"}},
+		{name: "executable image", stat: DiffStat{Path: "assets/logo.png", Binary: true, NewMode: "100755"}},
 		{name: "symlink Markdown", stat: DiffStat{Path: "docs/guide.md", Additions: 1, NewMode: "120000"}},
 		{name: "gitlink Markdown", stat: DiffStat{Path: "docs/guide.md", Additions: 1, NewMode: "160000"}},
 		{name: "executable Markdown", stat: DiffStat{Path: "docs/guide.md", Additions: 1, NewMode: "100755"}},
@@ -719,6 +722,10 @@ func TestPassiveDocumentContentFailsClosedUpward(t *testing.T) {
 		{name: "interpreter directive", path: "docs/guide.md", content: "#!/bin/sh\necho hi\n"},
 		{name: "embedded NUL byte", path: "docs/guide.md", content: "prose\x00more\n"},
 		{name: "invalid UTF-8", path: "docs/guide.md", content: "prose \xff\xfe\n"},
+		{name: "binary image bytes", path: "assets/logo.png", content: "\x89PNG\r\n\x1a\n\x00\x00", want: true},
+		{name: "image wearing a shebang", path: "assets/logo.png", content: "#!/bin/sh\necho hi\n"},
+		{name: "text wearing an image extension", path: "assets/logo.png", content: "prose\n"},
+		{name: "archive wearing an image extension", path: "assets/logo.jpg", content: "PK\x03\x04payload"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
