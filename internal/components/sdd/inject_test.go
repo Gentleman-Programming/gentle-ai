@@ -4839,12 +4839,12 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
 	}
-	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	settings, err := os.ReadFile(kilocodeAdapter().SettingsPath(home))
 	if err != nil {
 		t.Fatalf("ReadFile(Kilocode settings) error = %v", err)
 	}
-	var root map[string]any
-	if err := json.Unmarshal(settings, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(settings)
+	if err != nil {
 		t.Fatalf("Unmarshal(Kilocode settings) error = %v", err)
 	}
 	agentMap, ok := root["agent"].(map[string]any)
@@ -5797,8 +5797,8 @@ func TestKilocodeSharedLegacyMigrationsPreserveTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := map[string]any{}
-	if err := json.Unmarshal(payload, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(payload)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, exists := root["agents"]; exists {

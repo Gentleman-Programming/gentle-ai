@@ -96,7 +96,7 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(homeDir, ".config", "kilo", "opencode.json")
+	return ResolveConfigPath(homeDir)
 }
 
 // --- Config strategies ---
@@ -111,10 +111,10 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 
 // --- MCP ---
 
-func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
-	// Kilocode merges into opencode.json, but this provides the path
+func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
+	// Kilocode merges into its global config file, but this provides the path
 	// for components that use the separate-file strategy fallback.
-	return filepath.Join(homeDir, ".config", "kilo", "opencode.json")
+	return ResolveConfigPath(homeDir)
 }
 
 // --- Optional capabilities ---

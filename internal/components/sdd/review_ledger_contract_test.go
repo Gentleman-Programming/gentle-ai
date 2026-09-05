@@ -351,7 +351,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".config", "kilo", "plugins", "review-result-artifacts.ts")); !os.IsNotExist(err) {
 		t.Fatalf("Kilo installed OpenCode-only review plugin: %v", err)
 	}
-	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	settings, err := os.ReadFile(kilocodeAdapter().SettingsPath(home))
 	if err != nil {
 		t.Fatal(err)
 	}

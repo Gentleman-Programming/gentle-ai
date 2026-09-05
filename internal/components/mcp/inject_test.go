@@ -371,14 +371,15 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 
 func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeaders(t *testing.T) {
 	tests := []struct {
-		name     string
-		adapter  agents.Adapter
-		existing string
+		name        string
+		adapter     agents.Adapter
+		settingsRel string
+		existing    string
 	}{
 		{name: "OpenCode malformed settings", adapter: opencodeAdapter(), existing: `{malformed`},
-		{name: "KiloCode malformed settings", adapter: kilocodeAdapter(), existing: `{malformed`},
+		{name: "KiloCode malformed JSON settings", adapter: kilocodeAdapter(), settingsRel: filepath.Join(".config", "kilo", "opencode.json"), existing: `{malformed`},
 		{name: "OpenCode malformed headers", adapter: opencodeAdapter(), existing: `{"mcp":{"context7":{"headers":`},
-		{name: "KiloCode malformed headers", adapter: kilocodeAdapter(), existing: `{"mcp":{"context7":{"headers":`},
+		{name: "KiloCode malformed JSON headers", adapter: kilocodeAdapter(), settingsRel: filepath.Join(".config", "kilo", "opencode.json"), existing: `{"mcp":{"context7":{"headers":`},
 		{name: "OpenCode non-object headers", adapter: opencodeAdapter(), existing: `{"mcp":{"context7":{"headers":["secret"]}}}`},
 		{name: "KiloCode non-object headers", adapter: kilocodeAdapter(), existing: `{"mcp":{"context7":{"headers":"secret"}}}`},
 	}
@@ -386,12 +387,17 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			configPath := tt.adapter.SettingsPath(home)
+			var configPath string
+			if tt.settingsRel != "" {
+				configPath = filepath.Join(home, tt.settingsRel)
+			} else {
+				configPath = tt.adapter.SettingsPath(home)
+			}
 			if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 				t.Fatalf("MkdirAll error = %v", err)
 			}
 			if err := os.WriteFile(configPath, []byte(tt.existing), 0o644); err != nil {
-				t.Fatalf("WriteFile(opencode.json) error = %v", err)
+				t.Fatalf("WriteFile(settings) error = %v", err)
 			}
 
 			first, err := Inject(home, home, tt.adapter)
@@ -419,27 +425,39 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 	}
 }
 
-func TestInjectOpenCodeRejectsMalformedJSONCSettingsWithoutReplacingBytes(t *testing.T) {
-	home := t.TempDir()
-	adapter := opencodeAdapter()
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
-	original := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(settings dir) error = %v", err)
-	}
-	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
-		t.Fatalf("WriteFile(opencode.jsonc) error = %v", err)
+func TestInjectOpenCodeAndKilocodeRejectMalformedJSONCSettingsWithoutReplacingBytes(t *testing.T) {
+	tests := []struct {
+		name        string
+		adapter     agents.Adapter
+		settingsRel string
+	}{
+		{name: "OpenCode", adapter: opencodeAdapter(), settingsRel: filepath.Join(".config", "opencode", "opencode.jsonc")},
+		{name: "KiloCode", adapter: kilocodeAdapter(), settingsRel: filepath.Join(".config", "kilo", "kilo.jsonc")},
 	}
 
-	if _, err := Inject(home, home, adapter); err == nil {
-		t.Fatal("Inject() error = nil, want refusal for malformed opencode.jsonc")
-	}
-	after, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(opencode.jsonc) error = %v", err)
-	}
-	if !bytes.Equal(after, original) {
-		t.Fatalf("malformed opencode.jsonc was replaced:\n got: %q\nwant: %q", after, original)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settingsRel)
+			original := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings dir) error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
+				t.Fatalf("WriteFile(%s) error = %v", tt.settingsRel, err)
+			}
+
+			if _, err := Inject(home, home, tt.adapter); err == nil {
+				t.Fatalf("Inject() error = nil, want refusal for malformed %s", tt.settingsRel)
+			}
+			after, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tt.settingsRel, err)
+			}
+			if !bytes.Equal(after, original) {
+				t.Fatalf("malformed %s was replaced:\n got: %q\nwant: %q", tt.settingsRel, after, original)
+			}
+		})
 	}
 }
 

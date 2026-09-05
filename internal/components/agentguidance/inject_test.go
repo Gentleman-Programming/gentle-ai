@@ -580,7 +580,7 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 func deliveredGuidance(t *testing.T, path string) string {
 	t.Helper()
 
-	if strings.HasSuffix(path, ".json") {
+	if strings.HasSuffix(path, ".json") || strings.HasSuffix(path, ".jsonc") {
 		return orchestratorPrompt(t, path)
 	}
 	return readFile(t, path)

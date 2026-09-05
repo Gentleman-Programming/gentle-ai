@@ -1964,19 +1964,20 @@ func TestInjectOpenCode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T
 
 func TestInjectKilocode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T) {
 	home := t.TempDir()
+	adapter := kilocodeAdapter()
 
-	_, err := Inject(home, kilocodeAdapter(), model.PersonaGentleman)
+	_, err := Inject(home, adapter, model.PersonaGentleman)
 	if err != nil {
 		t.Fatalf("Inject(gentleman) error = %v", err)
 	}
 
-	settingsPath := filepath.Join(home, ".config", "kilo", "opencode.json")
+	settingsPath := adapter.SettingsPath(home)
 	data, _ := os.ReadFile(settingsPath)
 	if !strings.Contains(string(data), `"gentleman"`) {
-		t.Fatal("precondition: kilo/opencode.json should have gentleman agent after Gentleman install")
+		t.Fatal("precondition: kilo config should have gentleman agent after Gentleman install")
 	}
 
-	result, err := Inject(home, kilocodeAdapter(), model.PersonaNeutral)
+	result, err := Inject(home, adapter, model.PersonaNeutral)
 	if err != nil {
 		t.Fatalf("Inject(neutral) error = %v", err)
 	}
@@ -1986,10 +1987,10 @@ func TestInjectKilocode_SwitchGentlemanToNeutral_CleansAgentOverlay(t *testing.T
 
 	data, err = os.ReadFile(settingsPath)
 	if err != nil {
-		t.Fatalf("ReadFile kilo/opencode.json error = %v", err)
+		t.Fatalf("ReadFile kilo config error = %v", err)
 	}
 	if strings.Contains(string(data), `"gentleman"`) {
-		t.Fatal("kilo/opencode.json must not have gentleman agent key after switching to Neutral")
+		t.Fatal("kilo config must not have gentleman agent key after switching to Neutral")
 	}
 }
 
