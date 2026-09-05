@@ -1158,6 +1158,13 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 		writeOpenCodeChatText(writer, "review task group complete")
 	}))
 	defer server.Close()
+	// OpenCode resolves its provider SDKs against the npm registry, and the
+	// organic environment's cold HOME cache forces that fetch onto the network,
+	// where it races the 30s scheduling barrier below. Route external egress
+	// through the suite's denying proxy so registry attempts fail fast instead
+	// of hanging; the loopback provider stays direct through NO_PROXY.
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
 
 	configDirectory := t.TempDir()
 	pluginDirectory := filepath.Join(configDirectory, "plugins")
@@ -1198,6 +1205,14 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 		"OPENCODE_CONFIG_DIR="+configDirectory,
 		"OPENCODE_CONFIG_CONTENT="+string(config),
 		"PATH="+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"HTTP_PROXY="+proxy.URL,
+		"HTTPS_PROXY="+proxy.URL,
+		"ALL_PROXY="+proxy.URL,
+		"http_proxy="+proxy.URL,
+		"https_proxy="+proxy.URL,
+		"all_proxy="+proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
 	)
 	type runResult struct {
 		output []byte
@@ -1214,7 +1229,23 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 	case result := <-run:
 		t.Fatalf("OpenCode ended before every foreground reviewer reached the barrier: %v\n%s", result.err, result.output)
 	case <-time.After(30 * time.Second):
-		t.Fatal("OpenCode did not schedule all four foreground reviewer requests")
+		// Snapshot the scheduling state without the handler lock so the failure
+		// message reports which stage stalled instead of naming a component that
+		// may never have executed.
+		lock.Lock()
+		arrivedNow, inFlightNow, maxInFlightNow, settledNow := arrived, inFlight, maxInFlight, settled
+		titleAnsweredNow, tasksIssuedNow, handlerFailureNow := titleAnswered, tasksIssued, handlerFailure
+		arrivalsNow := make(map[string]int, len(arrivals))
+		for lens, count := range arrivals {
+			arrivalsNow[lens] = count
+		}
+		lock.Unlock()
+		if arrivedNow == 0 && !titleAnsweredNow {
+			t.Fatalf("OpenCode never issued its first provider request within 30s; its runtime bootstrap did not complete (external egress attempts denied: %d). Diagnostics: arrivals=%v maxInFlight=%d settled=%d tasksIssued=%t handlerFailure=%q",
+				proxy.deniedRequests(), arrivalsNow, maxInFlightNow, settledNow, tasksIssuedNow, handlerFailureNow)
+		}
+		t.Fatalf("OpenCode did not schedule all four foreground reviewer requests within 30s: arrived=%d arrivals=%v inFlight=%d maxInFlight=%d settled=%d titleAnswered=%t tasksIssued=%t handlerFailure=%q externalEgressDenied=%d",
+			arrivedNow, arrivalsNow, inFlightNow, maxInFlightNow, settledNow, titleAnsweredNow, tasksIssuedNow, handlerFailureNow, proxy.deniedRequests())
 	}
 	lock.Lock()
 	if maxInFlight != len(wantLenses) {
@@ -1242,6 +1273,7 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 	if !issued || completed != len(wantLenses) {
 		t.Fatalf("grouped OpenCode 4R task state issued=%t completed=%d, want true/%d\n%s", issued, completed, len(wantLenses), result.output)
 	}
+	t.Logf("OpenCode 4R egress isolation: %d external attempts denied by the loopback proxy; runtime no longer races the npm registry against the scheduling barrier", proxy.deniedRequests())
 	acknowledgement := organicApprovedAcknowledgementStatus(t, harness, lineage)
 	harness.assertReviewAcknowledgedAndBurned(lineage, organicFinalizeResult{
 		LineageID: lineage, State: organicStateApproved, Acknowledgement: acknowledgement,
