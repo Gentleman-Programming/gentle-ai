@@ -514,6 +514,7 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 }
 
 func TestStatusCollectsInvalidatedSameTargetCurrentChangesRecoveryAuthorization(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	var output bytes.Buffer
