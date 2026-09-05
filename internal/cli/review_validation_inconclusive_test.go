@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -108,6 +109,34 @@ func TestTargetedValidatorRawAdmissionRejectsUnknownNestedFields(t *testing.T) {
 	}
 }
 
+// TestTargetedValidatorRawAdmissionRejectsRegressionFalseWithoutRegressions is
+// the RED-first proof for issue #4214: a targeted validator reported
+// correction_regression.passed=false while every evidence string said there
+// was no regression, and admission escalated the lineage to terminal
+// native_stop_required on the false alarm. Raw admission must instead refuse
+// with a plain (non-inconclusive) error so the compiled-runtime capture
+// spends its existing one-shot corrective retry on it.
+func TestTargetedValidatorRawAdmissionRejectsRegressionFalseWithoutRegressions(t *testing.T) {
+	request := targetedValidatorAdmissionRequest(t)
+	valid := string(providerTargetedValidationPayload(t, request.ValidationRequest))
+	original := `"correction_regression":{"passed":true,"evidence":["correction regression passed"]}`
+	// An empty {} or blank-claim entry must also be refused (issue #4214).
+	refused := func(replacement string) {
+		payload := strings.Replace(valid, original, replacement, 1)
+		if payload == valid {
+			t.Fatal("could not flip correction_regression to a failed verdict")
+		}
+		if _, _, err := reviewProviderAdmitTargetedValidatorRaw(request, []byte(payload)); err == nil {
+			t.Fatal("admitted an inconsistent regression verdict")
+		} else if errors.Is(err, errReviewTargetedValidationInconclusive) {
+			t.Fatalf("regression-verdict inconsistency was misclassified as inconclusive: %v", err)
+		}
+	}
+	refused(`"correction_regression":{"passed":false,"evidence":["there was no regression in the corrected candidate"]}`)
+	refused(`"correction_regression":{"passed":false,"evidence":["saw a regression"],"regressions":[{}]}`)
+	refused(`"correction_regression":{"passed":false,"evidence":["saw a regression"],"regressions":[{"location":"internal/example.go:1","claim":"   ","proof_refs":["ref"]}]}`)
+}
+
 func TestTargetedValidatorEvidenceRejectsDigestAndBindingMismatch(t *testing.T) {
 	request := reviewtransaction.TargetedValidationRequest{
 		RequestHash:              "sha256:" + strings.Repeat("1", 64),
@@ -186,8 +215,13 @@ func TestFacadeValidationKeepsGenuineFailedVerdicts(t *testing.T) {
 		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
 	}
 	result := facadeValidationResult{
-		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance criteria re-ran and passed"}},
-		CorrectionRegression:          facadeValidationCheck{Passed: false, Evidence: []string{"regression TestReviewStatus failed: exit status 1 on the corrected candidate"}},
+		OriginalCriteria: facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance criteria re-ran and passed"}},
+		CorrectionRegression: facadeValidationCheck{Passed: false, Evidence: []string{"regression TestReviewStatus failed: exit status 1 on the corrected candidate"},
+			Regressions: []reviewtransaction.Regression{{
+				Location: "internal/review_status_test.go:42", Claim: "the correction reintroduced the flaky race in TestReviewStatus",
+				ProofRefs: []string{"internal/review_status_test.go:42 exit status 1 on the corrected candidate"},
+			}},
+		},
 		TargetedValidationRequestHash: request.RequestHash,
 		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
 	}
@@ -197,5 +231,52 @@ func TestFacadeValidationKeepsGenuineFailedVerdicts(t *testing.T) {
 	}
 	if converted.CorrectionRegression.Passed {
 		t.Fatal("genuine failed verdict was not preserved")
+	}
+}
+
+// TestFacadeValidationKeepsGenuineFailedVerdictsWithRegressions extends the
+// fixture above (issue #4214): a failed correction_regression verdict that
+// names its regressions must still compact successfully, while the same
+// verdict without any named regression -- the exact defect #4214 reported,
+// where every evidence string claimed no regression yet passed was false --
+// must be refused instead of silently admitted and escalated.
+func TestFacadeValidationKeepsGenuineFailedVerdictsWithRegressions(t *testing.T) {
+	request := reviewtransaction.TargetedValidationRequest{
+		RequestHash:              "sha256:" + strings.Repeat("1", 64),
+		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
+	}
+	base := facadeValidationResult{
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance criteria re-ran and passed"}},
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+	}
+
+	named := base
+	named.CorrectionRegression = facadeValidationCheck{
+		Passed: false, Evidence: []string{"there was no regression in the corrected candidate; the following was nonetheless observed"},
+		Regressions: []reviewtransaction.Regression{{
+			ID: "R4-4214", Location: "internal/example.go:12", Claim: "the fix reintroduced the TOCTOU window",
+			ProofRefs: []string{"internal/example.go:12 lock released before the guarded read"},
+		}},
+	}
+	if _, err := named.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err != nil {
+		t.Fatalf("compact conversion rejected a genuine failed verdict with a named regression: %v", err)
+	}
+
+	unnamed := base
+	unnamed.CorrectionRegression = facadeValidationCheck{Passed: false, Evidence: []string{"there was no regression"}}
+	if _, err := unnamed.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err == nil || !strings.Contains(err.Error(), "without naming any regression") {
+		t.Fatalf("compact conversion admitted a regression-failed verdict without any named regression: %v", err)
+	}
+
+	// compact() must also refuse an empty {} or blank-claim entry.
+	for _, blank := range []reviewtransaction.Regression{
+		{}, {Location: "internal/example.go:12", Claim: "  ", ProofRefs: []string{"ref"}},
+	} {
+		incomplete := base
+		incomplete.CorrectionRegression = facadeValidationCheck{Passed: false, Evidence: []string{"saw a regression"}, Regressions: []reviewtransaction.Regression{blank}}
+		if _, err := incomplete.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err == nil {
+			t.Fatal("compact conversion admitted an incompletely named regression entry")
+		}
 	}
 }

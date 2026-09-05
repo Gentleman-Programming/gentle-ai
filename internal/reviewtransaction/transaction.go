@@ -161,6 +161,18 @@ type FollowUp struct {
 	ProofRefs   []string `json:"proof_refs"`
 }
 
+// Regression names one observed regression backing a failed
+// correction_regression verdict (issue #4214): a targeted validator that
+// reports the check failed without naming what regressed produced no
+// verdict, and admitting it anyway escalated lineages on false alarms.
+// Location, Claim, and ProofRefs are mandatory; only ID may be omitted.
+type Regression struct {
+	ID        string   `json:"id,omitempty"`
+	Location  string   `json:"location"`
+	Claim     string   `json:"claim"`
+	ProofRefs []string `json:"proof_refs"`
+}
+
 type FindingEvidence struct {
 	FindingID string            `json:"finding_id"`
 	Severity  string            `json:"severity,omitempty"`
