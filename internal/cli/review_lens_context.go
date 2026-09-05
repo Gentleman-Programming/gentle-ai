@@ -104,6 +104,14 @@ const (
 	reviewLensContextConflictAction = "this frozen lens slot already recorded a reviewer context produced by a different mechanism, and audit history is never rewritten; " +
 		"produce this lens context by the same mechanism that already recorded one, or start a review for a fresh candidate by running " +
 		reviewNextTransitionRefreshCommandV21
+	// reviewLensContextCollectionClosedAction is issue #4019's fix: once
+	// collection closes (correction_required, validating, escalated, approved,
+	// ...), no next_transition ever re-offers lens-context tokens again, so the
+	// generic "refresh the transition, then run this operation again" hint is
+	// unfollowable. The admitted findings that closed collection are readable
+	// through review status's own provider-owned surface instead.
+	reviewLensContextCollectionClosedAction = "reviewer lens context is produced only while its capture is still open; a capture already closed to correction, validation, escalation, or approval has no lens-context tokens to refresh -- run " +
+		reviewNextTransitionRefreshCommandV21 + " and read the admitted findings from its next_transition.correction_request.findings instead of retrying lens-context"
 )
 
 // RunReviewLensContext emits the finished reviewer lens context for one
@@ -377,8 +385,13 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_authority_unavailable", reviewLensContextRefreshAction)
 	}
 	state := record.State
-	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity ||
-		state.CapturePhaseRevision != binding.Revision {
+	if state.InitialSnapshot.Identity != binding.TargetIdentity {
+		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
+	}
+	if state.State != reviewtransaction.StateReviewing {
+		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_unavailable_after_collection", reviewLensContextCollectionClosedAction)
+	}
+	if state.CapturePhaseRevision != binding.Revision {
 		return reviewLensAuthority{}, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
 	}
 	order, err := reviewLensContextSelectedOrder(state.SelectedLenses, lens)
