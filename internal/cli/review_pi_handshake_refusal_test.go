@@ -23,8 +23,8 @@ import (
 // message and concluded v2.4.0 had dropped Pi support, when the fix was one
 // exported variable.
 const piRelayHandshakeRefusalCause = "the active runtime is not eligible for immutable receipt review; " +
-	"pi is eligible only while GENTLE_PI_REVIEW_RELAY_CONTRACT declares the exact relay contract this binary admits, " +
-	"which the gentle-pi host exports on every invocation it relays; export it in this shell and re-run"
+	"pi is eligible only while GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1 is exported, " +
+	"which the gentle-pi host does on every invocation it relays; export it in this shell and re-run"
 
 // TestPiTransportRefusalNamesTheHandshakeNotTheKillSwitch runs the exact
 // documented shell entry point both ways round: the identical command must
