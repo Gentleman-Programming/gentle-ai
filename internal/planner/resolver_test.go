@@ -7,7 +7,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-func TestResolverAddsMissingDependenciesInOrder(t *testing.T) {
+// TestResolverSkillsAloneResolvesWithoutSDDOrEngram guards #3554: selecting
+// only the Skills component must not force-install SDD (and transitively
+// Engram). Standalone skill files have no hard dependency on SDD; the
+// SDD-authored skills are installed by the SDD component itself.
+//
+// This test replaces the old TestResolverAddsMissingDependenciesInOrder,
+// which encoded the previous (buggy) expansion of Skills into
+// [Engram, SDD, Skills].
+func TestResolverSkillsAloneResolvesWithoutSDDOrEngram(t *testing.T) {
 	resolver := NewResolver(MVPGraph())
 
 	selection := model.Selection{
@@ -24,12 +32,55 @@ func TestResolverAddsMissingDependenciesInOrder(t *testing.T) {
 		t.Fatalf("Resolve() agents = %v", plan.Agents)
 	}
 
-	if !reflect.DeepEqual(plan.OrderedComponents, []model.ComponentID{model.ComponentEngram, model.ComponentSDD, model.ComponentSkills}) {
-		t.Fatalf("Resolve() ordered components = %v", plan.OrderedComponents)
+	if !reflect.DeepEqual(plan.OrderedComponents, []model.ComponentID{model.ComponentSkills}) {
+		t.Fatalf("Resolve() ordered components = %v, want [skills] only", plan.OrderedComponents)
 	}
 
-	if !reflect.DeepEqual(plan.AddedDependencies, []model.ComponentID{model.ComponentEngram, model.ComponentSDD}) {
-		t.Fatalf("Resolve() added dependencies = %v", plan.AddedDependencies)
+	if len(plan.AddedDependencies) != 0 {
+		t.Fatalf("Resolve() added dependencies = %v, want none", plan.AddedDependencies)
+	}
+}
+
+// TestResolverSDDAloneStillPullsEngram guards that removing Skills' hard
+// dependency on SDD did not weaken SDD's own dependency on Engram.
+func TestResolverSDDAloneStillPullsEngram(t *testing.T) {
+	resolver := NewResolver(MVPGraph())
+
+	selection := model.Selection{
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+
+	plan, err := resolver.Resolve(selection)
+	if err != nil {
+		t.Fatalf("Resolve() returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(plan.OrderedComponents, []model.ComponentID{model.ComponentEngram, model.ComponentSDD}) {
+		t.Fatalf("Resolve() ordered components = %v, want [engram, sdd]", plan.OrderedComponents)
+	}
+
+	if !reflect.DeepEqual(plan.AddedDependencies, []model.ComponentID{model.ComponentEngram}) {
+		t.Fatalf("Resolve() added dependencies = %v, want [engram]", plan.AddedDependencies)
+	}
+}
+
+// TestResolverSkillsAndSDDBothSelectedDeterministicOrderNoDuplicates guards a
+// #3554 review finding: dropping Skills' hard dependency on SDD must not
+// regress selecting both together — order stays deterministic, once each.
+func TestResolverSkillsAndSDDBothSelectedDeterministicOrderNoDuplicates(t *testing.T) {
+	resolver := NewResolver(MVPGraph())
+	selection := model.Selection{
+		Components: []model.ComponentID{model.ComponentSkills, model.ComponentSDD},
+	}
+
+	plan, err := resolver.Resolve(selection)
+	if err != nil {
+		t.Fatalf("Resolve() returned error: %v", err)
+	}
+
+	want := []model.ComponentID{model.ComponentEngram, model.ComponentSDD, model.ComponentSkills}
+	if !reflect.DeepEqual(plan.OrderedComponents, want) {
+		t.Fatalf("Resolve() ordered components = %v, want %v (sdd before skills, no duplicates)", plan.OrderedComponents, want)
 	}
 }
 
