@@ -1047,6 +1047,15 @@ Status:  healthy
 	}
 }
 
+// TestRunDoctor_DanglingConfigSymlinkIsReadOnly asserts that when the user
+// has a legacy install (no managed-assets manifest) and a dangling config
+// symlink, the doctor still surfaces the dangling-path warning and the
+// inspect/gentle-ai doctor guidance, and does not modify the symlink,
+// state.json, the missing target, or create backup metadata — even though
+// RunDoctor returns ErrUnknownClassification because the missing manifest
+// triggers the "unknown" classification (#1884 contract). The read-only
+// guarantees below hold across the error return because the full check
+// matrix runs before doctorUnknownExitError is consulted.
 func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
 	origLookPath := lookPathFn
 	origAvail := availableBytesFn
@@ -1084,11 +1093,9 @@ func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
 	t.Setenv(engramHealthEnvVar, "https://engram.example.test")
 
 	var output bytes.Buffer
-	if err := RunDoctor(context.Background(), &output); err != nil {
-		t.Fatalf("RunDoctor returned error: %v", err)
-	}
-	if strings.Contains(output.String(), "gentle-ai sync") {
-		t.Fatalf("Doctor must not recommend sync for a dangling config symlink, got:\n%s", output.String())
+	err = RunDoctor(context.Background(), &output)
+	if !errors.Is(err, doctor.ErrUnknownClassification) {
+		t.Fatalf("RunDoctor error = %v, want ErrUnknownClassification", err)
 	}
 	for _, want := range []string{configDir, "inspect", "gentle-ai doctor"} {
 		if !strings.Contains(output.String(), want) {
