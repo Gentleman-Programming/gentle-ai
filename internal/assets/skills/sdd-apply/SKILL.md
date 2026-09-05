@@ -306,6 +306,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - Read max 3 files at a time — if you need more to understand a task, stop and report `needs-explore`
 - Keep edits minimal and localized to task files
 - Consume structured status when provided; stop on `blocked`, `all_done`, or unsafe `actionContext`
+- Apply any `rules.apply` from `openspec/config.yaml` before implementing a task
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
 - Focused remediation is the sole `all_done` exception and must bind evidence to the exact failed_evidence_revision from native status

@@ -63,6 +63,19 @@ func TestSDDApplyRoutesToIndependentVerifyBeforeOptionalReview(t *testing.T) {
 	}
 }
 
+func TestSDDApplyModelSectionsPreserveRulesApplyContract(t *testing.T) {
+	content := assets.MustRead("skills/sdd-apply/SKILL.md")
+	for _, capability := range []string{"capable", "small"} {
+		section := extractModelSection(content, capability)
+		if section == content {
+			t.Fatalf("sdd-apply has no model-%s section marker", capability)
+		}
+		if !strings.Contains(section, "rules.apply") {
+			t.Fatalf("sdd-apply model-%s section omits the openspec/config.yaml rules.apply instruction", capability)
+		}
+	}
+}
+
 func TestSDDVerifyRunsWithoutReviewArtifacts(t *testing.T) {
 	content := assets.MustRead("skills/sdd-verify/SKILL.md")
 	for _, want := range []string{
