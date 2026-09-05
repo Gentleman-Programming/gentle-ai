@@ -588,10 +588,11 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
+func TestInjectAntigravityWritesMCPToGlobalConfig(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := Inject(home, antigravityAdapter())
+	adapter := antigravityAdapter()
+	result, err := Inject(home, adapter)
 	if err != nil {
 		t.Fatalf("Inject(antigravity) error = %v", err)
 	}
@@ -599,17 +600,22 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
-	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
-	content, err := os.ReadFile(cliMCPPath)
+	globalMCPPath := adapter.MCPConfigPath(home, "engram")
+	content, err := os.ReadFile(globalMCPPath)
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
+		t.Fatalf("ReadFile(%q) error = %v", globalMCPPath, err)
+	}
+
+	oldCLIPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+	if _, err := os.Stat(oldCLIPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy CLI MCP path %q should not be written for antigravity; stat err = %v", oldCLIPath, err)
 	}
 	text := string(content)
 	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
 		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
 	}
-	if strings.Contains(text, `--tools=`) {
-		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
+	if !strings.Contains(text, `"--tools=agent"`) {
+		t.Fatalf("Antigravity should use Engram's MCP invocation with --tools=agent; got:\n%s", text)
 	}
 
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
@@ -623,8 +629,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
 	}
 	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	if !strings.Contains(pluginMCPText, `"mcp"`) || !strings.Contains(pluginMCPText, `"--tools=agent"`) {
+		t.Fatalf("Antigravity Engram plugin MCP config should expose Engram MCP tools via --tools=agent; got:\n%s", pluginMCPText)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
@@ -657,8 +663,45 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	}
 }
 
+func TestInjectAntigravityIDEVariantReceivesPlugin(t *testing.T) {
+	home := t.TempDir()
+
+	// Create the IDE path on disk so the adapter's real os.Stat resolves to the IDE variant.
+	ideDir := filepath.Join(home, ".gemini", "antigravity-ide")
+	if err := os.MkdirAll(ideDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", ideDir, err)
+	}
+
+	result, err := Inject(home, antigravity.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity-IDE) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject(antigravity-IDE) changed = false")
+	}
+
+	// Plugin files must land inside the IDE variant directory.
+	for _, rel := range []string{
+		filepath.Join("plugins", "gentle-ai-engram", "plugin.json"),
+		filepath.Join("plugins", "gentle-ai-engram", "mcp_config.json"),
+		filepath.Join("plugins", "gentle-ai-engram", "hooks.json"),
+	} {
+		p := filepath.Join(ideDir, rel)
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("expected plugin file at IDE variant path %q; stat error = %v", p, err)
+		}
+	}
+
+	// Legacy CLI directory must NOT be created.
+	legacyCLI := filepath.Join(home, ".gemini", "antigravity-cli")
+	if _, err := os.Stat(legacyCLI); !os.IsNotExist(err) {
+		t.Fatalf("legacy CLI directory %q should not exist when IDE variant is active; stat err = %v", legacyCLI, err)
+	}
+}
+
 func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
 	home := t.TempDir()
+
 
 	first, err := Inject(home, antigravityAdapter())
 	if err != nil {

@@ -177,11 +177,12 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### Antigravity
 
-- Skills at `~/.gemini/antigravity/skills/` (native Antigravity feature)
-- MCP config at `~/.gemini/antigravity/mcp_config.json`
+- Skills at `<variantDir>/skills/` where `<variantDir>` is the resolved Antigravity variant (IDE → Desktop → `~/.gemini/antigravity-cli/` fallback)
+- Engram plugin at `~/.gemini/config/plugins/gentle-ai-engram/` (when migrated) or `<variantDir>/plugins/gentle-ai-engram/`
+- MCP config at `~/.gemini/config/mcp_config.json` (shared global location)
 - System prompt appended to `~/.gemini/GEMINI.md` (shared with Gemini CLI — collision check warns if both are installed)
 - Mission Control handles built-in sub-agent delegation (Browser, Terminal) automatically
-- Settings managed via the IDE's Agent settings UI, not via `settings.json`
+- Settings initialized via `<variantDir>/settings.json` but primarily managed via the IDE's Agent settings UI
 
 ### Kimi Code
 

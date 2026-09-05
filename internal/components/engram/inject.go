@@ -131,11 +131,6 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 		}
 	} else {
 		args := []string{"mcp", "--tools=agent"}
-		if agentID == model.AgentAntigravity {
-			// Antigravity should launch the default Engram MCP server without
-			// narrowing the exposed tool set.
-			args = []string{"mcp"}
-		}
 		cfg = map[string]any{
 			"mcpServers": map[string]any{
 				"engram": map[string]any{
@@ -269,8 +264,8 @@ func ensureJSONFileIfMissing(path string) (filemerge.WriteResult, error) {
 	return filemerge.WriteFileAtomic(path, []byte("{}\n"), 0o644)
 }
 
-func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []string, error) {
-	pluginDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
+func installAntigravityEngramPlugin(variantDir, engramCommand string) (bool, []string, error) {
+	pluginDir := filepath.Join(variantDir, "plugins", "gentle-ai-engram")
 	files := make([]string, 0, 3)
 	changed := false
 
@@ -389,7 +384,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			changed = changed || settingsWrite.Changed
 			files = append(files, settingsTarget)
 
-			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
+			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(adapter.GlobalConfigDir(configHomeDir), engramCommand)
 			if pluginErr != nil {
 				return InjectionResult{}, pluginErr
 			}
