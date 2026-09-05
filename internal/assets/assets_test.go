@@ -463,8 +463,9 @@ func TestSDDCompactUntrackedRecoveryUsesNativeDelta(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(orchestrator, "Settle defines no other flag") {
-		t.Fatal("managed orchestrator still falsely claims settle has no recovery flags")
+	if strings.Contains(orchestrator, "Settle defines no other flag") ||
+		!strings.Contains(status, "retry compact `sdd-attempt settle` with the same `<settle-id>`") {
+		t.Fatal("managed compact recovery guidance is stale or incomplete")
 	}
 }
 
