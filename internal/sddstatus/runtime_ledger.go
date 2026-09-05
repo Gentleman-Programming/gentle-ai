@@ -248,6 +248,9 @@ type RuntimeAttempt struct {
 	ProcessEvidence            string             `json:"process_evidence,omitempty"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+	// InvalidatedWithoutDelivery mirrors the finish event's own field of the
+	// same name; see runtimeFinishEvent.InvalidatedWithoutDelivery.
+	InvalidatedWithoutDelivery bool `json:"invalidated_without_delivery,omitempty"`
 }
 
 type RuntimeHandoff struct {
@@ -679,6 +682,15 @@ type runtimeFinishEvent struct {
 	ProcessEvidence            string             `json:"process_evidence"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+	// InvalidatedWithoutDelivery records, AT SETTLE TIME, whether this
+	// settlement met #3152's refund shape (failed, HarnessInvalidated, zero
+	// changed lines). Replay reads this stored decision rather than
+	// recomputing the predicate against the historical outcome/harness_
+	// disposition/changed_lines triple: those facts predate this field, and
+	// recomputing at replay would retroactively refund budget a maintainer
+	// already spent under the accounting live at commit time. Absent (false)
+	// on every record from before this field existed, preserving its charge.
+	InvalidatedWithoutDelivery bool `json:"invalidated_without_delivery,omitempty"`
 
 	// IntendedUntracked is the selection this settlement actually overlaid,
 	// which is the begin selection unless the caller declared a new one here.
@@ -1014,6 +1026,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
 			ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, changedLines),
+			// Decided once, here, at settle time (R3): see
+			// runtimeFinishEvent.InvalidatedWithoutDelivery.
+			InvalidatedWithoutDelivery: runtimeAttemptInvalidatedWithoutDelivery(request.Outcome, request.HarnessDisposition, changedLines),
 			IntendedUntracked:          &intendedUntracked,
 			DeclaredUntrackedInventory: declaredInventory,
 		}
@@ -2536,6 +2551,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.ProcessEvidence = event.ProcessEvidence
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
+	attempt.InvalidatedWithoutDelivery = event.InvalidatedWithoutDelivery
 	// A rescope successor inherits its predecessor's recorded selection, so the
 	// settled attempt must report the one it actually settled with, not the one
 	// it began with (#3806).
@@ -2548,7 +2564,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	// The objective budget refunds a call that advanced the unit, up to the
 	// configured ceiling. LifetimeAttempts is never refunded, so the chain still
 	// records every call that ran.
-	if runtimeAttemptDeliveredIncrement(event.Outcome, event.ChangedLines) && replay.Status.CumulativeAttempts > 0 &&
+	if runtimeAttemptRefundsBudget(event.Outcome, event.ChangedLines, event.InvalidatedWithoutDelivery) && replay.Status.CumulativeAttempts > 0 &&
 		runtimeRefundedAttempts(replay.Status) <= replay.Status.Objective.MaxAttempts {
 		replay.Status.CumulativeAttempts--
 	}
@@ -2580,27 +2596,51 @@ func runtimeRefundedAttempts(status RuntimeStatus) int {
 	refunded := 0
 	for _, attempt := range status.Attempts {
 		if attempt.ObjectiveID == status.Objective.ID && attempt.ObjectiveGeneration == status.Objective.Generation &&
-			runtimeAttemptDeliveredIncrement(attempt.Outcome, attempt.ChangedLines) {
+			runtimeAttemptRefundsBudget(attempt.Outcome, attempt.ChangedLines, attempt.InvalidatedWithoutDelivery) {
 			refunded++
 		}
 	}
 	return refunded
 }
 
-// runtimeAttemptDeliveredIncrement reports whether a settlement earned back the
-// call it spent. #3815: RuntimeAttempt was one provider call, one unit of
-// budget and one unit of work at once, so a work unit that legitimately needs
-// several calls exhausted its objective by accounting rather than by failure —
-// #3808, where two calls delivered zero production and ended at
-// decision_required.
+// runtimeAttemptRefundsBudget is the ONE union of both grounds that earn an
+// attempt's call back, checked at both sites that must agree: the mutation
+// (applyRuntimeFinishEvent) and the cap count (runtimeRefundedAttempts).
 //
-// An interrupted call that left measurable increment advanced the unit, so it
-// does not discharge an attempt against the objective. A call that delivered
-// nothing is still spent, which is what keeps max_attempts bounding calls that
-// produce nothing. The refund cannot run away: earning one costs delivered
-// lines, and cumulative changed lines remain capped by the objective.
+// Ground 1, runtimeAttemptDeliveredIncrement (#3815): an interrupted call
+// that left measurable increment advanced the unit instead of discharging an
+// attempt (RuntimeAttempt was one call, one budget unit and one work unit at
+// once — #3808). Recomputed fresh on every replay from outcome/changed-lines,
+// because that rule has not changed since those fields were first written.
+//
+// Ground 2, invalidatedWithoutDelivery (#3152): a FAILED settlement marked
+// HarnessInvalidated with zero changed lines means the harness never ran the
+// work at all. Unlike ground 1, this is NOT recomputed here: that predicate
+// did not exist when older records were committed, and recomputing it during
+// replay would retroactively refund budget a maintainer already spent under
+// the accounting live at commit time (R3). It is instead the exact decision
+// runtimeAttemptInvalidatedWithoutDelivery made ONCE, at settle time, and
+// stored on the event/attempt (runtimeFinishEvent.InvalidatedWithoutDelivery)
+// — false, and so charged, on every record from before that field existed.
+//
+// Neither ground runs away: ground 1's refund always costs delivered lines,
+// capped by the objective; both grounds share runtimeRefundedAttempts' own
+// MaxAttempts cap, so an objective earns back at most MaxAttempts calls total.
+func runtimeAttemptRefundsBudget(outcome AttemptOutcome, changedLines int, invalidatedWithoutDelivery bool) bool {
+	return runtimeAttemptDeliveredIncrement(outcome, changedLines) || invalidatedWithoutDelivery
+}
+
+// runtimeAttemptDeliveredIncrement is refund ground 1; see
+// runtimeAttemptRefundsBudget.
 func runtimeAttemptDeliveredIncrement(outcome AttemptOutcome, changedLines int) bool {
 	return outcome == AttemptInterrupted && changedLines > 0
+}
+
+// runtimeAttemptInvalidatedWithoutDelivery is refund ground 2's predicate,
+// evaluated ONLY at settle time to decide the marker a new record commits.
+// Never call this during replay; see runtimeAttemptRefundsBudget.
+func runtimeAttemptInvalidatedWithoutDelivery(outcome AttemptOutcome, harnessDisposition HarnessDisposition, changedLines int) bool {
+	return outcome == AttemptFailed && harnessDisposition == HarnessInvalidated && changedLines == 0
 }
 
 // applyRuntimeGrantEvent accumulates a grant's canonical roots into the

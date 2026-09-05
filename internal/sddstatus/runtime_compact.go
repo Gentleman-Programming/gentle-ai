@@ -76,10 +76,17 @@ type CompactAttemptResult struct {
 // BeginAttemptRequest. Work-unit scope (WorkUnit, EvidenceGoal, MaxAttempts,
 // MaxChangedLines) is owned exactly once, by the embedded BeginAttemptRequest
 // (decision 9 / CON-08: RuntimeObjective's BeginAttemptRequest is the single
-// work-unit-scope owner). ExpectedRevision is inert here — Acquire always
-// derives it from ledger replay state before use — but embedding rather than
-// re-declaring keeps the projection from drifting out of sync with its one
-// source of truth the way the pre-Wave-4 parallel struct did (#2133/#2151).
+// work-unit-scope owner). ExpectedRevision is an OPTIONAL validated CAS input
+// (#4160): empty leaves every existing acquire path byte-for-byte unchanged --
+// Acquire still derives the value it actually begins against from ledger
+// replay state -- but a non-empty value is checked against that same live
+// revision before the begin it guards, and refused with the identical typed
+// stale-revision shape every legacy verb's own store.mutate already returns.
+// This is what lets reset/status guidance point a caller at acquire's own
+// --expected-revision instead of a legacy verb the compact flow otherwise
+// never touches. Embedding rather than re-declaring keeps the projection from
+// drifting out of sync with its one source of truth the way the pre-Wave-4
+// parallel struct did (#2133/#2151).
 type CompactAcquireRequest struct {
 	BeginAttemptRequest
 
@@ -216,6 +223,14 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if request.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
 		return CompactAttemptResult{}, errors.New("remediates_evidence_revision must be sha256; rerun `gentle-ai sdd-attempt acquire` with --remediates-evidence-revision sha256:<64-lowercase-hex>")
 	}
+	// #4160: a caller naming both the ownership-continuation proof and the CAS
+	// input must not name two different ledger states at once. A matching
+	// token already identifies the exact revision it continues, so this is a
+	// pure input-shape check -- no ledger read is needed to catch the
+	// contradiction.
+	if request.Token != "" && begin.ExpectedRevision != "" && request.Token != begin.ExpectedRevision {
+		return CompactAttemptResult{}, errors.New("token and expected_revision disagree; rerun `gentle-ai sdd-attempt acquire` with --token and --expected-revision naming the same revision, or only one of them")
+	}
 
 	replay, err := store.load()
 	if err != nil {
@@ -258,6 +273,16 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if request.RemediatesEvidenceRevision != "" &&
 		!failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
 		return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
+	}
+	// #4160: a caller-declared --expected-revision is CAS-checked against the
+	// live ledger revision before this fresh begin claims it -- the same
+	// guarantee every legacy verb's own store.mutate already enforces -- and
+	// refused with the identical typed stale-revision shape. Empty stays a
+	// no-op, so every acquire call that never declares one is unaffected.
+	if begin.ExpectedRevision != "" && begin.ExpectedRevision != replay.Status.Revision {
+		return store.compactMutationFailure(&RuntimeRevisionConflictError{
+			Expected: begin.ExpectedRevision, Current: replay.Status.Revision,
+		}, false, begin), nil
 	}
 	begin.ExpectedRevision = replay.Status.Revision
 	started, err := store.Begin(ctx, begin)

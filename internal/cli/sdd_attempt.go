@@ -215,7 +215,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "acquire":
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
-				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+				ExpectedRevision: *expected,
+				RequestID:        *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, IntendedUntracked: intended,
 			},
 			Token:                      *token,
@@ -369,6 +370,14 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
 		{name: "token", usage: "optional; token from an earlier acquire to continue that active attempt"},
+		// #4160: acquire is a compact verb, but reset/status guidance may point
+		// a caller here after a mutation that moved the ledger, exactly as it
+		// points legacy callers at begin/finish/reset with --expected-revision.
+		// Optional and empty by default so every existing acquire call is
+		// unaffected; when given, it is validated as a CAS input against the
+		// live runtime revision, and must agree with --token when both are
+		// present, since a matching token already names that same revision.
+		{name: "expected-revision", usage: "optional; validated CAS input, empty or sha256:<64 lowercase hex>; must equal the current runtime revision, and must agree with --token when both are given"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "work-unit", required: true, usage: "required; single-line label, at most 160 bytes"},
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
