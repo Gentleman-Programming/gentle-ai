@@ -1239,6 +1239,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime)
 			result.NextTransition = &transition
 		}
+		// v1 envelopes keep their pinned schema; only v2 projects the root action.
+		if *contract == ReviewIntegrationContractV2 {
+			result.Action = reviewRootActionForTransition(result.Action, result.NextTransition)
+		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
 			// The forecast is structural only: it rides the v2 envelope's
 			// `forecast` field and is never narrated to stderr, because a

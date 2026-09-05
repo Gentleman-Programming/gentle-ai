@@ -218,7 +218,10 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/status-v7.schema.json":         "5a5e4a7052689f97767d02625ad7572628cc4d5a62677497f569fb2d78608aa2",
+		// issue #3928: the root action enum gained "collect" and "execute", the
+		// v7 envelope's projection of a live transaction whose next_transition
+		// is mandatory. Deliberate, not drift.
+		"schemas/status-v7.schema.json":         "c856784a603601e14103c26adb484cb0331db1ab29ed14b208f45f435a61cea6",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {

@@ -421,6 +421,25 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	return input, nil
 }
 
+// reviewRootActionForTransition keeps the envelope's root `action` in
+// agreement with `next_transition`: a stop that still mandates a collect or
+// an execute is not a stop (#3928). Every other action is left as native
+// status decided it, so preflight (`start`), recovery, repair, and genuine
+// terminal stops are untouched.
+func reviewRootActionForTransition(action reviewtransaction.TargetStatusAction, transition *ReviewNextTransition) reviewtransaction.TargetStatusAction {
+	if action != reviewtransaction.TargetStatusActionStop || transition == nil {
+		return action
+	}
+	switch transition.Kind {
+	case reviewNextTransitionCollect:
+		return reviewtransaction.TargetStatusActionCollect
+	case reviewNextTransitionExecute:
+		return reviewtransaction.TargetStatusActionExecute
+	default:
+		return action
+	}
+}
+
 func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, runtime ...model.AgentID) ReviewNextTransition {
 	providerRuntime := model.AgentID("")
 	if len(runtime) > 0 && (reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {

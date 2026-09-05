@@ -25,6 +25,12 @@ const (
 	TargetStatusActionSelectLineage   TargetStatusAction = "select_lineage"
 	TargetStatusActionRepairAuthority TargetStatusAction = "repair_authority"
 	TargetStatusActionStop            TargetStatusAction = "stop"
+	// Envelope-only projections: native status keeps "stop" while a compact
+	// review is in flight (only the adapter can project its next capture), and
+	// the public envelope names the mandated transition kind instead, so the
+	// root action never reads as terminal while next_transition is required.
+	TargetStatusActionCollect TargetStatusAction = "collect"
+	TargetStatusActionExecute TargetStatusAction = "execute"
 )
 
 type Replayability string
