@@ -361,8 +361,9 @@ type facadeReviewerResult struct {
 }
 
 type facadeValidationCheck struct {
-	Passed   bool     `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      bool                           `json:"passed"`
+	Evidence    []string                       `json:"evidence"`
+	Regressions []reviewtransaction.Regression `json:"regressions,omitempty"`
 }
 
 type facadeValidationResult struct {
@@ -2392,6 +2393,11 @@ func (result facadeValidationResult) compact(fixDeltaHash string, findingIDs []s
 	}
 	if err := result.conclusive(); err != nil {
 		return reviewtransaction.ScopedValidationResult{}, err
+	}
+	if !result.CorrectionRegression.Passed {
+		if err := reviewProviderValidateFailedRegression(result.CorrectionRegression.Regressions); err != nil {
+			return reviewtransaction.ScopedValidationResult{}, err
+		}
 	}
 	if result.TargetedValidationRequestHash != request.RequestHash || result.CorrectionTargetIdentity != request.CorrectionTargetIdentity {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation result does not bind the provider-owned correction request") // refusal:by-design operator-knowledge: the external validator must echo both bindings from the provider-owned request
