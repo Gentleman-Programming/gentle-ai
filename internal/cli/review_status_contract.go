@@ -572,9 +572,15 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if err != nil {
 			return err
 		}
+		// The capture is bound to the frozen candidate the reviewer event
+		// admitted (reviewAuthorityTargetIdentity), never to result.TargetIdentity,
+		// which tracks whatever the live worktree currently projects. Before
+		// #4094 this recomputed "want" against the live identity, so any
+		// working-tree drift ahead of capture-correction-plan made a correctly
+		// frozen-bound descriptor look unbound and failed STATUS pre_native.
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
 			LineageID: result.Authority.LineageID, Revision: transition.CorrectionRequest.ExpectedRevision,
-			TargetIdentity: result.TargetIdentity, RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
+			TargetIdentity: reviewAuthorityTargetIdentity(result), RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
