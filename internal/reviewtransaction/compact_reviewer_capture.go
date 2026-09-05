@@ -41,8 +41,9 @@ type compactAdmittedRefuterValue struct {
 }
 
 type CompactTargetedValidatorCheckEvidence struct {
-	Passed   bool     `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      bool         `json:"passed"`
+	Evidence    []string     `json:"evidence"`
+	Regressions []Regression `json:"regressions,omitempty"`
 }
 
 // CompactTargetedValidatorEvidence is the canonical observed evidence for one

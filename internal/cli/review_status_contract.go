@@ -175,6 +175,11 @@ type ReviewTargetStatusFrozen struct {
 	Tier                 reviewtransaction.RiskLevel `json:"tier"`
 	OriginalChangedLines int                         `json:"original_changed_lines"`
 	CorrectionBudget     int                         `json:"correction_budget"`
+	// ChangedPathManifestSHA256 is the digest of the frozen candidate's
+	// changed-path manifest, re-derived from the repository at STATUS time.
+	// Per-lens capture inputs carry no manifest any more, so each subject's
+	// digest is bound to this one value instead of to an inlined copy.
+	ChangedPathManifestSHA256 string `json:"changed_path_manifest_sha256,omitempty"`
 }
 
 type ReviewTargetStatusProjection struct {
@@ -359,6 +364,9 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			return err
 		}
 		if err := result.validateNextTransitionTargets(); err != nil {
+			return err
+		}
+		if err := result.validateFrozenManifestBinding(); err != nil {
 			return err
 		}
 		if err := result.validateSubmissionDescriptors(); err != nil {
@@ -572,9 +580,15 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if err != nil {
 			return err
 		}
+		// The capture is bound to the frozen candidate the reviewer event
+		// admitted (reviewAuthorityTargetIdentity), never to result.TargetIdentity,
+		// which tracks whatever the live worktree currently projects. Before
+		// #4094 this recomputed "want" against the live identity, so any
+		// working-tree drift ahead of capture-correction-plan made a correctly
+		// frozen-bound descriptor look unbound and failed STATUS pre_native.
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
 			LineageID: result.Authority.LineageID, Revision: transition.CorrectionRequest.ExpectedRevision,
-			TargetIdentity: result.TargetIdentity, RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
+			TargetIdentity: reviewAuthorityTargetIdentity(result), RepositoryContext: context, RepositoryRoot: result.repositoryRoot,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
@@ -778,13 +792,44 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
 		if err != nil || arguments["target"] != result.Projection.InitialSnapshotIdentity || input.ArtifactSubject == nil ||
-			input.ArtifactSubject.TargetIdentity != result.Projection.InitialSnapshotIdentity || input.ChangedPathManifest == nil ||
-			!reflect.DeepEqual(manifestPathsForStatus(*input.ChangedPathManifest), result.Projection.Paths) {
+			input.ArtifactSubject.TargetIdentity != result.Projection.InitialSnapshotIdentity {
 			return errors.New("negotiated status capture target differs from the frozen target identity")
 		}
-		if result.Contract == ReviewIntegrationContractV1 && (input.CandidateDiff == nil || input.BaseTree != "" || input.CandidateTree != "") ||
+		// issue #3922 / #4199 / gentle-pi#543: the native-git (v2) transport no
+		// longer inlines the manifest on this per-lens input -- it is already
+		// committed to by artifact_subject.changed_path_manifest_sha256 -- so a
+		// nil manifest here is valid for v2. The legacy (v1) transport still
+		// requires it below. When a manifest is present anyway, its paths must
+		// still match the frozen projection.
+		if input.ChangedPathManifest != nil && !reflect.DeepEqual(manifestPathsForStatus(*input.ChangedPathManifest), result.Projection.Paths) {
+			return errors.New("negotiated status capture target differs from the frozen target identity")
+		}
+		if result.Contract == ReviewIntegrationContractV1 && (input.CandidateDiff == nil || input.BaseTree != "" || input.CandidateTree != "" || input.ChangedPathManifest == nil) ||
 			result.Contract == ReviewIntegrationContractV2 && (input.CandidateDiff != nil || input.BaseTree != result.Projection.BaseTree || input.CandidateTree != result.Projection.InitialReviewTree) {
 			return errors.New("negotiated status capture transport differs from its contract") // refusal:by-design world-action: provider-built STATUS mixed negotiated transports and requires a code fix
+		}
+	}
+	return nil
+}
+
+// validateFrozenManifestBinding proves every manifest-less capture input
+// describes the frozen candidate: its subject's manifest digest must equal
+// the envelope's frozen digest, which the facade re-derives from the
+// repository. It fails closed: without that digest a manifest-less input is
+// unbound and the envelope is refused, on every validation path.
+func (result ReviewTargetStatusResult) validateFrozenManifestBinding() error {
+	if result.NextTransition == nil || result.NextTransition.Collect == nil {
+		return nil
+	}
+	for _, input := range result.NextTransition.Collect.Inputs {
+		if input.CaptureOperation != "review.capture-result" || input.ChangedPathManifest != nil || input.ArtifactSubject == nil {
+			continue
+		}
+		if result.Frozen == nil || !validReviewCapabilitySHA256(result.Frozen.ChangedPathManifestSHA256) {
+			return errors.New("negotiated status offers a manifest-less capture without the frozen candidate manifest digest") // refusal:by-design world-action: the provider-built envelope omitted the digest it must publish and requires a code fix
+		}
+		if input.ArtifactSubject.ChangedPathManifestSHA256 != result.Frozen.ChangedPathManifestSHA256 {
+			return errors.New("negotiated status capture subject manifest digest differs from the frozen candidate manifest") // refusal:by-design world-action: the provider-built subject and frozen digest disagree and require a code fix
 		}
 	}
 	return nil
@@ -995,6 +1040,19 @@ func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
 	return nil
 }
 
+// frozenManifestDigestForProjection publishes the digest a manifest-less
+// capture input is bound to, and keeps the projection cross-check the inlined
+// manifest used to carry: the frozen manifest must describe exactly the
+// published projection paths before its digest can vouch for any subject, so
+// a STATUS whose subjects agree with each other but not with `projection.paths`
+// is refused at the provider instead of validating by construction.
+func frozenManifestDigestForProjection(manifest []reviewtransaction.ChangedPathManifestEntry, projectionPaths []string) (string, error) {
+	if !reflect.DeepEqual(manifestPathsForStatus(manifest), projectionPaths) {
+		return "", errors.New("frozen candidate manifest paths differ from the published projection paths") // refusal:by-design world-action: the frozen manifest and the published projection were derived from different candidates and require a code fix
+	}
+	return reviewtransaction.ChangedPathManifestDigest(manifest)
+}
+
 func manifestPathsForStatus(entries []reviewtransaction.ChangedPathManifestEntry) []string {
 	paths := make([]string, len(entries))
 	for index, entry := range entries {
@@ -1111,7 +1169,13 @@ func (transition ReviewNextTransition) Validate() error {
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
-					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
+					// issue #3922 / #4199 / gentle-pi#543: the native-git (v2)
+					// transport no longer requires an inlined manifest on this
+					// per-lens input -- artifact_subject.changed_path_manifest_sha256
+					// already commits to it. The legacy (v1) transport still
+					// requires the manifest, since its capture input carries no
+					// resolvable git tree to re-derive it from.
+					input.ArtifactSubject == nil || legacyTransport && input.ChangedPathManifest == nil ||
 					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
 					providerRuntime != "" && !providerCapture && !hostRelayMaterialize ||
 					hostRelayMaterialize && arguments["materialize"] != "true" ||
@@ -1120,14 +1184,24 @@ func (transition ReviewNextTransition) Validate() error {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
 				}
 				subject := input.ArtifactSubject
-				manifestDigest, manifestErr := reviewtransaction.ChangedPathManifestDigest(*input.ChangedPathManifest)
-				if reviewtransaction.ValidateArtifactSubject(*subject) != nil || manifestErr != nil ||
+				if reviewtransaction.ValidateArtifactSubject(*subject) != nil ||
 					subject.LineageID != arguments["lineage"] || subject.AuthorityRevision != arguments["expected-revision"] ||
 					subject.TargetIdentity != arguments["target"] || subject.Lens != arguments["lens"] || subject.SelectedOrder != order ||
-					subject.ChangedPathManifestSHA256 != manifestDigest ||
 					legacyTransport && subject.CandidateDiffSHA256 != input.CandidateDiff.SHA256 ||
 					nativeGitTransport && (subject.BaseTree != input.BaseTree || subject.CandidateTree != input.CandidateTree) {
 					return errors.New("review capture transition frozen subject or candidate context is invalid")
+				}
+				// When a manifest is present -- always for the legacy transport,
+				// optionally for the native-git transport -- its digest must
+				// still match the subject's committed identity. When absent (the
+				// now-common native-git case), the subject hash alone remains
+				// the binding; this struct-level validator has no repository
+				// access to re-derive the manifest from git.
+				if input.ChangedPathManifest != nil {
+					manifestDigest, manifestErr := reviewtransaction.ChangedPathManifestDigest(*input.ChangedPathManifest)
+					if manifestErr != nil || subject.ChangedPathManifestSHA256 != manifestDigest {
+						return errors.New("review capture transition frozen subject or candidate context is invalid")
+					}
 				}
 				if legacyTransport {
 					if _, diffErr := input.CandidateDiff.Bytes(); diffErr != nil || input.BaseTree != "" || input.CandidateTree != "" {

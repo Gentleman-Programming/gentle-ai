@@ -235,8 +235,9 @@ type providerValidationResultWire struct {
 }
 
 type providerValidationCheckWire struct {
-	Passed   *bool    `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      *bool                          `json:"passed"`
+	Evidence    []string                       `json:"evidence"`
+	Regressions []reviewtransaction.Regression `json:"regressions,omitempty"`
 }
 
 // reviewProviderTargetedValidatorKnownTopLevelJSON allows providers to add
@@ -516,6 +517,13 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	if wire.OriginalCriteria.Passed == nil || wire.CorrectionRegression.Passed == nil || result.FollowUps == nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator result requires passed checks and an explicit follow_ups array") // refusal:by-design operator-knowledge: every targeted validator response must explicitly declare its result
 	}
+	// An inconclusive verdict keeps its own retry ladder (classified below by
+	// conclusive()); only an unnamed or incompletely-named one is refused here.
+	if !*wire.CorrectionRegression.Passed && !reviewtransaction.InconclusiveValidationEvidence(wire.CorrectionRegression.Evidence) {
+		if err := reviewProviderValidateFailedRegression(wire.CorrectionRegression.Regressions); err != nil {
+			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		}
+	}
 	if err := reviewProviderConcreteStrings(result.OriginalCriteria.Evidence, "provider original criteria evidence"); err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
 	}
@@ -612,9 +620,11 @@ func reviewProviderTargetedValidatorEvidence(result facadeValidationResult) revi
 		CorrectionTargetIdentity:      result.CorrectionTargetIdentity,
 		OriginalCriteria: reviewtransaction.CompactTargetedValidatorCheckEvidence{
 			Passed: result.OriginalCriteria.Passed, Evidence: append([]string(nil), result.OriginalCriteria.Evidence...),
+			Regressions: append([]reviewtransaction.Regression(nil), result.OriginalCriteria.Regressions...),
 		},
 		CorrectionRegression: reviewtransaction.CompactTargetedValidatorCheckEvidence{
 			Passed: result.CorrectionRegression.Passed, Evidence: append([]string(nil), result.CorrectionRegression.Evidence...),
+			Regressions: append([]reviewtransaction.Regression(nil), result.CorrectionRegression.Regressions...),
 		},
 		FollowUps: append([]reviewtransaction.FollowUp{}, result.FollowUps...),
 	}
@@ -684,6 +694,24 @@ func reviewProviderConcreteStrings(values []string, label string) error {
 	for index, value := range values {
 		if !reviewProviderConcreteEvidence(value) {
 			return fmt.Errorf("%s[%d] must be concrete", label, index) // refusal:by-design operator-knowledge: replace empty evidence with an observed concrete value
+		}
+	}
+	return nil
+}
+
+// reviewProviderValidateFailedRegression refuses a failed correction_regression
+// verdict naming no regression, or naming one incompletely -- an empty {}
+// entry still satisfies len(regressions)==0's negation (issue #4214).
+func reviewProviderValidateFailedRegression(regressions []reviewtransaction.Regression) error {
+	if len(regressions) == 0 {
+		return errors.New("targeted validator reported a regression verdict without naming any regression") // refusal:by-design operator-knowledge: a failed correction_regression check must name the regression it observed; retry with a named regression or a passing verdict
+	}
+	for index, regression := range regressions {
+		if !reviewProviderConcreteEvidence(regression.Location) || !reviewProviderConcreteEvidence(regression.Claim) {
+			return fmt.Errorf("regressions[%d] requires a concrete location and claim", index) // refusal:by-design operator-knowledge: name the exact location and claim of the observed regression
+		}
+		if err := reviewProviderConcreteStrings(regression.ProofRefs, fmt.Sprintf("regressions[%d] proof_refs", index)); err != nil {
+			return err
 		}
 	}
 	return nil

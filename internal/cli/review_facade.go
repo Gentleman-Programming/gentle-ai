@@ -361,8 +361,9 @@ type facadeReviewerResult struct {
 }
 
 type facadeValidationCheck struct {
-	Passed   bool     `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      bool                           `json:"passed"`
+	Evidence    []string                       `json:"evidence"`
+	Regressions []reviewtransaction.Regression `json:"regressions,omitempty"`
 }
 
 type facadeValidationResult struct {
@@ -889,6 +890,20 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if !requestedLineageOccupied {
 				return reviewPreflightError(fmt.Errorf("review lineage %q is not held by repository %s; rerun the same command from the repository that owns the lineage, or name it: `gentle-ai review status --cwd <repository> --contract %s --next-transition --lineage %s --repository-context %s`", requestedLineage, root, *contract, requestedLineage, requestedContext))
 			}
+			// Issue #4023: the authority store above is scoped to the Git
+			// common dir, so a linked worktree of the same repository also
+			// reports the lineage occupied. Occupancy alone is not proof this
+			// process cwd is the worktree that froze it, so a mismatch must
+			// fail closed the same way the #3932 guard above does instead of
+			// letting the occupied branch evaluate the wrong working tree as
+			// a fresh target for someone else's lineage.
+			foreignWorktree, err := reviewtransaction.ExactReviewLineageForeignWorktree(ctx, root, requestedLineage)
+			if err != nil {
+				return fmt.Errorf("inspect negotiated START lineage worktree binding: %w", err)
+			}
+			if foreignWorktree {
+				return reviewPreflightError(fmt.Errorf("review lineage %q is held by a different worktree of repository %s (expected worktree %s); rerun the same command from the worktree that started the lineage, or name it: `gentle-ai review status --cwd <repository> --contract %s --next-transition --lineage %s --repository-context %s`", requestedLineage, root, reviewDefectReportRedactionMarker, *contract, requestedLineage, requestedContext))
+			}
 		}
 		if *nextTransition && (requestedLineage == "" || !requestedLineageOccupied) {
 			// A free exact selector starts independently. Freeze its target without
@@ -1123,6 +1138,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									artifactErr = frozenErr
 								} else {
 									captureContext, artifactErr = newReviewCaptureContext(record.State, record.State.CapturePhaseRevision, frozen)
+									if artifactErr == nil && result.Frozen != nil {
+										result.Frozen.ChangedPathManifestSHA256, artifactErr = frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+									}
 								}
 							}
 						}
@@ -2392,6 +2410,11 @@ func (result facadeValidationResult) compact(fixDeltaHash string, findingIDs []s
 	}
 	if err := result.conclusive(); err != nil {
 		return reviewtransaction.ScopedValidationResult{}, err
+	}
+	if !result.CorrectionRegression.Passed {
+		if err := reviewProviderValidateFailedRegression(result.CorrectionRegression.Regressions); err != nil {
+			return reviewtransaction.ScopedValidationResult{}, err
+		}
 	}
 	if result.TargetedValidationRequestHash != request.RequestHash || result.CorrectionTargetIdentity != request.CorrectionTargetIdentity {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation result does not bind the provider-owned correction request") // refusal:by-design operator-knowledge: the external validator must echo both bindings from the provider-owned request
