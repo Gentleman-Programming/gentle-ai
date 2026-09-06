@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -137,6 +138,59 @@ func assertEnabledUnmanagedGatePayload(t *testing.T, payload []byte, gate review
 		if strings.Contains(compact, forbidden) {
 			t.Fatalf("enabled unmanaged output contains forbidden %q:\n%s", forbidden, payload)
 		}
+	}
+}
+
+// TestShippedReviewValidatePrePushIgnoresExplicitBaseRefAndNeverTouchesNetwork
+// pins the resolution of issue #2893 (advertised-remote credential prompting
+// misclassifying an existing branch as missing/ambiguous during pre-push
+// validation). Since #3417's Gate Cutover, `review validate` is the shipped
+// non-deciding route: it accepts --lineage and --base-ref for historical
+// syntax compatibility but never reads authority, a receipt, or a candidate,
+// and therefore never derives an advertised remote boundary. This test
+// replays the issue's exact invocation shape against an HTTPS remote that
+// cannot be dialed, so any reintroduced remote-derivation call would either
+// error or block past the bound instead of returning the fixed unmanaged
+// envelope.
+func TestShippedReviewValidatePrePushIgnoresExplicitBaseRefAndNeverTouchesNetwork(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"enable", "--scope", "global", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatalf("enable receipt-driven development: %v", err)
+	}
+	// A reserved, non-routable TEST-NET-2 address (RFC 5737): a real network
+	// attempt or an interactive credential prompt would block well past this
+	// test's bound, while the shipped non-deciding route never dials out.
+	runReviewCLIGit(t, repo, "remote", "add", "origin", "https://198.51.100.1/unreachable/issue-2893.git")
+
+	type result struct {
+		payload []byte
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var output bytes.Buffer
+		err := RunReview([]string{
+			"validate", "--cwd", repo, "--gate", "pre-push",
+			"--lineage", "issue-2893-approved-lineage", "--base-ref", "origin/main",
+		}, &output)
+		done <- result{payload: append([]byte(nil), output.Bytes()...), err: err}
+	}()
+
+	select {
+	case outcome := <-done:
+		if outcome.err != nil {
+			t.Fatalf("shipped review validate --gate pre-push --lineage --base-ref: %v", outcome.err)
+		}
+		assertEnabledUnmanagedGatePayload(t, outcome.payload, reviewtransaction.GatePrePush)
+		compact := strings.ToLower(string(outcome.payload))
+		for _, forbidden := range []string{"ls-remote", "username", "password", "credential", "origin/main", "missing or ambiguous"} {
+			if strings.Contains(compact, forbidden) {
+				t.Fatalf("pre-push non-deciding output leaked remote-derivation vocabulary %q:\n%s", forbidden, outcome.payload)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shipped review validate --gate pre-push blocked past 5s: it must never query the remote or prompt for credentials (issue #2893)")
 	}
 }
 
