@@ -236,7 +236,7 @@ func rebuildCompactRecoveredTargetedValidationRequest(predecessor CompactState, 
 
 func importCompactRecoveredEvidence(successor *CompactState, predecessor CompactState, evidence CompactRecoveredEvidence) {
 	attempt := predecessor.CorrectionAttempts[len(predecessor.CorrectionAttempts)-1]
-	successor.State = StateValidating
+	setCompactStateExit(successor, StateValidating)
 	successor.CurrentSnapshot = successor.InitialSnapshot
 	// The admitted collection is the only successor owner of recovered role
 	// values. Evidence references address these exact entries by tuple and

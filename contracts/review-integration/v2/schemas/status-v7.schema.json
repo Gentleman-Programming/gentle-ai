@@ -55,6 +55,30 @@
             }}
           }
         }
+      },
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "unachievable_lens_slots"],
+        "properties": {
+          "kind": {"const": "stop"}, "reason_code": {"const": "unachievable_lens_slot"},
+          "unachievable_lens_slots": {"type": "array", "minItems": 1, "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["lens", "selected_order", "subject_hash", "reason", "withdraw"],
+            "properties": {
+              "lens": {"type": "string", "minLength": 1}, "selected_order": {"type": "integer", "minimum": 0},
+              "subject_hash": {"$ref": "status-v5.schema.json#/$defs/sha256"}, "reason": {"type": "string", "minLength": 1},
+              "detail": {"type": "string"},
+              "withdraw": {
+                "type": "object", "additionalProperties": false, "required": ["operation", "command", "arguments", "binding"],
+                "properties": {
+                  "operation": {"const": "review.capture-unachievable"},
+                  "command": {"type": "string", "minLength": 1, "pattern": "^gentle-ai review capture-unachievable "},
+                  "arguments": {"type": "array", "items": {"$ref": "transition-execution.schema.json#/$defs/executable_transition_argument"}},
+                  "binding": {"$ref": "transition-binding.schema.json"}
+                }
+              }
+            }
+          }}
+        }
       }
     ]}
   },

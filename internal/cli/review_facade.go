@@ -571,7 +571,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -711,6 +711,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewCaptureRefuter(args[1:], stdout)
 	case "capture-validation":
 		return RunReviewCaptureValidation(args[1:], stdout)
+	case "capture-unachievable":
+		return RunReviewCaptureUnachievable(args[1:], stdout)
 	case "acknowledge-approved":
 		return RunReviewAcknowledgeApproved(args[1:], stdout)
 	case "inspect-candidate":
@@ -1120,6 +1122,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			capturedProviderTargetedValidatorInconclusive := false
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
+			var unachievableLensAttempts []reviewtransaction.CompactUnachievableLensAttempt
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
 				store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, native.LineageID)
@@ -1186,6 +1189,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							}
 						}
 						if artifactErr == nil && record.State.State == reviewtransaction.StateReviewing {
+							unachievableLensAttempts = record.State.UnachievableLensAttempts
 							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
 							if artifactErr == nil && len(artifacts) != len(record.State.SelectedLenses) {
 								// Only the probe's deterministic verdict stops STATUS: an unproven
@@ -1306,7 +1310,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, UnachievableLensAttempts: unachievableLensAttempts}
 			var transition ReviewNextTransition
 			transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
 			result.NextTransition = &transition

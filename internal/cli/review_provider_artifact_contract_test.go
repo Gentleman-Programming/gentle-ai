@@ -232,7 +232,13 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 		// issue #3928: the root action enum gained "collect" and "execute", the
 		// v7 envelope's projection of a live transaction whose next_transition
 		// is mandatory. Deliberate, not drift.
-		"schemas/status-v7.schema.json":         "8d4196b744464f2a85779c38b79fca50c54672c2e943950824fdb5905262823a",
+		// issue #3442: next_transition gained a third oneOf branch for the
+		// unachievable_lens_slot stop, carrying one unachievable_lens_slots
+		// entry per declared slot (lens, subject_hash, reason, and the exact
+		// review.capture-unachievable --withdraw=true command), so a
+		// restarted orchestrator that lost the pre-stop collect offer can
+		// still recover the binding its withdraw needs. Deliberate, not drift.
+		"schemas/status-v7.schema.json":         "a756c7cbc7b029651481a4b53a670f50ab63464093f5860fd0df10253683d1d9",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {

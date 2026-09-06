@@ -1925,19 +1925,45 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 	if record.Schema != compactRecordSchema || !validSHA256(record.Revision) {
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
-	if err := record.State.Validate(); err != nil {
-		forensic, historical := forensicHistoricalCompactRecord(payload, lineageID)
-		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: historical, PriorSchemaPredecessorLineageID: forensic.PredecessorLineageID}
+	validateErr := record.State.Validate()
+	staleUnachievableLensAttempts := false
+	if validateErr != nil {
+		// A record whose ONLY semantic problem is a non-empty
+		// UnachievableLensAttempts ledger outside StateReviewing predates the
+		// centralized exit clearing (setCompactStateExit, issue #3442): every
+		// lifecycle mutator now clears it on any exit from StateReviewing, so
+		// this shape can no longer be freshly produced, but an already-stuck
+		// lineage written before that fix must still be able to load. The
+		// drop happens further down, only after the checksum below has
+		// verified this is exactly what was persisted -- never before, which
+		// would let a genuinely corrupted or tampered file masquerade as "just
+		// a legacy ledger".
+		tolerant := record.State
+		tolerant.UnachievableLensAttempts = nil
+		if tolerant.Validate() == nil {
+			staleUnachievableLensAttempts = true
+		} else {
+			forensic, historical := forensicHistoricalCompactRecord(payload, lineageID)
+			return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: validateErr.Error(),
+				OutdatedIdentity: historical, PriorSchemaPredecessorLineageID: forensic.PredecessorLineageID}
+		}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
 	}
 	if !record.HistoricalCompat {
+		// Checksummed against the untouched, exactly-as-persisted state
+		// (stale ledger included, if present): this is the authenticity
+		// proof the tolerance above depends on, so it must run before, never
+		// after, the ledger is dropped.
 		want, _, err := makeCompactRecord(record.State)
 		if err != nil || want.Revision != record.Revision {
 			return CompactRecord{}, errors.New("compact review state checksum mismatch")
 		}
+	}
+	if staleUnachievableLensAttempts {
+		compactStaleUnachievableLensAttemptsNote(record.State.LineageID, record.State.State, len(record.State.UnachievableLensAttempts))
+		record.State.UnachievableLensAttempts = nil
 	}
 	return record, nil
 }
@@ -2213,6 +2239,17 @@ func (err *compactTraceWriteError) Error() string {
 }
 
 func (err *compactTraceWriteError) Unwrap() error { return err.cause }
+
+// compactStaleUnachievableLensAttemptsNote reports a load-time recovery, not
+// a failure: a record written before setCompactStateExit centralized the
+// clearing of UnachievableLensAttempts (issue #3442) can carry declarations
+// left standing after the phase moved on. parseCompactRecord drops them so
+// the lineage loads instead of refusing forever; this note is the one
+// diagnostic trace of that silent-but-lossy repair, following the same
+// package-level test-seam convention as compactTraceWarn below.
+var compactStaleUnachievableLensAttemptsNote = func(lineageID string, state State, dropped int) {
+	fmt.Fprintf(os.Stderr, "NOTE: dropped %d stale unachievable-lens declaration(s) for lineage %s loaded in state %q; declarations apply only while a phase is actively reviewing\n", dropped, lineageID, state)
+}
 
 // compactTraceWarn is the fallback report for a trace write failure on a
 // call path with no projected machine result to carry CompactTraceOutcome

@@ -111,6 +111,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// combination is recovery-only), not an unreachable/unmodeled state.
 		ToolFault: reviewStopToolFault(false),
 	},
+	"unachievable_lens_slot": {
+		Terminal:      false,
+		Justification: "caller-continuable: a host reported that a selected reviewer slot cannot be completed under current conditions (issue #3442); if that report was a mistaken transient failure, `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` retracts it on the SAME lineage and STATUS re-offers the slot -- a concrete, flag-driven continuation, not a maintainer-only action. Only a genuinely deterministic failure has no in-lineage exit, and that case is resolved by starting a new review, exactly like every other stop whose row also names a fresh-candidate exit without being reclassified for it",
+	},
 	"rdd_disabled": {
 		Terminal:      false,
 		Justification: "caller-continuable: receipt-driven development is disabled; run `gentle-ai review mode enable` to turn it back on, then re-run the exact `review status --next-transition --contract <contract> <selector-args>` command that produced this stop — a concrete, flag-driven continuation; the same typed error the start gate already names",
