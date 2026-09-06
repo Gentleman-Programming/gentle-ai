@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -366,6 +367,7 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 		cmdLookPath = restoreLookPath
 	})
 	cmdLookPath = missingBinaryLookPath
+	useMissingStandardExecutablePaths(t)
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(name string, args ...string) error {
@@ -928,14 +930,20 @@ func TestRunInstallMacOSStillResolvesBrewCommands(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreStat := osStat
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		osStat = restoreStat
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
+	// Force resolveEngramInstalledPath's Homebrew-prefix fallback (#4020) to
+	// report "not found" regardless of the real machine running this test,
+	// so this test still exercises the genuinely-missing install path.
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
@@ -1037,6 +1045,7 @@ func TestRunInstallMacOSRollbackStillWorks(t *testing.T) {
 		cmdLookPath = restoreLookPath
 	})
 	cmdLookPath = missingBinaryLookPath
+	useMissingStandardExecutablePaths(t)
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(name string, args ...string) error {
@@ -1159,18 +1168,37 @@ func TestRunInstallEngramFallsBackToInjectWhenSetupFails(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	const engramPath = "/usr/local/bin/engram"
 	cmdLookPath = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
 	}
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("verify command = %q, want %q", command, engramPath)
+		}
+		return "engram 1.20.0", nil
+	}
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("protocol probe command = %q, want %q", command, engramPath)
+		}
+		return "Usage: engram setup <slug>", nil
+	}
+	setupFailureTriggered := false
 	runCommand = func(name string, args ...string) error {
-		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+		if name == engramPath && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+			setupFailureTriggered = true
 			return errors.New("setup failed")
 		}
 		return nil
@@ -1182,6 +1210,9 @@ func TestRunInstallEngramFallsBackToInjectWhenSetupFails(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !setupFailureTriggered {
+		t.Fatal("RunInstall() did not execute the controlled setup failure path")
 	}
 	if !result.Verify.Ready {
 		t.Fatalf("verification ready = false")
@@ -1200,22 +1231,41 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	origUserHomeDirFn := backup.UserHomeDirFn
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 		backup.UserHomeDirFn = origUserHomeDirFn
 	})
 	// Override restore path validation to accept test temp dirs.
 	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	const engramPath = "/usr/local/bin/engram"
 	cmdLookPath = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
 	}
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("verify command = %q, want %q", command, engramPath)
+		}
+		return "engram 1.20.0", nil
+	}
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		if command != engramPath {
+			t.Fatalf("protocol probe command = %q, want %q", command, engramPath)
+		}
+		return "Usage: engram setup <slug>", nil
+	}
+	setupFailureTriggered := false
 	runCommand = func(name string, args ...string) error {
-		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+		if name == engramPath && len(args) == 2 && args[0] == "setup" && args[1] == "opencode" {
+			setupFailureTriggered = true
 			return errors.New("setup failed")
 		}
 		return nil
@@ -1225,6 +1275,9 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 		[]string{"--agent", "opencode", "--component", "engram"},
 		macOSDetectionResult(),
 	)
+	if !setupFailureTriggered {
+		t.Fatal("RunInstall() did not execute the controlled strict setup failure path")
+	}
 	if err == nil {
 		t.Fatalf("RunInstall() expected error in strict setup mode")
 	}
@@ -1604,10 +1657,12 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreStat := osStat
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		osStat = restoreStat
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
@@ -1615,6 +1670,10 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	cmdLookPath = func(string) (string, error) {
 		return "", exec.ErrNotFound
 	}
+	// Force resolveEngramInstalledPath's Homebrew-prefix fallback (#4020) to
+	// report "not found" regardless of the real machine running this test,
+	// so this test still exercises the genuinely-missing install path.
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
