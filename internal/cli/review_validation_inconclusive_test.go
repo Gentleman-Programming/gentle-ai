@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -13,20 +14,36 @@ import (
 // candidate produced no verdict: recording its check as failed would consume
 // the single correction attempt on a non-observation, and recording it as
 // passed would approve without inspection (issue #1309 follow-up).
+//
+// Admission reads this exclusively from the check's typed inspection.status
+// field (issue #4266); the check's free-text Evidence is never scanned, so
+// evidence phrasing alone -- however it reads -- never flips the verdict.
 func TestFacadeValidationRejectsInconclusiveEvidence(t *testing.T) {
 	request := reviewtransaction.TargetedValidationRequest{
 		RequestHash:              "sha256:" + strings.Repeat("1", 64),
 		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
 	}
 	conclusive := facadeValidationCheck{Passed: true, Evidence: []string{"go test ./internal/... passed for the corrected candidate"}}
+	unavailable := func(reason string) *reviewtransaction.ValidationInspection {
+		return &reviewtransaction.ValidationInspection{Status: reviewtransaction.ValidationInspectionUnavailable, Reason: reason}
+	}
 
 	tests := []struct {
 		name  string
 		check facadeValidationCheck
 	}{
-		{name: "failed without access", check: facadeValidationCheck{Passed: false, Evidence: []string{"original criteria could not be verified: permission denied reading the corrected diff"}}},
-		{name: "failed candidate unavailable", check: facadeValidationCheck{Passed: false, Evidence: []string{"immutable candidate unavailable to the validator process"}}},
-		{name: "passed without inspection", check: facadeValidationCheck{Passed: true, Evidence: []string{"assumed clean because the candidate was not inspected"}}},
+		{name: "failed without access", check: facadeValidationCheck{
+			Passed: false, Evidence: []string{"original criteria could not be verified"},
+			Inspection: unavailable("permission denied reading the corrected diff"),
+		}},
+		{name: "failed candidate unavailable", check: facadeValidationCheck{
+			Passed: false, Evidence: []string{"no verdict was reached"},
+			Inspection: unavailable("immutable candidate unavailable to the validator process"),
+		}},
+		{name: "passed without inspection", check: facadeValidationCheck{
+			Passed: true, Evidence: []string{"assumed clean"},
+			Inspection: unavailable("the candidate was not inspected"),
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -36,14 +53,119 @@ func TestFacadeValidationRejectsInconclusiveEvidence(t *testing.T) {
 				{OriginalCriteria: conclusive, CorrectionRegression: tt.check,
 					TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity},
 			} {
-				if _, err := result.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err == nil || !strings.Contains(err.Error(), "inconclusive") {
+				if _, err := result.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err == nil || !errors.Is(err, errReviewTargetedValidationInconclusive) {
 					t.Fatalf("compact conversion admitted an inconclusive validation check: %v", err)
 				}
-				if _, err := result.native(reviewtransaction.Transaction{}); err == nil || !strings.Contains(err.Error(), "inconclusive") {
+				if _, err := result.native(reviewtransaction.Transaction{}); err == nil || !errors.Is(err, errReviewTargetedValidationInconclusive) {
 					t.Fatalf("native conversion admitted an inconclusive validation check: %v", err)
 				}
 			}
 		})
+	}
+}
+
+// TestFacadeValidationAdmitsEvidenceQuotingUnreadableCandidatePhrasing is the
+// reproduction for issue #4266: with a completed typed inspection present,
+// evidence may freely quote the candidate's own strings and still be
+// admitted -- the field decides alone. Phrase built by concatenation so it
+// never appears contiguously in this diff.
+func TestFacadeValidationAdmitsEvidenceQuotingUnreadableCandidatePhrasing(t *testing.T) {
+	request := reviewtransaction.TargetedValidationRequest{
+		RequestHash:              "sha256:" + strings.Repeat("1", 64),
+		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
+	}
+	quotedCandidateString := "read access denied" + " for the candidate diff"
+	quotingEvidence := []string{
+		"read the frozen candidate tree with read-only Git access: the corrected fixture now defines the constant `unreadableCandidateMessage = \"" +
+			quotedCandidateString + "\"` and the new unreadable-candidate reporting feature renders it verbatim when a caller's repository handle cannot be resolved; the acceptance criterion is met",
+	}
+	completed := &reviewtransaction.ValidationInspection{Status: reviewtransaction.ValidationInspectionCompleted}
+
+	result := facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: quotingEvidence, Inspection: completed},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"no regression observed in the corrected candidate"}, Inspection: completed},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	}
+	if _, err := result.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err != nil {
+		t.Fatalf("compact conversion refused evidence that merely quotes candidate phrasing: %v", err)
+	}
+	if _, err := result.native(reviewtransaction.Transaction{}); err != nil {
+		t.Fatalf("native conversion refused evidence that merely quotes candidate phrasing: %v", err)
+	}
+}
+
+// TestFacadeValidationLegacyAbsentInspection is the narrow legacy backstop
+// (issue #4266 correction): a check that omits inspection falls back to
+// scanning Evidence for an unreadable-candidate claim; ordinary evidence
+// keeps its verdict. Phrase built by concatenation so it never appears
+// contiguously here.
+func TestFacadeValidationLegacyAbsentInspection(t *testing.T) {
+	request := reviewtransaction.TargetedValidationRequest{
+		RequestHash:              "sha256:" + strings.Repeat("1", 64),
+		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
+	}
+	conclusive := facadeValidationCheck{Passed: true, Evidence: []string{"go test ./internal/... passed for the corrected candidate"}}
+
+	t.Run("evidence reports unreadable trees is inconclusive", func(t *testing.T) {
+		unreadable := facadeValidationCheck{Passed: false, Evidence: []string{"the frozen candidate trees " + "could not be inspected" + " from this sandbox"}}
+		result := facadeValidationResult{OriginalCriteria: unreadable, CorrectionRegression: conclusive,
+			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity}
+		if _, err := result.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err == nil || !errors.Is(err, errReviewTargetedValidationInconclusive) {
+			t.Fatalf("compact admitted a legacy check with unreadable-trees evidence: %v", err)
+		}
+		if _, err := result.native(reviewtransaction.Transaction{}); err == nil || !errors.Is(err, errReviewTargetedValidationInconclusive) {
+			t.Fatalf("native admitted a legacy check with unreadable-trees evidence: %v", err)
+		}
+	})
+
+	t.Run("ordinary evidence is admitted", func(t *testing.T) {
+		result := facadeValidationResult{
+			OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance criteria re-ran and passed"}},
+			CorrectionRegression:          conclusive,
+			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+			FollowUps: []reviewtransaction.FollowUp{},
+		}
+		if _, err := result.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request); err != nil {
+			t.Fatalf("compact refused a legacy check with ordinary evidence: %v", err)
+		}
+		if _, err := result.native(reviewtransaction.Transaction{}); err != nil {
+			t.Fatalf("native refused a legacy check with ordinary evidence: %v", err)
+		}
+	})
+}
+
+// TestFacadeValidationRejectsTypedUnavailableInspection is the paired proof
+// that a typed inspection.status of unavailable still yields the inconclusive
+// refusal (with its reason folded into the message) and does not consume the
+// correction attempt, regardless of what the check's Evidence says.
+func TestFacadeValidationRejectsTypedUnavailableInspection(t *testing.T) {
+	request := reviewtransaction.TargetedValidationRequest{
+		RequestHash:              "sha256:" + strings.Repeat("1", 64),
+		CorrectionTargetIdentity: "sha256:" + strings.Repeat("2", 64),
+	}
+	const reason = "the sandbox denied read-only Git access to the frozen candidate tree"
+	result := facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{
+			Passed: true, Evidence: []string{"assumed the criterion held"},
+			Inspection: &reviewtransaction.ValidationInspection{Status: reviewtransaction.ValidationInspectionUnavailable, Reason: reason},
+		},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"go test ./internal/... passed for the corrected candidate"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	}
+
+	_, compactErr := result.compact("sha256:"+strings.Repeat("3", 64), []string{"finding-1"}, request)
+	if compactErr == nil || !errors.Is(compactErr, errReviewTargetedValidationInconclusive) {
+		t.Fatalf("compact conversion admitted a typed unavailable inspection: %v", compactErr)
+	}
+	if !strings.Contains(compactErr.Error(), reason) {
+		t.Fatalf("compact refusal does not name the inspection reason: %v", compactErr)
+	}
+
+	_, nativeErr := result.native(reviewtransaction.Transaction{})
+	if nativeErr == nil || !errors.Is(nativeErr, errReviewTargetedValidationInconclusive) {
+		t.Fatalf("native conversion admitted a typed unavailable inspection: %v", nativeErr)
 	}
 }
 
@@ -85,6 +207,54 @@ func TestTargetedValidatorRawAdmissionAllowsAdditiveTopLevelFields(t *testing.T)
 		!native.OriginalCriteria.Passed || !native.CorrectionRegression.Passed {
 		t.Fatalf("admitted targeted validator verdict = result=%#v native=%#v, want both checks passed", result, native)
 	}
+}
+
+// TestTargetedValidatorRawAdmissionAppliesTypedInspectionAndLegacyFallback
+// proves the typed-inspection-wins rule and the legacy evidence-scan fallback
+// both fire through reviewProviderAdmitTargetedValidatorRaw itself -- the
+// exact provider wire admission path `capture-validation` uses -- not just at
+// the facade level (issue #4266 correction). Phrases are built by
+// concatenation so they never appear contiguously in this diff.
+func TestTargetedValidatorRawAdmissionAppliesTypedInspectionAndLegacyFallback(t *testing.T) {
+	request := targetedValidatorAdmissionRequest(t)
+	conclusive := facadeValidationCheck{Passed: true, Evidence: []string{"correction regression passed"}}
+	marshal := func(t *testing.T, original facadeValidationCheck) []byte {
+		t.Helper()
+		payload, err := json.Marshal(facadeValidationResult{
+			TargetedValidationRequestHash: request.ValidationRequest.RequestHash, CorrectionTargetIdentity: request.ValidationRequest.CorrectionTargetIdentity,
+			OriginalCriteria: original, CorrectionRegression: conclusive, FollowUps: []reviewtransaction.FollowUp{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+
+	t.Run("absent inspection with unreadable-trees evidence is inconclusive", func(t *testing.T) {
+		unreadable := facadeValidationCheck{Passed: false, Evidence: []string{"the frozen candidate trees " + "could not be inspected" + " from this sandbox"}}
+		if _, _, err := reviewProviderAdmitTargetedValidatorRaw(request, marshal(t, unreadable)); err == nil || !errors.Is(err, errReviewTargetedValidationInconclusive) {
+			t.Fatalf("wire admission admitted an absent-inspection check with unreadable-trees evidence: %v", err)
+		}
+	})
+
+	t.Run("absent inspection with ordinary evidence is admitted", func(t *testing.T) {
+		ordinary := facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance criteria re-ran and passed"}}
+		if _, _, err := reviewProviderAdmitTargetedValidatorRaw(request, marshal(t, ordinary)); err != nil {
+			t.Fatalf("wire admission refused an absent-inspection check with ordinary evidence: %v", err)
+		}
+	})
+
+	t.Run("completed typed inspection with quoted phrase is admitted", func(t *testing.T) {
+		quotedCandidateString := "read access denied" + " for the candidate diff"
+		quoting := facadeValidationCheck{
+			Passed:     true,
+			Evidence:   []string{"read the frozen candidate tree: the fixture defines \"" + quotedCandidateString + "\" and the unreadable-candidate feature renders it; criterion met"},
+			Inspection: &reviewtransaction.ValidationInspection{Status: reviewtransaction.ValidationInspectionCompleted},
+		}
+		if _, _, err := reviewProviderAdmitTargetedValidatorRaw(request, marshal(t, quoting)); err != nil {
+			t.Fatalf("wire admission refused a completed typed inspection quoting candidate phrasing: %v", err)
+		}
+	})
 }
 
 func TestTargetedValidatorRawAdmissionRejectsOmittedPassed(t *testing.T) {

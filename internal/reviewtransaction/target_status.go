@@ -2,8 +2,12 @@ package reviewtransaction
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type TargetApplicability string
@@ -175,12 +179,92 @@ type selectorlessCommittedBaseDiffCorrection struct {
 	snapshot Snapshot
 }
 
+// selectorlessCommittedBaseDiffCorrectionBinding is one candidate that
+// survived every binding-policy check in selectorlessCommittedBaseDiffCorrections,
+// paired with the recency (state file modification time) used to prefer the
+// most recent match when more than one lineage legitimately qualifies.
+type selectorlessCommittedBaseDiffCorrectionBinding struct {
+	candidate selectorlessCommittedBaseDiffCorrection
+	modTime   time.Time
+}
+
+// selectorlessCommittedBaseDiffAncestor pairs one HEAD-ancestry commit with its tree.
+type selectorlessCommittedBaseDiffAncestor struct {
+	commit string
+	tree   string
+}
+
+// selectorlessCommittedBaseDiffAncestorLimit bounds the ancestry walk below.
+const selectorlessCommittedBaseDiffAncestorLimit = 64
+
+// selectorlessCommittedBaseDiffHasParentCommit reports whether HEAD has a
+// parent via a query unambiguous either way (empty means root), unlike a
+// plain revision resolve whose failure looks identical for both cases.
+func selectorlessCommittedBaseDiffHasParentCommit(ctx context.Context, repo string) (bool, error) {
+	output, err := runGit(ctx, repo, nil, nil, "rev-list", "--max-count=1", "--skip=1", "HEAD")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) != "", nil
+}
+
+// selectorlessCommittedBaseDiffAncestors returns HEAD's first-parent
+// ancestry, bounded, as (nil, nil) only for the unambiguous root-commit
+// case; every other Git failure is returned so the caller fails closed.
+func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffAncestor, error) {
+	hasParent, err := selectorlessCommittedBaseDiffHasParentCommit(ctx, repo)
+	if err != nil || !hasParent {
+		return nil, err
+	}
+	output, err := runGit(ctx, repo, nil, nil, "log", "--first-parent", "--format=%H %T",
+		"-n", strconv.Itoa(selectorlessCommittedBaseDiffAncestorLimit), "HEAD~1")
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" {
+		return nil, nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	ancestors := make([]selectorlessCommittedBaseDiffAncestor, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("unexpected HEAD ancestry log line %q", line) // refusal:by-design world-action: git log --format=%H %T produced a line this parser cannot shape into a commit/tree pair; needs operator inspection, no command can repair it
+		}
+		ancestors = append(ancestors, selectorlessCommittedBaseDiffAncestor{commit: fields[0], tree: fields[1]})
+	}
+	return ancestors, nil
+}
+
+// selectorlessCommittedBaseDiffMatchedPredecessor finds the lineage's frozen
+// candidate tree among ancestors, stopping at its frozen base tree.
+func selectorlessCommittedBaseDiffMatchedPredecessor(ancestors []selectorlessCommittedBaseDiffAncestor, state CompactState) string {
+	for _, ancestor := range ancestors {
+		if ancestor.tree == state.CurrentSnapshot.CandidateTree {
+			return ancestor.tree
+		}
+		if ancestor.tree == state.InitialSnapshot.BaseTree {
+			break
+		}
+	}
+	return ""
+}
+
 func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	candidates := []selectorlessCommittedBaseDiffCorrection{}
+	builder := SnapshotBuilder{Repo: repo}
+	// Issue #2345: a lineage may only resume selector-free when its own
+	// frozen candidate tree sits in HEAD's history; a resolve failure here
+	// fails closed instead of silently emptying the candidate list.
+	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	bindings := []selectorlessCommittedBaseDiffCorrectionBinding{}
 	for _, store := range stores {
 		record, loadErr := store.LoadContext(ctx)
 		if loadErr != nil {
@@ -189,6 +273,11 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 			}
 			continue
 		}
+		// Reconstruction is attempted for every lineage before the binding
+		// policy below narrows the result: an operational failure or an
+		// exceeded correction budget on ANY lineage's own frozen boundary
+		// must fail closed exactly as before, whether or not that lineage
+		// would otherwise qualify as this candidate's predecessor.
 		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
 		if rebuildErr != nil {
 			if IsCompactAuthorityOperationalFailure(rebuildErr) || IsCorrectionBudgetExceeded(rebuildErr) {
@@ -196,7 +285,41 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 			}
 			continue
 		}
-		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live})
+		predecessorTree := selectorlessCommittedBaseDiffMatchedPredecessor(ancestors, record.State)
+		if predecessorTree == "" {
+			continue
+		}
+		// The live candidate's own changed paths (measured from the matched
+		// predecessor) must still overlap what this lineage's frozen
+		// manifest concerns. A coincidental predecessor-tree match over
+		// wholly disjoint paths is never a legitimate resumption.
+		ownPaths, pathsErr := builder.changedPaths(ctx, predecessorTree, live.CandidateTree)
+		if pathsErr != nil {
+			return nil, pathsErr
+		}
+		if !hasStringIntersection(ownPaths, record.State.CurrentSnapshot.Paths) {
+			continue
+		}
+		modTime := time.Time{}
+		if info, statErr := os.Stat(store.StatePath()); statErr == nil {
+			modTime = info.ModTime()
+		}
+		bindings = append(bindings, selectorlessCommittedBaseDiffCorrectionBinding{
+			candidate: selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live}, modTime: modTime,
+		})
+	}
+	if len(bindings) == 0 {
+		return nil, nil
+	}
+	// Prefer the most recent lineage when several independently qualify;
+	// only an exact modification-time tie remains ambiguous.
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].modTime.After(bindings[j].modTime) })
+	mostRecent := bindings[0].modTime
+	candidates := []selectorlessCommittedBaseDiffCorrection{}
+	for _, binding := range bindings {
+		if binding.modTime.Equal(mostRecent) {
+			candidates = append(candidates, binding.candidate)
+		}
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lineage < candidates[j].lineage })
 	return candidates, nil

@@ -698,7 +698,7 @@ func reviewConsoleTerminal(file *os.File) bool {
 // the exact frozen candidate and never touch the legacy clone-wide latch. An
 // undeclared plain START keeps the one-time console behavior unchanged; an
 // undeclared negotiated START authorizes silently (see below).
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool) error {
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool, runtimeAgent string) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
@@ -707,8 +707,12 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
-	if err := authorizeManagedReviewerAssets(); err != nil {
-		return reviewPreflightRefusal(reviewPreflightManagedAssetsReason, err)
+	// #3299, #4170: STATUS classifies this same skew before ever offering
+	// START, but a caller that reaches START directly (or replays a stale
+	// offer) still needs the exact sync continuation, not just a refusal.
+	if provenance := checkManagedReviewerAssets(); provenance.stale() {
+		continuation := managedAssetsContinuation(runtimeAgent, provenance.staleAssetIdentities())
+		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, errors.New(managedAssetProvenanceRefusal), continuation)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce

@@ -341,15 +341,17 @@ func TestCreatePrivateRARDirectoryKeepsTheUnsafePathItNamesOnWindows(t *testing.
 	}
 }
 
-// classifierStub records every path it receives and returns a fixed filesystem type.
+// classifierStub records every path it receives and returns fixed probe facts.
 type classifierStub struct {
-	calls []string
-	give  string
+	calls     []string
+	fstype    string
+	driveType uint32
+	err       error
 }
 
-func (s *classifierStub) classify(path string) string {
+func (s *classifierStub) classify(path string) (string, uint32, error) {
 	s.calls = append(s.calls, path)
-	return s.give
+	return s.fstype, s.driveType, s.err
 }
 
 // ownerStubAlwaysReject forces rarRepositoryDirectorySafe to return false.
@@ -362,30 +364,39 @@ func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
 	t.Cleanup(func() { rarWindowsAuthorityOwnerUnsafe = origOwner })
 	rarWindowsAuthorityOwnerUnsafe = ownerStubAlwaysReject
 
-	stub := &classifierStub{give: "NTFS"}
+	stub := &classifierStub{fstype: "NTFS", driveType: windows.DRIVE_FIXED}
 	origClassifier := rarWindowsAuthorityFilesystemClassifier
 	t.Cleanup(func() { rarWindowsAuthorityFilesystemClassifier = origClassifier })
 	rarWindowsAuthorityFilesystemClassifier = stub.classify
 
 	dir := t.TempDir()
+	probeFailure := errors.New("access is denied")
 
 	tests := []struct {
 		name            string
 		path            string
 		fsType          string
+		driveType       uint32
+		probeErr        error
 		wantBase        error
 		wantUnknown     bool
 		wantUnsupported bool
 		wantSubStr      string
 		wantNilStr      string
 	}{
-		{"NTFS → ACL guidance", "", "NTFS", errUnsafeRARAuthorityPath, false, false, "takeown", "exFAT"},
-		{"ReFS → ACL guidance", "", "ReFS", errUnsafeRARAuthorityPath, false, false, "icacls", "exFAT"},
-		{"exFAT → unsupported", "", "exFAT", errUnsafeRARAuthorityPath, false, true, "exFAT", "takeown"},
-		{"FAT32 → unsupported", "", "FAT32", errUnsafeRARAuthorityPath, false, true, "FAT32", "icacls"},
-		{"empty → unknown", "", "", errUnsafeRARAuthorityPath, true, false, "", "takeown"},
-		{"FOOFS → unknown", "", "FOOFS", errUnsafeRARAuthorityPath, true, false, "", "takeown"},
-		{"UNC → unknown", `\\server\share`, "NTFS", errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+		{"NTFS → ACL guidance", "", "NTFS", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, false, false, "takeown", "exFAT"},
+		{"ReFS → ACL guidance", "", "ReFS", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, false, false, "icacls", "exFAT"},
+		{"exFAT → unsupported", "", "exFAT", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, false, true, "exFAT", "takeown"},
+		{"FAT32 → unsupported", "", "FAT32", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, false, true, "FAT32", "icacls"},
+		{"empty → unknown", "", "", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+		{"FOOFS → unknown", "", "FOOFS", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+		// A remote share may still report an NTFS-shaped filesystem name; the
+		// resolved drive type is what tells them apart, never the name alone.
+		{"remote drive → unknown, not silently trusted", "", "NTFS", windows.DRIVE_REMOTE, nil, errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+		// #4048: a probe failure must be reported as unknown-but-named,
+		// carrying the real cause, and must never be worded as "remote".
+		{"probe failure → unknown, never remote", "", "", windows.DRIVE_FIXED, probeFailure, errUnsafeRARAuthorityPath, true, false, "access is denied", "remote"},
+		{"UNC → unknown", `\\server\share`, "NTFS", windows.DRIVE_FIXED, nil, errUnsafeRARAuthorityPath, true, false, "", "takeown"},
 	}
 
 	for _, tc := range tests {
@@ -394,7 +405,7 @@ func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
 			if tc.path != "" {
 				testDir = tc.path + `\temp`
 			}
-			stub.give = tc.fsType
+			stub.fstype, stub.driveType, stub.err = tc.fsType, tc.driveType, tc.probeErr
 			stub.calls = nil
 
 			err := validateRARRepositoryParent(testDir)
@@ -422,7 +433,7 @@ func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
 }
 
 func TestRARWindowsAuthorityFilesystemClassifierFS5WorktreeOnExFAT(t *testing.T) {
-	stub := &classifierStub{give: "exFAT"}
+	stub := &classifierStub{fstype: "exFAT", driveType: windows.DRIVE_FIXED}
 	origClassifier := rarWindowsAuthorityFilesystemClassifier
 	t.Cleanup(func() { rarWindowsAuthorityFilesystemClassifier = origClassifier })
 	rarWindowsAuthorityFilesystemClassifier = stub.classify

@@ -1103,7 +1103,7 @@ func (state CompactState) CompactReviewView() (CompactReviewView, error) {
 				envelope.Subject.LineageID != state.LineageID || envelope.Subject.AuthorityRevision != entry.CapturePhaseRevision ||
 				envelope.Subject.TargetIdentity != entry.TargetIdentity || envelope.Subject.Lens != entry.Lens ||
 				envelope.Subject.SelectedOrder != entry.SelectedOrder || envelope.Subject.CorrectionTargetIdentity != "" ||
-				envelope.Admission.Validate(envelope.Subject) != nil {
+				envelope.Admission.Validate(envelope.Subject, append(append([]byte(nil), envelope.Result...), '\n')) != nil {
 				return CompactReviewView{}, invalidCompactReviewView("lens envelope does not bind its active tuple")
 			}
 			var provider compactProviderReviewerResult
@@ -1652,11 +1652,17 @@ func validateCompactReviewInput(state CompactState, input CompactReviewInput, vi
 		if result.Lens != state.SelectedLenses[index] {
 			return fmt.Errorf("lens result %d does not name its selected lens", index+1)
 		}
-		for _, evidence := range result.Evidence {
-			if evidenceReportsUnavailableInspection(evidence) {
-				return fmt.Errorf("lens result %d reports unavailable candidate inspection", index+1)
-			}
-		}
+		// Issue #4256: LensResult carries no Inspection field -- a result
+		// only reaches CompactReviewInput after AdmitArtifact already
+		// required its typed inspection.status to be "completed" (or
+		// refused it as ArtifactAdmissionIncomplete before it was ever
+		// stored (see ArtifactInspectionUnavailable). Re-scanning its
+		// Evidence text here for words like
+		// "unavailable" was the same false-positive class the removed
+		// admission-time scan produced (evidence such as "the fixture was
+		// unavailable in the previous release" is ordinary review prose, not
+		// an inspection-completeness signal), so completion trusts the
+		// admission decision that already ran instead of repeating it.
 		canonical, err := CanonicalCompactLensResult(result)
 		if err != nil {
 			return fmt.Errorf("lens result %d: %w", index+1, err)

@@ -4,25 +4,22 @@ import (
 	"bytes"
 	"crypto/sha256"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-const (
-	// historicalManagedAssetStateSHA256 pins the exact state bytes emitted by
-	// `gentle-ai sync --agents opencode` from predecessor 8c2cbd80.
-	historicalManagedAssetStateSHA256 = "6c337347a4c94055f321b6e4aef7fa6ee96f4ca0159e2e8d99e385557120a329"
-	managedAssetRemediation           = "managed reviewer assets are outdated; run `gentle-ai sync`"
-)
+// historicalManagedAssetStateSHA256 pins the exact state bytes emitted by
+// `gentle-ai sync --agents opencode` from predecessor 8c2cbd80.
+const historicalManagedAssetStateSHA256 = "6c337347a4c94055f321b6e4aef7fa6ee96f4ca0159e2e8d99e385557120a329"
 
 //go:embed testdata/managed-assets/state-8c2cbd80.json
 var historicalManagedAssetState []byte
 
-var managedAssetsStartCapability = &Capability{
-	Verb:  []string{"review", "start"},
-	Flags: []string{"--cwd", "--contract", "--target", "--projection", "--agent", "--consent"},
+var managedAssetsStatusCapability = &Capability{
+	Verb:  []string{"review", "status"},
+	Flags: []string{"--cwd", "--contract", "--agent", "--next-transition"},
 }
 
 // staleManagedAssetState copies the exact predecessor product artifact without
@@ -55,37 +52,26 @@ func staleManagedAssetState(sandbox *Sandbox) error {
 	return optIntoReviewMode(sandbox)
 }
 
-func staleManagedAssetsStartIsNotUnknown(r *journeyRun) error {
+// staleManagedAssetsStatusIsNotUnknown is the RED-first proof for #3299/#4170's
+// STATUS-time reclassification: a stale product-created managed-asset digest
+// must fail selectorless STATUS's own preflight, as a typed `stop` carrying
+// the exact candidate-preserving `gentle-ai sync` continuation, BEFORE STATUS
+// ever offers a START that preflight would refuse anyway. Executing a printed
+// START used to be the only way to discover the skew; now the skew is visible
+// -- and its one runnable remedy is named -- without ever attempting one.
+func staleManagedAssetsStatusIsNotUnknown(r *journeyRun) error {
 	status, err := readStatusForContract(r, reviewContractV2, "--agent", "opencode")
 	if err != nil {
 		return err
 	}
-	if status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "fresh_target_ready" ||
-		status.NextTransition.Execute.Operation != "review.start" {
+	if status.NextTransition.Kind != "stop" || status.NextTransition.ReasonCode != "managed_assets_outdated" ||
+		status.NextTransition.Execute.Operation != "" {
 		return fmt.Errorf("stale managed assets initial STATUS = %+v", status.NextTransition)
 	}
-
-	start, err := runPrintedTransition(r, status)
-	if err != nil {
-		return err
-	}
-	if start.ExitCode == 0 {
-		return fmt.Errorf("stale managed assets START succeeded: %s", start.Stdout)
-	}
-	var failure struct {
-		Operation       string `json:"operation"`
-		Phase           string `json:"phase"`
-		Code            string `json:"code"`
-		MutationOutcome string `json:"mutation_outcome"`
-		NextAction      string `json:"next_action"`
-		Cause           string `json:"cause"`
-	}
-	if err := json.Unmarshal([]byte(start.Stdout), &failure); err != nil {
-		return fmt.Errorf("parse stale managed assets START failure: %w (stderr: %s)", err, firstLine(start.Stderr))
-	}
-	if failure.Operation != "review.start" || failure.Phase != "preflight" || failure.Code != "managed_assets_outdated" ||
-		failure.MutationOutcome != "not_started" || failure.NextAction != "stop" || failure.Cause != managedAssetRemediation {
-		return fmt.Errorf("stale managed assets START failure = %#v", failure)
+	continuation := status.NextTransition.Continuation
+	if continuation == nil || continuation.Operation != "sync" || continuation.Agent != "opencode" ||
+		!strings.HasPrefix(continuation.Command, "gentle-ai sync") {
+		return fmt.Errorf("stale managed assets STATUS continuation = %+v", continuation)
 	}
 
 	inspection, err := proveInspection(r.sandbox)
@@ -93,7 +79,20 @@ func staleManagedAssetsStartIsNotUnknown(r *journeyRun) error {
 		return err
 	}
 	if !inspection.Complete || !inspection.Valid || inspection.Totals.CompactEntries != 0 || inspection.Totals.LoadedEntries != 0 || inspection.Totals.Edges != 0 {
-		return fmt.Errorf("stale managed assets START created authority: %+v", inspection)
+		return fmt.Errorf("stale managed assets STATUS created authority: %+v", inspection)
+	}
+
+	// STATUS must remain usable: running the exact printed continuation
+	// reconciles the recorded digest through the product's own documented
+	// remedy (docs/review-integration.md), and the very same candidate is
+	// offered again with nothing else about it changed.
+	syncArgs, err := printedCommandArguments(continuation.Command)
+	if err != nil {
+		return fmt.Errorf("stale managed assets continuation %w", err)
+	}
+	sync := r.run(syncArgs, false)
+	if sync.ExitCode != 0 {
+		return fmt.Errorf("stale managed assets continuation %q exited %d: %s", continuation.Command, sync.ExitCode, firstLine(sync.Stderr))
 	}
 
 	reconciled, err := readStatusForContract(r, reviewContractV2, "--agent", "opencode")
@@ -112,13 +111,13 @@ func managedAssetJourneys() []Journey {
 		{
 			ID:     "j93-stale-managed-assets-start-is-not-unknown",
 			Review: reviewOptedIn,
-			Title:  "Stale managed assets: v2 OpenCode START stops before authority and STATUS remains usable",
-			Source: "issue #2822: a stale product-created managed-asset digest refuses before START can mutate; negotiated output must not claim native execution",
+			Title:  "Stale managed assets: v2 OpenCode STATUS stops before authority with a runnable sync continuation, and stays usable",
+			Source: "issue #2822, #3299, #4170: a stale product-created managed-asset digest refuses at STATUS's own preflight, before any START is offered, carrying the exact `gentle-ai sync` continuation that reconciles it",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: staged prose candidate", Fixture: stageDocs("stale-managed-assets")},
 				{Name: "fixture: predecessor managed asset digest", Fixture: staleManagedAssetState},
-				{Name: "v2 OpenCode START is typed not-started and reconciliation stays usable", Requires: managedAssetsStartCapability, Composite: staleManagedAssetsStartIsNotUnknown},
+				{Name: "v2 OpenCode STATUS is a typed stop with a sync continuation, and stays usable", Requires: managedAssetsStatusCapability, Composite: staleManagedAssetsStatusIsNotUnknown},
 			},
 		},
 	}

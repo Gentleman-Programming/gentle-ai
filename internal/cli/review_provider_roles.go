@@ -235,9 +235,26 @@ type providerValidationResultWire struct {
 }
 
 type providerValidationCheckWire struct {
-	Passed      *bool                          `json:"passed"`
-	Evidence    []string                       `json:"evidence"`
-	Regressions []reviewtransaction.Regression `json:"regressions,omitempty"`
+	Passed      *bool                                   `json:"passed"`
+	Evidence    []string                                `json:"evidence"`
+	Regressions []reviewtransaction.Regression          `json:"regressions,omitempty"`
+	Inspection  *reviewtransaction.ValidationInspection `json:"inspection,omitempty"`
+}
+
+// validateValidationInspection rejects ValidationInspectionUnavailable with
+// no Reason: an unavailable inspection that does not say why is not an
+// actionable claim (issue #4266). An unrecognized Status is not this
+// function's job -- ValidationCheckInconclusive refuses that as a schema
+// violation wherever the check's conclusiveness is decided, so callers never
+// need a second unknown-status gate here.
+func validateValidationInspection(inspection *reviewtransaction.ValidationInspection, name string) error {
+	if inspection == nil || inspection.Status != reviewtransaction.ValidationInspectionUnavailable {
+		return nil
+	}
+	if strings.TrimSpace(inspection.Reason) == "" {
+		return fmt.Errorf("provider targeted validator %s inspection.status is unavailable but names no reason", name) // refusal:by-design operator-knowledge: an unavailable inspection must explain why the frozen trees could not be read
+	}
+	return nil
 }
 
 // reviewProviderTargetedValidatorKnownTopLevelJSON allows providers to add
@@ -517,9 +534,19 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	if wire.OriginalCriteria.Passed == nil || wire.CorrectionRegression.Passed == nil || result.FollowUps == nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator result requires passed checks and an explicit follow_ups array") // refusal:by-design operator-knowledge: every targeted validator response must explicitly declare its result
 	}
+	if err := validateValidationInspection(wire.OriginalCriteria.Inspection, "original_criteria"); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	if err := validateValidationInspection(wire.CorrectionRegression.Inspection, "correction_regression"); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
 	// An inconclusive verdict keeps its own retry ladder (classified below by
-	// conclusive()); only an unnamed or incompletely-named one is refused here.
-	if !*wire.CorrectionRegression.Passed && !reviewtransaction.InconclusiveValidationEvidence(wire.CorrectionRegression.Evidence) {
+	// conclusive(), same rule); only an unnamed genuine failure is refused here.
+	regressionInconclusive, err := reviewtransaction.ValidationCheckInconclusive(wire.CorrectionRegression.Inspection, wire.CorrectionRegression.Evidence)
+	if err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	if !*wire.CorrectionRegression.Passed && !regressionInconclusive {
 		if err := reviewProviderValidateFailedRegression(wire.CorrectionRegression.Regressions); err != nil {
 			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
 		}

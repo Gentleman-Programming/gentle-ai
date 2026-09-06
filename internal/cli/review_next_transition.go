@@ -20,17 +20,21 @@ const (
 
 // ReviewNextTransition is the sole negotiated routing decision. Its execute
 // form is complete, its collect form identifies one externally supplied
-// input, and its stop form otherwise contains no command-shaped data. The one
-// deliberate exception is UnachievableLensSlots (issue #3442): a bare stop
-// with no recoverable binding would strand a restarted orchestrator that lost
-// the pre-stop collect offer carrying the declared slot's SubjectHash, with
-// no native route back to the exact `--request-hash` its own withdraw needs.
+// input, and its stop form otherwise contains no command-shaped data. Two
+// deliberate exceptions exist: the managed_assets_outdated stop is itself
+// the candidate-preserving continuation (#3299, #4170), so Continuation is
+// additive and set only there; and UnachievableLensSlots (issue #3442): a
+// bare stop with no recoverable binding would strand a restarted
+// orchestrator that lost the pre-stop collect offer carrying the declared
+// slot's SubjectHash, with no native route back to the exact
+// `--request-hash` its own withdraw needs.
 type ReviewNextTransition struct {
 	Kind              string                                   `json:"kind"`
 	ReasonCode        string                                   `json:"reason_code"`
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
+	Continuation      *ReviewManagedAssetsContinuation         `json:"continuation,omitempty"`
 	// UnachievableLensSlots is a pointer-to-slice, exactly like
 	// ReviewTransitionExecution.SelectorArguments, so ReviewNextTransition
 	// stays a comparable struct (== / != against a zero value) for the
@@ -221,6 +225,15 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
 					Arguments: reviewTargetArguments(status),
 				})
+			}
+			// #3299, #4170: a stale managed-asset digest fails START's own
+			// preflight anyway, so offering it here would send the caller
+			// into a refusal STATUS already knew was coming. Classifying it
+			// here, before any START is proposed, and naming the exact sync
+			// continuation avoids the "guess run sync from free text" gap
+			// both issues report.
+			if provenance := checkManagedReviewerAssets(); provenance.stale() {
+				return reviewManagedAssetsStopTransition(input.RuntimeAgent, provenance.staleAssetIdentities())
 			}
 			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent, input.IntendedUntracked), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -1173,6 +1186,17 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 
 func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
+}
+
+// reviewManagedAssetsStopTransition reports stale managed reviewer assets
+// during STATUS preflight, before a START is ever offered (#3299, #4170): a
+// bare "stop" here would leave the caller to guess "run sync" from prose, so
+// the stop itself carries the exact candidate-preserving continuation, bound
+// to the runtime agent STATUS was asked for.
+func reviewManagedAssetsStopTransition(agent model.AgentID, staleAssets []string) ReviewNextTransition {
+	transition := reviewStopTransition("managed_assets_outdated")
+	transition.Continuation = managedAssetsContinuation(string(agent), staleAssets)
+	return transition
 }
 
 func reviewReasonDescription(reason string) string {

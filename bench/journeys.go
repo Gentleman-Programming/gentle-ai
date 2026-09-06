@@ -73,6 +73,16 @@ type statusEnvelope struct {
 				Token string `json:"token"`
 			} `json:"arguments"`
 		} `json:"execute"`
+		// Continuation is set only on the one stop reason_code
+		// (managed_assets_outdated) whose stop is itself the
+		// candidate-preserving continuation (#3299, #4170): the exact
+		// `gentle-ai sync` invocation that reconciles the recorded digest.
+		Continuation *struct {
+			Operation   string   `json:"operation"`
+			Command     string   `json:"command"`
+			Agent       string   `json:"agent"`
+			StaleAssets []string `json:"stale_assets"`
+		} `json:"continuation"`
 	} `json:"next_transition"`
 }
 

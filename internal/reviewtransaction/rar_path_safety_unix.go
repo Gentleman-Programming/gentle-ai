@@ -79,27 +79,7 @@ func createPrivateRARDirectory(path string) (bool, error) {
 	if err != nil && !errors.Is(err, fs.ErrExist) {
 		return false, err
 	}
-	validateErr := validatePrivateRARDirectory(path)
-	if validateErr != nil {
-		// A directory at this path can still fail its own owner-only
-		// validation, because some filesystems ignore the mode passed to
-		// mkdir(2). Ask for the mode explicitly and revalidate before giving
-		// up: that is the whole failure on WSL DrvFS, and it is the difference
-		// between the kill switch working and the documented self-service
-		// delivery exit being unreachable.
-		//
-		// Do NOT gate this on `created`: a run killed between mkdir(2) and its
-		// repair leaves an unsafe directory that every later mkdir answers with
-		// EEXIST, so that gate makes recovery once-only. The no-follow
-		// descriptor decides instead: tightening an EMPTY directory this euid
-		// already owns is not the world-action errUnsafeRARAuthorityPath
-		// declines. A symlink, somebody else's entry, and a directory already
-		// holding state all still refuse.
-		if repairErr := rarPrivateDirectoryChmod(path, 0o700); repairErr == nil {
-			validateErr = validatePrivateRARDirectory(path)
-		}
-	}
-	if validateErr != nil {
+	if validateErr := repairAndValidatePrivateRARDirectory(path); validateErr != nil {
 		// The just-created directory deliberately stays on disk. Removing it
 		// made the refusal name a path that no longer existed, so the repair
 		// this product prints (`chmod 700 <path>`) failed with "cannot access
@@ -109,6 +89,26 @@ func createPrivateRARDirectory(path string) (bool, error) {
 		return false, validateErr
 	}
 	return created, nil
+}
+
+// repairAndValidatePrivateRARDirectory validates path as an owner-only RAR
+// directory and, on failure, applies the same no-follow repair
+// createPrivateRARDirectory has always used before giving up. #3416: this is
+// now the one helper both the just-created path and
+// ensureRARDirectoryChain's pre-existing-directory branch call, so repair is
+// reachable whether the private directory was just created or already
+// existed (some filesystems ignore mkdir(2)'s mode; a directory an older
+// release or an interrupted run left behind is exactly as repairable). A
+// symlink, somebody else's entry, and a directory already holding state all
+// still refuse -- see validatePrivateRARDirectory / the no-follow repair.
+func repairAndValidatePrivateRARDirectory(path string) error {
+	validateErr := validatePrivateRARDirectory(path)
+	if validateErr != nil {
+		if repairErr := rarPrivateDirectoryChmod(path, 0o700); repairErr == nil {
+			validateErr = validatePrivateRARDirectory(path)
+		}
+	}
+	return validateErr
 }
 
 func createPrivateRARFile(path string) (*os.File, error) {
@@ -146,24 +146,77 @@ func privateOpenRARPathSafe(_ *os.File, info fs.FileInfo) bool {
 	return privateRARPathSafe("", info)
 }
 
+// rarCurrentEUID is os.Geteuid, kept as a variable so a test can pin the
+// current-process euid the ownership checks below compare against, instead of
+// depending on whichever uid happens to run the test.
+var rarCurrentEUID = os.Geteuid
+
 func rarRepositoryDirectorySafe(_ string, info fs.FileInfo) bool {
 	if info == nil || !info.IsDir() {
 		return false
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && stat.Uid == uint32(os.Geteuid())
+	return ok && stat.Uid == uint32(rarCurrentEUID())
 }
 
 func rarRepositoryOpenDirectorySafe(_ *os.File, info fs.FileInfo) bool {
 	return rarRepositoryDirectorySafe("", info)
 }
 
+// rarPOSIXFUSEProjectedOwnership reports whether path is hosted on a
+// filesystem that projects a fixed owner for every path -- a FUSE mount such
+// as ntfs-3g given a fixed user_id= -- rather than persisting real per-file
+// ownership metadata. Assigned per platform (real statfs-based detection on
+// Linux; "never FUSE" elsewhere, since #2838's evidence is Linux-specific);
+// kept as a variable so tests can reproduce either outcome, and any probe
+// error, without a real FUSE mount.
+var rarPOSIXFUSEProjectedOwnership = posixFUSEProjectedOwnership
+
 func formatRARAuthorityRefusal(path string) error {
+	// #2838: a directory whose reported owner is a FUSE mount-time
+	// projection cannot be fixed with chown -- chown returns EPERM, or is
+	// silently ignored, for every path on such a volume -- so the generic
+	// remedy is actively unactionable there. Detect that case and name the
+	// two routes that can actually change the outcome instead. A probe error
+	// falls through to the existing generic message unchanged: an
+	// inconclusive probe is not grounds to guess a new one.
+	if fuseProjected, probeErr := rarPOSIXFUSEProjectedOwnership(path); probeErr == nil && fuseProjected {
+		return errFUSEProjectedRAROwnershipType{path: path, innerErr: errUnsafeRARAuthorityPath}
+	}
 	return fmt.Errorf(
 		"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
 		path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
 	)
 }
+
+// errFUSEProjectedRAROwnershipType is the distinct #2838 refusal for a
+// FUSE-projected owner. It wraps errUnsafeRARAuthorityPath so
+// errors.Is(err, errUnsafeRARAuthorityPath) still holds for any caller
+// matching on the generic sentinel, but its own message deliberately never
+// mentions chown.
+type errFUSEProjectedRAROwnershipType struct {
+	path     string
+	innerErr error
+}
+
+func (e errFUSEProjectedRAROwnershipType) Error() string {
+	return fmt.Sprintf(
+		"RAR authority parent %q is on a filesystem that projects a fixed owner for every path "+
+			"(a FUSE mount, such as ntfs-3g given a fixed user_id=), so its reported ownership cannot "+
+			"be repaired by changing it: remount without a fixed user_id=/uid= owner projection, or "+
+			"move the repository to a filesystem that persists real per-file ownership",
+		e.path,
+	)
+}
+func (e errFUSEProjectedRAROwnershipType) Unwrap() error { return e.innerErr }
+func (e errFUSEProjectedRAROwnershipType) Is(target error) bool {
+	if t, ok := target.(errFUSEProjectedRAROwnershipType); ok {
+		return e.innerErr == t.innerErr
+	}
+	return false
+}
+
+var errFUSEProjectedRAROwnership = errFUSEProjectedRAROwnershipType{innerErr: errUnsafeRARAuthorityPath}
 
 func rarRepositoryOwnerDescription(path string) string {
 	info, err := os.Lstat(path)
@@ -174,7 +227,7 @@ func rarRepositoryOwnerDescription(path string) string {
 	if !ok {
 		return "an unreadable owner"
 	}
-	return fmt.Sprintf("uid %d (current euid %d)", stat.Uid, os.Geteuid())
+	return fmt.Sprintf("uid %d (current euid %d)", stat.Uid, rarCurrentEUID())
 }
 
 func openRARPathNoFollow(path string, directory bool) (*os.File, error) {

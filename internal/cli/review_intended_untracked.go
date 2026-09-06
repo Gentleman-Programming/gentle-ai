@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -147,6 +148,27 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 		input.Submission = &ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: 4}}
 	}
 	return reviewCollectTransition("intended_untracked_selection_required", input)
+}
+
+// reviewSameUntrackedPaths reports whether two path lists name exactly the
+// same set, independent of order. Both `IntendedUntrackedInventory` and a
+// stored `IntendedUntracked` selection are canonicalized and sorted at their
+// own source, but this comparison does not depend on that: it sorts its own
+// copies so a caller never has to reason about either side's ordering.
+func reviewSameUntrackedPaths(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	sortedLeft := append([]string{}, left...)
+	sortedRight := append([]string{}, right...)
+	sort.Strings(sortedLeft)
+	sort.Strings(sortedRight)
+	for index, path := range sortedLeft {
+		if path != sortedRight[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func reviewStartIntendedUntrackedArguments(scope reviewIntendedUntrackedScope) []ReviewTransitionArgument {

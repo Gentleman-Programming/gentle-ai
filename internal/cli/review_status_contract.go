@@ -705,6 +705,17 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
+	// #3299, #4170: the continuation is the one and only signal for a stale
+	// managed-asset digest. Attaching it to any other transition -- an
+	// execute the caller would run alongside a sync it was never told about,
+	// or a stop for an unrelated reason -- would let a caller read two
+	// disagreeing exits out of one envelope. Checked once here, ahead of
+	// every applicability branch below, so no later branch can reintroduce
+	// the gap by omission.
+	if result.NextTransition.Continuation != nil &&
+		!(result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "managed_assets_outdated") {
+		return errors.New("next_transition.continuation is valid only on a managed_assets_outdated stop") // refusal:by-design world-action: a producer that attaches this continuation to any other transition built a malformed envelope and requires a code fix, not an operator command
+	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 		if result.rddModeResolved && !result.rddMode.Enabled() {
 			// The kill switch answers before any selector-dependent invariant:
@@ -715,6 +726,17 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
 				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
 				return errors.New("disabled fresh target lacks an RDD STOP transition")
+			}
+			return nil
+		}
+		// #3299, #4170: a stale managed-asset digest stops a fresh target
+		// before any START is offered, regardless of its Action or
+		// projection kind -- the skew is orthogonal to what the candidate
+		// would otherwise start -- exactly as the kill-switch check above
+		// answers before any selector-dependent invariant.
+		if result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "managed_assets_outdated" {
+			if result.NextTransition.Continuation == nil {
+				return errors.New("managed_assets_outdated fresh target STOP lacks its sync continuation") // refusal:by-design world-action: only a producer code fix can emit the sync continuation this classification requires
 			}
 			return nil
 		}
