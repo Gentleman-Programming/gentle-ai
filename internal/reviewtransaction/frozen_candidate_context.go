@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -91,7 +92,22 @@ type FrozenCandidateContext struct {
 	CandidateTree       string
 	LegacyCandidateDiff *FrozenCandidateDiff
 	ChangedPathManifest []ChangedPathManifestEntry
-	repositoryRoot      string
+	// RenamePairs is the rename pairing frozenRenamePairs computed once
+	// during THIS inspector's own preparation (#4107/#3208): it is exactly
+	// what this same inspector's rename-aware patch reads used, so a
+	// reviewer or context builder inspecting this frozen candidate sees the
+	// pairing its own patches were built from. It is not synchronized with
+	// any other caller's separate invocation of the same derivation (for
+	// example ChangedLines' rename-aware sizing, computed independently,
+	// ordinarily at a different time for a different purpose) -- on the
+	// ordinary path both agree because the derivation is deterministic over
+	// the same immutable trees, but each has its own failure mode.
+	RenamePairs map[string]renamePairInfo
+	// RenamePairingDegraded is true when the rename pairing lookup itself
+	// failed for this boundary; RenamePairs is then empty and every rename
+	// pair fell back to the conservative --no-renames read.
+	RenamePairingDegraded bool
+	repositoryRoot        string
 }
 
 type PreparedCandidateInspector struct {
@@ -100,6 +116,13 @@ type PreparedCandidateInspector struct {
 	attributesFile string
 	cleanup        func() error
 	closed         bool
+	// renamePartners maps one manifest path to the other side of a
+	// git-detected rename pair (#3208). The manifest itself stays
+	// rename-disabled -- Status is never "R" -- so this is used only to size
+	// the per-path "patch" read: a moved file's two manifest entries would
+	// otherwise each materialize the entire file (a full delete, a full
+	// insert) instead of the small change git's own diff reports for it.
+	renamePartners map[string]string
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -212,19 +235,57 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 		}
 		manifest = append(manifest, entry)
 	}
+	// Rename pairing is computed exactly once for THIS inspector's own
+	// preparation, via the single canonical derivation (frozenRenamePairs)
+	// ChangedLines' rename-aware sizing also calls -- so the two can never
+	// disagree on the pairing LOGIC, though each still runs its own git
+	// invocation and does not observe the other's result (#4107/#3208). A
+	// failed lookup here degrades this inspector's own pairing to empty --
+	// recorded observably as RenamePairingDegraded so a reviewer/context
+	// builder can see it -- with every path in THIS inspector falling back
+	// to the plain --no-renames read, rather than aborting preparation.
+	renamePairs, renameDegraded := frozenRenamePairs(ctx, repo, isolation, snapshot.BaseTree, snapshot.CandidateTree)
+	renamePartners := renamePartnersFromManifest(renamePairs, manifest)
 	return &PreparedCandidateInspector{
 		frozen: FrozenCandidateContext{
 			BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
 			ChangedPathManifest: manifest, repositoryRoot: repo,
+			RenamePairs: renamePairs, RenamePairingDegraded: renameDegraded,
 		},
 		isolation: isolation, attributesFile: attributesFile, cleanup: cleanup,
+		renamePartners: renamePartners,
 	}, nil
+}
+
+// renamePartnersFromManifest narrows an already-computed rename pairing (see
+// frozenRenamePairs) to the pairs this exact manifest recognizes as a clean
+// delete/add pair (issue #3208's counterpart to #4107): it performs no Git
+// invocation of its own, and the manifest's paths and rename-disabled Status
+// enum are never touched.
+func renamePartnersFromManifest(pairs map[string]renamePairInfo, manifest []ChangedPathManifestEntry) map[string]string {
+	statusByPath := make(map[string]CandidatePathStatus, len(manifest))
+	for _, entry := range manifest {
+		statusByPath[entry.Path] = entry.Status
+	}
+	partners := make(map[string]string, len(pairs))
+	for path, info := range pairs {
+		if statusByPath[path] != CandidatePathDeleted || statusByPath[info.partner] != CandidatePathAdded {
+			continue
+		}
+		partners[path] = info.partner
+		partners[info.partner] = path
+	}
+	return partners
 }
 
 // FrozenCandidateContext returns a copy that cannot mutate later inspection scope.
 func (inspector *PreparedCandidateInspector) FrozenCandidateContext() FrozenCandidateContext {
 	frozen := inspector.frozen
 	frozen.ChangedPathManifest = append(frozen.ChangedPathManifest[:0:0], frozen.ChangedPathManifest...)
+	// RenamePairs is a map: the struct copy above shares it with
+	// inspector.frozen unless cloned here, which would let a caller mutating
+	// the returned value corrupt this inspector's own recorded pairing.
+	frozen.RenamePairs = maps.Clone(frozen.RenamePairs)
 	return frozen
 }
 
@@ -274,8 +335,18 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		// preserved by the isolation this inspector already installs: an empty
 		// attributes file plus GIT_ATTR_NOSYSTEM, so neither the repository's
 		// .gitattributes nor the machine's can move the classification.
-		path := ":(literal)" + frozen.ChangedPathManifest[pathIndex].Path
-		args = append(common, "diff", "--patch", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
+		entryPath := frozen.ChangedPathManifest[pathIndex].Path
+		renameFlag, paths := "--no-renames", []string{":(literal)" + entryPath}
+		// A git-detected rename charges this read as one small change-inside
+		// -the-moved-file patch instead of a full delete or full insert, so a
+		// candidate dominated by pure moves stays inside the reviewer context
+		// byte budget (#3208). Both manifest entries in the pair render the
+		// same rename patch; each is still tagged with its own path above.
+		if partner, ok := inspector.renamePartners[entryPath]; ok {
+			renameFlag, paths = "-M", []string{":(literal)" + entryPath, ":(literal)" + partner}
+		}
+		args = append(common, "diff", "--patch", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", renameFlag, "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--")
+		args = append(args, paths...)
 	case "object":
 		tree := frozen.CandidateTree
 		if side == "base" {

@@ -180,6 +180,49 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 	return report, nil
 }
 
+// InventoryAuthorityForLineage reads authority entries and locks scoped to a single lineage identifier.
+// It validates the lineage ID, runs the full repository inventory, filters entries and locks to those
+// matching the lineage ID, and returns an error if the named lineage does not exist in the inventory.
+func InventoryAuthorityForLineage(ctx context.Context, repo string, lineageID string) (AuthorityStatusReport, error) {
+	if err := validateLineageID(lineageID); err != nil {
+		return AuthorityStatusReport{}, err
+	}
+	report, err := InventoryAuthority(ctx, repo)
+	if err != nil {
+		return AuthorityStatusReport{}, err
+	}
+	var matchingEntries []AuthorityInventoryEntry
+	for _, entry := range report.Entries {
+		if entry.LineageID == lineageID {
+			matchingEntries = append(matchingEntries, entry)
+		}
+	}
+	if len(matchingEntries) == 0 {
+		// refusal:by-design operator-knowledge: named lineage was never created or has already been pruned
+		return AuthorityStatusReport{}, fmt.Errorf("review authority inventory contains no entries for lineage %q", lineageID)
+	}
+	report.Entries = matchingEntries
+
+	var matchingLocks []AuthorityLockEvidence
+	for _, lock := range report.Locks {
+		if lock.LineageID == lineageID || lock.LineageID == "" {
+			matchingLocks = append(matchingLocks, lock)
+		}
+	}
+	report.Locks = matchingLocks
+
+	if len(report.Entries) == 1 {
+		report.Status = report.Entries[0].Status
+	} else if len(report.Entries) == 0 && report.Complete {
+		report.Status = AuthorityStatusClean
+	} else if !report.Complete {
+		report.Status = AuthorityStatusInvalid
+	} else {
+		report.Status = AuthorityStatusActive
+	}
+	return report, nil
+}
+
 type authorityVersionInventory struct {
 	entries     []AuthorityInventoryEntry
 	locks       []AuthorityLockEvidence

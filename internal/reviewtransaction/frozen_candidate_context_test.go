@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -468,8 +469,11 @@ func TestPreparedCandidateInspectorReusesOneSetupForFourReads(t *testing.T) {
 			t.Fatalf("Inspect(%q, %d) error = %v", read.operation, read.pathIndex, err)
 		}
 	}
-	if children != 11 {
-		t.Fatalf("Git children for prepare plus four reads = %d, want 11", children)
+	// 12, not 11: prepare now also runs one rename-aware numstat (-M) to
+	// build the patch operation's rename pairing (#3208), on top of its prior
+	// setup and raw-diff reads.
+	if children != 12 {
+		t.Fatalf("Git children for prepare plus four reads = %d, want 12", children)
 	}
 	builder := SnapshotBuilder{Repo: repo}
 	for _, inspection := range []struct {
@@ -511,6 +515,171 @@ func TestPreparedCandidateInspectorReusesOneSetupForFourReads(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("cleanup calls = %d, want 1", calls)
+	}
+}
+
+// renamedManifestFixture builds a staged candidate with one pure file move
+// (a git-detected rename pair) alongside one unrelated add and one unrelated
+// delete of unrelated content (never a rename pair with anything), and
+// returns the repo, its prepared inspector, and the manifest indices needed
+// to inspect each interesting path.
+func renamedManifestFixture(t *testing.T) (repo string, inspector *PreparedCandidateInspector, oldIndex, newIndex, unrelatedAddedIndex, unrelatedDeletedIndex int) {
+	t.Helper()
+	requireSnapshotGit(t)
+	repo = initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "moved-source.txt", "line one\nline two\nline three\n")
+	writeSnapshotFile(t, repo, "stays-deleted.txt", "unrelated content to delete\n")
+	gitSnapshot(t, repo, "add", "--", "moved-source.txt", "stays-deleted.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	gitSnapshot(t, repo, "mv", "moved-source.txt", "moved-destination.txt")
+	gitSnapshot(t, repo, "rm", "--", "stays-deleted.txt")
+	writeSnapshotFile(t, repo, "unrelated-add.txt", "unrelated content to add\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspector, err = (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = inspector.Close() })
+	frozen := inspector.FrozenCandidateContext()
+	indexOf := func(path string) int {
+		for index, entry := range frozen.ChangedPathManifest {
+			if entry.Path == path {
+				return index
+			}
+		}
+		t.Fatalf("manifest is missing %q: %#v", path, frozen.ChangedPathManifest)
+		return -1
+	}
+	return repo, inspector, indexOf("moved-source.txt"), indexOf("moved-destination.txt"), indexOf("unrelated-add.txt"), indexOf("stays-deleted.txt")
+}
+
+// TestFrozenCandidateContextRenamePairsIsNotAliasedToTheInspector proves
+// FrozenCandidateContext()'s copy promise holds for RenamePairs too: it is a
+// map, a reference type the struct-value copy alone does not protect, so
+// without an explicit clone a caller mutating the returned map would corrupt
+// the inspector's own recorded pairing.
+func TestFrozenCandidateContextRenamePairsIsNotAliasedToTheInspector(t *testing.T) {
+	_, inspector, oldIndex, _, _, _ := renamedManifestFixture(t)
+	frozen := inspector.FrozenCandidateContext()
+	if len(frozen.RenamePairs) == 0 {
+		t.Fatal("fixture has no rename pairs to prove non-aliasing with")
+	}
+	for path := range frozen.RenamePairs {
+		delete(frozen.RenamePairs, path)
+	}
+	frozen.RenamePairs["forged"] = renamePairInfo{partner: "forged-partner"}
+
+	replayed := inspector.FrozenCandidateContext()
+	if len(replayed.RenamePairs) == 0 {
+		t.Fatal("mutating the first returned RenamePairs map emptied the inspector's own recorded pairing")
+	}
+	if _, forged := replayed.RenamePairs["forged"]; forged {
+		t.Fatal("mutating the first returned RenamePairs map leaked a forged entry into the inspector's own recorded pairing")
+	}
+	// The patch read itself must still be rename-aware: mutating the
+	// returned copy must not have touched what Inspect actually uses.
+	payload, err := inspector.Inspect(context.Background(), "patch", oldIndex, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, old) error = %v", err)
+	}
+	if !strings.Contains(string(payload), "rename from") {
+		t.Fatalf("Inspect(patch, old) = %q, want it to remain rename-aware after the returned map was mutated", payload)
+	}
+}
+
+// TestPreparedCandidateInspectorPatchIsRenameAwareForAPairedPath is issue
+// #3208's behavioral proof: a git-detected rename pair's "patch" read comes
+// back as one compact `-M` rename patch, tagged under both manifest indices,
+// instead of a full delete plus a full insert.
+func TestPreparedCandidateInspectorPatchIsRenameAwareForAPairedPath(t *testing.T) {
+	_, inspector, oldIndex, newIndex, _, _ := renamedManifestFixture(t)
+	for _, index := range []int{oldIndex, newIndex} {
+		payload, err := inspector.Inspect(context.Background(), "patch", index, "")
+		if err != nil {
+			t.Fatalf("Inspect(patch, %d) error = %v", index, err)
+		}
+		text := string(payload)
+		if !strings.Contains(text, "rename from moved-source.txt") || !strings.Contains(text, "rename to moved-destination.txt") {
+			t.Fatalf("Inspect(patch, %d) = %q, want a rename patch", index, text)
+		}
+		if strings.Contains(text, "deleted file mode") || strings.Contains(text, "new file mode") {
+			t.Fatalf("Inspect(patch, %d) = %q, want no full delete/insert markers for a paired rename", index, text)
+		}
+	}
+}
+
+// TestPreparedCandidateInspectorPatchStaysNoRenameForAnUnpairedPath proves
+// the rename-aware path is scoped to genuine pairs: an unrelated add and an
+// unrelated delete (never paired with anything) still each read as the
+// ordinary single-path --no-renames patch.
+func TestPreparedCandidateInspectorPatchStaysNoRenameForAnUnpairedPath(t *testing.T) {
+	_, inspector, _, _, addedIndex, deletedIndex := renamedManifestFixture(t)
+	added, err := inspector.Inspect(context.Background(), "patch", addedIndex, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, added) error = %v", err)
+	}
+	if !strings.Contains(string(added), "new file mode") || strings.Contains(string(added), "rename") {
+		t.Fatalf("Inspect(patch, added) = %q, want an ordinary new-file patch", added)
+	}
+	deleted, err := inspector.Inspect(context.Background(), "patch", deletedIndex, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, deleted) error = %v", err)
+	}
+	if !strings.Contains(string(deleted), "deleted file mode") || strings.Contains(string(deleted), "rename") {
+		t.Fatalf("Inspect(patch, deleted) = %q, want an ordinary deleted-file patch", deleted)
+	}
+}
+
+// TestPreparedCandidateInspectorDegradesToNoRenamesWhenPairingFails is the
+// counterpart to fix 2: when the rename-pairing lookup itself fails during
+// PrepareCandidateInspector, preparation must still succeed, degrading to no
+// paired reads (the ordinary --no-renames patch for every path) rather than
+// aborting the whole inspector over an advisory sizing failure.
+func TestPreparedCandidateInspectorDegradesToNoRenamesWhenPairingFails(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "moved-source.txt", "line one\nline two\nline three\n")
+	gitSnapshot(t, repo, "add", "--", "moved-source.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	gitSnapshot(t, repo, "mv", "moved-source.txt", "moved-destination.txt")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := gitCommandContext
+	t.Cleanup(func() { gitCommandContext = original })
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "-M") {
+			return exec.CommandContext(ctx, "git", "not-a-real-git-subcommand-for-testing")
+		}
+		return original(ctx, name, args...)
+	}
+
+	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("PrepareCandidateInspector() error = %v, want it to degrade instead of aborting", err)
+	}
+	defer inspector.Close()
+	frozen := inspector.FrozenCandidateContext()
+	var oldIndex int
+	for index, entry := range frozen.ChangedPathManifest {
+		if entry.Path == "moved-source.txt" {
+			oldIndex = index
+		}
+	}
+	payload, err := inspector.Inspect(context.Background(), "patch", oldIndex, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, old) error = %v", err)
+	}
+	if !strings.Contains(string(payload), "deleted file mode") {
+		t.Fatalf("Inspect(patch, old) = %q, want the ordinary --no-renames deleted-file patch after pairing failed", payload)
 	}
 }
 

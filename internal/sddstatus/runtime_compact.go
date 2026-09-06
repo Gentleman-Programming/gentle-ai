@@ -70,16 +70,33 @@ type CompactAttemptResult struct {
 	// the token is real. Empty whenever the chain holds nothing, because a
 	// field that is always populated is noise.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// MaxChangedLines and MaxChangedLinesSource report an applied DEFAULT
+	// runtime line budget on the proceed answer itself (#2589): before this,
+	// an omitted --max-changed-lines was charged silently, and a caller
+	// learned only from a separate `status` call that a 200-line ceiling had
+	// already been applied. Both stay empty for an explicit budget and for
+	// every non-proceed answer -- an explicit caller already knows the value
+	// it typed, and this compact projection stays bounded for the ordinary
+	// case (TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory).
+	MaxChangedLines       int    `json:"max_changed_lines,omitempty"`
+	MaxChangedLinesSource string `json:"max_changed_lines_source,omitempty"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
 // BeginAttemptRequest. Work-unit scope (WorkUnit, EvidenceGoal, MaxAttempts,
 // MaxChangedLines) is owned exactly once, by the embedded BeginAttemptRequest
 // (decision 9 / CON-08: RuntimeObjective's BeginAttemptRequest is the single
-// work-unit-scope owner). ExpectedRevision is inert here — Acquire always
-// derives it from ledger replay state before use — but embedding rather than
-// re-declaring keeps the projection from drifting out of sync with its one
-// source of truth the way the pre-Wave-4 parallel struct did (#2133/#2151).
+// work-unit-scope owner). ExpectedRevision is an OPTIONAL validated CAS input
+// (#4160): empty leaves every existing acquire path byte-for-byte unchanged --
+// Acquire still derives the value it actually begins against from ledger
+// replay state -- but a non-empty value is checked against that same live
+// revision before the begin it guards, and refused with the identical typed
+// stale-revision shape every legacy verb's own store.mutate already returns.
+// This is what lets reset/status guidance point a caller at acquire's own
+// --expected-revision instead of a legacy verb the compact flow otherwise
+// never touches. Embedding rather than re-declaring keeps the projection from
+// drifting out of sync with its one source of truth the way the pre-Wave-4
+// parallel struct did (#2133/#2151).
 type CompactAcquireRequest struct {
 	BeginAttemptRequest
 
@@ -216,6 +233,14 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if request.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
 		return CompactAttemptResult{}, errors.New("remediates_evidence_revision must be sha256; rerun `gentle-ai sdd-attempt acquire` with --remediates-evidence-revision sha256:<64-lowercase-hex>")
 	}
+	// #4160: a caller naming both the ownership-continuation proof and the CAS
+	// input must not name two different ledger states at once. A matching
+	// token already identifies the exact revision it continues, so this is a
+	// pure input-shape check -- no ledger read is needed to catch the
+	// contradiction.
+	if request.Token != "" && begin.ExpectedRevision != "" && request.Token != begin.ExpectedRevision {
+		return CompactAttemptResult{}, errors.New("token and expected_revision disagree; rerun `gentle-ai sdd-attempt acquire` with --token and --expected-revision naming the same revision, or only one of them")
+	}
 
 	replay, err := store.load()
 	if err != nil {
@@ -249,6 +274,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	}); terminal {
 		if result.State == CompactStateProceed {
 			result.SettleObligation = runtimeSettleObligation(replay.Status)
+			result = compactAcquireBudgetResult(result, replay.Status.Objective)
 		}
 		return result, nil
 	}
@@ -259,17 +285,42 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		!failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
 		return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
 	}
+	// #4160: a caller-declared --expected-revision is CAS-checked against the
+	// live ledger revision before this fresh begin claims it -- the same
+	// guarantee every legacy verb's own store.mutate already enforces -- and
+	// refused with the identical typed stale-revision shape. Empty stays a
+	// no-op, so every acquire call that never declares one is unaffected.
+	if begin.ExpectedRevision != "" && begin.ExpectedRevision != replay.Status.Revision {
+		return store.compactMutationFailure(&RuntimeRevisionConflictError{
+			Expected: begin.ExpectedRevision, Current: replay.Status.Revision,
+		}, false, begin), nil
+	}
 	begin.ExpectedRevision = replay.Status.Revision
 	started, err := store.Begin(ctx, begin)
 	if err != nil {
 		return store.compactMutationFailure(err, false, begin), nil
 	}
-	return CompactAttemptResult{
+	return compactAcquireBudgetResult(CompactAttemptResult{
 		State: CompactStateProceed, Token: started.Revision,
 		// Derived from the PRE-mutation chain: the obligation this attempt
 		// inherits is the one that existed when it was opened.
 		SettleObligation: runtimeSettleObligation(replay.Status),
-	}, nil
+	}, started.Objective), nil
+}
+
+// compactAcquireBudgetResult surfaces the applied DEFAULT runtime line budget
+// on a proceed answer (#2589) -- the one case this compact projection was
+// silent about: an omitted --max-changed-lines charged a 200-line ceiling
+// with nothing in the answer to say so. An explicit budget adds nothing here,
+// preserving the bounded/unchanging compact output an explicit acquire call
+// already guarantees (TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory)
+// -- the caller who typed the value already knows it.
+func compactAcquireBudgetResult(result CompactAttemptResult, objective *RuntimeObjective) CompactAttemptResult {
+	if objective != nil && objective.MaxChangedLinesSource == runtimeChangedLinesSourceDefault {
+		result.MaxChangedLines = objective.MaxChangedLines
+		result.MaxChangedLinesSource = objective.MaxChangedLinesSource
+	}
+	return result
 }
 
 // Settle closes the attempt selected by Token through the ordinary Finish
@@ -463,6 +514,9 @@ func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, own
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 		Request: request, PresentedToken: ownedToken,
 	}); terminal {
+		if result.State == CompactStateProceed {
+			result = compactAcquireBudgetResult(result, replay.Status.Objective)
+		}
 		return result
 	}
 	return compactBlocked(CompactBlockInvalidContinuation, "")

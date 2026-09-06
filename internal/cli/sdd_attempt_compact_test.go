@@ -26,6 +26,12 @@ type compactAttemptOutput struct {
 	// passing settle will already owe, named while the attempt is still
 	// unspent.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// MaxChangedLines/MaxChangedLinesSource ride the proceed envelope too
+	// (#2589): the runtime line budget this attempt opened against, and
+	// whether it came from an explicit --max-changed-lines or the compiled
+	// default.
+	MaxChangedLines       int    `json:"max_changed_lines,omitempty"`
+	MaxChangedLinesSource string `json:"max_changed_lines_source,omitempty"`
 }
 
 func TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory(t *testing.T) {

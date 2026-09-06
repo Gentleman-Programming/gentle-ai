@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -348,6 +349,222 @@ func TestCountChangedLinesHasOneCrossAdapterRule(t *testing.T) {
 	}
 	if _, err := CountChangedLines([]DiffStat{{Path: "same.go", Additions: 1}, {Path: "same.go", Deletions: 1}}); err == nil {
 		t.Fatal("CountChangedLines() accepted duplicate logical paths")
+	}
+}
+
+// TestChangedLinesIsRenameAwareForAPureFileMove is issue #4107: a pure
+// relocation of a 100-line file used to be charged as a full 100-line
+// deletion at the old path plus a full 100-line insertion at the new path
+// (200 changed lines), even though nothing inside the file changed.
+func TestChangedLinesIsRenameAwareForAPureFileMove(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	var lines strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&lines, "line %d\n", i)
+	}
+	writeSnapshotFile(t, repo, "big.txt", lines.String())
+	gitSnapshot(t, repo, "add", "--", "big.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add big file")
+
+	gitSnapshot(t, repo, "mv", "big.txt", "moved-big.txt")
+	gitSnapshot(t, repo, "add", "-A", "--")
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("ChangedLines() error = %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("ChangedLines() = %d, want 0 for a pure file move", got)
+	}
+}
+
+// TestChangedLinesRenameAwareStillCountsAuthoredEditsInsideTheMovedFile
+// proves the rename-aware accounting only removes the accounting artifact of
+// the move; a genuine edit made alongside the move is still charged.
+func TestChangedLinesRenameAwareStillCountsAuthoredEditsInsideTheMovedFile(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	var lines strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&lines, "line %d\n", i)
+	}
+	writeSnapshotFile(t, repo, "big.txt", lines.String())
+	gitSnapshot(t, repo, "add", "--", "big.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add big file")
+
+	gitSnapshot(t, repo, "mv", "big.txt", "moved-big.txt")
+	writeSnapshotFile(t, repo, "moved-big.txt", lines.String()+"one more authored line\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("ChangedLines() error = %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("ChangedLines() = %d, want 1 for one authored line inside a moved file", got)
+	}
+}
+
+// TestChangedLinesFallsBackToConservativeTotalWhenRenameSizingFails proves
+// rename-aware sizing is advisory, never load-bearing: when the independent
+// diff invocation renameAwareSavings depends on fails, ChangedLines must
+// still charge the ordinary no-rename total instead of refusing the charge.
+func TestChangedLinesFallsBackToConservativeTotalWhenRenameSizingFails(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	var lines strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&lines, "line %d\n", i)
+	}
+	writeSnapshotFile(t, repo, "big.txt", lines.String())
+	gitSnapshot(t, repo, "add", "--", "big.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add big file")
+	gitSnapshot(t, repo, "mv", "big.txt", "moved-big.txt")
+	gitSnapshot(t, repo, "add", "-A", "--")
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := gitCommandContext
+	t.Cleanup(func() { gitCommandContext = original })
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "-M") {
+			// Fail only the rename-aware sizing invocation; every other Git
+			// call (DiffStats, etc.) runs normally.
+			return exec.CommandContext(ctx, "git", "not-a-real-git-subcommand-for-testing")
+		}
+		return original(ctx, name, args...)
+	}
+
+	got, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("ChangedLines() error = %v, want a fallback to the conservative no-rename total instead of a hard failure", err)
+	}
+	if got != 200 {
+		t.Fatalf("ChangedLines() = %d, want 200 (the conservative no-rename total: 100 deletions + 100 insertions)", got)
+	}
+}
+
+// pureMoveSnapshotForAgreement builds a staged pure file move and returns its
+// snapshot, shared by the two agreement tests below.
+func pureMoveSnapshotForAgreement(t *testing.T) (string, Snapshot) {
+	t.Helper()
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	var lines strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&lines, "line %d\n", i)
+	}
+	writeSnapshotFile(t, repo, "big.txt", lines.String())
+	gitSnapshot(t, repo, "add", "--", "big.txt")
+	gitSnapshot(t, repo, "commit", "-m", "add big file")
+	gitSnapshot(t, repo, "mv", "big.txt", "moved-big.txt")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, snapshot
+}
+
+// TestChangedLinesAndInspectorAgreeOnTheSameRenamePairForAPureMove is the R4
+// correction's core proof: ChangedLines' rename-aware sizing and
+// PrepareCandidateInspector both derive their pairing via the same
+// frozenRenamePairs derivation (each still its own git invocation), so for
+// the identical frozen boundary they see the identical pair on the ordinary
+// (non-failing) path.
+func TestChangedLinesAndInspectorAgreeOnTheSameRenamePairForAPureMove(t *testing.T) {
+	repo, snapshot := pureMoveSnapshotForAgreement(t)
+
+	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("ChangedLines() error = %v", err)
+	}
+	if lines != 0 {
+		t.Fatalf("ChangedLines() = %d, want 0 for a pure move", lines)
+	}
+
+	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("PrepareCandidateInspector() error = %v", err)
+	}
+	defer inspector.Close()
+	frozen := inspector.FrozenCandidateContext()
+	if frozen.RenamePairingDegraded {
+		t.Fatal("FrozenCandidateContext.RenamePairingDegraded = true, want false")
+	}
+	pair, ok := frozen.RenamePairs["big.txt"]
+	if !ok || pair.partner != "moved-big.txt" {
+		t.Fatalf("FrozenCandidateContext.RenamePairs[big.txt] = %#v, ok=%v; want partner moved-big.txt", pair, ok)
+	}
+	// The same pairing sizing used: additions+deletions inside the moved
+	// file account for the whole 0-line ChangedLines() result above.
+	if pair.additions+pair.deletions != 0 {
+		t.Fatalf("recorded pair additions+deletions = %d, want 0 to agree with ChangedLines()", pair.additions+pair.deletions)
+	}
+}
+
+// TestChangedLinesAndInspectorDegradeConsistentlyWhenRenamePairingFails is
+// the R4 correction's degradation proof: when both invocations of the shared
+// frozenRenamePairs derivation fail (injected here for both), ChangedLines'
+// sizing (no rename credit) and PrepareCandidateInspector's patch reads
+// (--no-renames) fall back the same way, each recording its own failure the
+// identical way -- RenamePairingDegraded observable on the inspector side.
+func TestChangedLinesAndInspectorDegradeConsistentlyWhenRenamePairingFails(t *testing.T) {
+	repo, snapshot := pureMoveSnapshotForAgreement(t)
+
+	original := gitCommandContext
+	t.Cleanup(func() { gitCommandContext = original })
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slices.Contains(args, "-M") {
+			return exec.CommandContext(ctx, "git", "not-a-real-git-subcommand-for-testing")
+		}
+		return original(ctx, name, args...)
+	}
+
+	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("ChangedLines() error = %v, want a fallback instead of a hard failure", err)
+	}
+	if lines != 200 {
+		t.Fatalf("ChangedLines() = %d, want 200 (no rename credit once pairing degrades)", lines)
+	}
+
+	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("PrepareCandidateInspector() error = %v, want it to degrade instead of aborting", err)
+	}
+	defer inspector.Close()
+	frozen := inspector.FrozenCandidateContext()
+	if !frozen.RenamePairingDegraded {
+		t.Fatal("FrozenCandidateContext.RenamePairingDegraded = false, want true once pairing failed")
+	}
+	if len(frozen.RenamePairs) != 0 {
+		t.Fatalf("FrozenCandidateContext.RenamePairs = %#v, want empty once pairing failed", frozen.RenamePairs)
+	}
+	var oldIndex int
+	for index, entry := range frozen.ChangedPathManifest {
+		if entry.Path == "big.txt" {
+			oldIndex = index
+		}
+	}
+	payload, err := inspector.Inspect(context.Background(), "patch", oldIndex, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, old) error = %v", err)
+	}
+	if !strings.Contains(string(payload), "deleted file mode") {
+		t.Fatalf("Inspect(patch, old) = %q, want the ordinary --no-renames deleted-file patch once pairing degraded", payload)
 	}
 }
 

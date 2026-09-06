@@ -57,10 +57,15 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "8d5e1a8491db1a5a2f6329e8c1d5cd210dd175e0525ff4d51fa914351d2fcf08",
 		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
-		"fixtures/status.fixture.json":       "846377e06df2cae3587c4258ea75fe1ec1b51f08d01f1d498378c3bf13e93921",
-		"schemas/capabilities.schema.json":   "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
-		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "3b257b417270744061dc943a97537e253e36e34de4591b0400e3c38ea3efde80",
+		// issue #3922 / #4199 / gentle-pi#543: the native-git reviewer_result
+		// collect input no longer inlines changed_path_manifest -- it is
+		// already committed to by artifact_subject.changed_path_manifest_sha256
+		// -- so this fixture legitimately dropped that array. Deliberate, not
+		// drift.
+		"fixtures/status.fixture.json":     "3fc2539d5bcaa8dc3ed650ba7f5e8915856a3d9f8caf1cfcb1b0354ecacbe0f8",
+		"schemas/capabilities.schema.json": "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
+		"schemas/consent.schema.json":      "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
+		"schemas/status.schema.json":       "3b257b417270744061dc943a97537e253e36e34de4591b0400e3c38ea3efde80",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -124,8 +129,14 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
+		//
+		// issue #3922 / #4199 / gentle-pi#543: the review.capture-result `then`
+		// clause no longer requires changed_path_manifest -- it stays an
+		// allowed property, but the native-git transport no longer needs to
+		// inline it since artifact_subject.changed_path_manifest_sha256 already
+		// commits to it. Deliberate, not drift.
 		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
-		"schemas/status-v5.schema.json": "997bd9628ea59871640e4a17b46d61f8590c93f64e9344f24d809eb6b7cbcf6c",
+		"schemas/status-v5.schema.json": "8f6d05bd4ed64abc765bd7ce9ae8bed0470448cd260fc0a94dc5929b88f42a18",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -229,7 +240,7 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 		// candidate-preserving `gentle-ai sync` continuation (see
 		// failure.schema.json#/$defs/managed_assets_continuation). Deliberate,
 		// not drift.
-		"schemas/status-v7.schema.json":         "f9abdf1e2b11130879c60e4e5b2eed114832f7a2be0d9170cc5cb4ba60ae67e3",
+		"schemas/status-v7.schema.json":         "f0f48d1309e028ea4d43e433c684f470761c0828d6f40eb1c44e8a0ad0fe2da4",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {

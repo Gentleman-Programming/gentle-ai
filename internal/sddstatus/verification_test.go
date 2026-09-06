@@ -76,7 +76,9 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 		{"unknown", strings.Replace(valid, "verdict: pass", "verdict: pass\nextra: value", 1), "unknown", false},
 		{"malformed", strings.Replace(valid, "blockers: 0", "blockers", 1), "malformed", false},
 		{"missing", strings.Replace(valid, "build_command: go test ./cmd/gentle-ai\n", "", 1), "missing build_command", false},
-		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "invalid test_output_hash", false},
+		// #4089: the refusal must name the expected shape, not just the field.
+		{"invalid hash", strings.Replace(valid, "sha256:"+strings.Repeat("b", 64), "sha256:nope", 1), "test_output_hash must be sha256:<64 lowercase hex>", false},
+		{"invalid evidence_revision", strings.Replace(valid, "sha256:"+strings.Repeat("a", 64), "sha256:nope", 1), "evidence_revision must be sha256:<64 lowercase hex>", false},
 		{"placeholder command", strings.Replace(valid, "test_command: go test ./internal/example", "test_command: placeholder", 1), "concrete", false},
 	}
 	for _, tt := range tests {

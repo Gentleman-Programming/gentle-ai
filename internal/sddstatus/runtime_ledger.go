@@ -46,10 +46,19 @@ const (
 	runtimeOperationHandoff                  = "attempt/handoff"
 	runtimeOperationGrant                    = "authority/grant"
 	maximumRuntimeGrantRoots                 = 32
-	maximumRuntimeIntendedUntracked          = 32
-	runtimeLockAcquireAttempts               = 3
-	finalVerifyWorkUnit                      = "verify"
-	finalVerifyAttestationWorkUnit           = "verify-attestation"
+	// maximumRuntimeIntendedUntracked bounds one attempt's untracked
+	// declaration (#4029). 256 is chosen over a chunked multi-call
+	// declaration path: it keeps the existing single-call digest/inventory
+	// binding exact (one declared list, one canonical digest, one capture) at
+	// a size that already covers the large real work units reported stuck at
+	// 32 (40 born-during files was enough to deadlock one), while a chunked
+	// path would need a new partial-declaration protocol, its own ledger
+	// event shape, and cross-call inventory-digest reconciliation for a
+	// problem a bigger constant already solves.
+	maximumRuntimeIntendedUntracked = 256
+	runtimeLockAcquireAttempts      = 3
+	finalVerifyWorkUnit             = "verify"
+	finalVerifyAttestationWorkUnit  = "verify-attestation"
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -218,6 +227,29 @@ type RuntimeObjective struct {
 	InitialCandidateTree     string `json:"initial_candidate_tree"`
 	MaxAttempts              int    `json:"max_attempts"`
 	MaxChangedLines          int    `json:"max_changed_lines"`
+	// MaxChangedLinesSource reports whether MaxChangedLines came from an
+	// explicit --max-changed-lines or from the compiled
+	// DefaultRuntimeChangedLines fallback (#2589): before this, an omitted
+	// flag silently became a 200-line ceiling with nothing in the
+	// begin/acquire answer distinguishing it from a maintainer who typed 200
+	// on purpose. An objective replayed from a record written before this
+	// provenance was tracked reports "default", the same as an unmarked
+	// explicit value would -- there is no way to recover which one a legacy
+	// record was, so this never asserts "explicit" without the caller's own
+	// say-so.
+	MaxChangedLinesSource string `json:"max_changed_lines_source,omitempty"`
+}
+
+const (
+	runtimeChangedLinesSourceExplicit = "explicit"
+	runtimeChangedLinesSourceDefault  = "default"
+)
+
+func runtimeChangedLinesSource(explicit bool) string {
+	if explicit {
+		return runtimeChangedLinesSourceExplicit
+	}
+	return runtimeChangedLinesSourceDefault
 }
 
 type RuntimeAttempt struct {
@@ -248,6 +280,9 @@ type RuntimeAttempt struct {
 	ProcessEvidence            string             `json:"process_evidence,omitempty"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+	// InvalidatedWithoutDelivery mirrors the finish event's own field of the
+	// same name; see runtimeFinishEvent.InvalidatedWithoutDelivery.
+	InvalidatedWithoutDelivery bool `json:"invalidated_without_delivery,omitempty"`
 }
 
 type RuntimeHandoff struct {
@@ -309,6 +344,11 @@ type RuntimeRescope struct {
 	MaxChangedLines          int    `json:"max_changed_lines"`
 	Reason                   string `json:"reason"`
 	Actor                    string `json:"actor"`
+	// IntendedUntracked carries the maintainer-declared fresh successor
+	// selection (#4195) when the rescope declared one; nil when the
+	// successor replays the predecessor's recorded selection instead
+	// (runtimeRescopeSuccessorIntendedUntracked prefers this field).
+	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
 }
 
 type RuntimeRepair struct {
@@ -365,13 +405,25 @@ type RuntimeStatus struct {
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision  string   `json:"expected_revision"`
-	RequestID         string   `json:"request_id"`
-	WorkUnit          string   `json:"work_unit"`
-	EvidenceGoal      string   `json:"evidence_goal"`
-	MaxAttempts       int      `json:"max_attempts"`
-	MaxChangedLines   int      `json:"max_changed_lines"`
-	IntendedUntracked []string `json:"intended_untracked"`
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	WorkUnit         string `json:"work_unit"`
+	EvidenceGoal     string `json:"evidence_goal"`
+	MaxAttempts      int    `json:"max_attempts"`
+	MaxChangedLines  int    `json:"max_changed_lines"`
+	// MaxChangedLinesExplicit is caller (CLI) provenance: true when the
+	// caller actually typed --max-changed-lines, false when MaxChangedLines
+	// is the compiled default the flag registered on the caller's behalf
+	// (#2589). It has no bearing on admission or request identity -- only on
+	// what a fresh objective's MaxChangedLinesSource reports -- so it is
+	// excluded from the request digest entirely (json:"-"): an explicit
+	// request digest must stay byte-identical to what a binary predating
+	// this field computed, or an in-flight ledger replayed after an upgrade
+	// would fail begin_request_digest_match on its own pre-upgrade records.
+	// The genuine persisted marker lives on runtimeBeginEvent instead, which
+	// is never a digest input.
+	MaxChangedLinesExplicit bool     `json:"-"`
+	IntendedUntracked       []string `json:"intended_untracked"`
 }
 
 // legacyBeginAttemptRequest preserves replay of records written before
@@ -444,6 +496,18 @@ type RescopeObjectiveRequest struct {
 	MaxChangedLines  int    `json:"max_changed_lines"`
 	Reason           string `json:"reason"`
 	Actor            string `json:"actor"`
+
+	// An optional maintainer-authorized fresh untracked selection for the
+	// successor's initial candidate (#4195): eligible untracked files
+	// authored after the predecessor's terminal settlement -- outside any
+	// active attempt -- can never appear in the predecessor's recorded
+	// selection, so replaying it forever excludes them. Both fields mirror
+	// FinishAttemptRequest's shape exactly, including the omitempty digest
+	// binding that keeps a request declaring nothing byte-identical to one
+	// written before these fields existed. IntendedUntracked is nil when
+	// nothing was declared and non-nil (possibly empty) when something was.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	ExpectedUntrackedInventory string    `json:"expected_untracked_inventory,omitempty"`
 }
 
 // GrantRootsRequest records a per-change edit-authority grant (#2540 S2).
@@ -564,15 +628,20 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
-	WorkUnit               string `json:"work_unit"`
-	EvidenceGoal           string `json:"evidence_goal"`
-	MaxAttempts            int    `json:"max_attempts"`
-	MaxChangedLines        int    `json:"max_changed_lines"`
-	Ordinal                int    `json:"ordinal"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	ObjectiveID         string `json:"objective_id"`
+	ObjectiveGeneration int    `json:"objective_generation,omitempty"`
+	WorkUnit            string `json:"work_unit"`
+	EvidenceGoal        string `json:"evidence_goal"`
+	MaxAttempts         int    `json:"max_attempts"`
+	MaxChangedLines     int    `json:"max_changed_lines"`
+	// MaxChangedLinesExplicit mirrors BeginAttemptRequest's field of the same
+	// name (#2589), persisted so replay can reconstruct
+	// RuntimeObjective.MaxChangedLinesSource deterministically. Absent on a
+	// record written before this field existed.
+	MaxChangedLinesExplicit bool   `json:"max_changed_lines_explicit,omitempty"`
+	Ordinal                 int    `json:"ordinal"`
+	BeginCandidateIdentity  string `json:"begin_candidate_identity"`
+	BeginCandidateTree      string `json:"begin_candidate_tree"`
 	// A nil pointer preserves records written before candidate provenance was
 	// introduced; a non-nil empty slice is a modern, explicit empty selection.
 	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
@@ -624,6 +693,21 @@ type runtimeRescopeEvent struct {
 	MaxChangedLines          int    `json:"max_changed_lines"`
 	Reason                   string `json:"reason"`
 	Actor                    string `json:"actor"`
+
+	// A maintainer-declared fresh successor untracked selection (#4195).
+	// Both are omitempty so a rescope declaring nothing marshals exactly as
+	// it did before these fields existed, keeping every legacy rescope
+	// request digest byte-identical. IntendedUntracked is nil when nothing
+	// was declared (the successor replays the predecessor's recorded
+	// selection, unchanged behavior) and non-nil when something was --
+	// mirroring runtimeFinishEvent's IntendedUntracked/
+	// DeclaredUntrackedInventory convention.
+	IntendedUntracked          *[]string `json:"intended_untracked,omitempty"`
+	DeclaredUntrackedInventory string    `json:"declared_untracked_inventory,omitempty"`
+	// SuccessorCandidateDigest binds the candidate to the replayed
+	// predecessor FinishCandidateTree (#4195 R3/R4-002); present only when
+	// IntendedUntracked is (a declared selection legitimately widens it).
+	SuccessorCandidateDigest string `json:"successor_candidate_digest,omitempty"`
 }
 
 type runtimeRepairEvent struct {
@@ -647,6 +731,15 @@ type runtimeFinishEvent struct {
 	ProcessEvidence            string             `json:"process_evidence"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+	// InvalidatedWithoutDelivery records, AT SETTLE TIME, whether this
+	// settlement met #3152's refund shape (failed, HarnessInvalidated, zero
+	// changed lines). Replay reads this stored decision rather than
+	// recomputing the predicate against the historical outcome/harness_
+	// disposition/changed_lines triple: those facts predate this field, and
+	// recomputing at replay would retroactively refund budget a maintainer
+	// already spent under the accounting live at commit time. Absent (false)
+	// on every record from before this field existed, preserving its charge.
+	InvalidatedWithoutDelivery bool `json:"invalidated_without_delivery,omitempty"`
 
 	// IntendedUntracked is the selection this settlement actually overlaid,
 	// which is the begin selection unless the caller declared a new one here.
@@ -840,7 +933,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
-			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines, MaxChangedLinesExplicit: request.MaxChangedLinesExplicit,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			IntendedUntracked: &intendedUntracked, EligibleUntrackedInventory: &eligibleInventory,
 			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
@@ -982,6 +1075,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
 			ChangedLineBudgetExceeded:  runtimeChangedLineBudgetExceeded(status, changedLines),
+			// Decided once, here, at settle time (R3): see
+			// runtimeFinishEvent.InvalidatedWithoutDelivery.
+			InvalidatedWithoutDelivery: runtimeAttemptInvalidatedWithoutDelivery(request.Outcome, request.HarnessDisposition, changedLines),
 			IntendedUntracked:          &intendedUntracked,
 			DeclaredUntrackedInventory: declaredInventory,
 		}
@@ -1661,6 +1757,29 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, store.runtimeRescopeExhaustedRefusal(
 				"--max-changed-lines", request.MaxChangedLines, status.CumulativeChangedLines, objective.MaxChangedLines)
 		}
+		// #4195: a maintainer may declare a fresh successor selection instead
+		// of replaying the predecessor's recorded one. It is validated
+		// against the CURRENT eligible inventory exactly like begin/acquire/
+		// finish/settle (freshness digest, then eligible membership), reusing
+		// the same reviewtransaction helper those commands validate through
+		// -- no new validation path. A path already part of the verified
+		// zero-drift terminal candidate may never be dropped back out either
+		// (settlementUntrackedSelection's "widen, never narrow" rule,
+		// applied here to the successor instead of a settlement).
+		successorIntended, declaredInventory := intended, ""
+		if request.IntendedUntracked != nil {
+			selection, validateErr := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).
+				ValidateIntendedUntrackedSelection(ctx, request.ExpectedUntrackedInventory, *request.IntendedUntracked)
+			if validateErr != nil {
+				return runtimeRecord{}, fmt.Errorf("%w: %v; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt rescope`", ErrRuntimeUndeclaredUntracked, validateErr)
+			}
+			for _, path := range intended {
+				if !slices.Contains(selection, path) {
+					return runtimeRecord{}, fmt.Errorf("%w: this objective's terminal candidate already includes %q, and rescope cannot take it back out; rerun `gentle-ai sdd-attempt rescope` with --intended-untracked=%s included", ErrRuntimeUndeclaredUntracked, path, path)
+				}
+			}
+			successorIntended, declaredInventory = selection, request.ExpectedUntrackedInventory
+		}
 		// The zero-drift `drift` snapshot above was captured with
 		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
 		// so its Identity is only comparable against another
@@ -1674,16 +1793,29 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 		// on it exactly because there is zero drift -- so this second capture
 		// is provably the same underlying content the drift check just
 		// verified, not a fresh unguarded read.
-		fresh, err := captureRuntimeCandidate(ctx, store.Repo, intended)
+		//
+		// A widened selection makes `drift` the wrong comparand, but the
+		// redundant-capture principle still applies (#4195 R4-001): recapture
+		// the SAME proof with the NEW selection, so a concurrent tracked
+		// write here is still caught, instead of skipping the guard.
+		successorDrift := drift
+		if request.IntendedUntracked != nil {
+			successorDrift, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, successorIntended)
+			if err != nil {
+				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", err)
+			}
+		}
+		runtimeRescopeBeforeSecondCaptureHook()
+		fresh, err := captureRuntimeCandidate(ctx, store.Repo, successorIntended)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective rescope: %w", err)
 		}
-		if fresh.CandidateTree != drift.CandidateTree {
+		if fresh.CandidateTree != successorDrift.CandidateTree {
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		generation := status.ObjectiveGeneration + 1
 		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation)
-		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: &runtimeRescopeEvent{
+		event := &runtimeRescopeEvent{
 			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
 			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
 			RescopeCandidateIdentity: fresh.Identity, RescopeCandidateTree: fresh.CandidateTree,
@@ -1691,7 +1823,15 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Reason: request.Reason, Actor: request.Actor,
-		}}, nil
+		}
+		if request.IntendedUntracked != nil {
+			declared := slices.Clone(successorIntended)
+			event.IntendedUntracked, event.DeclaredUntrackedInventory = &declared, declaredInventory
+			// #4195 R3/R4-002: bind the candidate to the replayed Finish tree.
+			event.SuccessorCandidateDigest = runtimeRescopeSuccessorCandidateDigest(
+				last.FinishCandidateTree, declared, declaredInventory, fresh.Identity, fresh.CandidateTree)
+		}
+		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: event}, nil
 	})
 }
 
@@ -2156,6 +2296,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			MaxChangedLinesSource: runtimeChangedLinesSource(event.MaxChangedLinesExplicit),
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
@@ -2260,8 +2401,17 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	// is comparable across them. RescopeCandidateIdentity is NOT compared
 	// here for the same reason; it is still shape-validated and reused
 	// verbatim to derive ObjectiveID below.
+	//
+	// #4195: a declared selection legitimately overlays more than Finish did,
+	// so this equality guards only the legacy shape; SuccessorCandidateDigest
+	// (below) guards the declared shape against this SAME replayed tree.
 	if (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
-		last.FinishCandidateTree != event.RescopeCandidateTree {
+		(event.IntendedUntracked == nil && last.FinishCandidateTree != event.RescopeCandidateTree) {
+		return rejectRuntimeRecord("objective_rescope_candidate_match")
+	}
+	if event.IntendedUntracked != nil && runtimeRescopeSuccessorCandidateDigest(
+		last.FinishCandidateTree, *event.IntendedUntracked, event.DeclaredUntrackedInventory,
+		event.RescopeCandidateIdentity, event.RescopeCandidateTree) != event.SuccessorCandidateDigest {
 		return rejectRuntimeRecord("objective_rescope_candidate_match")
 	}
 	generation := event.ObjectiveGeneration
@@ -2273,6 +2423,10 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		// AUDITED NARROWING RESCOPE always requires an explicit positive
+		// --max-changed-lines (normalizeRescopeObjectiveRequest); there is no
+		// default path here to report.
+		MaxChangedLinesSource: runtimeChangedLinesSourceExplicit,
 	}
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
@@ -2285,7 +2439,7 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		RescopeCandidateIdentity: event.RescopeCandidateIdentity, RescopeCandidateTree: event.RescopeCandidateTree,
 		ObjectiveID: event.ObjectiveID, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-		Reason: event.Reason, Actor: event.Actor,
+		Reason: event.Reason, Actor: event.Actor, IntendedUntracked: event.IntendedUntracked,
 	}
 	// NextOrdinal, CumulativeAttempts, CumulativeChangedLines,
 	// LifetimeAttempts, and LifetimeChangedLines are deliberately left
@@ -2451,6 +2605,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.ProcessEvidence = event.ProcessEvidence
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
+	attempt.InvalidatedWithoutDelivery = event.InvalidatedWithoutDelivery
 	// A rescope successor inherits its predecessor's recorded selection, so the
 	// settled attempt must report the one it actually settled with, not the one
 	// it began with (#3806).
@@ -2463,7 +2618,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	// The objective budget refunds a call that advanced the unit, up to the
 	// configured ceiling. LifetimeAttempts is never refunded, so the chain still
 	// records every call that ran.
-	if runtimeAttemptDeliveredIncrement(event.Outcome, event.ChangedLines) && replay.Status.CumulativeAttempts > 0 &&
+	if runtimeAttemptRefundsBudget(event.Outcome, event.ChangedLines, event.InvalidatedWithoutDelivery) && replay.Status.CumulativeAttempts > 0 &&
 		runtimeRefundedAttempts(replay.Status) <= replay.Status.Objective.MaxAttempts {
 		replay.Status.CumulativeAttempts--
 	}
@@ -2495,27 +2650,51 @@ func runtimeRefundedAttempts(status RuntimeStatus) int {
 	refunded := 0
 	for _, attempt := range status.Attempts {
 		if attempt.ObjectiveID == status.Objective.ID && attempt.ObjectiveGeneration == status.Objective.Generation &&
-			runtimeAttemptDeliveredIncrement(attempt.Outcome, attempt.ChangedLines) {
+			runtimeAttemptRefundsBudget(attempt.Outcome, attempt.ChangedLines, attempt.InvalidatedWithoutDelivery) {
 			refunded++
 		}
 	}
 	return refunded
 }
 
-// runtimeAttemptDeliveredIncrement reports whether a settlement earned back the
-// call it spent. #3815: RuntimeAttempt was one provider call, one unit of
-// budget and one unit of work at once, so a work unit that legitimately needs
-// several calls exhausted its objective by accounting rather than by failure —
-// #3808, where two calls delivered zero production and ended at
-// decision_required.
+// runtimeAttemptRefundsBudget is the ONE union of both grounds that earn an
+// attempt's call back, checked at both sites that must agree: the mutation
+// (applyRuntimeFinishEvent) and the cap count (runtimeRefundedAttempts).
 //
-// An interrupted call that left measurable increment advanced the unit, so it
-// does not discharge an attempt against the objective. A call that delivered
-// nothing is still spent, which is what keeps max_attempts bounding calls that
-// produce nothing. The refund cannot run away: earning one costs delivered
-// lines, and cumulative changed lines remain capped by the objective.
+// Ground 1, runtimeAttemptDeliveredIncrement (#3815): an interrupted call
+// that left measurable increment advanced the unit instead of discharging an
+// attempt (RuntimeAttempt was one call, one budget unit and one work unit at
+// once — #3808). Recomputed fresh on every replay from outcome/changed-lines,
+// because that rule has not changed since those fields were first written.
+//
+// Ground 2, invalidatedWithoutDelivery (#3152): a FAILED settlement marked
+// HarnessInvalidated with zero changed lines means the harness never ran the
+// work at all. Unlike ground 1, this is NOT recomputed here: that predicate
+// did not exist when older records were committed, and recomputing it during
+// replay would retroactively refund budget a maintainer already spent under
+// the accounting live at commit time (R3). It is instead the exact decision
+// runtimeAttemptInvalidatedWithoutDelivery made ONCE, at settle time, and
+// stored on the event/attempt (runtimeFinishEvent.InvalidatedWithoutDelivery)
+// — false, and so charged, on every record from before that field existed.
+//
+// Neither ground runs away: ground 1's refund always costs delivered lines,
+// capped by the objective; both grounds share runtimeRefundedAttempts' own
+// MaxAttempts cap, so an objective earns back at most MaxAttempts calls total.
+func runtimeAttemptRefundsBudget(outcome AttemptOutcome, changedLines int, invalidatedWithoutDelivery bool) bool {
+	return runtimeAttemptDeliveredIncrement(outcome, changedLines) || invalidatedWithoutDelivery
+}
+
+// runtimeAttemptDeliveredIncrement is refund ground 1; see
+// runtimeAttemptRefundsBudget.
 func runtimeAttemptDeliveredIncrement(outcome AttemptOutcome, changedLines int) bool {
 	return outcome == AttemptInterrupted && changedLines > 0
+}
+
+// runtimeAttemptInvalidatedWithoutDelivery is refund ground 2's predicate,
+// evaluated ONLY at settle time to decide the marker a new record commits.
+// Never call this during replay; see runtimeAttemptRefundsBudget.
+func runtimeAttemptInvalidatedWithoutDelivery(outcome AttemptOutcome, harnessDisposition HarnessDisposition, changedLines int) bool {
+	return outcome == AttemptFailed && harnessDisposition == HarnessInvalidated && changedLines == 0
 }
 
 // applyRuntimeGrantEvent accumulates a grant's canonical roots into the
@@ -2582,6 +2761,10 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 	if event.IntendedUntracked != nil {
 		intendedUntracked = *event.IntendedUntracked
 	}
+	// MaxChangedLinesExplicit is deliberately not reconstructed here: it is
+	// excluded from BeginAttemptRequest's digest (json:"-"), so it plays no
+	// part in this replay-time digest match regardless of what the event
+	// carries.
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
@@ -2713,14 +2896,32 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			// recomputes narrowing against the REPLAYED objective, which a
 			// forged PreviousMax* cannot fool (see its doc comment).
 			event.MaxAttempts > event.PreviousMaxAttempts || event.MaxChangedLines > event.PreviousMaxChangedLines ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil ||
+			(event.IntendedUntracked == nil) != (event.DeclaredUntrackedInventory == "") ||
+			(event.DeclaredUntrackedInventory != "" && !runtimeRevisionPattern.MatchString(event.DeclaredUntrackedInventory)) ||
+			(event.IntendedUntracked == nil) != (event.SuccessorCandidateDigest == "") ||
+			(event.SuccessorCandidateDigest != "" && !runtimeRevisionPattern.MatchString(event.SuccessorCandidateDigest)) {
 			return rejectRuntimeRecord("invalid_rescope_event")
+		}
+		if event.IntendedUntracked != nil {
+			canonical, canonicalErr := canonicalRuntimeIntendedUntracked(*event.IntendedUntracked)
+			if canonicalErr != nil || !slices.Equal(canonical, *event.IntendedUntracked) {
+				return rejectRuntimeRecord("invalid_rescope_intended_untracked_provenance")
+			}
 		}
 		request := RescopeObjectiveRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
 			WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			Reason: event.Reason, Actor: event.Actor,
+		}
+		// The event records the fresh selection this rescope declared; the
+		// request carried one only when the caller declared, which is exactly
+		// when the event carries the digest they declared against (mirrors
+		// the Finish case above).
+		if event.DeclaredUntrackedInventory != "" {
+			request.IntendedUntracked = event.IntendedUntracked
+			request.ExpectedUntrackedInventory = event.DeclaredUntrackedInventory
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request) != record.RequestDigest {
 			return rejectRuntimeRecord("rescope_request_digest_match")
@@ -2813,7 +3014,7 @@ func canonicalRuntimeIntendedUntracked(paths []string) ([]string, error) {
 		return []string{}, nil
 	}
 	if len(canonical) > maximumRuntimeIntendedUntracked {
-		return nil, fmt.Errorf("intended_untracked must name at most %d paths; rerun `gentle-ai sdd-attempt acquire` or `gentle-ai sdd-attempt begin` with an inventory-validated selection", maximumRuntimeIntendedUntracked)
+		return nil, fmt.Errorf("intended_untracked must name at most %d paths; `git add` the excess born-during paths so they are tracked (tracked changes and the index are always captured, uncapped) and declare only the remaining untracked paths, or declare none with --untracked-scope=exclude if every born-during path is now tracked; rerun `gentle-ai sdd-attempt acquire`, `gentle-ai sdd-attempt begin`, `gentle-ai sdd-attempt settle`, or `gentle-ai sdd-attempt finish` with that selection", maximumRuntimeIntendedUntracked)
 	}
 	slices.Sort(canonical)
 	for index, path := range canonical {
@@ -3039,6 +3240,25 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	}
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
+	}
+	// Mirrors normalizeFinishAttemptRequest's untracked-declaration shape
+	// validation exactly (#4195): a declaration needs both its selection and
+	// the inventory digest it was made against, and the selection itself
+	// must be canonical. The live eligible-inventory freshness/membership
+	// check happens in Rescope, against the repository, the same division of
+	// labor Finish already uses.
+	if (request.IntendedUntracked == nil) != (request.ExpectedUntrackedInventory == "") {
+		return RescopeObjectiveRequest{}, errors.New("an untracked declaration needs both its selection and the inventory digest it was made against; rerun `gentle-ai sdd-attempt rescope` with --untracked-scope and --expected-untracked-inventory together")
+	}
+	if request.ExpectedUntrackedInventory != "" && !runtimeRevisionPattern.MatchString(request.ExpectedUntrackedInventory) {
+		return RescopeObjectiveRequest{}, errors.New("expected_untracked_inventory must be sha256:<64-lowercase-hex>; rerun `gentle-ai sdd-attempt rescope` with the digest `gentle-ai review status --next-transition` publishes")
+	}
+	if request.IntendedUntracked != nil {
+		canonical, canonicalErr := canonicalRuntimeIntendedUntracked(*request.IntendedUntracked)
+		if canonicalErr != nil {
+			return RescopeObjectiveRequest{}, canonicalErr
+		}
+		request.IntendedUntracked = &canonical
 	}
 	return request, nil
 }
@@ -3332,6 +3552,23 @@ func runtimeValueHash(domain string, value any) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// runtimeRescopeSuccessorCandidateDigest binds a declared-selection rescope's
+// candidate to the predecessor's FinishCandidateTree (#4195 R3/R4-002),
+// recomputed at replay from REPLAYED state, never from the record's claim.
+func runtimeRescopeSuccessorCandidateDigest(finishCandidateTree string, intendedUntracked []string, declaredUntrackedInventory, rescopeCandidateIdentity, rescopeCandidateTree string) string {
+	return runtimeValueHash("gentle-ai.sdd-runtime-rescope-successor-candidate/v1", struct {
+		FinishCandidateTree        string   `json:"finish_candidate_tree"`
+		IntendedUntracked          []string `json:"intended_untracked"`
+		DeclaredUntrackedInventory string   `json:"declared_untracked_inventory"`
+		RescopeCandidateIdentity   string   `json:"rescope_candidate_identity"`
+		RescopeCandidateTree       string   `json:"rescope_candidate_tree"`
+	}{
+		FinishCandidateTree: finishCandidateTree, IntendedUntracked: intendedUntracked,
+		DeclaredUntrackedInventory: declaredUntrackedInventory,
+		RescopeCandidateIdentity:   rescopeCandidateIdentity, RescopeCandidateTree: rescopeCandidateTree,
+	})
+}
+
 func runtimeRecordRevision(record runtimeRecord) (string, []byte, error) {
 	payload, err := json.Marshal(record)
 	if err != nil {
@@ -3366,6 +3603,10 @@ func (store RuntimeStore) consecutiveRescopeRepairContinuation(revision string) 
 }
 
 var runtimeRepairBeforePublishHook = func() {}
+
+// runtimeRescopeBeforeSecondCaptureHook is a test-only seam (mirrors
+// runtimeRepairBeforePublishHook) in Rescope's TOCTOU window (#4195 R4-001).
+var runtimeRescopeBeforeSecondCaptureHook = func() {}
 
 func (store RuntimeStore) ensureDirectories() error {
 	if filepath.Clean(store.commonDir) == "." || !filepath.IsAbs(store.commonDir) {

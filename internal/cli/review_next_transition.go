@@ -523,16 +523,28 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 	}
 	if context != nil && order >= 0 && order < len(context.ArtifactSubjects) {
 		subject := context.ArtifactSubjects[order]
-		manifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), context.FrozenContext.ChangedPathManifest...)
-		if manifest == nil {
-			manifest = []reviewtransaction.ChangedPathManifestEntry{}
-		}
 		input.ArtifactSubject = &subject
-		input.ChangedPathManifest = &manifest
 		if context.FrozenContext.LegacyCandidateDiff != nil {
+			// The legacy (v1) transport still inlines the manifest: its capture
+			// input carries a candidate diff instead of base/candidate trees, and
+			// nothing downstream re-derives the changed paths from a resolvable
+			// git tree the way the native-git transport can, so the manifest
+			// itself remains the only carrier of that identity for this input.
+			manifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), context.FrozenContext.ChangedPathManifest...)
+			if manifest == nil {
+				manifest = []reviewtransaction.ChangedPathManifestEntry{}
+			}
+			input.ChangedPathManifest = &manifest
 			diff := *context.FrozenContext.LegacyCandidateDiff
 			input.CandidateDiff = &diff
 		} else {
+			// issue #3922 / #4199 / gentle-pi#543: the native-git transport
+			// already commits to the manifest through
+			// artifact_subject.changed_path_manifest_sha256, so this per-lens
+			// collect input stops inlining a full copy of it -- a 200-file
+			// candidate used to repeat that ~46 KB manifest once per selected
+			// lens. The manifest itself stays on the START envelope (once per
+			// lineage) unchanged.
 			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "subject-hash", Value: subject.SubjectHash})
 			input.BaseTree, input.CandidateTree = context.FrozenContext.BaseTree, context.FrozenContext.CandidateTree
 		}
@@ -832,7 +844,8 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
 			})
 		}
-		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
+		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) &&
+			(disposition != reviewtransaction.RecoveryInvalidated || input.Selector.Recovery.Kind != reviewtransaction.TargetCurrentChanges) {
 			return reviewStopTransition("recovery_scope_unchanged")
 		}
 		var representable bool
