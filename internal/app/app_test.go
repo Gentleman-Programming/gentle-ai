@@ -637,6 +637,56 @@ func TestTuiSyncSelectionPreservesCustomPermissionExclusion(t *testing.T) {
 	}
 }
 
+// TestTuiSyncProfilePersistsWhenSDDComponentMissingFromState reproduces
+// https://github.com/Gentleman-Programming/gentle-ai/issues/3430 through the
+// TUI sync entry point: a machine that installed without the SDD component
+// (state.json's persisted Components list omits "sdd") must still get its
+// OpenCode SDD profile written when the "Edit Profile" flow explicitly
+// requests it via SyncOverrides.Profiles — loadPersistedAssignments restores
+// Components from state before applyOverrides sets Profiles, so without the
+// fix ComponentSDD is dropped and the profile write silently never runs.
+func TestTuiSyncProfilePersistsWhenSDDComponentMissingFromState(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"$schema":"https://opencode.ai/config.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentEngram},
+		SDDMode:             model.SDDModeSingle,
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	profile := model.Profile{
+		Name:              "demo",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-5"},
+	}
+	changed, err := tuiSync(home)(&model.SyncOverrides{
+		TargetAgents: []model.AgentID{model.AgentOpenCode},
+		Profiles:     []model.Profile{profile},
+	})
+	if err != nil {
+		t.Fatalf("tuiSync() error = %v", err)
+	}
+	if len(changed) == 0 {
+		t.Fatal("tuiSync() changed 0 files, want the profile written to opencode.json")
+	}
+
+	settingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
+	}
+	if !strings.Contains(string(settingsData), "sdd-orchestrator-demo") {
+		t.Fatalf("opencode.json missing profile agent key %q; the explicitly requested profile was silently dropped. Got: %s", "sdd-orchestrator-demo", settingsData)
+	}
+}
+
 func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)

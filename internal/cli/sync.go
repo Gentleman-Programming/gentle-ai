@@ -425,6 +425,13 @@ func RestorePersistedSelection(selection *model.Selection, persisted state.Insta
 	}
 	setSelectionComponent(selection, model.ComponentPermission, flags.permissionsSet, flags.IncludePermissions)
 	setSelectionComponent(selection, model.ComponentTheme, flags.themeSet, flags.IncludeTheme)
+	// The persisted component list above may predate the caller ever choosing
+	// the SDD component (e.g. an install that ran before profiles existed).
+	// When the caller explicitly asked for profile or model assignment work,
+	// that request must not be silently dropped — see issue #3430.
+	if model.CarriesSDDWork(explicit.Profiles, explicit.ModelAssignments) {
+		selection.EnsureComponent(model.ComponentSDD)
+	}
 }
 
 func setSelectionComponent(selection *model.Selection, component model.ComponentID, configured, included bool) {

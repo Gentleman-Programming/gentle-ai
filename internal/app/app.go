@@ -829,6 +829,13 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 			selection.SDDMode = model.SDDModeMulti
 		}
 	}
+	// A persisted component selection loaded earlier via loadPersistedAssignments
+	// may omit the SDD component (e.g. an install that predates profiles). When
+	// the caller explicitly asked for profile or model assignment work through
+	// this override, that request must not be silently dropped — see issue #3430.
+	if model.CarriesSDDWork(overrides.Profiles, overrides.ModelAssignments) {
+		selection.EnsureComponent(model.ComponentSDD)
+	}
 }
 
 // loadPersistedAssignments reads previously-saved model assignments from
