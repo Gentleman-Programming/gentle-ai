@@ -149,6 +149,10 @@ var reviewStopReasonNarration = map[string]string{
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",
+	"unachievable_lens_slot": "A reviewer could not be completed for this candidate under current conditions, and every selected reviewer is required, so this review cannot finish as scoped. " +
+		"If that failure was transient, run `gentle-ai review capture-unachievable` again with the same binding and `--withdraw=true` so this review re-offers the same reviewer. " +
+		"If it is not transient, reduce the candidate scope and start a new review with `gentle-ai review start`, or run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 }
 
 // reviewConsentPromptNarration registers the one-time RDD consent prompt's

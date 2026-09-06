@@ -1125,6 +1125,21 @@ func (transition ReviewNextTransition) Validate() error {
 	if transition.CorrectionRequest != nil && reviewtransaction.ValidateCorrectionPlanRequest(*transition.CorrectionRequest) != nil {
 		return errors.New("correction transition request is invalid") // refusal:by-design world-action: malformed provider-owned findings cannot safely authorize planning
 	}
+	unachievableSlotsRequired := transition.ReasonCode == "unachievable_lens_slot"
+	if unachievableSlotsRequired != (transition.UnachievableLensSlots != nil) {
+		return errors.New("unachievable lens slot transition must carry exactly one recoverable withdraw binding per declared slot") // refusal:by-design world-action: provider-generated routing requires a code fix when this projection is missing or misplaced
+	}
+	if transition.UnachievableLensSlots != nil {
+		if len(*transition.UnachievableLensSlots) == 0 {
+			return errors.New("unachievable lens slot transition carries an empty slot list") // refusal:by-design world-action: provider-generated routing requires a code fix when this projection is empty
+		}
+		for _, slot := range *transition.UnachievableLensSlots {
+			if strings.TrimSpace(slot.Lens) == "" || strings.TrimSpace(slot.SubjectHash) == "" || strings.TrimSpace(slot.Reason) == "" ||
+				strings.TrimSpace(slot.Withdraw.Operation) == "" || strings.TrimSpace(slot.Withdraw.Command) == "" || len(slot.Withdraw.Arguments) == 0 {
+				return errors.New("unachievable lens slot entry is incomplete") // refusal:by-design world-action: provider-generated routing requires a code fix when a declared slot's withdraw binding is incomplete
+			}
+		}
+	}
 	switch transition.Kind {
 	case reviewNextTransitionStop:
 		if transition.Execute != nil || transition.Collect != nil {

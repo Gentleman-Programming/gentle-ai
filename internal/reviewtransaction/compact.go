@@ -164,6 +164,20 @@ type CompactState struct {
 	// current correction phase. It intentionally excludes rejected output bytes,
 	// evidence bodies, artifact paths, and role values.
 	TargetedValidatorAttempts []CompactTargetedValidatorAttempt `json:"targeted_validator_attempts,omitempty"`
+	// UnachievableLensAttempts binds one host declaration per selected order
+	// that a lens slot could not be completed under current conditions (for
+	// example a reviewer prompt exceeding a host relay's transport bound).
+	// Each entry is bound to the frozen capture phase revision, target
+	// identity, lens, and the exact SubjectHash the collect transition
+	// offered for that slot, so it can never silently apply to a slot other
+	// than the one attempted. It lives ONLY while State is StateReviewing at
+	// the same CapturePhaseRevision: setCompactStateExit is the sole
+	// assignment point for state.State and clears it on every transition
+	// away from StateReviewing, so no lifecycle mutator in this package can
+	// leave it standing under a non-reviewing state. A record written before
+	// that helper existed can still carry stale entries; parseCompactRecord
+	// drops them on load (with a diagnostic note) instead of refusing.
+	UnachievableLensAttempts []CompactUnachievableLensAttempt `json:"unachievable_lens_attempts,omitempty"`
 	// ApprovedAckToken is the one bounded opaque 256-bit acknowledgement token.
 	// It is present only on an active approved authority and is cleared by burn.
 	ApprovedAckToken string `json:"approved_ack_token,omitempty"`
@@ -257,6 +271,22 @@ type CompactTargetedValidatorAttempt struct {
 const compactTargetedValidatorAttemptInconclusive = "inconclusive"
 
 const maxCompactTargetedValidatorAttempts = 3
+
+// CompactUnachievableLensAttempt is one bound host declaration that a
+// selected lens slot could not be completed. SubjectHash is the exact
+// ArtifactSubject.SubjectHash the collect transition already handed the host
+// for this slot (rendered as its `subject-hash` argument), so the
+// declaration identifies the lens and order without a caller-supplied name
+// that could drift from the frozen binding.
+type CompactUnachievableLensAttempt struct {
+	CapturePhaseRevision string `json:"capture_phase_revision"`
+	TargetIdentity       string `json:"target_identity"`
+	Lens                 string `json:"lens"`
+	SelectedOrder        int    `json:"selected_order"`
+	SubjectHash          string `json:"subject_hash"`
+	Reason               string `json:"reason"`
+	Detail               string `json:"detail,omitempty"`
+}
 
 type CompactAtomicStartBinding struct {
 	LineageID              string    `json:"lineage_id"`
@@ -831,6 +861,9 @@ func (state CompactState) Validate() error {
 	if err := validateCompactTargetedValidatorAttempts(state); err != nil {
 		return err
 	}
+	if err := validateCompactUnachievableLensAttempts(state); err != nil {
+		return err
+	}
 	if state.InitialAtomicStart != nil {
 		if err := state.InitialAtomicStart.Validate(); err != nil {
 			return fmt.Errorf("compact initial atomic START binding: %w", err)
@@ -891,6 +924,37 @@ func validateCompactTargetedValidatorAttempts(state CompactState) error {
 			return errors.New("compact targeted validator attempt digest repeats") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 		seen[attempt.AttemptDigest] = true
+	}
+	return nil
+}
+
+// validateCompactUnachievableLensAttempts enforces that every declaration is
+// bound to the active reviewing phase for a real selected order, names a
+// non-empty reason, and that no two declarations claim the same order --
+// exactly one truthful answer per slot, never a silently overwritten one.
+func validateCompactUnachievableLensAttempts(state CompactState) error {
+	if len(state.UnachievableLensAttempts) == 0 {
+		return nil
+	}
+	if len(state.UnachievableLensAttempts) > len(state.SelectedLenses) {
+		return errors.New("compact unachievable lens attempts exceed the selected lens count") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	if state.State != StateReviewing {
+		return errors.New("compact unachievable lens attempts require an active reviewing phase") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	seen := make(map[int]bool, len(state.UnachievableLensAttempts))
+	for _, attempt := range state.UnachievableLensAttempts {
+		if attempt.CapturePhaseRevision != state.CapturePhaseRevision || !validSHA256(attempt.TargetIdentity) ||
+			attempt.TargetIdentity != state.InitialSnapshot.Identity || !validSHA256(attempt.SubjectHash) ||
+			attempt.SelectedOrder < 0 || attempt.SelectedOrder >= len(state.SelectedLenses) ||
+			attempt.Lens == "" || attempt.Lens != state.SelectedLenses[attempt.SelectedOrder] ||
+			strings.TrimSpace(attempt.Reason) == "" {
+			return errors.New("compact unachievable lens attempt is not bound to the current reviewing phase") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		if seen[attempt.SelectedOrder] {
+			return errors.New("compact unachievable lens attempt order repeats") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+		seen[attempt.SelectedOrder] = true
 	}
 	return nil
 }
@@ -1273,7 +1337,7 @@ func reopenCompactAdmittedRoleResults(state CompactState, quarantineLenses []str
 		removed = append(removed, entry)
 	}
 	next := cloneCompactStateInitialAtomicStart(state)
-	next.State = StateReviewing
+	setCompactStateExit(&next, StateReviewing)
 	next.AdmittedRoleResults = remaining
 	next.FixFindingIDs = []string{}
 	next.ProposedCorrectionLines = nil
@@ -1647,6 +1711,27 @@ func compactReviewViewHasUnresolvedFindings(view CompactReviewView) bool {
 	return false
 }
 
+// setCompactStateExit is the sole assignment point every CompactState
+// lifecycle mutator in this package uses to change state.State. The
+// unachievable-lens declaration ledger (UnachievableLensAttempts) is
+// meaningful only while a phase is actively StateReviewing (issue #3442):
+// entries recorded there answer "why can't this selected reviewer be
+// captured right now", a question that stops applying the moment the phase
+// itself moves on. Routing every transition through one helper -- instead of
+// clearing the ledger by hand at whichever call site happens to leave
+// Reviewing -- is what makes "a non-reviewing state still carrying a stale
+// declaration" structurally unreachable from this package's own mutators,
+// rather than merely correct at today's call sites. Entering or staying in
+// StateReviewing is a no-op here: the ledger is only ever populated by an
+// explicit RecordUnachievableLensAttempt call against an ALREADY-reviewing
+// authority, never inherited across a phase boundary.
+func setCompactStateExit(state *CompactState, next State) {
+	state.State = next
+	if next != StateReviewing {
+		state.UnachievableLensAttempts = nil
+	}
+}
+
 func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	if state.State != StateReviewing {
 		return fmt.Errorf("cannot complete review from compact state %q", state.State)
@@ -1660,14 +1745,14 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	}
 	state.FixFindingIDs = append([]string{}, view.FixFindingIDs...)
 	if compactReviewViewHasUnresolvedFindings(view) {
-		state.State = StateEscalated
+		setCompactStateExit(state, StateEscalated)
 	} else if len(state.FixFindingIDs) > 0 {
-		state.State = StateCorrectionRequired
+		setCompactStateExit(state, StateCorrectionRequired)
 		if err := state.advanceCapturePhase(); err != nil {
 			return err
 		}
 	} else {
-		state.State = StateValidating
+		setCompactStateExit(state, StateValidating)
 	}
 	return state.Validate()
 }
@@ -1682,7 +1767,7 @@ func (state *CompactState) CloseCleanReviewOnLastEvent() error {
 	if err != nil {
 		return err
 	}
-	state.State = StateApproved
+	setCompactStateExit(state, StateApproved)
 	state.EvidenceHash = compactReviewEvidenceHash(view)
 	return state.Validate()
 }
@@ -1810,7 +1895,8 @@ func (state *CompactState) Invalidate(reason string) error {
 	if !compactPristineReviewing(*state) {
 		return errors.New("only a pristine reviewing compact authority may be invalidated")
 	}
-	state.State, state.InvalidationReason = StateInvalidated, reason
+	setCompactStateExit(state, StateInvalidated)
+	state.InvalidationReason = reason
 	return nil
 }
 
@@ -1863,6 +1949,7 @@ func compactPristineReviewing(state CompactState) bool {
 		len(state.AdmittedRoleResults) == 0 && len(state.FixFindingIDs) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
 		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" &&
 		state.InvalidationReason == "" && len(state.TargetedValidatorAttempts) == 0 &&
+		len(state.UnachievableLensAttempts) == 0 &&
 		len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines == 0
 }
 
@@ -1963,9 +2050,9 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 		// but CorrectionScopePaths keeps the frozen reviewed manifest, so a
 		// companion path an escalated correction merely attempted can never
 		// ride out through a delivery gate.
-		state.State = StateEscalated
+		setCompactStateExit(state, StateEscalated)
 	} else {
-		state.State = StateValidating
+		setCompactStateExit(state, StateValidating)
 		state.TargetedValidatorAttempts = nil
 		if len(added) > 0 {
 			state.CorrectionAddedPaths = added
@@ -2000,7 +2087,7 @@ func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, act
 	if len(complete) == 1 {
 		next.CurrentSnapshot = complete[0]
 	}
-	next.State = StateApproved
+	setCompactStateExit(&next, StateApproved)
 	if err := next.Validate(); err != nil {
 		return err
 	}
@@ -2081,6 +2168,15 @@ func compactStateEqual(left, right CompactState) bool {
 }
 
 func normalizeCompactState(state *CompactState) {
+	// A legacy record loaded before setCompactStateExit existed (issue
+	// #3442) may still carry declarations outside StateReviewing; equality
+	// comparisons here treat it the same way parseCompactRecord's own load
+	// tolerance does -- drop, don't refuse -- so a stuck lineage's stale
+	// ledger never manufactures a spurious inequality against a freshly
+	// normalized successor.
+	if state.State != StateReviewing && len(state.UnachievableLensAttempts) > 0 {
+		state.UnachievableLensAttempts = nil
+	}
 	normalizeSnapshot := func(snapshot *Snapshot) {
 		if snapshot.IntendedUntracked == nil {
 			snapshot.IntendedUntracked = []string{}
@@ -2108,6 +2204,9 @@ func normalizeCompactState(state *CompactState) {
 	}
 	if state.TargetedValidatorAttempts == nil {
 		state.TargetedValidatorAttempts = []CompactTargetedValidatorAttempt{}
+	}
+	if state.UnachievableLensAttempts == nil {
+		state.UnachievableLensAttempts = []CompactUnachievableLensAttempt{}
 	}
 	if state.ResultReopens == nil {
 		state.ResultReopens = []CompactResultReopen{}

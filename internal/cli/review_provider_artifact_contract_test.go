@@ -240,7 +240,13 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 		// candidate-preserving `gentle-ai sync` continuation (see
 		// failure.schema.json#/$defs/managed_assets_continuation). Deliberate,
 		// not drift.
-		"schemas/status-v7.schema.json":         "f0f48d1309e028ea4d43e433c684f470761c0828d6f40eb1c44e8a0ad0fe2da4",
+		// issue #3442: next_transition gained a third oneOf branch for the
+		// unachievable_lens_slot stop, carrying one unachievable_lens_slots
+		// entry per declared slot (lens, subject_hash, reason, and the exact
+		// review.capture-unachievable --withdraw=true command), so a
+		// restarted orchestrator that lost the pre-stop collect offer can
+		// still recover the binding its withdraw needs. Deliberate, not drift.
+		"schemas/status-v7.schema.json":         "c165a2309adff3131dd1d19e93408ade5cf45b27f0076304e423ca604e1f436c",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {

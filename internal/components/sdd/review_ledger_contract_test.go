@@ -759,8 +759,22 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// with it (16_756 -> 17_078) to restore the same small headroom;
 		// full-4R already had enough headroom (29_420 < 30_953) and is
 		// unchanged.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 17_075, maxCharacters: 17_078},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_420, maxCharacters: 30_953},
+		// +187 per case (+187 on top of #3299/#4170 and #4256) when #3442 added
+		// the unachievable_lens_slot stop-reason row: a host can now declare a
+		// selected reviewer slot unachievable, and the shipped contract names
+		// its terminal continuation. Deliberate, not drift; the ceilings move
+		// with it (standard and full-4R ceilings move by the same amount) to restore the same
+		// small headroom each row already had.
+		// +102 per case (+102 more) when the native
+		// review found declaring a slot unachievable was irreversible: the
+		// row was reclassified caller-continuable and now also names the
+		// `--withdraw=true` retraction for a mistaken transient failure,
+		// alongside the existing new-transaction exit for a deterministic
+		// one. Deliberate, not drift; the ceilings move with it
+		// (ceilings move again by the same amount) to restore the same small
+		// headroom each row already had.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 17_364, maxCharacters: 17_367},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_709, maxCharacters: 31_242},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
