@@ -73,6 +73,16 @@ type statusEnvelope struct {
 				Token string `json:"token"`
 			} `json:"arguments"`
 		} `json:"execute"`
+		// Continuation is set only on the one stop reason_code
+		// (managed_assets_outdated) whose stop is itself the
+		// candidate-preserving continuation (#3299, #4170): the exact
+		// `gentle-ai sync` invocation that reconciles the recorded digest.
+		Continuation *struct {
+			Operation   string   `json:"operation"`
+			Command     string   `json:"command"`
+			Agent       string   `json:"agent"`
+			StaleAssets []string `json:"stale_assets"`
+		} `json:"continuation"`
 	} `json:"next_transition"`
 }
 
@@ -97,7 +107,15 @@ func (e statusEnvelope) executeArgument(name string) string {
 	return ""
 }
 
+// paths names the frozen candidate paths a reviewer must inspect. The
+// native-git transport no longer inlines the changed-path manifest on every
+// per-lens capture input (#3922); the published projection carries the same
+// path set for the whole lineage, and the legacy manifest remains a fallback
+// for envelopes that still inline it.
 func (e statusEnvelope) paths() []string {
+	if len(e.Projection.Paths) > 0 {
+		return append([]string{}, e.Projection.Paths...)
+	}
 	if len(e.NextTransition.Collect.Inputs) == 0 {
 		return nil
 	}

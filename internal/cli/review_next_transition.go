@@ -19,14 +19,57 @@ const (
 )
 
 // ReviewNextTransition is the sole negotiated routing decision. Its execute
-// form is complete, its collect form identifies one externally supplied input,
-// and its stop form intentionally contains no command-shaped data.
+// form is complete, its collect form identifies one externally supplied
+// input, and its stop form otherwise contains no command-shaped data. Two
+// deliberate exceptions exist: the managed_assets_outdated stop is itself
+// the candidate-preserving continuation (#3299, #4170), so Continuation is
+// additive and set only there; and UnachievableLensSlots (issue #3442): a
+// bare stop with no recoverable binding would strand a restarted
+// orchestrator that lost the pre-stop collect offer carrying the declared
+// slot's SubjectHash, with no native route back to the exact
+// `--request-hash` its own withdraw needs.
 type ReviewNextTransition struct {
 	Kind              string                                   `json:"kind"`
 	ReasonCode        string                                   `json:"reason_code"`
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
+	Continuation      *ReviewManagedAssetsContinuation         `json:"continuation,omitempty"`
+	// UnachievableLensSlots is a pointer-to-slice, exactly like
+	// ReviewTransitionExecution.SelectorArguments, so ReviewNextTransition
+	// stays a comparable struct (== / != against a zero value) for the
+	// existing state-table test's "omitted" check.
+	UnachievableLensSlots *[]ReviewUnachievableLensSlot `json:"unachievable_lens_slots,omitempty"`
+}
+
+// ReviewUnachievableLensSlot names one selected lens slot a host declared
+// unachievable, carrying the exact command a restarted orchestrator needs to
+// retract that declaration -- even one that never saw, or has since lost,
+// the original collect offer that carried this SubjectHash -- so the
+// withdraw binding is always recoverable from the stop itself.
+type ReviewUnachievableLensSlot struct {
+	Lens          string                         `json:"lens"`
+	SelectedOrder int                            `json:"selected_order"`
+	SubjectHash   string                         `json:"subject_hash"`
+	Reason        string                         `json:"reason"`
+	Detail        string                         `json:"detail,omitempty"`
+	Withdraw      ReviewUnachievableLensWithdraw `json:"withdraw"`
+}
+
+// ReviewUnachievableLensWithdraw is the complete, literally runnable
+// `review capture-unachievable ... --withdraw=true` command for one declared
+// slot. It deliberately does not reuse ReviewTransitionExecution: that type's
+// Preconditions field has no omitempty and always renders (even as an empty
+// list), and its shipped v2 schema enumerates only the handful of operations
+// (start/status/recover/repair/validate) that already carry preconditions and
+// selector semantics this withdraw command has neither of. A narrower,
+// self-contained shape keeps this addition decoupled from that broader,
+// tightly pinned contract.
+type ReviewUnachievableLensWithdraw struct {
+	Operation string                     `json:"operation"`
+	Command   string                     `json:"command"`
+	Arguments []ReviewTransitionArgument `json:"arguments"`
+	Binding   ReviewTransitionBinding    `json:"binding"`
 }
 
 type ReviewTransitionExecution struct {
@@ -183,6 +226,15 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 					Arguments: reviewTargetArguments(status),
 				})
 			}
+			// #3299, #4170: a stale managed-asset digest fails START's own
+			// preflight anyway, so offering it here would send the caller
+			// into a refusal STATUS already knew was coming. Classifying it
+			// here, before any START is proposed, and naming the exact sync
+			// continuation avoids the "guess run sync from free text" gap
+			// both issues report.
+			if provenance := checkManagedReviewerAssets(); provenance.stale() {
+				return reviewManagedAssetsStopTransition(input.RuntimeAgent, provenance.staleAssetIdentities())
+			}
 			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent, input.IntendedUntracked), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
@@ -256,7 +308,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
 		if len(artifacts) != len(selectedLenses) {
-			return reviewMissingCaptureTransition(captureBinding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
+			return reviewMissingCaptureTransition(captureBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
 			return reviewProviderRoleTransition("provider_refuter_required", captureBinding, input.ProviderRole, input.RuntimeAgent, nil)
@@ -421,7 +473,26 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	return input, nil
 }
 
-func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, runtime ...model.AgentID) ReviewNextTransition {
+// reviewRootActionForTransition keeps the envelope's root `action` in
+// agreement with `next_transition`: a stop that still mandates a collect or
+// an execute is not a stop (#3928). Every other action is left as native
+// status decided it, so preflight (`start`), recovery, repair, and genuine
+// terminal stops are untouched.
+func reviewRootActionForTransition(action reviewtransaction.TargetStatusAction, transition *ReviewNextTransition) reviewtransaction.TargetStatusAction {
+	if action != reviewtransaction.TargetStatusActionStop || transition == nil {
+		return action
+	}
+	switch transition.Kind {
+	case reviewNextTransitionCollect:
+		return reviewtransaction.TargetStatusActionCollect
+	case reviewNextTransitionExecute:
+		return reviewtransaction.TargetStatusActionExecute
+	default:
+		return action
+	}
+}
+
+func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, unachievable []reviewtransaction.CompactUnachievableLensAttempt, runtime ...model.AgentID) ReviewNextTransition {
 	providerRuntime := model.AgentID("")
 	if len(runtime) > 0 && (reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
 		providerRuntime = runtime[0]
@@ -429,6 +500,26 @@ func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLen
 	captured := make(map[int]bool, len(artifacts))
 	for _, artifact := range artifacts {
 		captured[artifact.SelectedOrder] = true
+	}
+	// A slot a host already reported unachievable (issue #3442) is neither
+	// captured nor re-offerable: every selected lens is required (no plan
+	// vocabulary yet admits an optional one), so the review cannot complete
+	// while any one of them stays unachievable. Re-offering it here would
+	// contradict what the host already told the operator, so it stops
+	// instead -- named, truthful, and never silently approved. The stop
+	// still carries the exact withdraw binding for every declared slot, so a
+	// restarted orchestrator that lost the original collect offer is not
+	// stranded without the SubjectHash its own retraction needs.
+	var unachievableSlots []ReviewUnachievableLensSlot
+	for _, attempt := range unachievable {
+		if attempt.SelectedOrder >= 0 && attempt.SelectedOrder < len(selectedLenses) && !captured[attempt.SelectedOrder] {
+			unachievableSlots = append(unachievableSlots, reviewUnachievableLensSlotEntry(binding, attempt))
+		}
+	}
+	if len(unachievableSlots) > 0 {
+		transition := reviewStopTransition("unachievable_lens_slot")
+		transition.UnachievableLensSlots = &unachievableSlots
+		return transition
 	}
 	inputs := make([]ReviewTransitionInput, 0)
 	for order, lens := range selectedLenses {
@@ -480,6 +571,33 @@ func reviewCaptureResultCommandName() string {
 	return reviewTransitionCommandTool + " review " + verb
 }
 
+// reviewUnachievableLensSlotEntry renders one declared slot's complete
+// retraction command: the same lineage/expected-revision/target/
+// repository-context binding every capture verb uses, plus the exact
+// SubjectHash the declaration recorded and `--withdraw=true`. Reusing
+// reviewBindingArguments here is what guarantees this command can never drift
+// from the one `review capture-unachievable` (declaring form) itself accepts.
+func reviewUnachievableLensSlotEntry(binding ReviewTransitionBinding, attempt reviewtransaction.CompactUnachievableLensAttempt) ReviewUnachievableLensSlot {
+	arguments := reviewBindingArguments(binding)
+	if binding.RepositoryContext != "" {
+		arguments = append(arguments, reviewRepositoryContextArguments(binding)...)
+	}
+	arguments = append(arguments,
+		ReviewTransitionArgument{Name: "request-hash", Value: attempt.SubjectHash},
+		ReviewTransitionArgument{Name: "withdraw", Value: "true"},
+	)
+	tokenized := reviewTokenizedTransitionArguments(arguments)
+	return ReviewUnachievableLensSlot{
+		Lens: attempt.Lens, SelectedOrder: attempt.SelectedOrder, SubjectHash: attempt.SubjectHash,
+		Reason: attempt.Reason, Detail: attempt.Detail,
+		Withdraw: ReviewUnachievableLensWithdraw{
+			Operation: reviewCaptureUnachievableCaptureOperation,
+			Command:   reviewTransitionCommandLine(reviewCaptureUnachievableCaptureOperation, tokenized),
+			Arguments: tokenized, Binding: binding,
+		},
+	}
+}
+
 func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int, context *reviewCaptureContext, runtime ...model.AgentID) ReviewTransitionInput {
 	arguments := reviewBindingArguments(binding)
 	if binding.RepositoryContext != "" {
@@ -491,16 +609,28 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 	}
 	if context != nil && order >= 0 && order < len(context.ArtifactSubjects) {
 		subject := context.ArtifactSubjects[order]
-		manifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), context.FrozenContext.ChangedPathManifest...)
-		if manifest == nil {
-			manifest = []reviewtransaction.ChangedPathManifestEntry{}
-		}
 		input.ArtifactSubject = &subject
-		input.ChangedPathManifest = &manifest
 		if context.FrozenContext.LegacyCandidateDiff != nil {
+			// The legacy (v1) transport still inlines the manifest: its capture
+			// input carries a candidate diff instead of base/candidate trees, and
+			// nothing downstream re-derives the changed paths from a resolvable
+			// git tree the way the native-git transport can, so the manifest
+			// itself remains the only carrier of that identity for this input.
+			manifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), context.FrozenContext.ChangedPathManifest...)
+			if manifest == nil {
+				manifest = []reviewtransaction.ChangedPathManifestEntry{}
+			}
+			input.ChangedPathManifest = &manifest
 			diff := *context.FrozenContext.LegacyCandidateDiff
 			input.CandidateDiff = &diff
 		} else {
+			// issue #3922 / #4199 / gentle-pi#543: the native-git transport
+			// already commits to the manifest through
+			// artifact_subject.changed_path_manifest_sha256, so this per-lens
+			// collect input stops inlining a full copy of it -- a 200-file
+			// candidate used to repeat that ~46 KB manifest once per selected
+			// lens. The manifest itself stays on the START envelope (once per
+			// lineage) unchanged.
 			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "subject-hash", Value: subject.SubjectHash})
 			input.BaseTree, input.CandidateTree = context.FrozenContext.BaseTree, context.FrozenContext.CandidateTree
 		}
@@ -564,6 +694,11 @@ type reviewNextTransitionInput struct {
 	RDDMode                                        reviewtransaction.RDDModeStatus
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
+	// UnachievableLensAttempts carries every bound host declaration the
+	// active reviewing phase currently holds (issue #3442), so
+	// reviewMissingCaptureTransition can stop re-offering a slot a host
+	// already reported unachievable instead of contradicting that report.
+	UnachievableLensAttempts []reviewtransaction.CompactUnachievableLensAttempt
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -800,7 +935,8 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
 			})
 		}
-		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
+		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) &&
+			(disposition != reviewtransaction.RecoveryInvalidated || input.Selector.Recovery.Kind != reviewtransaction.TargetCurrentChanges) {
 			return reviewStopTransition("recovery_scope_unchanged")
 		}
 		var representable bool
@@ -1050,6 +1186,17 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 
 func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
+}
+
+// reviewManagedAssetsStopTransition reports stale managed reviewer assets
+// during STATUS preflight, before a START is ever offered (#3299, #4170): a
+// bare "stop" here would leave the caller to guess "run sync" from prose, so
+// the stop itself carries the exact candidate-preserving continuation, bound
+// to the runtime agent STATUS was asked for.
+func reviewManagedAssetsStopTransition(agent model.AgentID, staleAssets []string) ReviewNextTransition {
+	transition := reviewStopTransition("managed_assets_outdated")
+	transition.Continuation = managedAssetsContinuation(string(agent), staleAssets)
+	return transition
 }
 
 func reviewReasonDescription(reason string) string {

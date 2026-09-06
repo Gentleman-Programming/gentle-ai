@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -453,7 +455,7 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport>") {
+	if !strings.Contains(output.String(), "review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
 	}
 	for _, retired := range []string{"preserve-result", "dispose-result"} {
@@ -635,6 +637,56 @@ func TestTuiSyncSelectionPreservesCustomPermissionExclusion(t *testing.T) {
 	}
 }
 
+// TestTuiSyncProfilePersistsWhenSDDComponentMissingFromState reproduces
+// https://github.com/Gentleman-Programming/gentle-ai/issues/3430 through the
+// TUI sync entry point: a machine that installed without the SDD component
+// (state.json's persisted Components list omits "sdd") must still get its
+// OpenCode SDD profile written when the "Edit Profile" flow explicitly
+// requests it via SyncOverrides.Profiles — loadPersistedAssignments restores
+// Components from state before applyOverrides sets Profiles, so without the
+// fix ComponentSDD is dropped and the profile write silently never runs.
+func TestTuiSyncProfilePersistsWhenSDDComponentMissingFromState(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"$schema":"https://opencode.ai/config.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentEngram},
+		SDDMode:             model.SDDModeSingle,
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	profile := model.Profile{
+		Name:              "demo",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-5"},
+	}
+	changed, err := tuiSync(home)(&model.SyncOverrides{
+		TargetAgents: []model.AgentID{model.AgentOpenCode},
+		Profiles:     []model.Profile{profile},
+	})
+	if err != nil {
+		t.Fatalf("tuiSync() error = %v", err)
+	}
+	if len(changed) == 0 {
+		t.Fatal("tuiSync() changed 0 files, want the profile written to opencode.json")
+	}
+
+	settingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
+	}
+	if !strings.Contains(string(settingsData), "sdd-orchestrator-demo") {
+		t.Fatalf("opencode.json missing profile agent key %q; the explicitly requested profile was silently dropped. Got: %s", "sdd-orchestrator-demo", settingsData)
+	}
+}
+
 func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
@@ -681,6 +733,106 @@ func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) 
 	if got.ManagedAssetDigest != "existing-writer" || got.LastUpdateCheck == nil || !got.LastUpdateCheck.Equal(lastCheck) || !got.PendingSync || got.RDDMode != "off" {
 		t.Fatalf("unrelated state was not preserved: %#v", got)
 	}
+}
+
+func TestTUIExecuteWithBackgroundPreservesConcurrentCLIStateMutation(t *testing.T) {
+	home := t.TempDir()
+	candidate := buildAppCandidateBinary(t)
+	setupMockHome(t, home)
+
+	initialRecordedAt := time.Now().UTC().Add(-time.Hour)
+	if err := state.Write(home, state.InstallState{
+		RDDMode:           "off",
+		RDDModeRecordedAt: &initialRecordedAt,
+		BackgroundIntent:  model.OpenCodeBackgroundOff,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	publicationReached := make(chan struct{})
+	releasePublication := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releasePublication) }) }
+	t.Cleanup(release)
+	previousWriteReconciled := appStateWriteReconciled
+	appStateWriteReconciled = func(homeDir string, installState state.InstallState) error {
+		close(publicationReached)
+		<-releasePublication
+		return state.WriteReconciled(homeDir, installState)
+	}
+	t.Cleanup(func() { appStateWriteReconciled = previousWriteReconciled })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{},
+		Preset:     model.PresetCustom,
+	}
+	resultCh := make(chan pipeline.ExecutionResult, 1)
+	go func() {
+		resultCh <- tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
+	}()
+
+	select {
+	case <-publicationReached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("TUI did not reach final state publication")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, candidate, "review", "mode", "enable", "--scope", "global")
+	command.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("candidate review mode enable succeeded while TUI owned the install-state transaction:\n%s", output)
+	}
+	intermediate, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read state after contended candidate review mode enable: %v", err)
+	}
+	if intermediate.RDDMode != "off" || intermediate.RDDModeRecordedAt == nil || !intermediate.RDDModeRecordedAt.Equal(initialRecordedAt) {
+		t.Fatalf("contended candidate review mode enable changed persisted state: %#v", intermediate)
+	}
+
+	release()
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			t.Fatalf("tuiExecuteWithBackground() error = %v", result.Err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("TUI did not finish final state publication")
+	}
+
+	command = exec.CommandContext(ctx, candidate, "review", "mode", "enable", "--scope", "global")
+	command.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	output, err = command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("candidate review mode enable retry failed: %v\n%s", err, output)
+	}
+
+	final, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read final install state: %v", err)
+	}
+	if final.RDDMode != "on" || final.RDDModeRecordedAt == nil || !final.RDDModeRecordedAt.After(initialRecordedAt) || final.BackgroundIntent != model.OpenCodeBackgroundOn || !final.SelectionConfigured || final.Preset != model.PresetCustom || !slices.Equal(final.InstalledAgents, []string{string(model.AgentOpenCode)}) {
+		t.Fatalf("final install state lost retried CLI review-mode mutation or TUI-owned fields: %#v", final)
+	}
+}
+
+func buildAppCandidateBinary(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "gentle-ai")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build candidate binary: %v\n%s", err, output)
+	}
+	return binary
 }
 
 func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.T) {

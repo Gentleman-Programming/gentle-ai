@@ -11,8 +11,8 @@
     "schema": {"const": "gentle-ai.review-integration.status/v7"},
     "contract": {"$ref": "status-v5.schema.json#/properties/contract"}, "operation": {"$ref": "status-v5.schema.json#/properties/operation"},
     "applicability": {"$ref": "status-v5.schema.json#/properties/applicability"}, "authority": {"$ref": "status-v5.schema.json#/properties/authority"},
-    "action": {"$ref": "status-v5.schema.json#/properties/action"}, "action_disposition": {"$ref": "status-v5.schema.json#/properties/action_disposition"},
-    "replayability": {"$ref": "status-v5.schema.json#/properties/replayability"}, "frozen": {"$ref": "status-v5.schema.json#/properties/frozen"},
+    "action": {"enum": ["start", "validate", "recover", "maintainer_action", "select_lineage", "repair_authority", "stop", "collect", "execute"]}, "action_disposition": {"$ref": "status-v5.schema.json#/properties/action_disposition"},
+    "replayability": {"$ref": "status-v5.schema.json#/properties/replayability"}, "frozen": {"type": "object", "additionalProperties": false, "required": ["tier", "original_changed_lines", "correction_budget"], "properties": {"tier": {"enum": ["low", "medium", "high"]}, "original_changed_lines": {"type": "integer", "minimum": 0}, "correction_budget": {"type": "integer", "minimum": 0, "maximum": 200}, "changed_path_manifest_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}},
     "target_identity": {"$ref": "status-v5.schema.json#/properties/target_identity"}, "authority_target_identity": {"$ref": "status-v5.schema.json#/properties/authority_target_identity"},
     "projection": {"$ref": "status-v5.schema.json#/properties/projection"}, "repair": {"$ref": "status-v5.schema.json#/properties/repair"},
     "candidates": {"$ref": "status-v5.schema.json#/properties/candidates"}, "reconciliation": {"$ref": "status-v5.schema.json#/properties/reconciliation"},
@@ -26,8 +26,16 @@
     "next_transition": {"oneOf": [
       {"allOf": [
         {"$ref": "status-v5.schema.json#/$defs/next_transition"},
-        {"not": {"properties": {"reason_code": {"const": "intended_untracked_selection_required"}}, "required": ["reason_code"]}}
+        {"not": {"properties": {"reason_code": {"enum": ["intended_untracked_selection_required", "managed_assets_outdated"]}}, "required": ["reason_code"]}}
       ]},
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "continuation"],
+        "properties": {
+          "kind": {"const": "stop"},
+          "reason_code": {"const": "managed_assets_outdated"},
+          "continuation": {"$ref": "failure.schema.json#/$defs/managed_assets_continuation"}
+        }
+      },
       {
         "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
         "properties": {
@@ -54,6 +62,30 @@
               }
             }}
           }
+        }
+      },
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "unachievable_lens_slots"],
+        "properties": {
+          "kind": {"const": "stop"}, "reason_code": {"const": "unachievable_lens_slot"},
+          "unachievable_lens_slots": {"type": "array", "minItems": 1, "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["lens", "selected_order", "subject_hash", "reason", "withdraw"],
+            "properties": {
+              "lens": {"type": "string", "minLength": 1}, "selected_order": {"type": "integer", "minimum": 0},
+              "subject_hash": {"$ref": "status-v5.schema.json#/$defs/sha256"}, "reason": {"type": "string", "minLength": 1},
+              "detail": {"type": "string"},
+              "withdraw": {
+                "type": "object", "additionalProperties": false, "required": ["operation", "command", "arguments", "binding"],
+                "properties": {
+                  "operation": {"const": "review.capture-unachievable"},
+                  "command": {"type": "string", "minLength": 1, "pattern": "^gentle-ai review capture-unachievable "},
+                  "arguments": {"type": "array", "items": {"$ref": "transition-execution.schema.json#/$defs/executable_transition_argument"}},
+                  "binding": {"$ref": "transition-binding.schema.json"}
+                }
+              }
+            }
+          }}
         }
       }
     ]}

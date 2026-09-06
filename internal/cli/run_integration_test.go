@@ -238,7 +238,7 @@ func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 		t.Fatalf("agentInstallStep.Run() error = %v", err)
 	}
 
-	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:pi-subagents-j0k3r", "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:@juicesharp/rpiv-todo", "pi install npm:pi-btw"}
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:@juicesharp/rpiv-ask-user-question", "pi install npm:pi-web-access", "pi install npm:pi-btw"}
 	if len(events) != len(wantPackages)*2 {
 		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
 	}
@@ -335,10 +335,8 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
 		engramInitCommandForTest,
-		"pi install npm:pi-subagents-j0k3r",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
-		"pi install npm:@juicesharp/rpiv-todo",
 		"pi install npm:pi-btw",
 	} {
 		if !stringSliceContains(commands, want) {
@@ -2049,17 +2047,16 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 		t.Fatalf("expected branch-pr skill file %q: %v", branchPRPath, err)
 	}
 
-	// Note: the graph defines skills → sdd → engram as a hard dependency chain.
-	// Selecting --component skills auto-resolves sdd (and engram) as dependencies.
-	// The SDD component installs its own 10 SDD+orchestration skills during injection,
-	// regardless of the --skills flag. So sdd-init and other SDD skills ARE installed.
+	// Regression guard for #3554: `skills` no longer has a hard dependency on
+	// `sdd` in the planner graph, so selecting only the skills component must
+	// NOT auto-resolve SDD (or Engram). sdd-init and the rest of the SDD
+	// orchestrator suite are installed only by the SDD component itself.
 	sddInitPath := filepath.Join(home, ".claude", "skills", "sdd-init", "SKILL.md")
-	if _, err := os.Stat(sddInitPath); err != nil {
-		t.Fatalf("sdd-init skill should be installed (sdd is auto-resolved as dep of skills): %v", err)
+	if _, err := os.Stat(sddInitPath); !os.IsNotExist(err) {
+		t.Fatalf("sdd-init skill should NOT be installed (skills has no hard dependency on sdd): err=%v", err)
 	}
 
-	// The --skills flag controls what the skills COMPONENT adds on top of SDD skills.
-	// Total = 10 SDD skills + 2 explicit skills = 12 SKILL.md files.
+	// Total = 2 explicitly requested skills only.
 	skillsDir := filepath.Join(home, ".claude", "skills")
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
@@ -2076,9 +2073,8 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 12 SDD skills + 2 explicit skills = 14. _shared is support-only.
-	if skillCount != 14 {
-		t.Fatalf("expected 14 skill files (12 SDD + 2 explicit), got %d", skillCount)
+	if skillCount != 2 {
+		t.Fatalf("expected 2 skill files (go-testing + branch-pr only, no SDD), got %d", skillCount)
 	}
 }
 
@@ -2115,12 +2111,10 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	// The graph defines skills → sdd → engram as hard dependencies.
-	// Selecting --component skills auto-resolves sdd (and engram).
-	// The SDD component ALWAYS installs its 10 SDD+orchestration skills during injection.
-	// Without --skills flag, selectedSkillIDs() returns nil for custom preset,
-	// so the skills COMPONENT is a no-op — but the sdd DEPENDENCY still runs and
-	// installs its 10 skills.
+	// Regression guard for #3554: skills has no hard dependency on sdd, so
+	// selecting only --component skills without --skills (which leaves
+	// selectedSkillIDs() empty for the custom preset) truly installs nothing —
+	// sdd is not auto-resolved and its skills are not written.
 	skillsDir := filepath.Join(home, ".claude", "skills")
 	// Count SKILL.md files (one per skill, excluding _shared and other non-skill dirs).
 	var skillCount int
@@ -2135,9 +2129,50 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect 12 files: 11 SDD phases + judgment-day. _shared is support-only.
-	if skillCount != 12 {
-		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	if skillCount != 0 {
+		t.Fatalf("expected 0 skill files (skills has no hard dependency on sdd), got %d", skillCount)
+	}
+}
+
+// TestRunInstallSkillsAndSDDBothSelectedNoDuplicateSkillFiles guards #3554
+// review finding: skills+sdd together must write every sdd-* skill exactly
+// once plus the requested standalone skill — no duplicates, no clobbering.
+func TestRunInstallSkillsAndSDDBothSelectedNoDuplicateSkillFiles(t *testing.T) {
+	home := t.TempDir()
+	restoreHome, restoreCommand, restoreLookPath := osUserHomeDir, runCommand, cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir, runCommand, cmdLookPath = restoreHome, restoreCommand, restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	result, err := RunInstall([]string{
+		"--agent", "claude-code", "--preset", "custom",
+		"--component", "skills,sdd", "--skills", "go-testing",
+	}, system.DetectionResult{})
+	if err != nil || !result.Verify.Ready {
+		t.Fatalf("RunInstall() error = %v, verify = %#v", err, result.Verify)
+	}
+
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", skillsDir, err)
+	}
+	var skillCount int
+	for _, entry := range entries {
+		if _, statErr := os.Stat(filepath.Join(skillsDir, entry.Name(), "SKILL.md")); statErr == nil {
+			skillCount++
+		}
+	}
+	if skillCount != 13 {
+		t.Fatalf("expected 13 skill files (12 SDD + go-testing, no duplicates), got %d", skillCount)
+	}
+	for _, id := range []string{"sdd-init", "go-testing"} {
+		if _, err := os.Stat(filepath.Join(skillsDir, id, "SKILL.md")); err != nil {
+			t.Fatalf("expected %s skill file: %v", id, err)
+		}
 	}
 }
 

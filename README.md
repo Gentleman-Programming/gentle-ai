@@ -451,7 +451,7 @@ If reviewers find severe findings caused by the candidate itself, RDD permits on
 
 ### Approval waits to be acknowledged
 
-> **In stable `v2.5.0`, a review does not end when it is approved.** It ends when your agent confirms it received that approval.
+> **In stable `v2.6.0`, a review does not end when it is approved.** It ends when your agent confirms it received that approval.
 
 Why this exists: previously, approval destroyed its own authority and returned a response. If that response never reached the host — a crash, a dropped connection — the review was over and nothing said so.
 
@@ -466,7 +466,7 @@ If a host decodes the acknowledgement but never runs it, the review stays approv
 
 Re-entering a frozen review used to be described in prose, which could drift from what the CLI accepted.
 
-**Stable `v2.5.0` carries that knowledge in the protocol instead of prose.** A negotiated START returns a `gentle-ai.review-integration.start/v4` envelope whose `next_transition` contains the complete command that re-enters the transaction. Your agent runs it verbatim rather than reconstructing it.
+**Stable `v2.6.0` carries that knowledge in the protocol instead of prose.** A negotiated START returns a `gentle-ai.review-integration.start/v4` envelope whose `next_transition` contains the complete command that re-enters the transaction. Your agent runs it verbatim rather than reconstructing it.
 
 The practical rule, and the one worth knowing even if you never read an envelope: **the agent should run the command the provider returned, never one assembled from a description of it.** You can check which protocol version your build speaks with:
 
@@ -567,6 +567,12 @@ gentle-ai sync
 > [!IMPORTANT]
 > `sync` is not optional after an upgrade. If you replace the `gentle-ai` binary by any means, run `gentle-ai sync` to refresh the managed assets it writes into your agents. See the [sync and upgrade reference](docs/usage.md#sync).
 
+**What `sync` writes in `v2.6.0`:**
+
+- **Claude Code review hooks.** `Stop` and `SessionStart` entries are written into `~/.claude/settings.json` as managed entries. They remind the agent to preflight a review once per session candidate, and stay silent when review mode is off or the worktree is clean. `uninstall` removes them and preserves every hook it does not own.
+- **Pi system prompt cleanup.** Stale managed blocks left by older builds are stripped from `~/.pi/agent/APPEND_SYSTEM.md`. The file is preserved; only the blocks Gentle-AI wrote are removed.
+- **Only the agents you selected.** `sync` derives its agent set from the agents recorded at install time, not from what it finds on disk. If you relied on `sync` writing into an agent you never selected, run `gentle-ai` and select it first.
+
 ### Backups
 
 Every install, sync and upgrade automatically snapshots your config files. Backups are **compressed** (tar.gz), **deduplicated** (identical configs are not re-backed up) and **auto-pruned** (the 5 most recent are kept). Pin important backups via the TUI (<kbd>p</kbd> key) to protect them from pruning.
@@ -588,7 +594,7 @@ There are two current channels. Install `@latest` unless you are deliberately te
 
 | Channel | Current | Install |
 | --- | --- | --- |
-| **Stable** | [`v2.5.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.5.0) | `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest` |
+| **Stable** | [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0) | `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest` |
 | **Development** | `main` | `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` |
 
 Verify with `gentle-ai version` after any of them.
@@ -597,7 +603,7 @@ Use `@main` only to test changes that are not part of a release. The managed ins
 
 **About the `/v2` suffix:** Go requires it for major version 2 and above. Releases before `v2.0.0` use the unsuffixed import path.
 
-**Stable `v2.5.0` publishes six archives under a signed checksum manifest:** four platform `.tar.gz` archives for macOS and Linux (amd64 and arm64), the provider-contract archive, and the release-provenance archive. `checksums.txt` covers all six and is authenticated by `checksums.txt.minisig`.
+**Stable `v2.6.0` publishes six archives under a signed checksum manifest:** four platform `.tar.gz` archives for macOS and Linux (amd64 and arm64), the provider-contract archive, and the release-provenance archive. `checksums.txt` covers all six and is authenticated by `checksums.txt.minisig`.
 
 Receipt-Driven Development became the supported stable path in `v2.2.0`; the negotiated public review contract was published in `v2.1.6`.
 
@@ -670,7 +676,7 @@ Workspace scope covers agent-scoped files — system prompts, skills, SDD agents
 
 <br/>
 
-**Stable channel — Minisign.** Stable `v2.5.0` publishes six archives: four macOS/Linux platform archives, the provider-contract archive, and the release-provenance archive. All six are covered by an authenticated `checksums.txt`. The built-in upgrader verifies its Minisign signature, its exact `Gentleman-Programming/gentle-ai` + release-tag binding, and the selected platform archive checksum **before** replacing the installed binary. Release archives are capped at **128 MiB**, including chunked or unknown-length responses. Missing, oversized, malformed, untrusted or placeholder key material fails closed without changing the installed binary.
+**Stable channel — Minisign.** Stable `v2.6.0` publishes six archives: four macOS/Linux platform archives, the provider-contract archive, and the release-provenance archive. All six are covered by an authenticated `checksums.txt`. The built-in upgrader verifies its Minisign signature, its exact `Gentleman-Programming/gentle-ai` + release-tag binding, and the selected platform archive checksum **before** replacing the installed binary. Release archives are capped at **128 MiB**, including chunked or unknown-length responses. Missing, oversized, malformed, untrusted or placeholder key material fails closed without changing the installed binary.
 
 To verify yourself, obtain the production public-key payload and fingerprint from a maintainer-controlled channel, then download `checksums.txt` and `checksums.txt.minisig` from the same release:
 
@@ -682,7 +688,7 @@ sha256sum --check --strict --ignore-missing checksums.txt
 
 Do not bootstrap trust from a public key downloaded only beside the artifacts it verifies. See [Release signing and key rotation](docs/release-signing.md).
 
-**Provider contract bundle.** Stable `v2.5.0` publishes `gentle-ai-review-provider-contract-1.1.0.tar.gz`. Verify and inspect it from the tagged source:
+**Provider contract bundle.** Stable `v2.6.0` publishes `gentle-ai-review-provider-contract-1.2.0.tar.gz`. Verify and inspect it from the tagged source:
 
 ```bash
 go run ./internal/providercontractbundlecmd verify --archive <bundle>

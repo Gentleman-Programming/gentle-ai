@@ -84,6 +84,7 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	{Command: "capture-correction-plan", Operation: reviewCaptureCorrectionPlanOperation, Label: "Review CAPTURE-CORRECTION-PLAN", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
 	{Command: "capture-refuter", Operation: reviewCaptureRefuterCaptureOperation, Label: "Review CAPTURE-REFUTER", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "agent"}, BoolFlags: []string{"materialize", "execute"}, MutatesAuthority: true, ReadOnlyFlag: "materialize"},
 	{Command: "capture-result", Operation: reviewCaptureResultCaptureOperation, Label: "Review CAPTURE-RESULT", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "lens", "expected-revision", "subject-hash", "agent", "input"}, BoolFlags: []string{"preflight", "materialize"}, IntFlags: []string{"order"}, MutatesAuthority: true, ReadOnlyFlag: "preflight"},
+	{Command: "capture-unachievable", Operation: reviewCaptureUnachievableCaptureOperation, Label: "Review CAPTURE-UNACHIEVABLE", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash", "reason", "detail"}, BoolFlags: []string{"withdraw"}, MutatesAuthority: true},
 	{Command: "capture-validation", Operation: reviewCaptureValidationCaptureOperation, Label: "Review CAPTURE-VALIDATION", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash", "agent"}, BoolFlags: []string{"materialize", "execute"}, MutatesAuthority: true, ReadOnlyFlag: "materialize"},
 	{Command: "acknowledge-approved", Operation: "review.acknowledge-approved", Label: "Review ACKNOWLEDGE-APPROVED"},
 	// review.recover owns a verb without joining the published negotiated
@@ -172,6 +173,41 @@ type ReviewIntegrationFailure struct {
 	// branch that has a safe diagnostic to publish.
 	Cause   string                           `json:"cause,omitempty"`
 	Context *ReviewIntegrationFailureContext `json:"context,omitempty"`
+	// Continuation is the one candidate-preserving runnable follow-up a
+	// managed_assets_outdated refusal can offer (#3299, #4170): the exact
+	// `gentle-ai sync` invocation that reconciles the recorded digest. It is
+	// additive and only ever set for that one refusal code.
+	Continuation *ReviewManagedAssetsContinuation `json:"continuation,omitempty"`
+}
+
+// ReviewManagedAssetsContinuation names the sync invocation that resolves a
+// managed_assets_outdated refusal without abandoning the frozen candidate.
+// Command is the exact, literally runnable command line, bound to the same
+// runtime agent the blocked operation was asked for; StaleAssets carries the
+// stale recorded digest when it is known.
+type ReviewManagedAssetsContinuation struct {
+	Operation   string   `json:"operation"`
+	Command     string   `json:"command"`
+	Agent       string   `json:"agent,omitempty"`
+	StaleAssets []string `json:"stale_assets,omitempty"`
+}
+
+// managedAssetsContinuation builds the one continuation a
+// managed_assets_outdated refusal can offer: the exact `gentle-ai sync`
+// invocation, bound to the runtime agent the blocked STATUS or START was
+// asked for. An empty agent (no runtime declared) produces the bare command
+// instead of guessing one.
+func managedAssetsContinuation(agent string, staleAssets []string) *ReviewManagedAssetsContinuation {
+	agent = strings.TrimSpace(agent)
+	command := "gentle-ai sync"
+	if agent != "" {
+		command = fmt.Sprintf("gentle-ai sync --agent %s", agent)
+	}
+	continuation := &ReviewManagedAssetsContinuation{Operation: "sync", Command: command, Agent: agent}
+	if len(staleAssets) > 0 {
+		continuation.StaleAssets = append([]string{}, staleAssets...)
+	}
+	return continuation
 }
 
 type ReviewIntegrationFailureContext struct {
@@ -359,6 +395,11 @@ var reviewPreflightProviderCaptureRefusedReason = reviewPreflightReason{
 type reviewIntegrationPreflightError struct {
 	cause  error
 	reason *reviewPreflightReason
+	// continuation is additive instance data (parallel to cause): the reason
+	// is a static classification shared by every occurrence of a code, while
+	// the continuation names the exact runnable command for THIS occurrence
+	// (bound to the agent this specific blocked call was asked for).
+	continuation *ReviewManagedAssetsContinuation
 }
 
 func (err *reviewIntegrationPreflightError) Error() string { return err.cause.Error() }
@@ -390,6 +431,18 @@ func reviewPreflightRefusal(reason reviewPreflightReason, err error) error {
 		return nil
 	}
 	return &reviewIntegrationPreflightError{cause: err, reason: &reason}
+}
+
+// reviewPreflightRefusalWithContinuation is reviewPreflightRefusal plus the
+// one additive continuation a managed_assets_outdated refusal carries, so
+// START's own preflight failure names the same runnable sync as STATUS's
+// stop transition instead of leaving the caller to infer it from prose
+// (#3299, #4170).
+func reviewPreflightRefusalWithContinuation(reason reviewPreflightReason, err error, continuation *ReviewManagedAssetsContinuation) error {
+	if err == nil {
+		return nil
+	}
+	return &reviewIntegrationPreflightError{cause: err, reason: &reason, continuation: continuation}
 }
 
 func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrationFailure) {
@@ -720,14 +773,27 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	var gitFailure *reviewtransaction.GitCommandError
 	if errors.As(runErr, &gitFailure) {
 		failure.Phase = "pre_native"
-		failure.Code = "git_command_failed"
-		failure.Message = "A Git subprocess failed before review authority mutation."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
 		failure.Cause = reviewIntegrationFailureCause(gitFailure)
+		// #3497: a Git dubious-ownership refusal (a UNC share, for example)
+		// is a distinct, typed, path-free condition -- reviewGitOwnershipRefusal
+		// already exists to name it -- and no review action can repair it, since
+		// gentle-ai never provisions safe.directory. Before this branch, only
+		// resolveOpaqueReviewRepositoryRoot consulted that classifier, so every
+		// other route through this generic mapper (including negotiated
+		// review.status) reported the same refusal as the content-free
+		// git_command_failed code.
+		if reviewGitOwnershipRefusal(gitFailure) {
+			failure.Code = reviewGitTrustRefusalCode
+			failure.Message = reviewGitTrustRefusalAction
+			return failure
+		}
+		failure.Code = "git_command_failed"
+		failure.Message = "A Git subprocess failed before review authority mutation."
 		return failure
 	}
 	var gitControl *reviewtransaction.GitProcessControlError
@@ -766,6 +832,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			preflightFailure.RetrySafe = false
 		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
+		preflightFailure.Continuation = preflight.continuation
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError
@@ -1264,6 +1331,15 @@ func (failure ReviewIntegrationFailure) Validate() error {
 			failure.Operation != "review.repair" || !reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) ||
 			failure.NextAction != "review.repair" || failure.ProgressIdentity == "" {
 			return errors.New("exact negotiated review repair replay is incomplete")
+		}
+	}
+	if (failure.Code == "managed_assets_outdated") != (failure.Continuation != nil) {
+		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
+	}
+	if continuation := failure.Continuation; continuation != nil {
+		if continuation.Operation != "sync" || strings.TrimSpace(continuation.Command) == "" ||
+			!strings.HasPrefix(continuation.Command, "gentle-ai sync") {
+			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command does not start with `gentle-ai sync` was built wrong; only a code fix produces a valid one
 		}
 	}
 	return nil

@@ -31,7 +31,8 @@ const reviewContractRequiredForActionEligibilityReason = "--action-eligibility a
 // exact contract value for the other set of --contract-gated review status
 // flags (target selectors such as --lineage, --base-ref, --base-tree,
 // --workspace-overlay, --projection, --gate, and the recovery selectors).
-const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " + ReviewIntegrationContractV1
+const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " +
+	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStartTargetRequiresContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above, naming the same
@@ -106,6 +107,58 @@ type ReviewFacadeStartResult struct {
 	// Acknowledgement is present only for a v2 zero-lens approved START. It
 	// carries the exact continuation that burns the pending compact authority.
 	Acknowledgement *ReviewTransitionExecution `json:"acknowledgement,omitempty"`
+	// Trace is present only when --trace was explicitly requested for this
+	// START (#1854). The authority mutation above always represents what
+	// actually committed; Trace separately reports whether the requested
+	// diagnostic entry was also persisted, never the other way around.
+	Trace *ReviewTraceOutcome `json:"trace,omitempty"`
+}
+
+// reviewTraceRetryGuidance is informational only: it never changes command
+// behavior. The authority named by CommittedRevision is already durable, so
+// repeating the same command with a writable --trace path is always safe --
+// it cannot create a second authority transition or duplicate the trace row
+// this outcome already accounts for.
+const reviewTraceRetryGuidance = "rerun the same command with a writable --trace path; the authority is already committed and an identical retry is idempotent"
+
+// ReviewTraceOutcome reports what happened to an explicitly requested
+// --trace diagnostic entry after its authority mutation already committed
+// (issue #1854). It is absent entirely unless --trace was requested, and its
+// presence or content never changes whether the mutation itself committed.
+type ReviewTraceOutcome struct {
+	// RequestedPath is a redacted identity of the --trace value, the same
+	// way this surface avoids ever publishing a raw filesystem path.
+	RequestedPath string `json:"requested_path,omitempty"`
+	Persisted     bool   `json:"persisted"`
+	// ErrorClass distinguishes mkdir/open/write/fsync/close failures; empty
+	// when Persisted is true.
+	ErrorClass        string `json:"error_class,omitempty"`
+	CommittedRevision string `json:"committed_revision,omitempty"`
+	// EventIdentity lets a caller confirm a later retry describes the same
+	// event, without trusting free-form text.
+	EventIdentity string `json:"event_identity,omitempty"`
+	// Retry is present only when Persisted is false.
+	Retry string `json:"retry,omitempty"`
+}
+
+// reviewTraceOutcomeResult projects a committed trace outcome into the
+// path-free CLI result shape. It returns nil when no trace was requested for
+// this commit, so callers can assign it directly to the omitempty field.
+func reviewTraceOutcomeResult(tracePath string, outcome *reviewtransaction.CompactTraceOutcome) *ReviewTraceOutcome {
+	if outcome == nil {
+		return nil
+	}
+	result := &ReviewTraceOutcome{
+		RequestedPath:     facadePayloadHash([]byte(tracePath)),
+		Persisted:         outcome.Persisted,
+		ErrorClass:        outcome.ErrorClass,
+		CommittedRevision: outcome.Revision,
+		EventIdentity:     outcome.Identity(),
+	}
+	if !outcome.Persisted {
+		result.Retry = reviewTraceRetryGuidance
+	}
+	return result
 }
 
 // ReviewStartConsentDeclinedThisCandidate reports that the user answered the
@@ -138,6 +191,13 @@ const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
 // (issue #2440). Naming the caller's own runtime keeps that check meaningful:
 // a runtime whose transport is unsupported is then refused, which is the
 // correct outcome for this build.
+//
+// It also names --consent relay (issue #2870): this is the exact invocation a
+// reader is most likely to copy and run verbatim, and reviewStartArguments
+// (the STATUS-supplied transition command, review_next_transition.go) already
+// includes it for every v2 contract. Without it here, a caller that copies
+// this named continuation and runs it without a TTY silently mints a
+// medium/high-risk review lineage with no consent envelope.
 func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAgent string) string {
 	identity := strings.TrimSpace(runtimeAgent)
 	command := fmt.Sprintf("gentle-ai review start --contract %s", ReviewIntegrationContractV2)
@@ -151,6 +211,7 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		command += " --base-ref " + snapshot.BaseTree + " --workspace-overlay"
 	}
+	command += " --consent relay"
 	return command
 }
 
@@ -361,8 +422,14 @@ type facadeReviewerResult struct {
 }
 
 type facadeValidationCheck struct {
-	Passed   bool     `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      bool                           `json:"passed"`
+	Evidence    []string                       `json:"evidence"`
+	Regressions []reviewtransaction.Regression `json:"regressions,omitempty"`
+	// Inspection is the validator's typed claim about whether it read the
+	// frozen candidate trees before producing this check's verdict (issue
+	// #4266). A nil Inspection (the field omitted) is treated as completed,
+	// matching every producer that predates this field.
+	Inspection *reviewtransaction.ValidationInspection `json:"inspection,omitempty"`
 }
 
 type facadeValidationResult struct {
@@ -381,26 +448,36 @@ type facadeValidationResult struct {
 // consumed and the same validation can simply be run again (issue #3378).
 var errReviewTargetedValidationInconclusive = errors.New("targeted validation is inconclusive") // refusal:by-design world-action: restore the validator's read-only access to the frozen trees and run the same targeted validation again
 
-// conclusive rejects validation checks whose evidence reports the immutable
-// candidate could not be inspected. Such a check is not a verdict: admitted as
-// failed it consumes the single correction attempt on a non-observation
-// (issue #1309 follow-up), and admitted as passed it approves uninspected
-// bytes. No state transitions, so the same validation can be captured again
-// once the validator regains access to the frozen trees.
+// conclusive rejects validation checks that produced no verdict, via
+// reviewtransaction.ValidationCheckInconclusive (issue #4266): the typed
+// inspection field decides alone when present, falling back to a narrow
+// Evidence scan only when a legacy producer omits it. Admitted anyway, a
+// failed check would consume the single correction attempt on a
+// non-observation (issue #1309); a passed one would approve uninspected
+// bytes.
 func (result facadeValidationResult) conclusive() error {
 	for _, check := range []struct {
-		name     string
-		evidence []string
+		name       string
+		inspection *reviewtransaction.ValidationInspection
+		evidence   []string
 	}{
-		{name: "original_criteria", evidence: result.OriginalCriteria.Evidence},
-		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
+		{name: "original_criteria", inspection: result.OriginalCriteria.Inspection, evidence: result.OriginalCriteria.Evidence},
+		{name: "correction_regression", inspection: result.CorrectionRegression.Inspection, evidence: result.CorrectionRegression.Evidence},
 	} {
-		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
-			// The exit is named on the sentinel this wraps: restore the
-			// validator's access to the frozen trees and run the same
-			// targeted validation again.
-			return fmt.Errorf("%w: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and run the same targeted validation again", errReviewTargetedValidationInconclusive, check.name)
+		inconclusive, err := reviewtransaction.ValidationCheckInconclusive(check.inspection, check.evidence)
+		if err != nil {
+			return fmt.Errorf("%s %w", check.name, err)
 		}
+		if !inconclusive {
+			continue
+		}
+		// The exit is named on the sentinel this wraps: restore the
+		// validator's access to the frozen trees and run the same
+		// targeted validation again.
+		if check.inspection != nil {
+			return fmt.Errorf("%w: %s inspection.status reports the immutable candidate could not be inspected (%s), so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and run the same targeted validation again", errReviewTargetedValidationInconclusive, check.name, check.inspection.Reason)
+		}
+		return fmt.Errorf("%w: %s evidence reports the immutable candidate could not be inspected and this check omits the typed inspection field, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees, run the same targeted validation again, and emit inspection.status on this check", errReviewTargetedValidationInconclusive, check.name)
 	}
 	return nil
 }
@@ -517,7 +594,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -657,6 +734,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewCaptureRefuter(args[1:], stdout)
 	case "capture-validation":
 		return RunReviewCaptureValidation(args[1:], stdout)
+	case "capture-unachievable":
+		return RunReviewCaptureUnachievable(args[1:], stdout)
 	case "acknowledge-approved":
 		return RunReviewAcknowledgeApproved(args[1:], stdout)
 	case "inspect-candidate":
@@ -806,14 +885,43 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		builder := reviewtransaction.SnapshotBuilder{Repo: root}
 		requestedLineage := strings.TrimSpace(*lineage)
 		requestedLineageOccupied := false
-		if *nextTransition && requestedLineage != "" {
+		if requestedLineage != "" {
 			requestedLineageOccupied, err = reviewtransaction.ExactReviewLineageOccupied(ctx, root, requestedLineage)
 			if err != nil {
 				return fmt.Errorf("inspect negotiated START lineage occupancy: %w", err)
 			}
+			// #1997 residual: outside the negotiated START/continuation flow
+			// (--next-transition), a plain contracted status query naming a
+			// lineage that does not exist must fail closed, instead of
+			// silently falling through to report the unrelated live current
+			// target at exit 0. --next-transition legitimately names an
+			// unoccupied lineage to start it fresh, so this check is scoped
+			// to the plain query.
+			//
+			// R3 correction: existence is decided by the exact same
+			// inventory predicate the uncontracted path uses
+			// (InventoryAuthorityForLineage), not by occupancy.
+			// requestedLineageOccupied only reports a live store directory;
+			// occupancy and inventory presence can diverge (a lineage that
+			// is approved-and-burned, abandoned, or invalidated may still
+			// hold auditable inventory state after its live directory is
+			// gone), and refusing those as nonexistent on this path while
+			// the uncontracted path admits them would be two independently
+			// maintained existence checks that can silently drift apart.
+			if !*nextTransition && !requestedLineageOccupied {
+				if _, inventoryErr := reviewtransaction.InventoryAuthorityForLineage(ctx, root, requestedLineage); inventoryErr != nil {
+					return fmt.Errorf("inventory review authority: %w", inventoryErr)
+				}
+			}
 		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
 		hydratedIntendedScope := false
+		// pendingApprovedTerminalTarget carries the exact frozen target kind
+		// and base ref an approved-pending lineage resumed below, so a
+		// selectorless refresh can rebuild the same committed-range
+		// projection instead of silently defaulting to current-changes
+		// (gentle-pi#569).
+		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
@@ -827,14 +935,38 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				record, loadErr := store.LoadContext(ctx)
 				if loadErr == nil {
 					// Only an approved compact authority that still owns its
-					// acknowledgement can resume its immutable terminal target. Every
-					// other occupied lineage must derive live scope so correction and
-					// recovery detect new untracked artifacts and target changes.
-					if _, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); pending {
+					// acknowledgement can resume its immutable terminal target. A
+					// correction-required authority that already froze a non-empty
+					// intended-untracked SELECTION resumes it too, but only while the
+					// live workspace's eligible untracked population is still exactly
+					// that declared set: the exact bound STATUS continuation
+					// `review.capture-correction-plan` itself returns carries no
+					// untracked-scope flags, so demanding a fresh declaration on that
+					// plain re-entry dead-ended the correction lineage and bound the
+					// resulting collect input to a different (live, declaration-less)
+					// target identity than the one the authority is bound to (issue
+					// #3849). A frozen EXCLUDE declaration (empty selection) is left
+					// alone here -- it is indistinguishable on its own from "nothing
+					// was ever declared", and a brand new untracked artifact appearing
+					// mid-correction must still force a fresh declaration exactly as
+					// before (design intent: "detect new untracked artifacts").
+					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
+					resumeCorrectionUntracked := false
+					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
+						if inventoryErr != nil {
+							return reviewPreflightError(inventoryErr)
+						}
+						resumeCorrectionUntracked = reviewSameUntrackedPaths(inventory, declaredUntracked)
+					}
+					if pendingApproval || resumeCorrectionUntracked {
 						intendedScope = reviewIntendedUntrackedScope{
-							Intended: append([]string{}, record.State.InitialSnapshot.IntendedUntracked...), Declared: true,
+							Intended: append([]string{}, declaredUntracked...), Declared: true,
 						}
 						hydratedIntendedScope = true
+						terminal := record.State.CurrentSnapshot
+						pendingApprovedTerminalTarget = &terminal
 					}
 				} else if reviewtransaction.IsCompactAuthorityOperationalFailure(loadErr) {
 					return fmt.Errorf("load explicit review lineage: %w", loadErr)
@@ -856,6 +988,22 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if selectedBaseTree != "" {
 				target.BaseRef = selectedBaseTree
 			}
+		}
+		// Issue gentle-pi#569: a caller-authorized committed-range approval
+		// (base-diff, committed-only) must survive a selectorless STATUS
+		// refresh performed only to reach `review.acknowledge-approved`. The
+		// caller supplied no --base-ref/--committed-only/--workspace-overlay
+		// of its own, so nothing above already claimed this target; without
+		// this, the default current-changes target above projects an empty
+		// diff on the clean approved worktree and the acknowledgement
+		// continuation is never offered. The subsequent status assessment
+		// re-derives the live snapshot from this exact target and compares
+		// its identity against the frozen one, so a worktree that actually
+		// drifted since approval still fails closed instead of being forced
+		// current.
+		if pendingApprovedTerminalTarget != nil && selectedBaseRef == "" && !*workspaceOverlay &&
+			pendingApprovedTerminalTarget.Kind == reviewtransaction.TargetBaseDiff {
+			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, pendingApprovedTerminalTarget.BaseTree
 		}
 		target.IntendedUntracked = intendedScope.Intended
 		var prePR *reviewtransaction.PrePRRequest
@@ -888,6 +1036,20 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			if !requestedLineageOccupied {
 				return reviewPreflightError(fmt.Errorf("review lineage %q is not held by repository %s; rerun the same command from the repository that owns the lineage, or name it: `gentle-ai review status --cwd <repository> --contract %s --next-transition --lineage %s --repository-context %s`", requestedLineage, root, *contract, requestedLineage, requestedContext))
+			}
+			// Issue #4023: the authority store above is scoped to the Git
+			// common dir, so a linked worktree of the same repository also
+			// reports the lineage occupied. Occupancy alone is not proof this
+			// process cwd is the worktree that froze it, so a mismatch must
+			// fail closed the same way the #3932 guard above does instead of
+			// letting the occupied branch evaluate the wrong working tree as
+			// a fresh target for someone else's lineage.
+			foreignWorktree, err := reviewtransaction.ExactReviewLineageForeignWorktree(ctx, root, requestedLineage)
+			if err != nil {
+				return fmt.Errorf("inspect negotiated START lineage worktree binding: %w", err)
+			}
+			if foreignWorktree {
+				return reviewPreflightError(fmt.Errorf("review lineage %q is held by a different worktree of repository %s (expected worktree %s); rerun the same command from the worktree that started the lineage, or name it: `gentle-ai review status --cwd <repository> --contract %s --next-transition --lineage %s --repository-context %s`", requestedLineage, root, reviewDefectReportRedactionMarker, *contract, requestedLineage, requestedContext))
 			}
 		}
 		if *nextTransition && (requestedLineage == "" || !requestedLineageOccupied) {
@@ -1029,6 +1191,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			capturedProviderTargetedValidatorInconclusive := false
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
+			var unachievableLensAttempts []reviewtransaction.CompactUnachievableLensAttempt
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
 				store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, native.LineageID)
@@ -1095,6 +1258,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							}
 						}
 						if artifactErr == nil && record.State.State == reviewtransaction.StateReviewing {
+							unachievableLensAttempts = record.State.UnachievableLensAttempts
 							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
 							if artifactErr == nil && len(artifacts) != len(record.State.SelectedLenses) {
 								// Only the probe's deterministic verdict stops STATUS: an unproven
@@ -1123,6 +1287,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									artifactErr = frozenErr
 								} else {
 									captureContext, artifactErr = newReviewCaptureContext(record.State, record.State.CapturePhaseRevision, frozen)
+									if artifactErr == nil && result.Frozen != nil {
+										result.Frozen.ChangedPathManifestSHA256, artifactErr = frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+									}
 								}
 							}
 						}
@@ -1212,7 +1379,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, UnachievableLensAttempts: unachievableLensAttempts}
 			var transition ReviewNextTransition
 			transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
 			result.NextTransition = &transition
@@ -1239,6 +1406,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime)
 			result.NextTransition = &transition
 		}
+		// v1 envelopes keep their pinned schema; only v2 projects the root action.
+		if *contract == ReviewIntegrationContractV2 {
+			result.Action = reviewRootActionForTransition(result.Action, result.NextTransition)
+		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
 			// The forecast is structural only: it rides the v2 envelope's
 			// `forecast` field and is never narrated to stderr, because a
@@ -1260,14 +1431,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
-	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}
-	report, err := reviewtransaction.InventoryAuthority(ctx, root)
+	var report reviewtransaction.AuthorityStatusReport
+	if trimmedLineage := strings.TrimSpace(*lineage); trimmedLineage != "" {
+		report, err = reviewtransaction.InventoryAuthorityForLineage(ctx, root, trimmedLineage)
+	} else {
+		report, err = reviewtransaction.InventoryAuthority(ctx, root)
+	}
 	if err != nil {
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
@@ -1926,7 +2102,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// point where the kill switch can stop a start and consent can name the real
 	// reason. Nothing has been persisted yet, so refusing here leaves no
 	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated); err != nil {
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been
@@ -1968,6 +2144,10 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
 		}
+		// #1854: threaded through so the exact atomic START commit below can
+		// also report a requested trace's committed-but-degraded outcome,
+		// not only the zero-lens completion commit further down.
+		request.TracePath = strings.TrimSpace(*tracePath)
 		if err := reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request); err != nil {
 			return err
 		}
@@ -2008,6 +2188,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			if err != nil {
 				return fmt.Errorf("resolve zero-lens review authority: %w", err)
 			}
+			// #1854: an explicitly requested --trace is wired here. The
+			// commit above proceeds exactly as it would without one; a
+			// failed trace write is reported through Trace, never a
+			// rolled-back commit or a stderr-only warning.
+			store.TracePath = strings.TrimSpace(*tracePath)
 			acknowledgement, err := reviewtransaction.CommitApprovedCompactAcknowledgement(ctx, store, record.Revision, "review/complete-review", state)
 			if err != nil {
 				return fmt.Errorf("commit zero-lens review acknowledgement: %w", err)
@@ -2015,6 +2200,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			legacyResult := reviewFacadeStartResultFor("closed", false, state)
 			legacyResult.Acknowledgement = reviewApprovedAcknowledgementTransition(root, acknowledgement)
 			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+			legacyResult.Trace = reviewTraceOutcomeResult(store.TracePath, acknowledgement.TraceOutcome)
 			if !negotiated {
 				return encodeReviewJSON(stdout, legacyResult)
 			}
@@ -2033,6 +2219,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			legacyResult.Action = "replayed"
 		}
 		legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+		legacyResult.Trace = reviewTraceOutcomeResult(request.TracePath, started.TraceOutcome)
 		if !negotiated {
 			return encodeReviewJSON(stdout, legacyResult)
 		}
@@ -2389,6 +2576,11 @@ func (result facadeValidationResult) compact(fixDeltaHash string, findingIDs []s
 	if err := result.conclusive(); err != nil {
 		return reviewtransaction.ScopedValidationResult{}, err
 	}
+	if !result.CorrectionRegression.Passed {
+		if err := reviewProviderValidateFailedRegression(result.CorrectionRegression.Regressions); err != nil {
+			return reviewtransaction.ScopedValidationResult{}, err
+		}
+	}
 	if result.TargetedValidationRequestHash != request.RequestHash || result.CorrectionTargetIdentity != request.CorrectionTargetIdentity {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation result does not bind the provider-owned correction request") // refusal:by-design operator-knowledge: the external validator must echo both bindings from the provider-owned request
 	}
@@ -2474,7 +2666,7 @@ func prepareCompactReviewerResults(state reviewtransaction.CompactState, results
 			switch finding.CausalDisposition {
 			case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
 				if len(repository) == 1 {
-					changed, err := (reviewtransaction.SnapshotBuilder{Repo: repository[0].repo}).CandidateLocationSupportsCausality(repository[0].ctx, state.InitialSnapshot, finding.Location, finding.CausalDisposition)
+					changed, _, err := (reviewtransaction.SnapshotBuilder{Repo: repository[0].repo}).CandidateLocationSupportsCausality(repository[0].ctx, state.InitialSnapshot, finding.Location, finding.CausalDisposition)
 					if err != nil {
 						return reviewtransaction.CompactReviewInput{}, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
 					}

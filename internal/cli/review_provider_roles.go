@@ -235,8 +235,26 @@ type providerValidationResultWire struct {
 }
 
 type providerValidationCheckWire struct {
-	Passed   *bool    `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      *bool                                   `json:"passed"`
+	Evidence    []string                                `json:"evidence"`
+	Regressions []reviewtransaction.Regression          `json:"regressions,omitempty"`
+	Inspection  *reviewtransaction.ValidationInspection `json:"inspection,omitempty"`
+}
+
+// validateValidationInspection rejects ValidationInspectionUnavailable with
+// no Reason: an unavailable inspection that does not say why is not an
+// actionable claim (issue #4266). An unrecognized Status is not this
+// function's job -- ValidationCheckInconclusive refuses that as a schema
+// violation wherever the check's conclusiveness is decided, so callers never
+// need a second unknown-status gate here.
+func validateValidationInspection(inspection *reviewtransaction.ValidationInspection, name string) error {
+	if inspection == nil || inspection.Status != reviewtransaction.ValidationInspectionUnavailable {
+		return nil
+	}
+	if strings.TrimSpace(inspection.Reason) == "" {
+		return fmt.Errorf("provider targeted validator %s inspection.status is unavailable but names no reason", name) // refusal:by-design operator-knowledge: an unavailable inspection must explain why the frozen trees could not be read
+	}
+	return nil
 }
 
 // reviewProviderTargetedValidatorKnownTopLevelJSON allows providers to add
@@ -516,6 +534,23 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	if wire.OriginalCriteria.Passed == nil || wire.CorrectionRegression.Passed == nil || result.FollowUps == nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator result requires passed checks and an explicit follow_ups array") // refusal:by-design operator-knowledge: every targeted validator response must explicitly declare its result
 	}
+	if err := validateValidationInspection(wire.OriginalCriteria.Inspection, "original_criteria"); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	if err := validateValidationInspection(wire.CorrectionRegression.Inspection, "correction_regression"); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	// An inconclusive verdict keeps its own retry ladder (classified below by
+	// conclusive(), same rule); only an unnamed genuine failure is refused here.
+	regressionInconclusive, err := reviewtransaction.ValidationCheckInconclusive(wire.CorrectionRegression.Inspection, wire.CorrectionRegression.Evidence)
+	if err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+	}
+	if !*wire.CorrectionRegression.Passed && !regressionInconclusive {
+		if err := reviewProviderValidateFailedRegression(wire.CorrectionRegression.Regressions); err != nil {
+			return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
+		}
+	}
 	if err := reviewProviderConcreteStrings(result.OriginalCriteria.Evidence, "provider original criteria evidence"); err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
 	}
@@ -580,7 +615,27 @@ func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, r
 	capture := reviewtransaction.CompactAdmittedTargetedValidatorResultRequest{
 		ExpectedRequest: request.ValidationRequest, Payload: payload, Evidence: &evidence, Validation: &native,
 	}
-	if reviewProviderTargetedValidatorOutcome(native) == "failed" {
+	outcome := reviewProviderTargetedValidatorOutcome(native)
+	if outcome == "passed" {
+		// Issue #4080: the correction-budget preflight must run before the
+		// validator admission is durably written. A passed verdict used to be
+		// admitted first, with the budget check only running afterward inside
+		// closeCorrectionOnCapturedValidator's own, later write -- so an
+		// over-budget correction still consumed the sixth admitted-role slot
+		// before being refused, and the prescribed shrink-and-retry then hit the
+		// fixed six-admitted-roles cap and wedged the lineage. Checking here,
+		// before any write, keeps an over-budget correction from ever being
+		// admitted, matching the "failed" branch below which already gates its
+		// own completion atomically with the write.
+		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
+		if err != nil {
+			return nil, err
+		}
+		if remaining := state.CorrectionBudget - state.CumulativeCorrectionLines; actual < 0 || actual > remaining {
+			return nil, fmt.Errorf("actual correction is %d changed lines, exceeding the frozen budget of %d; shrink the correction to at most %d changed lines and rerun `gentle-ai review capture-validation` with the exact tokens STATUS reoffers", actual, state.CorrectionBudget, remaining)
+		}
+	}
+	if outcome == "failed" {
 		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, correction)
 		if err != nil {
 			return nil, err
@@ -600,7 +655,7 @@ func reviewProviderCaptureAdmittedTargetedValidatorResult(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
-	if reviewProviderTargetedValidatorOutcome(native) == "passed" {
+	if outcome == "passed" {
 		return closeCorrectionOnCapturedValidator(ctx, repo, store, current, correction, request.ValidationRequest, native)
 	}
 	return newCorrectionCapturedValidatorClosure(repo, current.State, current.Revision, request.ValidationRequest)
@@ -612,9 +667,11 @@ func reviewProviderTargetedValidatorEvidence(result facadeValidationResult) revi
 		CorrectionTargetIdentity:      result.CorrectionTargetIdentity,
 		OriginalCriteria: reviewtransaction.CompactTargetedValidatorCheckEvidence{
 			Passed: result.OriginalCriteria.Passed, Evidence: append([]string(nil), result.OriginalCriteria.Evidence...),
+			Regressions: append([]reviewtransaction.Regression(nil), result.OriginalCriteria.Regressions...),
 		},
 		CorrectionRegression: reviewtransaction.CompactTargetedValidatorCheckEvidence{
 			Passed: result.CorrectionRegression.Passed, Evidence: append([]string(nil), result.CorrectionRegression.Evidence...),
+			Regressions: append([]reviewtransaction.Regression(nil), result.CorrectionRegression.Regressions...),
 		},
 		FollowUps: append([]reviewtransaction.FollowUp{}, result.FollowUps...),
 	}
@@ -684,6 +741,24 @@ func reviewProviderConcreteStrings(values []string, label string) error {
 	for index, value := range values {
 		if !reviewProviderConcreteEvidence(value) {
 			return fmt.Errorf("%s[%d] must be concrete", label, index) // refusal:by-design operator-knowledge: replace empty evidence with an observed concrete value
+		}
+	}
+	return nil
+}
+
+// reviewProviderValidateFailedRegression refuses a failed correction_regression
+// verdict naming no regression, or naming one incompletely -- an empty {}
+// entry still satisfies len(regressions)==0's negation (issue #4214).
+func reviewProviderValidateFailedRegression(regressions []reviewtransaction.Regression) error {
+	if len(regressions) == 0 {
+		return errors.New("targeted validator reported a regression verdict without naming any regression") // refusal:by-design operator-knowledge: a failed correction_regression check must name the regression it observed; retry with a named regression or a passing verdict
+	}
+	for index, regression := range regressions {
+		if !reviewProviderConcreteEvidence(regression.Location) || !reviewProviderConcreteEvidence(regression.Claim) {
+			return fmt.Errorf("regressions[%d] requires a concrete location and claim", index) // refusal:by-design operator-knowledge: name the exact location and claim of the observed regression
+		}
+		if err := reviewProviderConcreteStrings(regression.ProofRefs, fmt.Sprintf("regressions[%d] proof_refs", index)); err != nil {
+			return err
 		}
 	}
 	return nil
