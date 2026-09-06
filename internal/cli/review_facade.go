@@ -2059,7 +2059,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// point where the kill switch can stop a start and consent can name the real
 	// reason. Nothing has been persisted yet, so refusing here leaves no
 	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated); err != nil {
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been

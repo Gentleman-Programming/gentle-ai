@@ -129,6 +129,9 @@ var reviewStopReasonNarration = map[string]string{
 		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"managed_assets_outdated": "This installation's reviewer assets no longer match this version of Gentle AI, so this review stops before it starts. " +
+		"Run `gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "` to bring them back in sync, then re-run " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
