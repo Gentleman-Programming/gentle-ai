@@ -1,7 +1,10 @@
 package sddstatus
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -11,6 +14,7 @@ import (
 
 const VerifyResultSchema = "gentle-ai.verify-result/v1"
 const RemediationResultSchema = "gentle-ai.remediation-result/v1"
+const RemediationEvidenceSchema = "gentle-ai.remediation-evidence/v1"
 const MaxVerifyReportBytes = 1 << 20
 
 // VerifyReportContract is the stable, user-facing shape validated before an
@@ -595,7 +599,7 @@ func remediationFenceContainsResult(lines []string) bool {
 		line = remediationFenceContent(line)
 		if strings.HasPrefix(line, "schema:") {
 			schema := strings.TrimSpace(strings.TrimPrefix(line, "schema:"))
-			if schema == RemediationResultSchema || schema == "gentle-ai.remediation-evidence/v1" {
+			if schema == RemediationResultSchema || schema == RemediationEvidenceSchema {
 				return true
 			}
 		}
@@ -603,7 +607,7 @@ func remediationFenceContainsResult(lines []string) bool {
 	var fields map[string]any
 	if err := json.Unmarshal([]byte(strings.Join(remediationFenceContents(lines), "\n")), &fields); err == nil {
 		schema, _ := fields["schema"].(string)
-		return schema == RemediationResultSchema || schema == "gentle-ai.remediation-evidence/v1"
+		return schema == RemediationResultSchema || schema == RemediationEvidenceSchema
 	}
 	return false
 }
@@ -689,7 +693,13 @@ func parseRemediationEvidence(lines []string) (remediationEvidence, bool) {
 	if end < 0 || strings.TrimSpace(text[end+4:]) != "" {
 		return remediationEvidence{}, false
 	}
-	decoder := json.NewDecoder(strings.NewReader(text[:end]))
+	return decodeRemediationEvidenceJSON(text[:end])
+}
+
+// decodeRemediationEvidenceJSON strictly decodes one gentle-ai.remediation-
+// evidence/v1 object: no unknown fields, no trailing content, exact schema.
+func decodeRemediationEvidenceJSON(text string) (remediationEvidence, bool) {
+	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.DisallowUnknownFields()
 	var evidence remediationEvidence
 	if err := decoder.Decode(&evidence); err != nil {
@@ -699,10 +709,62 @@ func parseRemediationEvidence(lines []string) (remediationEvidence, bool) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return remediationEvidence{}, false
 	}
-	if evidence.Schema != "gentle-ai.remediation-evidence/v1" {
+	if evidence.Schema != RemediationEvidenceSchema {
 		return remediationEvidence{}, false
 	}
 	return evidence, true
+}
+
+// DeriveRemediationEvidenceRevision admits a strict gentle-ai.remediation-
+// evidence/v1 JSON object bound to expectedFailedRevision and returns the
+// canonical successful evidence revision it authorizes (#2896): the SHA-256
+// of the admitted object's own deterministic JSON re-encoding (json.Marshal
+// always emits struct fields in declaration order, which is what makes this
+// reproducible from the same admitted bytes). This is the value settle needs
+// for a remediation's --evidence-revision; before this, only the actor that
+// ran the correction could see whether its own evidence was concrete and
+// passing, and had no safe way to turn that into the required native
+// SHA-256 without inventing authority. The caller still has to supply
+// concrete, passing evidence — this does not manufacture success, only its
+// identity once admission has already required it.
+func DeriveRemediationEvidenceRevision(evidenceJSON, expectedFailedRevision string) (string, error) {
+	const rerun = "; correct it and rerun `gentle-ai sdd-attempt settle` with the fixed --remediation-evidence"
+	evidence, ok := decodeRemediationEvidenceJSON(strings.TrimSpace(evidenceJSON))
+	if !ok {
+		return "", errors.New("remediation evidence is not a strict gentle-ai.remediation-evidence/v1 JSON object: no unknown fields, no trailing content, exact schema" + rerun)
+	}
+	if evidence.FailedEvidenceRevision == "" || evidence.FailedEvidenceRevision != expectedFailedRevision {
+		return "", fmt.Errorf("remediation evidence's failed_evidence_revision must equal --remediates-evidence-revision %s"+rerun, expectedFailedRevision)
+	}
+	if len(evidence.Commands) == 0 {
+		return "", errors.New("remediation evidence has no commands; want at least one with exit_code 0 and concrete command/result text" + rerun)
+	}
+	for _, command := range evidence.Commands {
+		if command.ExitCode != 0 || !isConcreteEvidence(command.Command) || !isConcreteEvidence(command.Result) {
+			return "", fmt.Errorf("remediation evidence command %q is not concrete passing evidence"+rerun, command.Command)
+		}
+	}
+	switch evidence.RuntimeHarness.Status {
+	case "passed":
+		if !isConcreteEvidence(evidence.RuntimeHarness.Command) || !isConcreteEvidence(evidence.RuntimeHarness.Result) {
+			return "", errors.New("remediation evidence runtime_harness is \"passed\" but its command/result is not concrete" + rerun)
+		}
+	case "not_applicable":
+		if !isConcreteNAReason(evidence.RuntimeHarness.NAReason) {
+			return "", errors.New("remediation evidence runtime_harness is \"not_applicable\" but na_reason is not a concrete justification" + rerun)
+		}
+	default:
+		return "", errors.New(`remediation evidence runtime_harness.status must be "passed" or "not_applicable"` + rerun)
+	}
+	if !isConcreteEvidence(evidence.Rollback.Boundary) || !isConcreteEvidence(evidence.Rollback.Evidence) {
+		return "", errors.New("remediation evidence rollback boundary/evidence is not concrete" + rerun)
+	}
+	canonical, err := json.Marshal(evidence)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func isConcreteEvidence(value string) bool {
