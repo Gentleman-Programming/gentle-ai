@@ -555,14 +555,20 @@ func TestRunInstallMacOSEngramStillUsesBrew(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreStat := osStat
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		osStat = restoreStat
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
+	// Force resolveEngramInstalledPath's Homebrew-prefix fallback (#4020) to
+	// report "not found" regardless of the real machine running this test,
+	// so this test still exercises the genuinely-missing install path.
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
