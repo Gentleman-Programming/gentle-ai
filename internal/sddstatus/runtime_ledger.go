@@ -227,6 +227,29 @@ type RuntimeObjective struct {
 	InitialCandidateTree     string `json:"initial_candidate_tree"`
 	MaxAttempts              int    `json:"max_attempts"`
 	MaxChangedLines          int    `json:"max_changed_lines"`
+	// MaxChangedLinesSource reports whether MaxChangedLines came from an
+	// explicit --max-changed-lines or from the compiled
+	// DefaultRuntimeChangedLines fallback (#2589): before this, an omitted
+	// flag silently became a 200-line ceiling with nothing in the
+	// begin/acquire answer distinguishing it from a maintainer who typed 200
+	// on purpose. An objective replayed from a record written before this
+	// provenance was tracked reports "default", the same as an unmarked
+	// explicit value would -- there is no way to recover which one a legacy
+	// record was, so this never asserts "explicit" without the caller's own
+	// say-so.
+	MaxChangedLinesSource string `json:"max_changed_lines_source,omitempty"`
+}
+
+const (
+	runtimeChangedLinesSourceExplicit = "explicit"
+	runtimeChangedLinesSourceDefault  = "default"
+)
+
+func runtimeChangedLinesSource(explicit bool) string {
+	if explicit {
+		return runtimeChangedLinesSourceExplicit
+	}
+	return runtimeChangedLinesSourceDefault
 }
 
 type RuntimeAttempt struct {
@@ -382,13 +405,25 @@ type RuntimeStatus struct {
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision  string   `json:"expected_revision"`
-	RequestID         string   `json:"request_id"`
-	WorkUnit          string   `json:"work_unit"`
-	EvidenceGoal      string   `json:"evidence_goal"`
-	MaxAttempts       int      `json:"max_attempts"`
-	MaxChangedLines   int      `json:"max_changed_lines"`
-	IntendedUntracked []string `json:"intended_untracked"`
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	WorkUnit         string `json:"work_unit"`
+	EvidenceGoal     string `json:"evidence_goal"`
+	MaxAttempts      int    `json:"max_attempts"`
+	MaxChangedLines  int    `json:"max_changed_lines"`
+	// MaxChangedLinesExplicit is caller (CLI) provenance: true when the
+	// caller actually typed --max-changed-lines, false when MaxChangedLines
+	// is the compiled default the flag registered on the caller's behalf
+	// (#2589). It has no bearing on admission or request identity -- only on
+	// what a fresh objective's MaxChangedLinesSource reports -- so it is
+	// excluded from the request digest entirely (json:"-"): an explicit
+	// request digest must stay byte-identical to what a binary predating
+	// this field computed, or an in-flight ledger replayed after an upgrade
+	// would fail begin_request_digest_match on its own pre-upgrade records.
+	// The genuine persisted marker lives on runtimeBeginEvent instead, which
+	// is never a digest input.
+	MaxChangedLinesExplicit bool     `json:"-"`
+	IntendedUntracked       []string `json:"intended_untracked"`
 }
 
 // legacyBeginAttemptRequest preserves replay of records written before
@@ -593,15 +628,20 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
-	WorkUnit               string `json:"work_unit"`
-	EvidenceGoal           string `json:"evidence_goal"`
-	MaxAttempts            int    `json:"max_attempts"`
-	MaxChangedLines        int    `json:"max_changed_lines"`
-	Ordinal                int    `json:"ordinal"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	ObjectiveID         string `json:"objective_id"`
+	ObjectiveGeneration int    `json:"objective_generation,omitempty"`
+	WorkUnit            string `json:"work_unit"`
+	EvidenceGoal        string `json:"evidence_goal"`
+	MaxAttempts         int    `json:"max_attempts"`
+	MaxChangedLines     int    `json:"max_changed_lines"`
+	// MaxChangedLinesExplicit mirrors BeginAttemptRequest's field of the same
+	// name (#2589), persisted so replay can reconstruct
+	// RuntimeObjective.MaxChangedLinesSource deterministically. Absent on a
+	// record written before this field existed.
+	MaxChangedLinesExplicit bool   `json:"max_changed_lines_explicit,omitempty"`
+	Ordinal                 int    `json:"ordinal"`
+	BeginCandidateIdentity  string `json:"begin_candidate_identity"`
+	BeginCandidateTree      string `json:"begin_candidate_tree"`
 	// A nil pointer preserves records written before candidate provenance was
 	// introduced; a non-nil empty slice is a modern, explicit empty selection.
 	IntendedUntracked *[]string `json:"intended_untracked,omitempty"`
@@ -893,7 +933,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
-			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines, MaxChangedLinesExplicit: request.MaxChangedLinesExplicit,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			IntendedUntracked: &intendedUntracked, EligibleUntrackedInventory: &eligibleInventory,
 			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
@@ -2256,6 +2296,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			MaxChangedLinesSource: runtimeChangedLinesSource(event.MaxChangedLinesExplicit),
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
@@ -2382,6 +2423,10 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		// AUDITED NARROWING RESCOPE always requires an explicit positive
+		// --max-changed-lines (normalizeRescopeObjectiveRequest); there is no
+		// default path here to report.
+		MaxChangedLinesSource: runtimeChangedLinesSourceExplicit,
 	}
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
@@ -2716,6 +2761,10 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 	if event.IntendedUntracked != nil {
 		intendedUntracked = *event.IntendedUntracked
 	}
+	// MaxChangedLinesExplicit is deliberately not reconstructed here: it is
+	// excluded from BeginAttemptRequest's digest (json:"-"), so it plays no
+	// part in this replay-time digest match regardless of what the event
+	// carries.
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
