@@ -367,13 +367,21 @@ func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expecte
 	return nil
 }
 
-func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Context, snapshot Snapshot, location string, causality CausalDisposition) (bool, error) {
+// CandidateLocationSupportsCausality reports whether a finding's location is
+// on a repository-derived changed line, and separately whether that answer's
+// evidence derivation degraded -- the underlying diff could not resolve a
+// dependable per-line signal for this path at all (binary content, or a
+// manifest-changed path whose isolated diff produced no hunks, which
+// --no-renames can leave behind for a rename it could not pair). A degraded
+// derivation's `false` must never be read as "proven not caused by the
+// candidate": the caller could not tell either way.
+func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Context, snapshot Snapshot, location string, causality CausalDisposition) (supported bool, degraded bool, err error) {
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
-		return false, err
+		return false, false, err
 	}
 	finding, err := parseFindingLocation(location)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	return builder.candidateFindingSupportsCausality(ctx, snapshot, finding, causality)
 }
@@ -383,41 +391,49 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 // causality comparisons actually consume, so a start or end line below 1 can
 // never be judged causal even when it reaches this point without having been
 // filtered by the location parser.
-func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Context, snapshot Snapshot, finding findingLocation, causality CausalDisposition) (bool, error) {
+func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Context, snapshot Snapshot, finding findingLocation, causality CausalDisposition) (supported bool, degraded bool, err error) {
 	if stringIndex(snapshot.Paths, finding.Path) < 0 {
-		return false, nil
+		return false, false, nil
 	}
 	if !findingLocationHasPositiveLines(finding) {
-		return false, nil
+		return false, false, nil
 	}
 	if causality == CausalBehaviorActivated {
 		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 		if err != nil || len(entry) == 0 {
-			return false, err
+			return false, false, err
 		}
 		for _, tree := range []string{snapshot.CandidateTree} {
 			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+finding.Path)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			lines := bytes.Count(blob, []byte{'\n'})
 			if len(blob) > 0 && blob[len(blob)-1] != '\n' {
 				lines++
 			}
 			if finding.EndLine <= lines {
-				return true, nil
+				return true, false, nil
 			}
 		}
-		return false, nil
+		return false, false, nil
 	}
 	if causality != CausalIntroduced && causality != CausalWorsened {
-		return false, nil
+		return false, false, nil
 	}
 	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	for _, match := range regexp.MustCompile(`(?m)^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`).FindAllSubmatch(output, -1) {
+	matches := regexp.MustCompile(`(?m)^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`).FindAllSubmatch(output, -1)
+	if len(matches) == 0 && diffReportsBinaryContent(output) {
+		// Git prints its binary marker as its own line in place of hunks,
+		// never inside one, so the probe is anchored to a whole line and
+		// consulted only when no hunk was parsed: a text diff whose added or
+		// removed content merely quotes the phrase still resolves by hunk.
+		return false, true, nil
+	}
+	for _, match := range matches {
 		offset := 3
 		start, _ := strconv.Atoi(string(match[offset]))
 		count := 1
@@ -425,10 +441,28 @@ func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Con
 			count, _ = strconv.Atoi(string(match[offset+1]))
 		}
 		if count > 0 && finding.StartLine >= start && finding.EndLine < start+count {
-			return true, nil
+			return true, false, nil
 		}
 	}
-	return false, nil
+	if len(matches) == 0 && len(bytes.TrimSpace(output)) == 0 {
+		// snapshot.Paths already confirmed this path is part of the frozen
+		// changed-path manifest, yet its isolated diff produced no output at
+		// all -- not "no hunk covers this line" but no signal whatsoever. That
+		// is an absence of evidence, not evidence of absence.
+		return false, true, nil
+	}
+	return false, false, nil
+}
+
+// diffReportsBinaryContent reports whether git replaced the patch with its
+// "Binary files … differ" marker line.
+func diffReportsBinaryContent(output []byte) bool {
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		if bytes.HasPrefix(line, []byte("Binary files ")) && bytes.HasSuffix(bytes.TrimRight(line, "\r"), []byte(" differ")) {
+			return true
+		}
+	}
+	return false
 }
 
 func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot Snapshot) error {
