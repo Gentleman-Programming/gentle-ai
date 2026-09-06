@@ -189,7 +189,7 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	// attempt or an exhausted budget does not make the chain owe less, and a
 	// surface that goes quiet under those states would disagree with acquire
 	// exactly when the operator is looking hardest.
-	status.SettleObligation = runtimeSettleObligation(status)
+	status.SettleObligation, status.SuppressedObligation = runtimeSettleObligation(status)
 
 	inheritIntendedUntracked := request.IntendedUntracked == nil
 	normalized, err := normalizeBeginAttemptRequest(request)

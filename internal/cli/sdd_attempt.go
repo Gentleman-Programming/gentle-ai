@@ -56,6 +56,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	remediatesEvidenceRevision := registerSDDAttemptStringFlag(flags, operation, "remediates-evidence-revision")
 	reason := registerSDDAttemptStringFlag(flags, operation, "reason")
 	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
+	objectiveRelation := registerSDDAttemptStringFlag(flags, operation, "objective-relation")
 	var roots sddAttemptRootList
 	registerSDDAttemptRootFlag(flags, operation, &roots)
 	var intendedUntracked reviewRepeatedPathFlag
@@ -213,11 +214,13 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "reset":
 		result, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
+			Relation: sddstatus.RuntimeObjectiveRelation(*objectiveRelation),
 		})
 	case "rescope":
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+			Relation:          sddstatus.RuntimeObjectiveRelation(*objectiveRelation),
 			IntendedUntracked: settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "repair":
@@ -353,6 +356,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "objective-relation", usage: "optional; remediation (default) or independent — independent declares the successor does NOT inherit the closed objective's settle_obligation"},
 	}},
 	{name: "rescope", purpose: "Narrow a terminal zero-drift objective", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -364,6 +368,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "objective-relation", usage: "optional; remediation (default) or independent — independent declares the successor does NOT inherit the closed objective's settle_obligation"},
 		// Optional maintainer-authorized fresh successor selection (#4195):
 		// admits eligible untracked files authored after the predecessor's
 		// terminal settlement, outside any active attempt, which the
