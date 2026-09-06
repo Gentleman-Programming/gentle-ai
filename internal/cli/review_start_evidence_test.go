@@ -355,8 +355,19 @@ func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
 	if err := RunReview(args, &replay); err != nil {
 		t.Fatalf("named negotiated START failed: %v\n%s", err, replay.String())
 	}
+	// Issue #2870: the named continuation now asks for consent (it carries
+	// --consent relay) instead of silently minting a lineage; answer the
+	// question's own granted invocation for the exact frozen candidate.
+	question := decodeConsentQuestion(t, replay.Bytes())
+	if question.Action != "consent_required" || len(question.Choices) != 2 {
+		t.Fatalf("named negotiated START did not ask for consent: %#v", question)
+	}
+	var granted bytes.Buffer
+	if err := RunReview(invocationArgs(t, question.Choices[0].Invocation), &granted); err != nil {
+		t.Fatalf("granted negotiated START failed: %v\n%s", err, granted.String())
+	}
 	var negotiated ReviewIntegrationStartResult
-	decodeStrictReviewJSON(t, replay.Bytes(), &negotiated)
+	decodeStrictReviewJSON(t, granted.Bytes(), &negotiated)
 	if negotiated.RepositoryContext == nil {
 		t.Fatalf("named negotiated START carried no repository_context: %#v", negotiated)
 	}
