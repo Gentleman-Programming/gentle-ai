@@ -67,7 +67,18 @@
           "type": "array",
           "items": {"$ref": "#/$defs/targeted_validator_follow_up"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"correction_regression": {"type": "object", "properties": {"passed": {"const": false}}, "required": ["passed"]}},
+            "required": ["correction_regression"]
+          },
+          "then": {
+            "properties": {"correction_regression": {"type": "object", "properties": {"regressions": {"minItems": 1}}, "required": ["regressions"]}}
+          }
+        }
+      ]
     },
     "advisory_findings": {
       "type": "object",
@@ -104,7 +115,7 @@
         "evidence": {
           "type": "array",
           "minItems": 1,
-          "items": {"type": "string", "minLength": 1}
+          "items": {"type": "string", "pattern": "\\S"}
         },
         "regressions": {
           "type": "array",
@@ -119,12 +130,12 @@
       "required": ["location", "claim", "proof_refs"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "location": {"type": "string", "minLength": 1},
+        "location": {"type": "string", "pattern": "^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$"},
         "claim": {"type": "string", "minLength": 1},
         "proof_refs": {
           "type": "array",
           "minItems": 1,
-          "items": {"type": "string", "minLength": 1}
+          "items": {"type": "string", "pattern": "\\S"}
         }
       }
     },
@@ -137,7 +148,7 @@
         "proof_refs": {
           "type": "array",
           "minItems": 1,
-          "items": {"type": "string", "minLength": 1}
+          "items": {"type": "string", "pattern": "\\S"}
         }
       }
     }
