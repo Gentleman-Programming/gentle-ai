@@ -47,6 +47,11 @@ type ReviewIntegrationStartResult struct {
 	RepositoryContext   *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
 	Acknowledgement     *ReviewTransitionExecution                    `json:"acknowledgement,omitempty"`
 	NextTransition      *ReviewNextTransition                         `json:"next_transition,omitempty"`
+	// Trace mirrors ReviewFacadeStartResult.Trace (#1854). It is carried
+	// only on the current (non-legacy-transport) envelope, the same gating
+	// Acknowledgement and NextTransition already use, so the frozen v1
+	// legacy-transport wire shape (start-v2.schema.json) never gains a field.
+	Trace *ReviewTraceOutcome `json:"trace,omitempty"`
 }
 
 // ReviewRepositoryContextReference is the path-free provider context that a
@@ -85,6 +90,7 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 	if !legacyTransport {
 		result.Acknowledgement = legacy.Acknowledgement
 		result.NextTransition = nextTransition
+		result.Trace = legacy.Trace
 	}
 	if targetMode == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = targetMode

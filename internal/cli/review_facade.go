@@ -106,6 +106,58 @@ type ReviewFacadeStartResult struct {
 	// Acknowledgement is present only for a v2 zero-lens approved START. It
 	// carries the exact continuation that burns the pending compact authority.
 	Acknowledgement *ReviewTransitionExecution `json:"acknowledgement,omitempty"`
+	// Trace is present only when --trace was explicitly requested for this
+	// START (#1854). The authority mutation above always represents what
+	// actually committed; Trace separately reports whether the requested
+	// diagnostic entry was also persisted, never the other way around.
+	Trace *ReviewTraceOutcome `json:"trace,omitempty"`
+}
+
+// reviewTraceRetryGuidance is informational only: it never changes command
+// behavior. The authority named by CommittedRevision is already durable, so
+// repeating the same command with a writable --trace path is always safe --
+// it cannot create a second authority transition or duplicate the trace row
+// this outcome already accounts for.
+const reviewTraceRetryGuidance = "rerun the same command with a writable --trace path; the authority is already committed and an identical retry is idempotent"
+
+// ReviewTraceOutcome reports what happened to an explicitly requested
+// --trace diagnostic entry after its authority mutation already committed
+// (issue #1854). It is absent entirely unless --trace was requested, and its
+// presence or content never changes whether the mutation itself committed.
+type ReviewTraceOutcome struct {
+	// RequestedPath is a redacted identity of the --trace value, the same
+	// way this surface avoids ever publishing a raw filesystem path.
+	RequestedPath string `json:"requested_path,omitempty"`
+	Persisted     bool   `json:"persisted"`
+	// ErrorClass distinguishes mkdir/open/write/fsync/close failures; empty
+	// when Persisted is true.
+	ErrorClass        string `json:"error_class,omitempty"`
+	CommittedRevision string `json:"committed_revision,omitempty"`
+	// EventIdentity lets a caller confirm a later retry describes the same
+	// event, without trusting free-form text.
+	EventIdentity string `json:"event_identity,omitempty"`
+	// Retry is present only when Persisted is false.
+	Retry string `json:"retry,omitempty"`
+}
+
+// reviewTraceOutcomeResult projects a committed trace outcome into the
+// path-free CLI result shape. It returns nil when no trace was requested for
+// this commit, so callers can assign it directly to the omitempty field.
+func reviewTraceOutcomeResult(tracePath string, outcome *reviewtransaction.CompactTraceOutcome) *ReviewTraceOutcome {
+	if outcome == nil {
+		return nil
+	}
+	result := &ReviewTraceOutcome{
+		RequestedPath:     facadePayloadHash([]byte(tracePath)),
+		Persisted:         outcome.Persisted,
+		ErrorClass:        outcome.ErrorClass,
+		CommittedRevision: outcome.Revision,
+		EventIdentity:     outcome.Identity(),
+	}
+	if !outcome.Persisted {
+		result.Retry = reviewTraceRetryGuidance
+	}
+	return result
 }
 
 // ReviewStartConsentDeclinedThisCandidate reports that the user answered the
@@ -1990,6 +2042,10 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
 		}
+		// #1854: threaded through so the exact atomic START commit below can
+		// also report a requested trace's committed-but-degraded outcome,
+		// not only the zero-lens completion commit further down.
+		request.TracePath = strings.TrimSpace(*tracePath)
 		if err := reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request); err != nil {
 			return err
 		}
@@ -2030,6 +2086,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			if err != nil {
 				return fmt.Errorf("resolve zero-lens review authority: %w", err)
 			}
+			// #1854: an explicitly requested --trace is wired here. The
+			// commit above proceeds exactly as it would without one; a
+			// failed trace write is reported through Trace, never a
+			// rolled-back commit or a stderr-only warning.
+			store.TracePath = strings.TrimSpace(*tracePath)
 			acknowledgement, err := reviewtransaction.CommitApprovedCompactAcknowledgement(ctx, store, record.Revision, "review/complete-review", state)
 			if err != nil {
 				return fmt.Errorf("commit zero-lens review acknowledgement: %w", err)
@@ -2037,6 +2098,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			legacyResult := reviewFacadeStartResultFor("closed", false, state)
 			legacyResult.Acknowledgement = reviewApprovedAcknowledgementTransition(root, acknowledgement)
 			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+			legacyResult.Trace = reviewTraceOutcomeResult(store.TracePath, acknowledgement.TraceOutcome)
 			if !negotiated {
 				return encodeReviewJSON(stdout, legacyResult)
 			}
@@ -2055,6 +2117,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			legacyResult.Action = "replayed"
 		}
 		legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+		legacyResult.Trace = reviewTraceOutcomeResult(request.TracePath, started.TraceOutcome)
 		if !negotiated {
 			return encodeReviewJSON(stdout, legacyResult)
 		}
