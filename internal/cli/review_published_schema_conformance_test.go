@@ -190,6 +190,11 @@ func TestPublishedLastEventClosureSchemaAcceptsRejectedTargetedValidatorCapture(
 	if err := schema.Validate(closure); err == nil {
 		t.Fatalf("published last-event closure schema accepted targeted validator evidence outside capture validation: %#v", closure)
 	}
+	closure["operation"] = "review/capture-validation"
+	closure["state"] = string(reviewtransaction.StateCorrectionRequired)
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted targeted validator evidence outside escalated state: %#v", closure)
+	}
 }
 
 func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t *testing.T) {
