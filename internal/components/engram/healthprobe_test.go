@@ -107,7 +107,9 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			// A single small pipe write makes both frames available before the
 			// parent can terminate this helper.
 			_, _ = os.Stdout.WriteString(healthyResponse + "\nengram mcp stopped\n")
-			return
+			// Remain alive so the parent, rather than a natural helper exit,
+			// terminates the process before it drains buffered stdout.
+			select {}
 		case "descendant-holds-stdout", "descendant-holds-stdout-before-response":
 			// -test.timeout: same pending-timer lifeline as setStdioHelperProcess.
 			descendant := exec.Command(os.Args[0], "-test.run=TestHelperEngramMCPProcess", "-test.timeout=1m", "--", "descendant")

@@ -567,6 +567,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 }
 
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// The plugin and direct MCP entry expose the same Engram tools. When the
+	// plugin is enabled, suppress direct registration without deleting any
+	// existing entry: matching config shape is not proof that gentle-ai owns it.
+	if claudeEngramPluginEnabled(homeDir) {
+		return InjectionResult{}, nil
+	}
+
 	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
 	command := stableEngramCommandForMergedConfig(claude.UserConfigPath(homeDir), model.AgentClaudeCode)
 	legacyManaged := false
@@ -597,6 +604,22 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	result.Changed = true
 	result.Files = append(result.Files, legacyPath)
 	return result, nil
+}
+
+func claudeEngramPluginEnabled(homeDir string) bool {
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false
+	}
+
+	var settings struct {
+		EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return false
+	}
+	return settings.EnabledPlugins["engram@engram"]
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
