@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +142,74 @@ func overrideProviderRoleHostAdapter(t *testing.T, adapter reviewerprovider.Adap
 	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return adapter }
 }
 
+type controlledDeadlineContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+	mu   sync.RWMutex
+	err  error
+}
+
+func (ctx *controlledDeadlineContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *controlledDeadlineContext) Err() error {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+	return ctx.err
+}
+
+func (ctx *controlledDeadlineContext) expire(err error) {
+	ctx.once.Do(func() {
+		ctx.mu.Lock()
+		ctx.err = err
+		ctx.mu.Unlock()
+		close(ctx.done)
+	})
+}
+
+type deadlineAfterReadyAdapter struct {
+	adapter   reviewerprovider.Adapter
+	readyPath string
+}
+
+type providerReviewResult struct {
+	raw []byte
+	err error
+}
+
+func (adapter deadlineAfterReadyAdapter) Review(ctx context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+	controlled := &controlledDeadlineContext{Context: ctx, done: make(chan struct{})}
+	results := make(chan providerReviewResult, 1)
+	go func() {
+		raw, err := adapter.adapter.Review(controlled, invocation)
+		results <- providerReviewResult{raw: raw, err: err}
+	}()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	lifeline := time.NewTimer(5 * time.Second)
+	defer lifeline.Stop()
+	for {
+		select {
+		case result := <-results:
+			return result.raw, result.err
+		case <-ticker.C:
+			if _, err := os.Stat(adapter.readyPath); err == nil {
+				controlled.expire(context.DeadlineExceeded)
+				returnResult := <-results
+				return returnResult.raw, returnResult.err
+			}
+		case <-ctx.Done():
+			controlled.expire(ctx.Err())
+			returnResult := <-results
+			return returnResult.raw, returnResult.err
+		case <-lifeline.C:
+			controlled.expire(context.Canceled)
+			returnResult := <-results
+			return returnResult.raw, fmt.Errorf("fake pi did not signal readiness: %w", returnResult.err)
+		}
+	}
+}
+
 func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
@@ -187,15 +259,20 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 	repo, store, record, handle := piRefuterReview(t)
 	previous := reviewProviderRoleCaptureTimeout
 	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
-	reviewProviderRoleCaptureTimeout = 100 * time.Millisecond
+	reviewProviderRoleCaptureTimeout = 10 * time.Second
+	ready := filepath.Join(t.TempDir(), "pi-ready")
 	stalled := filepath.Join(t.TempDir(), "stalled-pi")
-	if err := os.WriteFile(stalled, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
+	if err := os.WriteFile(stalled, []byte("#!/bin/sh\n: > "+strconv.Quote(ready)+"\nexec sleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	overrideProviderRoleHostAdapter(t, &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }})
+	realPi := &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }}
+	overrideProviderRoleHostAdapter(t, deadlineAfterReadyAdapter{adapter: realPi, readyPath: ready})
 	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("stalled pi deadline refusal = %v", err)
+	}
+	if _, readinessErr := os.Stat(ready); readinessErr != nil {
+		t.Fatalf("fake pi did not announce readiness before deadline: %v", readinessErr)
 	}
 	current, loadErr := store.Load()
 	if loadErr != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
