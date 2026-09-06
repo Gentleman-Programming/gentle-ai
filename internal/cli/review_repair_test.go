@@ -398,6 +398,75 @@ func authorityDispositionAuthorization(plan reviewtransaction.AuthorityDispositi
 // pre-contract malformed_recovery_authorization AnomalyClasses class.
 const dispositionForgedAuthorization = "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=impossible-mismatch\npredecessor_revision=impossible\ntarget_identity=impossible\nactor=maintainer@example.com\nreason=impossible"
 
+func TestReviewRepairHistoricalStandaloneDiagnosticExecutesAdvertisedDisposition(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, _, store, record := newArtifactReview(t, true)
+	lineage := record.State.LineageID
+	fixture := retireCompactAuthorityForReviewRepairTest(t, store, record)
+
+	var inspectionOutput bytes.Buffer
+	if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspectionOutput); err != nil {
+		t.Fatal(err)
+	}
+	var inspection ReviewInspectAuthorityResult
+	decodeStrictReviewJSON(t, inspectionOutput.Bytes(), &inspection)
+	if len(inspection.SanctionedExits) != 1 {
+		t.Fatalf("historical inspection exits = %#v, want one repair exit", inspection.SanctionedExits)
+	}
+	exit := inspection.SanctionedExits[0]
+	if exit.LineageID != lineage || exit.SuccessorLineageID != "" || exit.Operation != "review repair" || exit.Blocked != "" {
+		t.Fatalf("historical repair exit = %#v", exit)
+	}
+
+	var preflightOutput bytes.Buffer
+	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &preflightOutput); err != nil {
+		t.Fatal(err)
+	}
+	var preflight ReviewRepairResult
+	decodeStrictReviewJSON(t, preflightOutput.Bytes(), &preflight)
+	if err := preflight.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if preflight.Assessment.Counts.EligibleCandidates != 0 || preflight.DispositionProviderInputs == nil {
+		t.Fatalf("historical preflight = %#v, want zero legacy eligible candidates plus disposition inputs", preflight)
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(after, fixture) {
+		t.Fatalf("historical preflight mutated authority: %v, %q", err, after)
+	}
+
+	actor, reason := "maintainer@example.com", "quarantine retired compact identity"
+	plan, err := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(context.Background(), repo, actor, reason)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.DispositionProviderInputs.PlanDigest != plan.PlanDigest ||
+		preflight.DispositionProviderInputs.AuthorityInventoryRevision != plan.AuthorityInventoryRevision {
+		t.Fatalf("preflight disposition inputs = %#v, plan = %#v", preflight.DispositionProviderInputs, plan)
+	}
+	authorization := authorityDispositionAuthorization(plan)
+	var executed bytes.Buffer
+	if err := RunReview([]string{
+		"repair", "--cwd", repo,
+		"--plan-digest", plan.PlanDigest,
+		"--inventory-revision", plan.AuthorityInventoryRevision,
+		"--actor", actor, "--reason", reason, "--authorization", authorization,
+	}, &executed); err != nil {
+		t.Fatalf("historical disposition execution: %v\n%s", err, executed.String())
+	}
+	var result ReviewRepairResult
+	decodeStrictReviewJSON(t, executed.Bytes(), &result)
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if result.DispositionExecution == nil || result.DispositionExecution.Status != string(reviewtransaction.CompactReclaimCommitted) ||
+		result.DispositionExecution.LineageID != lineage {
+		t.Fatalf("historical disposition execution = %#v", result.DispositionExecution)
+	}
+	if _, err := os.Stat(store.Dir); !os.IsNotExist(err) {
+		t.Fatalf("historical disposition left source entry: %v", err)
+	}
+}
+
 func TestReviewRepairPreflightBlocksHistoricalPlanForAdditionalAuthorityDiagnostic(t *testing.T) {
 	for _, test := range []struct {
 		name    string

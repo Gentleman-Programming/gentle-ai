@@ -204,6 +204,60 @@ func TestReviewInspectAuthorityReportsMixedCorruptionDeterministicallyWithoutMut
 	}
 }
 
+func TestReviewInspectAuthorityAdvertisesReclaimOnlyForNonAuthoritativeResidue(t *testing.T) {
+	t.Run("incomplete residue", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		lineage := "incomplete-residue"
+		dir := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "review-trace.jsonl"), []byte("trace residue\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var output bytes.Buffer
+		if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &output); err != nil {
+			t.Fatal(err)
+		}
+		var inspection ReviewInspectAuthorityResult
+		decodeStrictReviewJSON(t, output.Bytes(), &inspection)
+		if len(inspection.SanctionedExits) != 1 {
+			t.Fatalf("sanctioned exits = %#v, want one reclaim exit", inspection.SanctionedExits)
+		}
+		exit := inspection.SanctionedExits[0]
+		if exit.LineageID != lineage || exit.SuccessorLineageID != "" || exit.Operation != "review reclaim" || exit.Blocked != "" {
+			t.Fatalf("reclaim exit = %#v", exit)
+		}
+	})
+
+	for _, artifact := range []string{"review-state.json", "review-receipt.json", "finalize-attempt-journal.json", ".atomic-partial"} {
+		t.Run(artifact, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			lineage := "authoritative-residue"
+			dir := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, artifact), []byte("{\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			var output bytes.Buffer
+			if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &output); err != nil {
+				t.Fatal(err)
+			}
+			var inspection ReviewInspectAuthorityResult
+			decodeStrictReviewJSON(t, output.Bytes(), &inspection)
+			for _, exit := range inspection.SanctionedExits {
+				if exit.LineageID == lineage && exit.Operation == "review reclaim" {
+					t.Fatalf("authoritative artifact %q advertised reclaim: %#v", artifact, exit)
+				}
+			}
+		})
+	}
+}
+
 func TestReviewInspectAuthorityPropagatesContextFailure(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())

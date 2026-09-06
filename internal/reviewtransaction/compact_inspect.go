@@ -66,10 +66,19 @@ const (
 	// gated on the successor's pristine state — quarantine byte-preserves the
 	// whole entry, so nothing captured is discarded.
 	CompactRecoveryEdgeExitRepair = "review repair"
+	// CompactRecoveryEdgeExitReclaim names the existing `review reclaim` verb
+	// as the sanctioned exit for a standalone compact-v2 entry that never held
+	// an authoritative artifact (no review-state.json, receipt, finalize
+	// journal, or interrupted atomic-write residue): the same predicate
+	// ReclaimIncompleteCompactStore itself gates on (compact_reclaim.go), so
+	// naming it here never advertises a command that would then refuse.
+	CompactRecoveryEdgeExitReclaim = "review reclaim"
 )
 
-// CompactRecoverySanctionedExit names, for one invalid recovery edge, the
-// operation an operator can actually run right now.
+// CompactRecoverySanctionedExit names, for one invalid recovery edge or one
+// actionable standalone entry diagnostic, the operation an operator can
+// actually run right now. Diagnostics with no admitted operation remain only in
+// EntryDiagnostics; they are never mislabeled as exits.
 //
 // It is deliberately NOT a field of CompactRecoveryEdgeInspection. That struct
 // is a binding identity: batch reconciliation re-derives it from the exact
@@ -77,10 +86,20 @@ const (
 // planner declared, so any value that depends on the live store rather than on
 // the records alone would make an honest plan look stale. This carries the
 // live, operator-facing half separately.
+//
+// Exactly one of SuccessorLineageID (an invalid recovery edge) or LineageID
+// (a standalone entry diagnostic that never became an edge because it never
+// loaded) is set per exit: the two lineage sets are disjoint by construction
+// -- an entry diagnostic exists only for a lineage whose record failed to
+// load, and an edge successor exists only for a lineage whose record loaded.
 type CompactRecoverySanctionedExit struct {
-	SuccessorLineageID string `json:"successor_lineage_id"`
-	Operation          string `json:"operation,omitempty"`
-	Blocked            string `json:"blocked,omitempty"`
+	SuccessorLineageID string `json:"successor_lineage_id,omitempty"`
+	// LineageID names the standalone entry diagnostic (issue #2995: a
+	// malformed or outdated compact-v2 entry with no recovery edge at all)
+	// this exit is about. Empty for an edge-scoped exit.
+	LineageID string `json:"lineage_id,omitempty"`
+	Operation string `json:"operation,omitempty"`
+	Blocked   string `json:"blocked,omitempty"`
 }
 
 type CompactRecoveryEdgeInspection struct {
@@ -178,9 +197,9 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 	return report, records, err
 }
 
-// SanctionedCompactRecoveryExits resolves, for every invalid edge in one
-// inspection, which advertised operation would accept it right now. It is
-// read-only, takes no lock, and is the operator-facing companion to the
+// SanctionedCompactRecoveryExits resolves which advertised operation accepts
+// each invalid edge or actionable standalone diagnostic in one inspection. It
+// is read-only, takes no lock, and is the operator-facing companion to the
 // inspection rather than part of its binding identity.
 //
 // Before Wave 7 S3a, an edge reconciliation classified into an anomaly class
@@ -198,7 +217,7 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 // command that would not resolve the block.
 func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report CompactRecoveryInspectionReport) ([]CompactRecoverySanctionedExit, error) {
 	exits := []CompactRecoverySanctionedExit{}
-	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -211,11 +230,31 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
 	// aborts the whole exit computation.
 	dispositionSeed := ""
+	historicalLineage := ""
 	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
-			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			historicalLineage = plan.SeedSet[0]
 		} else {
 			dispositionSeed = plan.SeedSet[0]
+		}
+	}
+	for _, diagnostic := range report.EntryDiagnostics {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if diagnostic.LineageID == historicalLineage {
+			exits = append(exits, CompactRecoverySanctionedExit{LineageID: diagnostic.LineageID, Operation: CompactRecoveryEdgeExitRepair})
+			continue
+		}
+		if diagnostic.Problem == compactInspectionEntryUnexpected || validateLineageID(diagnostic.LineageID) != nil {
+			continue
+		}
+		items, readErr := os.ReadDir(filepath.Join(base, "v2", diagnostic.LineageID))
+		if readErr != nil {
+			return nil, fmt.Errorf("inspect compact reclaim eligibility for %q: %w", diagnostic.LineageID, readErr)
+		}
+		if !compactStoreHoldsAuthority(items) {
+			exits = append(exits, CompactRecoverySanctionedExit{LineageID: diagnostic.LineageID, Operation: CompactRecoveryEdgeExitReclaim})
 		}
 	}
 	for _, edge := range report.Edges {
