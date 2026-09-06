@@ -27,6 +27,17 @@ func TestSnapshotBuilderStillUntrackedIntendedReconcilesTrackedPaths(t *testing.
 		t.Fatalf("StillUntrackedIntended() = %v, want %v", got, want)
 	}
 
+	// Issue #4055: a recorded path that was discarded from the working tree
+	// drops out like a tracked one instead of surfacing as a raw lstat error
+	// from the next candidate capture.
+	discarded, err := builder.StillUntrackedIntended(context.Background(), []string{"keep-a.txt", "vanished.txt"})
+	if err != nil {
+		t.Fatalf("StillUntrackedIntended over a discarded selection: %v", err)
+	}
+	if want := []string{"keep-a.txt"}; !reflect.DeepEqual(discarded, want) {
+		t.Fatalf("StillUntrackedIntended() = %v, want %v", discarded, want)
+	}
+
 	landed, err := builder.StillUntrackedIntended(context.Background(), []string{"tracked.txt", "deleted.txt"})
 	if err != nil {
 		t.Fatalf("StillUntrackedIntended over a fully-landed selection: %v", err)

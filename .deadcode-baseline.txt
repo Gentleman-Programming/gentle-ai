@@ -77,6 +77,9 @@ internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
+internal/reviewerprovider/windows_batch_cmdline.go	isWindowsBatchFile
+internal/reviewerprovider/windows_batch_cmdline.go	quoteWindowsArgument
+internal/reviewerprovider/windows_batch_cmdline.go	windowsBatchCommandLine
 internal/reviewtransaction/authority_repair.go	AssessAuthorityRepair
 internal/reviewtransaction/candidate_decline.go	CandidateDeclineAuthorization.validate
 internal/reviewtransaction/candidate_decline.go	candidateDeclineDigest

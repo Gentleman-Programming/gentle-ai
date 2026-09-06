@@ -262,18 +262,14 @@ func captureAtomicReviewerSlots(r *journeyRun, lineageID string, includeCorrecta
 			return fmt.Errorf("atomic capture %d binding = %+v", capture, input)
 		}
 
-		paths := make([]string, 0, len(input.ChangedPathManifest))
-		for _, entry := range input.ChangedPathManifest {
-			paths = append(paths, entry.Path)
-		}
-		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, paths)
+		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, status.paths())
 		if err != nil {
 			return err
 		}
 		if capture == 0 && includeCorrectableFinding {
 			payload, err = json.Marshal(map[string]any{
 				"subject_hash": input.ArtifactSubject.SubjectHash,
-				"inspection":   map[string]any{"status": "completed", "paths": paths},
+				"inspection":   map[string]any{"status": "completed", "paths": status.paths()},
 				"findings": []any{map[string]any{
 					"location": "candidate.go:3", "severity": "CRITICAL", "claim": "candidate returns the wrong value",
 					"proof_refs":     []string{"candidate.go:3 changed hunk fails the focused check"},
@@ -367,18 +363,14 @@ func captureExactSelectedReviewerSlots(r *journeyRun, lineageID string, includeC
 			}
 		}
 		input := status.NextTransition.Collect.Inputs[0]
-		paths := make([]string, 0, len(input.ChangedPathManifest))
-		for _, entry := range input.ChangedPathManifest {
-			paths = append(paths, entry.Path)
-		}
-		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, paths)
+		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, status.paths())
 		if err != nil {
 			return err
 		}
 		if capture == 0 && includeCorrectableFinding {
 			payload, err = json.Marshal(map[string]any{
 				"subject_hash": input.ArtifactSubject.SubjectHash,
-				"inspection":   map[string]any{"status": "completed", "paths": paths},
+				"inspection":   map[string]any{"status": "completed", "paths": status.paths()},
 				"findings": []any{map[string]any{
 					"location": "candidate.go:3", "severity": "CRITICAL", "claim": "candidate returns the wrong value",
 					"proof_refs":     []string{"candidate.go:3 changed hunk fails the focused check"},

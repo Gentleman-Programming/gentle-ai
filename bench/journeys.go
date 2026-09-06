@@ -97,7 +97,15 @@ func (e statusEnvelope) executeArgument(name string) string {
 	return ""
 }
 
+// paths names the frozen candidate paths a reviewer must inspect. The
+// native-git transport no longer inlines the changed-path manifest on every
+// per-lens capture input (#3922); the published projection carries the same
+// path set for the whole lineage, and the legacy manifest remains a fallback
+// for envelopes that still inline it.
 func (e statusEnvelope) paths() []string {
+	if len(e.Projection.Paths) > 0 {
+		return append([]string{}, e.Projection.Paths...)
+	}
 	if len(e.NextTransition.Collect.Inputs) == 0 {
 		return nil
 	}

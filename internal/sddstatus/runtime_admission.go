@@ -18,14 +18,19 @@ type runtimeBeginAdmissionResult struct {
 }
 
 // runtimeRescopeSuccessorIntendedUntracked recovers only the exact selection
-// whose zero-drift candidate opened a fresh rescope successor. The successor
-// has no attempt of its own yet, so its predecessor's recorded selection is
-// the sole inventory-validated scope that can reproduce InitialCandidate*.
+// whose candidate opened a fresh rescope successor. #4195: when the rescope
+// itself declared a fresh selection, THAT is the inventory-validated scope
+// that produced InitialCandidate* and must be inherited; otherwise the
+// successor has no attempt of its own yet, so its predecessor's recorded
+// selection is the sole inventory-validated scope that can reproduce it.
 func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, bool) {
 	if status.Objective == nil || status.ActiveAttempt != nil || status.LastRescope == nil ||
 		status.LastRescope.ObjectiveID != status.Objective.ID || runtimeObjectiveHasRecordedAttempt(status) ||
 		len(status.Attempts) == 0 {
 		return nil, false
+	}
+	if status.LastRescope.IntendedUntracked != nil {
+		return slices.Clone(*status.LastRescope.IntendedUntracked), true
 	}
 	predecessor := status.Attempts[len(status.Attempts)-1]
 	if predecessor.ObjectiveID != status.LastRescope.PreviousObjectiveID ||
