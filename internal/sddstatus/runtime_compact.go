@@ -70,6 +70,16 @@ type CompactAttemptResult struct {
 	// the token is real. Empty whenever the chain holds nothing, because a
 	// field that is always populated is noise.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// MaxChangedLines and MaxChangedLinesSource report an applied DEFAULT
+	// runtime line budget on the proceed answer itself (#2589): before this,
+	// an omitted --max-changed-lines was charged silently, and a caller
+	// learned only from a separate `status` call that a 200-line ceiling had
+	// already been applied. Both stay empty for an explicit budget and for
+	// every non-proceed answer -- an explicit caller already knows the value
+	// it typed, and this compact projection stays bounded for the ordinary
+	// case (TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory).
+	MaxChangedLines       int    `json:"max_changed_lines,omitempty"`
+	MaxChangedLinesSource string `json:"max_changed_lines_source,omitempty"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -264,6 +274,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	}); terminal {
 		if result.State == CompactStateProceed {
 			result.SettleObligation = runtimeSettleObligation(replay.Status)
+			result = compactAcquireBudgetResult(result, replay.Status.Objective)
 		}
 		return result, nil
 	}
@@ -289,12 +300,27 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if err != nil {
 		return store.compactMutationFailure(err, false, begin), nil
 	}
-	return CompactAttemptResult{
+	return compactAcquireBudgetResult(CompactAttemptResult{
 		State: CompactStateProceed, Token: started.Revision,
 		// Derived from the PRE-mutation chain: the obligation this attempt
 		// inherits is the one that existed when it was opened.
 		SettleObligation: runtimeSettleObligation(replay.Status),
-	}, nil
+	}, started.Objective), nil
+}
+
+// compactAcquireBudgetResult surfaces the applied DEFAULT runtime line budget
+// on a proceed answer (#2589) -- the one case this compact projection was
+// silent about: an omitted --max-changed-lines charged a 200-line ceiling
+// with nothing in the answer to say so. An explicit budget adds nothing here,
+// preserving the bounded/unchanging compact output an explicit acquire call
+// already guarantees (TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory)
+// -- the caller who typed the value already knows it.
+func compactAcquireBudgetResult(result CompactAttemptResult, objective *RuntimeObjective) CompactAttemptResult {
+	if objective != nil && objective.MaxChangedLinesSource == runtimeChangedLinesSourceDefault {
+		result.MaxChangedLines = objective.MaxChangedLines
+		result.MaxChangedLinesSource = objective.MaxChangedLinesSource
+	}
+	return result
 }
 
 // Settle closes the attempt selected by Token through the ordinary Finish
@@ -488,6 +514,9 @@ func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, own
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 		Request: request, PresentedToken: ownedToken,
 	}); terminal {
+		if result.State == CompactStateProceed {
+			result = compactAcquireBudgetResult(result, replay.Status.Objective)
+		}
 		return result
 	}
 	return compactBlocked(CompactBlockInvalidContinuation, "")

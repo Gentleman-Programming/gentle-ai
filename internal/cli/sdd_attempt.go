@@ -70,6 +70,17 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected sdd-attempt argument %q", flags.Arg(0))
 	}
+	// --max-changed-lines is pre-defaulted at flags.Int (registerSDDAttemptIntFlag)
+	// so an omitted flag and an explicitly-typed default are indistinguishable
+	// from the parsed value alone; flags.Visit sees only flags the caller
+	// actually typed, so it is the one place that still knows which happened
+	// (#2589). acquire/begin surface it as max_changed_lines_source below.
+	maxChangedLinesExplicit := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "max-changed-lines" {
+			maxChangedLinesExplicit = true
+		}
+	})
 	// Identity/revision-shaped values are trimmed at this CLI boundary so
 	// incidental leading/trailing whitespace from a shell or PowerShell
 	// copy-paste (e.g. `Get-FileHash`/`shasum` output) does not itself cause
@@ -181,7 +192,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	case "begin":
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, IntendedUntracked: intended,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, MaxChangedLinesExplicit: maxChangedLinesExplicit,
+			IntendedUntracked: intended,
 		})
 	case "finish":
 		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
@@ -217,7 +229,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
 				ExpectedRevision: *expected,
 				RequestID:        *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, IntendedUntracked: intended,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, MaxChangedLinesExplicit: maxChangedLinesExplicit,
+				IntendedUntracked: intended,
 			},
 			Token:                      *token,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
