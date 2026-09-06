@@ -165,8 +165,18 @@ var (
 	runtimeRequestIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern     = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 	runtimeGitTreePattern      = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
-	runtimeChangePattern       = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`)
 	legacyRuntimeChangePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	// runtimeChangeUnsafeBytePattern matches the only characters
+	// validRuntimeChange still refuses (#2116): ASCII control bytes
+	// (including NUL) that would corrupt JSON or a rendered instruction
+	// string, backslash (an alternate path separator on Windows, ambiguous
+	// with "/"), and colon (reserved by NTFS drive letters and alternate
+	// data streams). sdd-status's own directory-based resolution
+	// (status.go's resolveByPreferenceOrder/resolveEngramStatus) imposes no
+	// shape restriction beyond what the filesystem or Engram itself
+	// refuses, so this is the narrowest floor that still lets every
+	// identity sdd-status resolves reach the runtime authority.
+	runtimeChangeUnsafeBytePattern = regexp.MustCompile(`[\x00-\x1f\x7f\\:]`)
 
 	runtimePublishRecord                     = reviewtransaction.PublishFileNoReplace
 	runtimeReplaceHead                       = reviewtransaction.ReplaceFileAtomic
@@ -767,7 +777,7 @@ type runtimeReplay struct {
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
 	if !validRuntimeChange(change) {
-		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most 96 characters; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
+		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want a non-empty identity of at most 96 characters with no control characters, backslash, colon, or \".\"/\"..\" path segment; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -807,8 +817,27 @@ func (err *RuntimeRepositoryRequiredError) Error() string {
 
 func (err *RuntimeRepositoryRequiredError) Unwrap() error { return err.Cause }
 
+// validRuntimeChange accepts exactly the identities sdd-status can resolve
+// (#2116): a directory-listed OpenSpec name, or an opaque Engram-backed
+// identity, neither of which is shape-restricted beyond what a filesystem
+// path segment or a JSON string can represent at all. "/" is accepted (a
+// literal path separator, not embedded in a single segment) because
+// resolveBindingChangeRoot (review_binding.go) already joins it under
+// openspec/changes/ and rejects anything that resolves outside the
+// repository via EvalSymlinks + containment, and runtimeChangeLedgerDir below
+// never lets it (or "..") reach a real path: it only ever appears inside a
+// digest-suffixed, non-legacy label whose non-alphanumeric bytes are always
+// collapsed first.
 func validRuntimeChange(change string) bool {
-	return len(change) <= 96 && runtimeChangePattern.MatchString(change)
+	if change == "" || len(change) > 96 || runtimeChangeUnsafeBytePattern.MatchString(change) {
+		return false
+	}
+	for _, segment := range strings.Split(change, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // legacyRuntimeChangeDir reports whether a change identity is one the runtime
@@ -846,7 +875,35 @@ func runtimeChangeLedgerDir(base, change string) string {
 		return filepath.Join(base, "v1", change)
 	}
 	digest := strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-runtime-change-identity/v1", change), "sha256:")
-	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
+	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, runtimeChangeEncodedLabel(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
+}
+
+// runtimeChangeEncodedLabel keeps the encoded ledger directory human-legible
+// without letting the identity's own bytes reopen a path hazard now that
+// validRuntimeChange accepts "/" and "." (#2116): every byte outside
+// [a-z0-9_-] collapses to "_", so "features/sub-change", "3.14", and "Tag
+// Name" each fold into one flat directory component instead of walking back
+// out of sdd-runtime/v1/_encoded or splitting into extra directory levels.
+// Hyphen and underscore are preserved verbatim rather than folded, because
+// the pre-#2116 encoding was `strings.ToLower(change)` with no substitution
+// at all: every identity the old validator already accepted used only
+// letters, digits, hyphens, and underscores, so folding either one now would
+// move that identity's ledger directory and orphan any attempt state already
+// recorded under it (acquired-but-unsettled attempts, the max-attempts
+// budget, request-id replay). The trailing digest (added by the caller)
+// still keeps identities that collapse to the same label apart.
+func runtimeChangeEncodedLabel(change string) string {
+	lower := strings.ToLower(change)
+	label := make([]byte, len(lower))
+	for i := 0; i < len(lower); i++ {
+		switch c := lower[i]; {
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_':
+			label[i] = c
+		default:
+			label[i] = '_'
+		}
+	}
+	return string(label)
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {

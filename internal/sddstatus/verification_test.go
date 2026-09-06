@@ -180,3 +180,53 @@ func itoa(value int) string {
 	}
 	return "1"
 }
+
+// TestDeriveRemediationEvidenceRevision pins #2896: a passing remediation
+// settle must be able to derive its authoritative --evidence-revision from
+// admitted evidence instead of requiring the caller to invent one.
+func TestDeriveRemediationEvidenceRevision(t *testing.T) {
+	failed := "sha256:" + strings.Repeat("a", 64)
+	valid := `{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"` + failed + `",` +
+		`"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}],` +
+		`"runtime_harness":{"status":"not_applicable","na_reason":"no runtime harness because this change is test-only"},` +
+		`"rollback":{"boundary":"commit 9ec76eec32","evidence":"git revert 9ec76eec32 restores the prior passing state"}}`
+
+	t.Run("valid evidence derives a stable revision", func(t *testing.T) {
+		first, err := DeriveRemediationEvidenceRevision(valid, failed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sha256IdentityPattern.MatchString(first) {
+			t.Fatalf("derived revision %q is not sha256:<64 lowercase hex>", first)
+		}
+		if first == failed {
+			t.Fatalf("derived revision must not equal the failed evidence it repairs")
+		}
+		second, err := DeriveRemediationEvidenceRevision(valid, failed)
+		if err != nil || second != first {
+			t.Fatalf("DeriveRemediationEvidenceRevision is not deterministic: %q vs %q (err=%v)", first, second, err)
+		}
+	})
+
+	tests := []struct {
+		name           string
+		evidence       string
+		expectedFailed string
+	}{
+		{name: "malformed JSON", evidence: "{not json", expectedFailed: failed},
+		{name: "unknown field rejected", evidence: strings.Replace(valid, `"schema"`, `"extra":"x","schema"`, 1), expectedFailed: failed},
+		{name: "wrong schema", evidence: strings.Replace(valid, "gentle-ai.remediation-evidence/v1", "gentle-ai.remediation-evidence/v2", 1), expectedFailed: failed},
+		{name: "failed_evidence_revision mismatch", evidence: valid, expectedFailed: "sha256:" + strings.Repeat("b", 64)},
+		{name: "no commands", evidence: strings.Replace(valid, `"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}]`, `"commands":[]`, 1), expectedFailed: failed},
+		{name: "failing command exit code", evidence: strings.Replace(valid, `"exit_code":0`, `"exit_code":1`, 1), expectedFailed: failed},
+		{name: "runtime_harness status not passed or not_applicable", evidence: strings.Replace(valid, `"status":"not_applicable"`, `"status":"skipped"`, 1), expectedFailed: failed},
+		{name: "rollback boundary not concrete", evidence: strings.Replace(valid, `"boundary":"commit 9ec76eec32"`, `"boundary":"n/a"`, 1), expectedFailed: failed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := DeriveRemediationEvidenceRevision(test.evidence, test.expectedFailed); err == nil {
+				t.Fatalf("DeriveRemediationEvidenceRevision(%q) error = nil, want rejection", test.name)
+			}
+		})
+	}
+}

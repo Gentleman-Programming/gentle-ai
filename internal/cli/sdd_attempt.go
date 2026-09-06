@@ -54,6 +54,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	cleanupEvidence := registerSDDAttemptStringFlag(flags, operation, "cleanup-evidence")
 	processEvidence := registerSDDAttemptStringFlag(flags, operation, "process-evidence")
 	remediatesEvidenceRevision := registerSDDAttemptStringFlag(flags, operation, "remediates-evidence-revision")
+	remediationEvidence := registerSDDAttemptStringFlag(flags, operation, "remediation-evidence")
 	reason := registerSDDAttemptStringFlag(flags, operation, "reason")
 	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
 	var roots sddAttemptRootList
@@ -242,6 +243,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			RemediationEvidence:        *remediationEvidence,
 			IntendedUntracked:          settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "grant":
@@ -412,6 +414,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "remediation-evidence", usage: "optional; strict gentle-ai.remediation-evidence/v1 JSON; derives --evidence-revision when it is omitted"},
 		{name: "untracked-scope", usage: "required when this attempt left eligible untracked files; select or exclude"},
 		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
 		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
@@ -647,7 +650,11 @@ func missingSDDAttemptOperationFlags(args []string, operation, parsedOutcome str
 			names = append(names, flagDefinition.name)
 		}
 	}
-	if (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" {
+	// #2896: --remediation-evidence derives --evidence-revision, so a settle
+	// carrying it no longer needs the caller to also invent one.
+	dropEvidenceRevision := (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" ||
+		operation == "settle" && presentSDDAttemptFlags(args, "remediation-evidence") == 1
+	if dropEvidenceRevision {
 		filtered := names[:0]
 		for _, name := range names {
 			if name != "evidence-revision" {

@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -133,6 +134,15 @@ type CompactSettleRequest struct {
 	ProcessEvidence    string
 
 	RemediatesEvidenceRevision string
+
+	// RemediationEvidence is an optional strict gentle-ai.remediation-
+	// evidence/v1 JSON object (#2896). When present, Settle derives the
+	// canonical successful EvidenceRevision from it instead of requiring the
+	// caller to invent one: before this, a passing remediation settle had no
+	// provider-owned value to put in --evidence-revision, only the caller's
+	// own unverifiable evidence. An explicit EvidenceRevision alongside this
+	// field must equal the derived value.
+	RemediationEvidence string
 
 	// The settle-time untracked declaration, forwarded verbatim to Finish.
 	// Nil means the caller declared nothing.
@@ -327,6 +337,19 @@ func compactAcquireBudgetResult(result CompactAttemptResult, objective *RuntimeO
 // transition. Its only remediation authority is the immutable SDD failed-
 // evidence chain; review bindings and successors do not participate.
 func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleRequest) (CompactAttemptResult, error) {
+	// Deriving before anything else (#2896) means a replayed settle (the
+	// request-id branch just below) sees the exact same EvidenceRevision the
+	// original call derived, since both start from the same admitted bytes.
+	if request.RemediationEvidence != "" {
+		derived, deriveErr := DeriveRemediationEvidenceRevision(request.RemediationEvidence, request.RemediatesEvidenceRevision)
+		if deriveErr != nil {
+			return CompactAttemptResult{}, deriveErr
+		}
+		if request.EvidenceRevision != "" && request.EvidenceRevision != derived {
+			return CompactAttemptResult{}, fmt.Errorf("--evidence-revision %s does not match the revision derived from --remediation-evidence (%s); rerun `gentle-ai sdd-attempt settle` omitting --evidence-revision, or with exactly the derived value", request.EvidenceRevision, derived)
+		}
+		request.EvidenceRevision = derived
+	}
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
