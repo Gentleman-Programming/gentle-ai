@@ -735,8 +735,15 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// STATUS. Deliberate, not drift. The ceilings move with it
 		// (15_866 -> 16_649 / 30_063 -> 30_846) to restore the same small
 		// headroom each row already had.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_646, maxCharacters: 16_649},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_991, maxCharacters: 30_846},
+		// +107 per case (16_646 -> 16_753 / 28_991 -> 29_098) when #3299/#4170
+		// added the managed_assets_outdated row: STATUS now classifies a
+		// stale managed-asset digest before ever offering START, and the
+		// stop names the exact `gentle-ai sync` continuation instead of
+		// leaving the caller to guess it from prose. Deliberate, not drift.
+		// The ceilings move with it (16_649 -> 16_756 / 30_846 -> 30_953) to
+		// restore the same small headroom each row already had.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_753, maxCharacters: 16_756},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_098, maxCharacters: 30_953},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

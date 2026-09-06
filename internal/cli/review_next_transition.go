@@ -20,13 +20,17 @@ const (
 
 // ReviewNextTransition is the sole negotiated routing decision. Its execute
 // form is complete, its collect form identifies one externally supplied input,
-// and its stop form intentionally contains no command-shaped data.
+// and its stop form intentionally contains no command-shaped data -- except
+// for the one reason_code (managed_assets_outdated) whose stop is itself the
+// candidate-preserving continuation (#3299, #4170): Continuation is additive
+// and set only there.
 type ReviewNextTransition struct {
 	Kind              string                                   `json:"kind"`
 	ReasonCode        string                                   `json:"reason_code"`
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
+	Continuation      *ReviewManagedAssetsContinuation         `json:"continuation,omitempty"`
 }
 
 type ReviewTransitionExecution struct {
@@ -182,6 +186,15 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
 					Arguments: reviewTargetArguments(status),
 				})
+			}
+			// #3299, #4170: a stale managed-asset digest fails START's own
+			// preflight anyway, so offering it here would send the caller
+			// into a refusal STATUS already knew was coming. Classifying it
+			// here, before any START is proposed, and naming the exact sync
+			// continuation avoids the "guess run sync from free text" gap
+			// both issues report.
+			if provenance := checkManagedReviewerAssets(); provenance.stale() {
+				return reviewManagedAssetsStopTransition(input.RuntimeAgent, provenance.staleAssetIdentities())
 			}
 			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent, input.IntendedUntracked), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -1069,6 +1082,17 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 
 func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
+}
+
+// reviewManagedAssetsStopTransition reports stale managed reviewer assets
+// during STATUS preflight, before a START is ever offered (#3299, #4170): a
+// bare "stop" here would leave the caller to guess "run sync" from prose, so
+// the stop itself carries the exact candidate-preserving continuation, bound
+// to the runtime agent STATUS was asked for.
+func reviewManagedAssetsStopTransition(agent model.AgentID, staleAssets []string) ReviewNextTransition {
+	transition := reviewStopTransition("managed_assets_outdated")
+	transition.Continuation = managedAssetsContinuation(string(agent), staleAssets)
+	return transition
 }
 
 func reviewReasonDescription(reason string) string {

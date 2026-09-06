@@ -26,8 +26,16 @@
     "next_transition": {"oneOf": [
       {"allOf": [
         {"$ref": "status-v5.schema.json#/$defs/next_transition"},
-        {"not": {"properties": {"reason_code": {"const": "intended_untracked_selection_required"}}, "required": ["reason_code"]}}
+        {"not": {"properties": {"reason_code": {"enum": ["intended_untracked_selection_required", "managed_assets_outdated"]}}, "required": ["reason_code"]}}
       ]},
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "continuation"],
+        "properties": {
+          "kind": {"const": "stop"},
+          "reason_code": {"const": "managed_assets_outdated"},
+          "continuation": {"$ref": "failure.schema.json#/$defs/managed_assets_continuation"}
+        }
+      },
       {
         "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
         "properties": {
