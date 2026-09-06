@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenCodeReviewTransportPluginDeduplicatesDuplicateInstances(t *testing.T) {
@@ -34,7 +35,7 @@ await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID:
 if (reversed.output !== "captured") throw new Error("non-owner after an owner-delivered completion must pass through; output = " + reversed.output)
 console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Prompt string `json:"prompt"`
 		Output string `json:"output"`
@@ -105,7 +106,7 @@ await transform({ sessionID: "disposed-session" }, { system: disposedSystem })
 unchanged("disposed", disposedSystem)
 console.log(JSON.stringify({ runtimeAgentSystem, legacyTitleSystem, ordinaryAgentSystem, partialTitleSystem, malformedSystem, undefinedSessionIDSystem, deletedSystem, disposedSystem }))
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		RuntimeAgentSystem       []string `json:"runtimeAgentSystem"`
 		LegacyTitleSystem        []string `json:"legacyTitleSystem"`
@@ -151,7 +152,7 @@ for (const [index, completion] of completions.entries()) {
 }
 console.log(JSON.stringify({ prompts: tasks.map((task) => task.args.prompt), outputs: taskOutputs.map((task) => task.output) }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Prompts []string `json:"prompts"`
 		Outputs []string `json:"outputs"`
@@ -185,9 +186,14 @@ func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentG
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The plugin must still use the active OpenCode host process and not
+	// branch on OPENCODE_DISABLE_* env gates. Issue #3049 introduces a
+	// gentle-ai --version handshake, so the original blanket --version
+	// ban is narrowed to a positive check on the handshake symbol so a
+	// future env-gate bypass cannot reintroduce the forbidden probe.
 	for _, forbidden := range []string{
 		`spawn("opencode"`, `spawn('opencode'`, `exec("opencode"`, `exec('opencode'`,
-		"OPENCODE_DISABLE_", "--version",
+		"OPENCODE_DISABLE_",
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("OpenCode transport plugin must use the active host process, found forbidden %q", forbidden)
@@ -195,6 +201,9 @@ func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentG
 	}
 	if !strings.Contains(source, `spawn(TRANSPORT.Command, ["review", "opencode-transport"]`) {
 		t.Fatal("OpenCode transport plugin must spawn only the shared Go transport")
+	}
+	if !strings.Contains(source, "spawn(resolved, [\"--version\"]") {
+		t.Fatal("OpenCode transport plugin must use the gentle-ai --version handshake from issue #3049")
 	}
 }
 
@@ -219,7 +228,7 @@ try {
 }
 console.log(JSON.stringify({ refused, output: after.output }))
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Refused string `json:"refused"`
 		Output  string `json:"output"`
@@ -236,8 +245,15 @@ console.log(JSON.stringify({ refused, output: after.output }))
 }
 
 // posixRelayFixture answers one start frame with a Go-materialized prompt and
-// one completion frame with a captured result, logging both inbound frames.
+// one completion frame with a captured result, logging both inbound frames. It
+// also handles a leading `gentle-ai --version` probe so the binary handshake
+// can run without forcing every test to mock the probe separately.
 const posixRelayFixture = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
+  printf 'gentle-ai 2.4.0\n'
+  exit 0
+fi
 IFS= read -r start
 printf '%s\n' "$start" >> "$GENTLE_AI_RELAY_LOG"
 printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"prompt","nonce":"nonce","prompt":"Go-materialized immutable prompt"}'
@@ -245,6 +261,242 @@ IFS= read -r complete
 printf '%s\n' "$complete" >> "$GENTLE_AI_RELAY_LOG"
 printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result","output":"captured"}'
 `
+
+// posixOldRelayFixture pretends to be a `gentle-ai` from a prior release: it
+// prints an older semver on `--version` and ignores any relay frames so a
+// path-skew refusal can short-circuit the spawn before reaching the relay.
+const posixOldRelayFixture = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
+  printf 'gentle-ai 2.1.0\n'
+  exit 0
+fi
+exit 0
+`
+
+func TestOpenCodeReviewTransportPluginBinaryHandshakeRefusesSkew(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pre-write an older `gentle-ai` shim into a temp dir so the test can
+	// prepend it to PATH ahead of the bundled harness binary. The shim only
+	// answers `--version`; the relay frames never reach it because the
+	// plugin must refuse before spawning.
+	oldBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(oldBin, "gentle-ai"), []byte(posixOldRelayFixture), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const before = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+let refused = ""
+try {
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
+`
+	output, log, probeLog := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture, oldBin)
+	var result struct {
+		Prompt  string `json:"prompt"`
+		Refused string `json:"refused"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode skew harness output %q: %v", output, err)
+	}
+	for _, want := range []string{
+		"opencode_review_transport_binary_skew",
+		"2.1.0",
+		"2.4.0",
+		oldBin,
+		"which -a gentle-ai",
+	} {
+		if !strings.Contains(result.Refused, want) {
+			t.Fatalf("skew refusal %q must contain %q", result.Refused, want)
+		}
+	}
+	if !strings.Contains(result.Prompt, "opencode_review_transport_binary_skew") {
+		t.Fatalf("refused Task prompt %q must carry the typed skew code", result.Prompt)
+	}
+	if log != "" {
+		t.Fatalf("refused skew must not spawn the relay child, got relay frames %q", log)
+	}
+	if probeLog == "" {
+		t.Fatalf("skew path must still probe before refusing, got empty probe log")
+	}
+}
+
+func TestOpenCodeReviewTransportPluginBinaryHandshakeRefusesUnavailable(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const before = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+let refused = ""
+try {
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
+`
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, "", "")
+	var result struct {
+		Prompt  string `json:"prompt"`
+		Refused string `json:"refused"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode unavailable harness output %q: %v", output, err)
+	}
+	for _, want := range []string{"opencode_review_transport_binary_unavailable", "2971"} {
+		if !strings.Contains(result.Refused, want) {
+			t.Fatalf("unavailable refusal %q must contain %q", result.Refused, want)
+		}
+	}
+	if !strings.Contains(result.Prompt, "opencode_review_transport_binary_unavailable") {
+		t.Fatalf("refused Task prompt %q must carry the typed unavailable code", result.Prompt)
+	}
+	if log != "" {
+		t.Fatalf("refused unavailable must not spawn the relay child, got relay frames %q", log)
+	}
+}
+
+func TestOpenCodeReviewTransportPluginBinaryHandshakeCachesProbeAndReProbesOnMtimeChange(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The TS harness writes GENTLE_AI_BARRIER after the first relay, waits
+	// for the +".go" signal before firing session.deleted and the second
+	// relay. Together these verify two spec scenarios: cache reuse for
+	// relays within one session, and re-probe after mtime drift + session
+	// deletion. Reading the probe log between the two phases confirms
+	// exactly one --version call landed during the cache-reuse phase and
+	// two after the mtime change.
+	const harness = `import plugin from "./plugin.mts"
+import { writeFile, readFile } from "node:fs/promises"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const barrier = process.env.GENTLE_AI_BARRIER
+const goSignal = barrier + ".go"
+const before1 = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call-1" }, before1)
+const after1 = { output: "untrusted reviewer output", metadata: {} }
+await hooks["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call-1", args: { subagent_type: "review-risk" } }, after1)
+await writeFile(barrier, "ready")
+while (true) {
+  try {
+    if ((await readFile(goSignal, "utf-8")).trim() === "touched") break
+  } catch {}
+  await new Promise((resolve) => setTimeout(resolve, 50))
+}
+await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "session" } } } })
+const before2 = { args: { subagent_type: "review-resilience", prompt: "Go must receive this original host prompt" } }
+await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call-2" }, before2)
+const after2 = { output: "untrusted reviewer output", metadata: {} }
+await hooks["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call-2", args: { subagent_type: "review-resilience" } }, after2)
+console.log(JSON.stringify({ output1: after1.output, output2: after2.output }))
+`
+	_, _, probeLog := runOpenCodeTransportPluginHarnessWithMtimeBarrier(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	probes := 0
+	if trimmed := strings.TrimSpace(probeLog); trimmed != "" {
+		probes = strings.Count(trimmed, "\n") + 1
+	}
+	if probes != 2 {
+		t.Fatalf("cache reuse on the first two relays plus mtime drift + session.deleted before the second relay must yield two probe invocations; got %d; log=%q", probes, probeLog)
+	}
+}
+
+// runOpenCodeTransportPluginHarnessWithMtimeBarrier mirrors the standard
+// harness but lets the test rewrite the bundled relay binary's mtime after
+// the first relay completes and before the second relay fires. The TS harness
+// writes GENTLE_AI_BARRIER between the two relays and waits for the +".go"
+// signal to read "touched" before proceeding.
+func runOpenCodeTransportPluginHarnessWithMtimeBarrier(t *testing.T, modules map[string]string, harness, relay string) (string, string, string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the relay fixture uses a POSIX shell")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is unavailable")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range modules {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(harness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	relayPath := filepath.Join(bin, "gentle-ai")
+	if err := os.WriteFile(relayPath, []byte(relay), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(root, "relay.log")
+	probePath := filepath.Join(root, "probe.log")
+	barrierPath := filepath.Join(root, "barrier")
+	command := exec.Command(node, "harness.mts")
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_RELAY_LOG="+logPath,
+		"GENTLE_AI_PROBE_LOG="+probePath,
+		"GENTLE_AI_BARRIER="+barrierPath,
+	)
+	stdoutBuf := &strings.Builder{}
+	command.Stdout = stdoutBuf
+	command.Stderr = stdoutBuf
+	if err := command.Start(); err != nil {
+		t.Fatalf("start barrier harness: %v", err)
+	}
+	for time.Now().Before(time.Now().Add(15 * time.Second)) {
+		if _, err := os.Stat(barrierPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(barrierPath); err != nil {
+		command.Process.Kill()
+		t.Fatalf("barrier harness never reached first-relay barrier: %s", stdoutBuf.String())
+	}
+	if err := os.Chtimes(relayPath, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		command.Process.Kill()
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(barrierPath+".go", []byte("touched"), 0o644); err != nil {
+		command.Process.Kill()
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatalf("barrier harness failed: %v\n%s", err, stdoutBuf.String())
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	probe, err := os.ReadFile(probePath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	relayLog := ""
+	if log != nil {
+		relayLog = string(log)
+	}
+	probeLog := ""
+	if probe != nil {
+		probeLog = string(probe)
+	}
+	return stdoutBuf.String(), relayLog, probeLog
+}
 
 func TestOpenCodeReviewTransportPluginRefusesCompletionWithoutMatchingBeforeHook(t *testing.T) {
 	source, err := Read("opencode/plugins/opencode-review-transport.ts")
@@ -262,7 +514,7 @@ try {
 }
 console.log(JSON.stringify({ refused, output: after.output }))
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Refused string `json:"refused"`
 		Output  string `json:"output"`
@@ -299,7 +551,7 @@ const untouched = after.output
 await first["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
 console.log(JSON.stringify({ refused, untouched, output: after.output }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Refused   string `json:"refused"`
 		Untouched string `json:"untouched"`
@@ -339,7 +591,7 @@ const after = { output: "untrusted reviewer output", metadata: {} }
 await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "second-call", args: { subagent_type: "review-risk" } }, after)
 console.log(JSON.stringify({ output: after.output }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Output string `json:"output"`
 	}
@@ -473,6 +725,10 @@ console.log(JSON.stringify({ ok: true }))
 	const relay = `#!/usr/bin/env node
 import { appendFileSync } from "node:fs"
 import { createInterface } from "node:readline"
+if (process.argv[2] === "--version") {
+  process.stdout.write("gentle-ai 2.4.0\n")
+  process.exit(0)
+}
 const materializationHeader = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION "
 let start
 const lines = createInterface({ input: process.stdin })
@@ -490,7 +746,7 @@ lines.on("line", (line) => {
   process.stdout.write(JSON.stringify({ schema: "gentle-ai.provider-transport/v1", operation: "result", output }) + "\n")
 })
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"current.mts": string(current), "legacy.mts": legacy}, harness, relay)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"current.mts": string(current), "legacy.mts": legacy}, harness, relay)
 	if string(output) != "{\"ok\":true}\n" {
 		t.Fatalf("mixed transport plugin harness output = %q", output)
 	}
@@ -508,7 +764,23 @@ lines.on("line", (line) => {
 	}
 }
 
-func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, harness, relay string) (string, string) {
+// overridePATH replaces any PATH entries in parent with pathValue and appends
+// the harness log pointers. The harness needs to override PATH, not append
+// to it, because getenv(3) returns the first matching entry — appending
+// leaves the parent's PATH first and the controlled pathValue shadowed.
+func overridePATH(parent []string, pathValue, logPath, probePath string) []string {
+	env := make([]string, 0, len(parent)+3)
+	for _, entry := range parent {
+		if strings.HasPrefix(entry, "PATH=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env, "PATH="+pathValue, "GENTLE_AI_RELAY_LOG="+logPath, "GENTLE_AI_PROBE_LOG="+probePath)
+	return env
+}
+
+func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, harness, relay string, extraPath ...string) (string, string, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the relay fixture uses a POSIX shell")
@@ -530,24 +802,42 @@ func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, 
 	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(harness), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte(relay), 0o700); err != nil {
-		t.Fatal(err)
+	if relay != "" {
+		if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte(relay), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	logPath := filepath.Join(root, "relay.log")
+	probePath := filepath.Join(root, "probe.log")
 	command := exec.Command(node, "harness.mts")
 	command.Dir = root
-	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "GENTLE_AI_RELAY_LOG="+logPath)
+	pathValue := bin
+	for _, entry := range extraPath {
+		pathValue = entry + string(os.PathListSeparator) + pathValue
+	}
+	if relay != "" {
+		pathValue = pathValue + string(os.PathListSeparator) + os.Getenv("PATH")
+	}
+	command.Env = overridePATH(os.Environ(), pathValue, logPath, probePath)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("transport plugin harness failed: %v\n%s", err, output)
 	}
 	log, err := os.ReadFile(logPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// A harness that never spawns a relay leaves no frame log behind.
-			return string(output), ""
-		}
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	return string(output), string(log)
+	probe, err := os.ReadFile(probePath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	relayLog := ""
+	if log != nil {
+		relayLog = string(log)
+	}
+	probeLog := ""
+	if probe != nil {
+		probeLog = string(probe)
+	}
+	return string(output), relayLog, probeLog
 }

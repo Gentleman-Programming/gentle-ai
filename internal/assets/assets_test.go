@@ -642,7 +642,12 @@ func TestOpenCodeReviewTransportPluginContract(t *testing.T) {
 		// hook replaces child output with the typed refusal, so a host runtime
 		// that swallows hook errors still cannot deliver an unbound child's
 		// prose as a reviewer completion.
-		`opencode_review_transport_relay_refused`, `refused.set(key, reason)`, `output.args.prompt = relayRefusedPrompt(reason)`, `output.output = relayRefusedOutput(refusal)`} {
+		`opencode_review_transport_relay_refused`, `refused.set(key, reason)`, `output.args.prompt = relayRefusedPrompt(reason)`, `output.output = relayRefusedOutput(refusal)`,
+		// Issue #3049 binary handshake: the plugin probes PATH for gentle-ai
+		// before spawning the relay child and refuses with two typed codes
+		// that route through the same refused-prompt / refused-output
+		// machinery so a refused handshake still fails the Task loudly.
+		`opencode_review_transport_binary_skew`, `opencode_review_transport_binary_unavailable`, `MIN_GENTLE_AI_VERSION`} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("transport plugin missing %q", want)
 		}

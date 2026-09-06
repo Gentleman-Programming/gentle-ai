@@ -1,5 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
+import { statSync } from "node:fs"
+import { delimiter, join } from "node:path"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability", "review-refuter", "review-validator"])
 // OpenCode constructs the child session and emits session.created before it
@@ -93,6 +95,21 @@ function taskKey(sessionID: string, callID: string, subagentType: string): strin
 // unbound child's prose can never masquerade as a captured reviewer result.
 const RELAY_REFUSED_CODE = "opencode_review_transport_relay_refused"
 
+// Binary handshake (issue #3049): a stale PATH `gentle-ai` can answer the
+// relay spawn for a newer binary's authority without ever knowing the
+// provider-transport/v1 capability. Probe `gentle-ai --version` before the
+// relay spawn, refuse on skew or ENOENT, and cache by resolved path + mtime
+// so a mid-session upgrade or fresh session both re-probe. The two typed
+// codes route through the same refused-prompt / refused-output machinery so
+// a refused handshake still fails the Task loudly.
+const BINARY_SKEW_CODE = "opencode_review_transport_binary_skew"
+const BINARY_UNAVAILABLE_CODE = "opencode_review_transport_binary_unavailable"
+
+// Version that shipped the `gentle-ai.provider-transport/v1` capability
+// baked into this plugin. A PATH binary reporting a strictly older semver
+// is refused with BINARY_SKEW_CODE before the relay spawn.
+const MIN_GENTLE_AI_VERSION = "2.4.0"
+
 function relayRefusedReason(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
@@ -108,6 +125,138 @@ function relayRefusedPrompt(reason: string): string {
 
 function relayRefusedOutput(reason: string): string {
   return `${RELAY_REFUSED_CODE}: ${reason}`
+}
+
+// Resolve the PATH entry that `spawn("gentle-ai", ...)` would pick. Walking
+// PATH ourselves is the only way to get a stable cache key for the
+// mtime-based invalidation the spec requires. `statSync` follows symlinks
+// so a swap of the symlink target surfaces as an mtime drift on the same
+// path.
+function resolveGentleAiPath(): { path: string; mtime: number } | null {
+  const isWindows = process.platform === "win32"
+  const extensions = isWindows ? [".exe", ".cmd", ".bat", ""] : [""]
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir === "") continue
+    for (const ext of extensions) {
+      const candidate = join(dir, `gentle-ai${ext}`)
+      try {
+        const stat = statSync(candidate)
+        if (stat.isFile()) return { path: candidate, mtime: stat.mtimeMs }
+      } catch {
+        continue
+      }
+    }
+  }
+  return null
+}
+
+const RELAY_PROBE_CACHE_KEY = "__gentleAiOpenCodeReviewTransportProbeCache" as const
+type ProbeCacheEntry = { mtime: number; version: string }
+type ProbeResult = { path: string; mtime: number; version: string }
+
+function relayProbeCache(): Map<string, ProbeCacheEntry> {
+  const runtime = globalThis as typeof globalThis & { [RELAY_PROBE_CACHE_KEY]?: Map<string, ProbeCacheEntry> }
+  if (runtime[RELAY_PROBE_CACHE_KEY] === undefined) runtime[RELAY_PROBE_CACHE_KEY] = new Map<string, ProbeCacheEntry>()
+  return runtime[RELAY_PROBE_CACHE_KEY]
+}
+
+function clearRelayProbeCache(): void {
+  relayProbeCache().clear()
+}
+
+// Parse `gentle-ai <semver>\n` from `--version` stdout. Anything else is
+// treated as a probe failure so a binary that does not implement the
+// version command cannot be mistaken for a healthy handshake.
+function parseGentleAiVersion(stdout: string): string | undefined {
+  const match = /^gentle-ai\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s*$/m.exec(stdout)
+  return match?.[1]
+}
+
+// Compare two dot-separated semvers segment by segment: numeric segments
+// as integers, non-numeric segments lexicographically. Intentionally
+// narrower than full semver ordering because the contract is "PATH version
+// >= the version that shipped provider-transport/v1"; build-metadata and
+// pre-release precedence edge cases are out of scope for the refusal.
+function compareSemver(pathVersion: string, minVersion: string): number {
+  const parts = (version: string) => version.split(/[.-]/).map((segment) => /^\d+$/.test(segment) ? Number(segment) : segment)
+  const [left, right] = [parts(pathVersion), parts(minVersion)]
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index++) {
+    const a = left[index] ?? 0
+    const b = right[index] ?? 0
+    if (typeof a === "number" && typeof b === "number") {
+      if (a !== b) return a < b ? -1 : 1
+      continue
+    }
+    const sa = String(a)
+    const sb = String(b)
+    if (sa !== sb) return sa < sb ? -1 : 1
+  }
+  return 0
+}
+
+function runGentleAiVersion(resolved: string): Promise<{ code: number | null; stdout: string } | null> {
+  return new Promise((settle) => {
+    const child = spawn(resolved, ["--version"], { stdio: ["ignore", "pipe", "pipe"] })
+    let stdout = ""
+    let done = false
+    const finish = (value: { code: number | null; stdout: string } | null) => {
+      if (done) return
+      done = true
+      settle(value)
+    }
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8") })
+    child.on("error", () => finish(null))
+    child.on("close", (code) => finish({ code, stdout }))
+  })
+}
+
+async function probeGentleAiBinary(): Promise<ProbeResult | null> {
+  const resolved = resolveGentleAiPath()
+  if (resolved === null) return null
+  const cache = relayProbeCache()
+  const cached = cache.get(resolved.path)
+  if (cached !== undefined && cached.mtime === resolved.mtime) {
+    return { path: resolved.path, mtime: cached.mtime, version: cached.version }
+  }
+  const probe = await runGentleAiVersion(resolved.path)
+  if (probe === null || probe.code !== 0) return null
+  const version = parseGentleAiVersion(probe.stdout)
+  if (version === undefined) return null
+  // Re-stat the resolved path: between resolveGentleAiPath and the spawn
+  // closing, an upgrade could have swapped the file under us, and the
+  // cached mtime must match the binary we actually probed.
+  let mtime = resolved.mtime
+  try {
+    mtime = statSync(resolved.path).mtimeMs
+  } catch {
+    return null
+  }
+  cache.set(resolved.path, { mtime, version })
+  return { path: resolved.path, mtime, version }
+}
+
+function binarySkewReason(resolvedPath: string, pathVersion: string): string {
+  return (
+    `${BINARY_SKEW_CODE}: PATH resolves gentle-ai to ${resolvedPath} version ${pathVersion}, ` +
+    `which is older than the minimum ${MIN_GENTLE_AI_VERSION} this plugin requires. ` +
+    `Inspect the path with: which -a gentle-ai`
+  )
+}
+
+function binaryUnavailableReason(): string {
+  return (
+    `${BINARY_UNAVAILABLE_CODE}: gentle-ai --version could not be spawned (ENOENT or spawn error); ` +
+    `the relay child cannot start. See issue #2971 for the install-side fix.`
+  )
+}
+
+async function runBinaryHandshake(): Promise<void> {
+  const result = await probeGentleAiBinary()
+  if (result === null) throw new Error(binaryUnavailableReason())
+  if (compareSemver(result.version, MIN_GENTLE_AI_VERSION) < 0) {
+    throw new Error(binarySkewReason(result.path, result.version))
+  }
 }
 
 function decodeTransportFrame(line: string): TransportFrame {
@@ -241,6 +390,9 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
       reviewSessions.delete(event.properties.info.id)
       const prefix = `${event.properties.info.id}:`
       clearSession(prefix)
+      // Clear the probe cache so the next relay in a new session re-probes.
+      // Within a session, relays still reuse the cached mtime probe.
+      clearRelayProbeCache()
     },
     "experimental.chat.system.transform": async (input, output) => {
       if (typeof input.sessionID !== "string" || !reviewSessions.has(input.sessionID)) return
@@ -261,12 +413,16 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
         if (existing.owner !== owner) deferred.set(key, existing)
         return
       }
-      const relay = startRelay(cwd(), output.args.prompt)
-      relays.set(key, { owner, relay, completing: false })
       try {
+        await runBinaryHandshake()
+        const relay = startRelay(cwd(), output.args.prompt)
+        relays.set(key, { owner, relay, completing: false })
         output.args.prompt = (await relay.prompt).prompt
       } catch (cause) {
-        clearOwned(key)
+        const registration = relays.get(key)
+        if (registration !== undefined && registration.owner === owner) {
+          clearOwned(key)
+        }
         const reason = relayRefusedReason(cause)
         refused.set(key, reason)
         output.args.prompt = relayRefusedPrompt(reason)
