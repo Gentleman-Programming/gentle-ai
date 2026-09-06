@@ -120,7 +120,7 @@ The orchestrator must stop acting as a monolithic executor when complexity appea
 - **PR rule**: review can provide fresh evidence for a commit, push, or PR, but it never authorizes delivery. Receipt-driven development is opt-in with `gentle-ai review mode enable --scope global`; whether it is on or off, ordinary repository policy decides delivery.
 - **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
 - **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
-- **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
+- **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness for unreviewed or changed candidates, and incidents when the agent platform supports it; an unchanged candidate that already reached terminal approval is never reviewed again solely because delivery preparation begins.
 
 ---
 
