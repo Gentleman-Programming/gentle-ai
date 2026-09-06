@@ -1180,6 +1180,159 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 }
 
+// TestSnapshotBuilderExactRevisionRejectsActiveLocalGraft reproduces #1719:
+// a repository-local .git/info/grafts entry lets the same full commit ID
+// resolve to a different parent, base tree, and changed-path set while the
+// candidate tree stays identical. Unlike a replacement object
+// (TestSnapshotBuilderExactRevisionIgnoresReplacementObjects), Git's graft
+// mechanism is not disabled by --no-replace-objects, so exact-revision
+// derivation must detect and refuse it explicitly instead of silently
+// freezing a snapshot over rewritten ancestry.
+func TestSnapshotBuilderExactRevisionRejectsActiveLocalGraft(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	parentCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "second\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "second")
+	targetCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	target := Target{Kind: TargetExactRevision, Revision: targetCommit}
+
+	baseline, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build(baseline, no graft) error = %v", err)
+	}
+
+	// Build an alternate history from the same original parent so the graft
+	// has a real, different tree to substitute.
+	gitSnapshot(t, repo, "checkout", "--detach", parentCommit)
+	writeSnapshotFile(t, repo, "other.txt", "alternate\n")
+	gitSnapshot(t, repo, "add", "--", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "alternate")
+	alternateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", targetCommit)
+
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo, commonDir)
+	}
+	graftDir := filepath.Join(commonDir, "info")
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", graftDir, err)
+	}
+	graftPath := filepath.Join(graftDir, "grafts")
+	graftLine := targetCommit + " " + alternateCommit + "\n"
+	if err := os.WriteFile(graftPath, []byte(graftLine), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", graftPath, err)
+	}
+
+	// Sanity-check the graft actually rewrites what plain Git reports, the
+	// same way the issue's reproduction confirms it before exercising the
+	// product.
+	graftedParents := strings.Fields(gitSnapshot(t, repo, "-c", "advice.graftFileDeprecated=false", "rev-list", "--parents", "-n", "1", targetCommit))
+	if len(graftedParents) != 2 || graftedParents[1] != alternateCommit {
+		t.Fatalf("graft fixture did not rewrite ancestry: rev-list --parents = %v", graftedParents)
+	}
+
+	_, err = (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	var graftErr *LocalGraftActiveError
+	if !errors.As(err, &graftErr) {
+		t.Fatalf("Build() with active graft error = %v, want *LocalGraftActiveError", err)
+	}
+	if !strings.Contains(err.Error(), graftPath) {
+		t.Fatalf("error %q does not name the graft file %q", err.Error(), graftPath)
+	}
+	if !strings.Contains(err.Error(), "rm "+graftPath) {
+		t.Fatalf("error %q does not name a runnable resolution", err.Error())
+	}
+
+	if err := os.Remove(graftPath); err != nil {
+		t.Fatalf("Remove(%s): %v", graftPath, err)
+	}
+	recovered, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build() after removing graft error = %v", err)
+	}
+	if recovered.Identity != baseline.Identity {
+		t.Fatalf("Identity after removing graft = %q, want the ungrafted identity %q", recovered.Identity, baseline.Identity)
+	}
+}
+
+// TestSnapshotBuilderExactRevisionRejectsActiveLocalGraftFromLinkedWorktree
+// proves the graft check resolves the repository's actual COMMON Git
+// directory rather than the per-worktree one: info/grafts lives in the
+// common directory and is shared by every worktree, so a graft written
+// through the main checkout must still be caught when the snapshot is built
+// from a linked worktree.
+func TestSnapshotBuilderExactRevisionRejectsActiveLocalGraftFromLinkedWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	parentCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "second\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "second")
+	targetCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	gitSnapshot(t, repo, "checkout", "--detach", parentCommit)
+	writeSnapshotFile(t, repo, "other.txt", "alternate\n")
+	gitSnapshot(t, repo, "add", "--", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "alternate")
+	alternateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", targetCommit)
+
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo, commonDir)
+	}
+	graftDir := filepath.Join(commonDir, "info")
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", graftDir, err)
+	}
+	graftPath := filepath.Join(graftDir, "grafts")
+	if err := os.WriteFile(graftPath, []byte(targetCommit+" "+alternateCommit+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", graftPath, err)
+	}
+
+	worktree := canonicalTempDir(t)
+	if err := os.RemoveAll(worktree); err != nil {
+		t.Fatalf("RemoveAll(%s): %v", worktree, err)
+	}
+	gitSnapshot(t, repo, "worktree", "add", "--detach", worktree, targetCommit)
+
+	target := Target{Kind: TargetExactRevision, Revision: targetCommit}
+	_, err := (SnapshotBuilder{Repo: worktree}).Build(context.Background(), target)
+	var graftErr *LocalGraftActiveError
+	if !errors.As(err, &graftErr) {
+		t.Fatalf("Build() from linked worktree with active graft error = %v, want *LocalGraftActiveError", err)
+	}
+}
+
+func TestActiveGraftFileContentIgnoresCommentsAndBlankLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "empty", content: "", want: false},
+		{name: "blank lines only", content: "\n\n \n", want: false},
+		{name: "comment only", content: "# no grafts configured\n"},
+		{name: "comment and blank mixed", content: "# note\n\n"},
+		{name: "one entry", content: strings.Repeat("a", 40) + " " + strings.Repeat("b", 40) + "\n", want: true},
+		{name: "entry after comment", content: "# note\n" + strings.Repeat("a", 40) + "\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := activeGraftFileContent([]byte(tt.content)); got != tt.want {
+				t.Fatalf("activeGraftFileContent(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBaseWorkspaceOverlayFreezesFullBoundaryWithoutMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))

@@ -1349,6 +1349,9 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 	if revision == "" || strings.Contains(revision, "...") {
 		return "", "", errors.New("commit-range requires one exact commit or A..B range")
 	}
+	if err := builder.rejectActiveLocalGraft(ctx); err != nil {
+		return "", "", err
+	}
 	if strings.Contains(revision, "..") {
 		parts := strings.Split(revision, "..")
 		if len(parts) != 2 || !exactObjectPattern.MatchString(parts[0]) || !exactObjectPattern.MatchString(parts[1]) {
@@ -1387,6 +1390,65 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 		return "", "", err
 	}
 	return strings.TrimSpace(string(emptyTreeOutput)), candidate, nil
+}
+
+// LocalGraftActiveError marks a repository-local Git graft as the
+// ANTICIPATED condition that made exact-revision derivation refuse -- the
+// same role UntrackedScopeRefusalError plays for an anticipated
+// working-tree shape: an operator's own repository state, not a product
+// defect worth a defect report.
+type LocalGraftActiveError struct{ Cause error }
+
+func (err *LocalGraftActiveError) Error() string { return err.Cause.Error() }
+func (err *LocalGraftActiveError) Unwrap() error { return err.Cause }
+
+// rejectActiveLocalGraft refuses exact-revision derivation while a
+// repository-local Git graft is active (#1719). Git's graft file lets
+// $GIT_COMMON_DIR/info/grafts substitute an arbitrary parent for a commit's
+// true one. `--no-replace-objects` (issue #1093) disables the newer
+// replace-ref mechanism, and stripping GIT_GRAFT_FILE from the child
+// environment (sanitizedGitEnvironmentForRun, also #1093) only blocks an env
+// override -- neither touches the repository's own info/grafts file. Left
+// unchecked, resolveExactRevision's `rev-list --parents` silently returns the
+// grafted parent, so the same full commit ID can freeze a different base
+// tree and changed-path set while the candidate tree stays identical.
+//
+// The common Git directory -- not builder.Repo -- is resolved so a linked
+// worktree is covered too: info/grafts is one of the files Git shares across
+// every worktree of a repository, never one it keeps per-worktree.
+func (builder SnapshotBuilder) rejectActiveLocalGraft(ctx context.Context) error {
+	commonDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	graftPath := filepath.Join(commonDir, "info", "grafts")
+	content, err := os.ReadFile(graftPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read repository-local Git graft file %s: %w", graftPath, err)
+	}
+	if !activeGraftFileContent(content) {
+		return nil
+	}
+	return &LocalGraftActiveError{Cause: fmt.Errorf("repository-local Git graft file %s is active; it can substitute an arbitrary parent for a commit's true one, so an exact-revision snapshot cannot be trusted while it exists -- remove it (`rm %s`) or delete its offending lines before deriving one", graftPath, graftPath)} // refusal:by-design world-action: disabling a repository-local graft is a repository-layout edit outside any command this product runs
+}
+
+// activeGraftFileContent reports whether a graft file's bytes contain at
+// least one effective entry. Git's graft format ignores blank lines and
+// lines starting with '#' (a comment), so an empty or comment-only file --
+// left over from a since-cleared graft, for instance -- has no ancestry
+// effect and must not trip this refusal.
+func activeGraftFileContent(content []byte) bool {
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (builder SnapshotBuilder) resolveTree(ctx context.Context, revision string) (string, error) {
