@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -123,6 +126,23 @@ type PreparedCandidateInspector struct {
 	// otherwise each materialize the entire file (a full delete, a full
 	// insert) instead of the small change git's own diff reports for it.
 	renamePartners map[string]string
+	// inspectionCache memoizes each successful Inspect result by operation,
+	// path index, and side. base_tree/candidate_tree are immutable for the
+	// lifetime of one inspector, so a repeated identical read always returns
+	// byte-identical output. STATUS's lens-context budget probe
+	// (reviewLensContextBudgetProbe, issues #3733/#3871) reuses one inspector
+	// across every selected lens and re-renders the complete candidate --
+	// two discovery reads plus one patch read per changed path -- once per
+	// lens, turning a bounded read-only STATUS into an O(lenses x paths)
+	// subprocess cost that scales with candidate size. Serving a repeated
+	// call from this cache instead of re-invoking Git collapses that back to
+	// O(paths), the cost one full pass over the candidate always required.
+	// Entries are private to the cache: Inspect returns a copy so a caller
+	// that mutates its slice cannot corrupt a later lens's view, and
+	// inspectionMu guards the map because one inspector is shared across
+	// lenses that may run concurrently.
+	inspectionCache map[string][]byte
+	inspectionMu    sync.Mutex
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -307,6 +327,14 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		return nil, errors.New("candidate inspection side is valid only for object content") // refusal:by-design operator-knowledge: reaching this means provider code bypassed the validated native CLI contract
 	}
 
+	cacheKey := operation + "\x00" + strconv.Itoa(pathIndex) + "\x00" + side
+	inspector.inspectionMu.Lock()
+	cached, hit := inspector.inspectionCache[cacheKey]
+	inspector.inspectionMu.Unlock()
+	if hit {
+		return bytes.Clone(cached), nil
+	}
+
 	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + inspector.attributesFile, "-c", "diff.external="}
 	var args []string
 	switch operation {
@@ -356,7 +384,17 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 	default:
 		return nil, fmt.Errorf("unknown candidate inspection operation %q", operation) // refusal:by-design operator-knowledge: the native CLI validates the closed operation enum before calling this boundary
 	}
-	return runGitLimited(ctx, frozen.repositoryRoot, inspector.isolation, nil, MaxFrozenCandidateDiffBytes, args...)
+	payload, err := runGitLimited(ctx, frozen.repositoryRoot, inspector.isolation, nil, MaxFrozenCandidateDiffBytes, args...)
+	if err != nil {
+		return nil, err
+	}
+	inspector.inspectionMu.Lock()
+	if inspector.inspectionCache == nil {
+		inspector.inspectionCache = make(map[string][]byte, len(frozen.ChangedPathManifest))
+	}
+	inspector.inspectionCache[cacheKey] = bytes.Clone(payload)
+	inspector.inspectionMu.Unlock()
+	return payload, nil
 }
 
 func (inspector *PreparedCandidateInspector) Close() error {
