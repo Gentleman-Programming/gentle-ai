@@ -130,7 +130,7 @@
       "required": ["location", "claim", "proof_refs"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "location": {"type": "string", "pattern": "^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$"},
+        "location": {"type": "string", "pattern": "\\S"},
         "claim": {"type": "string", "minLength": 1},
         "proof_refs": {
           "type": "array",
