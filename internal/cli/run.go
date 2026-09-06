@@ -1481,7 +1481,7 @@ func (s componentApplyStep) Run() error {
 				return fmt.Errorf("install beta engram from main: %w", err)
 			}
 			engramCommand = binaryPath
-		} else if installedPath, err := cmdLookPath("engram"); err != nil {
+		} else if installedPath, found := resolveEngramInstalledPath(s.profile); !found {
 			// Engram not on PATH — install it.
 			if s.profile.PackageManager == "brew" {
 				// macOS (or Linux with Homebrew): use brew tap + brew install.
@@ -1489,6 +1489,7 @@ func (s componentApplyStep) Run() error {
 				if err != nil {
 					return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 				}
+				commands = withResolvedBrewCommand(commands)
 				installErr = runCommandSequence(commands)
 			} else if binaryPath, err := engramDownloadFn(s.profile); err != nil {
 				// Linux / Windows: download the pre-built binary from GitHub Releases.
@@ -1917,6 +1918,98 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 		}
 	}
 	return false
+}
+
+// resolveEngramInstalledPath reports whether the engram binary is already
+// available and, if so, the path it was found at. It checks cmdLookPath
+// first, then — mirroring ggaAvailable's well-known-Homebrew-prefix
+// fallback — the standard Homebrew install locations on macOS/Homebrew
+// profiles. This matters because gentle-ai's own process PATH can omit
+// /opt/homebrew/bin (e.g. launched outside a login shell), which made
+// component:engram unconditionally re-run `brew tap` even when brew, the
+// tap, and engram were all genuinely installed, deterministically failing
+// with "brew: executable file not found in $PATH" (issue #4020).
+func resolveEngramInstalledPath(profile system.PlatformProfile) (string, bool) {
+	if p, err := cmdLookPath("engram"); err == nil {
+		return p, true
+	}
+	if profile.OS == "darwin" || profile.PackageManager == "brew" {
+		for _, brewBin := range []string{
+			"/opt/homebrew/bin/engram",
+			"/usr/local/bin/engram",
+		} {
+			if _, err := osStat(brewBin); err == nil {
+				return brewBin, true
+			}
+		}
+	}
+	return "", false
+}
+
+// resolveBrewCommand resolves the brew executable to invoke for install
+// commands, instead of relying on the bare "brew" name resolving through
+// gentle-ai's own (possibly deficient) process PATH. Resolution order:
+// cmdLookPath, then the standard Homebrew install prefixes, then a
+// login-shell PATH lookup (a login shell sources the profile that actually
+// puts brew on PATH, e.g. ~/.zprofile's `eval "$(/opt/homebrew/bin/brew
+// shellenv)"`). Falls back to the bare "brew" name so an actually-missing
+// Homebrew still surfaces the standard, actionable exec error (issue #4020).
+func resolveBrewCommand() string {
+	if p, err := cmdLookPath("brew"); err == nil {
+		return p
+	}
+	for _, brewBin := range []string{
+		"/opt/homebrew/bin/brew",
+		"/usr/local/bin/brew",
+		"/home/linuxbrew/.linuxbrew/bin/brew",
+	} {
+		if _, err := osStat(brewBin); err == nil {
+			return brewBin
+		}
+	}
+	if resolved, err := resolveBrewViaLoginShell(); err == nil && strings.TrimSpace(resolved) != "" {
+		return resolved
+	}
+	return "brew"
+}
+
+// loginShellOutput runs script through shell -lc (a login shell), so profile
+// files that put brew on PATH (~/.zprofile, ~/.bash_profile) are sourced even
+// though gentle-ai's own process never was. Package-level var for testing.
+var loginShellOutput = func(shell, script string) ([]byte, error) {
+	return exec.Command(shell, "-lc", script).Output()
+}
+
+// resolveBrewViaLoginShell asks the user's login shell where brew lives.
+func resolveBrewViaLoginShell() (string, error) {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+	out, err := loginShellOutput(shell, "command -v brew")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// withResolvedBrewCommand rewrites the leading "brew" token in each command
+// to the resolved brew executable (resolveBrewCommand), computed once so
+// every command in the sequence agrees on the same resolution.
+func withResolvedBrewCommand(commands [][]string) [][]string {
+	brewPath := ""
+	rewritten := make([][]string, len(commands))
+	for i, command := range commands {
+		if len(command) > 0 && command[0] == "brew" {
+			if brewPath == "" {
+				brewPath = resolveBrewCommand()
+			}
+			rewritten[i] = append([]string{brewPath}, command[1:]...)
+			continue
+		}
+		rewritten[i] = command
+	}
+	return rewritten
 }
 
 // runCommandSequence runs each command in the sequence one at a time, stopping on first error.

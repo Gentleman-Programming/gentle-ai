@@ -852,6 +852,105 @@ func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeSkipsMCPServersEngramWhenPluginEnabled reproduces issue
+// #4188: gentle-ai sync must not add mcpServers.engram to ~/.claude.json
+// when the Engram plugin is already enabled via
+// ~/.claude/settings.json's enabledPlugins["engram@engram"], because the
+// plugin already exposes the same 18 tools under a different prefix.
+func TestInjectClaudeSkipsMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	if err := os.WriteFile(registryPath, []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject() also bootstraps CLAUDE.md's protocol section on a fresh
+	// tempdir, so overall Changed being true here is expected and not the
+	// behavior under test; only the registry content matters (issue #4188).
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	registry := readJSONFile(t, registryPath)
+	mcpServers, _ := registry["mcpServers"].(map[string]any)
+	if _, exists := mcpServers["engram"]; exists {
+		t.Fatalf("mcpServers.engram must not be added when the Engram plugin is enabled; registry = %#v", registry)
+	}
+	assertNestedString(t, registry, "npx", "mcpServers", "context7", "command")
+}
+
+// TestInjectClaudeRemovesStaleMCPServersEngramWhenPluginEnabled verifies that
+// a previously written gentle-ai-managed mcpServers.engram entry is removed
+// once the plugin becomes enabled, so re-syncing settles on a single
+// registration (issue #4188).
+func TestInjectClaudeRemovesStaleMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	seed := `{"mcpServers":{"context7":{"command":"npx"},"engram":{"command":"/opt/homebrew/bin/engram","args":["mcp","--tools=agent"]}}}`
+	if err := os.WriteFile(registryPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Inject(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false; want the stale duplicate entry removed")
+	}
+
+	registry := readJSONFile(t, registryPath)
+	mcpServers, _ := registry["mcpServers"].(map[string]any)
+	if _, exists := mcpServers["engram"]; exists {
+		t.Fatalf("stale gentle-ai-managed mcpServers.engram must be removed once the plugin is enabled; registry = %#v", registry)
+	}
+	assertNestedString(t, registry, "npx", "mcpServers", "context7", "command")
+}
+
+// TestInjectClaudePreservesUserAuthoredMCPServersEngramWhenPluginEnabled
+// verifies that a customized (non-gentle-ai-shaped) mcpServers.engram entry
+// is never removed, even when the plugin is enabled — issue #4188 requires
+// removing only a stale duplicate gentle-ai itself wrote.
+func TestInjectClaudePreservesUserAuthoredMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	seed := `{"mcpServers":{"engram":{"command":"/custom/path/engram","args":["mcp","--tools=agent"],"env":{"FOO":"bar"}}}}`
+	if err := os.WriteFile(registryPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject() also bootstraps CLAUDE.md's protocol section on a fresh
+	// tempdir, so overall Changed being true here is expected and not the
+	// behavior under test; only the registry content matters (issue #4188).
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	registry := readJSONFile(t, registryPath)
+	assertNestedString(t, registry, "/custom/path/engram", "mcpServers", "engram", "command")
+	assertNestedString(t, registry, "bar", "mcpServers", "engram", "env", "FOO")
+}
+
+func writeClaudeEngramPluginEnabled(t *testing.T, home string) {
+	t.Helper()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"enabledPlugins":{"engram@engram":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
 	for _, symlinkParent := range []bool{true, false} {
 		name := "non-empty real parent"

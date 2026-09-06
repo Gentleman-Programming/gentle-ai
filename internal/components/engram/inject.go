@@ -568,6 +568,36 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
+
+	// Issue #4188: when the Claude Code Engram plugin is already enabled
+	// (~/.claude/settings.json's enabledPlugins["engram@engram"]), it
+	// registers the same 18 tools under the mcp__plugin_engram_engram__*
+	// prefix. Adding a second, direct mcpServers.engram entry in
+	// ~/.claude.json would duplicate the MCP server (mcp__engram__*) and
+	// open a second SQLite writer against the same store. Sync must not add
+	// that entry, and must remove a stale one it previously wrote — but
+	// never a user-authored registration.
+	if claudeEngramPluginEnabled(homeDir) {
+		result := InjectionResult{}
+		removedRegistry, err := removeManagedClaudeUserMCPEngram(homeDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removedRegistry {
+			result.Changed = true
+			result.Files = append(result.Files, claude.UserConfigPath(homeDir))
+		}
+		removedLegacy, err := RemoveManagedLegacyClaudeConfig(legacyPath)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removedLegacy {
+			result.Changed = true
+			result.Files = append(result.Files, legacyPath)
+		}
+		return result, nil
+	}
+
 	command := stableEngramCommandForMergedConfig(claude.UserConfigPath(homeDir), model.AgentClaudeCode)
 	legacyManaged := false
 	if raw, err := os.ReadFile(legacyPath); err == nil {
@@ -597,6 +627,94 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	result.Changed = true
 	result.Files = append(result.Files, legacyPath)
 	return result, nil
+}
+
+// claudeEngramPluginEnabled reports whether the Claude Code Engram plugin is
+// enabled via ~/.claude/settings.json's enabledPlugins["engram@engram"]
+// (issue #4188). A missing file, unparsable JSON, missing key, or a
+// false/non-boolean value all report false, so callers keep the existing
+// direct-MCP-registration behavior by default.
+func claudeEngramPluginEnabled(homeDir string) bool {
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return false
+	}
+	enabledPlugins, ok := settings["enabledPlugins"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := enabledPlugins["engram@engram"].(bool)
+	return enabled
+}
+
+// managedClaudeUserMCPEngramEntry reports whether root's mcpServers.engram
+// entry has exactly the shape gentle-ai writes: only "command" and "args",
+// with args exactly ["mcp", "--tools=agent"]. Any additional or different
+// key marks the entry as user-authored, reported as false so it is never
+// touched.
+func managedClaudeUserMCPEngramEntry(root map[string]any) (string, bool) {
+	mcpServers, ok := root["mcpServers"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	server, ok := mcpServers["engram"].(map[string]any)
+	if !ok || len(server) != 2 {
+		return "", false
+	}
+	command, ok := server["command"].(string)
+	if !ok || !isEngramCommand(command) {
+		return "", false
+	}
+	args, ok := server["args"].([]any)
+	if !ok || len(args) != 2 || args[0] != "mcp" || args[1] != "--tools=agent" {
+		return "", false
+	}
+	return command, true
+}
+
+// removeManagedClaudeUserMCPEngram drops a gentle-ai-authored mcpServers.engram
+// entry from ~/.claude.json (issue #4188). Called only once the Claude Code
+// Engram plugin is confirmed enabled, so the direct MCP registration becomes
+// redundant. A missing file, unparsable JSON (the OAuth-bearing registry is
+// never reset on parse failure — same guard as MergeUserConfig), or an entry
+// that does not match the exact managed shape leaves the file untouched.
+func removeManagedClaudeUserMCPEngram(homeDir string) (bool, error) {
+	configPath := claude.UserConfigPath(homeDir)
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %q: %w", configPath, err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return false, nil
+	}
+	if _, ok := managedClaudeUserMCPEngramEntry(root); !ok {
+		return false, nil
+	}
+	mcpServers := root["mcpServers"].(map[string]any)
+	delete(mcpServers, "engram")
+	root["mcpServers"] = mcpServers
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal %q: %w", configPath, err)
+	}
+	encoded = append(encoded, '\n')
+	writeResult, err := filemerge.WriteFileAtomic(configPath, encoded, 0o600)
+	if err != nil {
+		return false, err
+	}
+	if chmodErr := os.Chmod(configPath, 0o600); chmodErr != nil {
+		return false, fmt.Errorf("tighten mode of %q: %w", configPath, chmodErr)
+	}
+	return writeResult.Changed, nil
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
