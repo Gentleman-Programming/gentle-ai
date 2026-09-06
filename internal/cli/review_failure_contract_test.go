@@ -512,6 +512,78 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 	}
 }
 
+// TestNegotiatedGitOwnershipRefusalMapsToTypedTrustCode proves #3497: the
+// generic pre-native Git-failure branch inside newReviewIntegrationFailure
+// must recognize a Git dubious-ownership refusal (the exact failure a
+// UNC-hosted repository produces) and report the existing typed
+// git_repository_untrusted code and its carry-outable action, instead of
+// collapsing it into the generic git_command_failed classification that
+// reviewGitOwnershipRefusal already exists to distinguish. Before this fix,
+// reviewGitOwnershipRefusal was reachable only from
+// resolveOpaqueReviewRepositoryRoot; every other call path through this
+// generic mapper -- including negotiated review.status -- printed the
+// content-free git_command_failed code for the same refusal.
+func TestNegotiatedGitOwnershipRefusalMapsToTypedTrustCode(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "unc-style-repo")
+	for _, tt := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name: "current git wording",
+			output: fmt.Sprintf(
+				"fatal: detected dubious ownership in repository at '%s'\n"+
+					"To add an exception for this directory, call:\n\n"+
+					"\tgit config --global --add safe.directory %s",
+				repo, repo,
+			),
+			want: reviewGitTrustRefusalCode,
+		},
+		{
+			name: "git 2.35.2 wording",
+			output: fmt.Sprintf(
+				"fatal: unsafe repository ('%s' is owned by someone else)\n"+
+					"To add an exception for this directory, call:\n\n"+
+					"\tgit config --global --add safe.directory %s",
+				repo, repo,
+			),
+			want: reviewGitTrustRefusalCode,
+		},
+		{
+			name:   "unrelated exit-128 failure stays generic",
+			output: "fatal: not a git repository (or any of the parent directories): .git",
+			want:   "git_command_failed",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &reviewtransaction.GitCommandError{
+				Args: []string{"rev-parse", "--show-toplevel"}, ExitCode: gitDieExitCode, Output: tt.output,
+			}
+			failure := newReviewIntegrationFailure("review.status", []string{"--lineage", "git-ownership-mapper"}, err)
+			if failure.Code != tt.want {
+				t.Fatalf("code = %q, want %q (failure = %#v)", failure.Code, tt.want, failure)
+			}
+			if failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted ||
+				failure.AuthorityApplicability != "not_evaluated" || failure.RetrySafe ||
+				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
+				t.Fatalf("git ownership mapper failure = %#v", failure)
+			}
+			if tt.want == reviewGitTrustRefusalCode {
+				if strings.Contains(failure.Message, gitSafeDirectoryHint) {
+					t.Fatalf("failure prints the literal safe.directory remediation, which is a documented non-goal: %q", failure.Message)
+				}
+				if !strings.Contains(failure.Message, "Restart the host process") {
+					t.Fatalf("failure carries no instruction the caller can carry out: %q", failure.Message)
+				}
+				if strings.Contains(failure.Message, repo) {
+					t.Fatalf("failure leaked the repository path: %q", failure.Message)
+				}
+			}
+		})
+	}
+}
+
 // TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted proves 1781: a
 // failure that happens before the authoritative store lock is acquired must
 // classify as not-started, exactly like the pre-mutation Git failure family,
