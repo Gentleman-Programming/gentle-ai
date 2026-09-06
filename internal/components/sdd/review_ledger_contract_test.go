@@ -485,7 +485,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// no-hallucination clause in every runtime orchestrator, so a design that
 	// names files apply will create is no longer failed by the gate. Kilo
 	// renders the OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "b3c375b834db28f97daaf05c19b55f088c470e7ed58b0ba3dd965569ef04c74c"
+	// #3499 projects the canonical three-choice session preflight into the
+	// OpenCode-derived Kilocode prompt, so the combined baseline is rederived.
+	const want = "7c499e23051f637c9befdc22c040e8c541137d8d3aadbea93b2f3580573fb66f"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
