@@ -721,6 +721,22 @@ type Model struct {
 	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
 	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
 
+	// DefaultModelAssignmentsStash holds a copy of the default (non-profile)
+	// Selection.ModelAssignments captured on entering the profile flow
+	// (ScreenProfiles/ScreenProfileCreate) from any other screen, and restored
+	// when the flow returns to a non-profile, non-picker screen. See setScreen.
+	DefaultModelAssignmentsStash map[string]model.ModelAssignment
+
+	// ProfileFlowActive is true from the moment a profile edit is entered
+	// (ScreenProfiles/ScreenProfileCreate reached from outside the flow) until
+	// it returns to a screen that is neither a profile screen nor the shared
+	// model picker. It defines the profile flow by origin rather than by a
+	// fixed screen set, so a mid-edit detour into ScreenModelPicker (or any
+	// other screen a profile edit may open to display/edit its assignments)
+	// keeps carrying the profile's live assignments instead of having them
+	// silently swapped for the stashed default. See setScreen.
+	ProfileFlowActive bool
+
 	// UninstallMode holds the selected uninstall mode (partial, full, full-remove).
 	UninstallMode model.UninstallMode
 
@@ -3960,7 +3976,61 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	return m
 }
 
+// copyModelAssignments returns a shallow copy of a model assignment map so
+// stashing/restoring it (see setScreen) can never alias the caller's live
+// map — a nil source returns nil, preserving the "no assignments yet"
+// nil-guard semantics used by ScreenModelConfig's pre-population check.
+func copyModelAssignments(src map[string]model.ModelAssignment) map[string]model.ModelAssignment {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]model.ModelAssignment, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// profileFlowScreen reports whether screen is one of the two dedicated
+// profile screens (the list, and create/edit).
+func profileFlowScreen(screen Screen) bool {
+	return screen == ScreenProfiles || screen == ScreenProfileCreate
+}
+
 func (m *Model) setScreen(next Screen) {
+	// Isolate the default OpenCode model config from custom SDD profile model
+	// assignments (issue #950). Editing a profile loads its own phase
+	// assignments (plus its orchestrator model) into m.Selection.ModelAssignments
+	// so the shared model picker can display and edit them — keyed by the same
+	// "gentle-orchestrator" constant the default config screen uses for its own
+	// base row.
+	//
+	// The profile flow is defined by origin (ProfileFlowActive), not by a fixed
+	// screen set: entering ScreenProfiles/ScreenProfileCreate from outside the
+	// flow stashes a copy of the caller's current (default) assignments and
+	// marks the flow active. While active, a detour into ScreenModelPicker (or
+	// any other screen a profile edit may open to display/edit its own
+	// assignments) keeps carrying the profile's live data — it does NOT get
+	// swapped for the stash, because ScreenModelPicker while ProfileFlowActive
+	// is still "inside" the flow. Only when the flow returns to a screen that
+	// is neither a profile screen nor the picker does it end: the stash (a
+	// copy, never the profile's data) is restored and the flag clears.
+	//
+	// Outside the profile flow (ProfileFlowActive false and next isn't a
+	// profile screen), ScreenModelPicker is reached and left exactly like any
+	// other screen — the default config's own edits are never touched here.
+	enteringProfileFlow := !m.ProfileFlowActive && profileFlowScreen(next)
+	stillInProfileFlow := m.ProfileFlowActive && (profileFlowScreen(next) || next == ScreenModelPicker)
+	leavingProfileFlow := m.ProfileFlowActive && !stillInProfileFlow
+
+	if enteringProfileFlow {
+		m.DefaultModelAssignmentsStash = copyModelAssignments(m.Selection.ModelAssignments)
+		m.ProfileFlowActive = true
+	} else if leavingProfileFlow {
+		m.Selection.ModelAssignments = copyModelAssignments(m.DefaultModelAssignmentsStash)
+		m.DefaultModelAssignmentsStash = nil
+		m.ProfileFlowActive = false
+	}
 	m.PreviousScreen = m.Screen
 	m.Screen = next
 	m.Cursor = 0
