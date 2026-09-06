@@ -748,8 +748,19 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// leaving the caller to guess it from prose. Deliberate, not drift.
 		// The ceilings move with it (16_649 -> 16_756 / 30_846 -> 30_953) to
 		// restore the same small headroom each row already had.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_753, maxCharacters: 16_756},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_098, maxCharacters: 30_953},
+		// +322 per case (16_753 -> 17_075 / 29_098 -> 29_420, on top of #3299/#4170) when #4256
+		// extended the reviewer-capture-transport sentence: inspection.status
+		// no longer implies "completed" alone, so the shared contract now
+		// spells out the typed "unavailable"+"reason" alternative and states
+		// that inspection.status/inspection.reason are the only
+		// admission-completeness signal admission reads (free text in
+		// evidence is ignored) -- closing the gap the free-text evidence scan
+		// used to fill. Deliberate, not drift. The standard ceiling moves
+		// with it (16_756 -> 17_078) to restore the same small headroom;
+		// full-4R already had enough headroom (29_420 < 30_953) and is
+		// unchanged.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 17_075, maxCharacters: 17_078},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_420, maxCharacters: 30_953},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

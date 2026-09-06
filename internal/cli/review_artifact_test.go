@@ -718,6 +718,114 @@ func admittedReviewerResultForTest(t *testing.T, repo string, record reviewtrans
 	}
 }
 
+// TestReviewCaptureResultUnavailableInspectionStatusIsRefusedIncomplete is
+// issue #4256's typed replacement for the removed free-text evidence scan.
+// The published reviewer-result schema (reviewerprovider.LensResultSchema)
+// pins inspection.status to "completed" or the new "unavailable" enum value,
+// and admission (AdmitArtifact) must refuse "unavailable" as incomplete
+// through the real non-preflight capture path -- never by scanning evidence
+// prose, which the sibling test below proves is now ignored.
+func TestReviewCaptureResultUnavailableInspectionStatusIsRefusedIncomplete(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	result.Inspection = reviewtransaction.ArtifactInspection{
+		Status: "unavailable", Paths: []string{},
+		Reason: "the immutable inspection command timed out before any path could be read",
+	}
+	result.Evidence = []string{"inspection unavailable; see inspection.reason"}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(t.TempDir(), "unavailable.json")
+	if err := os.WriteFile(input, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", input,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("reviewer result declaring inspection.status unavailable was admitted")
+	}
+	if !strings.Contains(err.Error(), "reviewer artifact admission incomplete") ||
+		!strings.Contains(err.Error(), "inspection unavailable") ||
+		!strings.Contains(err.Error(), "the immutable inspection command timed out") ||
+		!strings.Contains(err.Error(), "gentle-ai review capture-result") {
+		t.Fatalf("unavailable-inspection rejection = %v", err)
+	}
+}
+
+// TestReviewCaptureResultCompletedStatusWithAlarmingEvidenceProseIsAdmitted is
+// issue #4256's other half: a reviewer result whose evidence merely contains
+// a bare alarm-sounding word ("unavailable") outside the narrow
+// read/access-failure phrase family, but whose typed inspection.status is
+// "completed", must be admitted through the real non-preflight capture path
+// -- admission reads the typed status primarily, never a bare word in
+// evidence text. The sibling test below proves the narrow backstop still
+// refuses evidence squarely inside that phrase family
+// (R4-false-completion-backstop-removed).
+func TestReviewCaptureResultCompletedStatusWithAlarmingEvidenceProseIsAdmitted(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	payload := admittedReviewerPayloadForTest(t, repo, record, lens, 0,
+		"the fixture was unavailable in the previous release; nothing else changed, "+
+			"and this review inspected the complete frozen candidate scope")
+	input := filepath.Join(t.TempDir(), "alarming.json")
+	if err := os.WriteFile(input, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", input,
+	}, &output); err != nil {
+		t.Fatalf("completed inspection with alarming evidence prose was refused: %v", err)
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("alarming-evidence terminal capture = %#v", terminal)
+	}
+}
+
+// TestReviewCaptureResultCompletedStatusWithReadFailureEvidenceIsRefusedByBackstop
+// is issue #4256's defense-in-depth backstop (finding
+// R4-false-completion-backstop-removed): a reviewer result whose typed
+// inspection.status is "completed" but whose evidence squarely names a
+// read/access failure in the narrow phrase family
+// evidenceReportsUnavailableInspection recognizes must still be refused as
+// incomplete through the real non-preflight capture path, since Status is
+// produced by a non-deterministic model and a reviewer can leave it at
+// "completed" -- the schema's own first example -- by mistake.
+func TestReviewCaptureResultCompletedStatusWithReadFailureEvidenceIsRefusedByBackstop(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	payload := admittedReviewerPayloadForTest(t, repo, record, lens, 0,
+		"inspection blocked: read "+"access "+"denied for the candidate diff")
+	input := filepath.Join(t.TempDir(), "read-failure.json")
+	if err := os.WriteFile(input, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", input,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("completed status with read-failure evidence was admitted")
+	}
+	if !strings.Contains(err.Error(), "reviewer artifact admission incomplete") ||
+		!strings.Contains(err.Error(), "could not be "+"inspected") ||
+		!strings.Contains(err.Error(), "inspection.status: \"unavailable\"") ||
+		!strings.Contains(err.Error(), "gentle-ai review capture-result") {
+		t.Fatalf("read-failure backstop rejection = %v", err)
+	}
+}
+
 func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
 	reviewEnabledHome(t)
 	tests := []struct {

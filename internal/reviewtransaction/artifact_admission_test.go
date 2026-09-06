@@ -94,9 +94,8 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	}{
 		{name: "legacy subject omitted", mutate: func(r *ArtifactAdmissionRequest) { r.EchoedSubjectHash = "" }, decision: ArtifactAdmissionIncomplete},
 		{name: "binding mismatch", mutate: func(r *ArtifactAdmissionRequest) { r.EchoedSubjectHash = "sha256:" + strings.Repeat("9", 64) }, decision: ArtifactAdmissionBindingMismatch},
-		{name: "inspection unavailable", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Findings = []Finding{}
-			r.Result.Evidence = []string{"Inspection blocked: read access denied; no candidate contents were available."}
+		{name: "inspection status unavailable", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Inspection.Status = "unavailable"
 		}, decision: ArtifactAdmissionIncomplete},
 		{name: "partial inspection", mutate: func(r *ArtifactAdmissionRequest) { r.Inspection.Paths = []string{"internal/a.go"} }, decision: ArtifactAdmissionIncomplete},
 		{name: "repository authority missing", mutate: func(r *ArtifactAdmissionRequest) {
@@ -129,6 +128,56 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAdmitArtifactIgnoresFreeTextInspectionClaims is issue #4256: admission
+// must decide completeness primarily from the typed inspection.status field,
+// not by keyword-scanning the reviewer's free-text evidence for a bare word.
+// A rationale that merely contains "unavailable" outside the narrow
+// read/access-failure phrase family evidenceReportsUnavailableInspection
+// recognizes must not flip a completed inspection to incomplete, and a
+// genuinely incomplete typed status must still refuse regardless of what the
+// evidence text says. A narrow defense-in-depth backstop still catches
+// evidence squarely inside that phrase family even when the typed status
+// claims "completed" (finding R4-false-completion-backstop-removed): Status
+// is produced by a non-deterministic model, so a reviewer that could not
+// read the candidate but leaves Status at "completed" while its evidence
+// names a read/access failure must still be caught.
+func TestAdmitArtifactIgnoresFreeTextInspectionClaims(t *testing.T) {
+	t.Run("unavailable wording outside the phrase family with completed status is admitted", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Result.Evidence = []string{
+			"the fixture was unavailable in the previous release; nothing else changed",
+		}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, ArtifactAdmissionCompleted)
+		}
+	})
+
+	t.Run("typed unavailable status is incomplete regardless of evidence wording", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Inspection.Status = "unavailable"
+		request.Result.Evidence = []string{"inspection: internal/a.go:7 and internal/b.go:1"}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+			t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, ArtifactAdmissionIncomplete)
+		}
+	})
+
+	t.Run("read/access-failure evidence with completed status is refused by the backstop", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Result.Evidence = []string{"inspection blocked: read " + "access " + "denied for the candidate diff"}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+			t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, ArtifactAdmissionIncomplete)
+		}
+		if !strings.Contains(admission.Diagnostic, "could not be "+"inspected") ||
+			!strings.Contains(admission.Diagnostic, "inspection.status: \"unavailable\"") ||
+			!strings.Contains(admission.Diagnostic, "gentle-ai review capture-result") {
+			t.Fatalf("backstop diagnostic = %q", admission.Diagnostic)
+		}
+	})
 }
 
 func TestAdmitArtifactCanonicalizesCompleteInspectionCoverage(t *testing.T) {

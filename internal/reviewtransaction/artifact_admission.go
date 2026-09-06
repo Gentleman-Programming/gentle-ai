@@ -28,13 +28,32 @@ const (
 
 type ArtifactInspectionStatus string
 
-const ArtifactInspectionCompleted ArtifactInspectionStatus = "completed"
+const (
+	ArtifactInspectionCompleted ArtifactInspectionStatus = "completed"
+	// ArtifactInspectionUnavailable is issue #4256's typed replacement for the
+	// removed free-text evidence scan: the published reviewer-result schema
+	// (reviewerprovider.LensResultSchema) pins inspection.status to the
+	// constant "completed" alone, and the reviewer prompt
+	// (internal/cli/review_lens_context.go's reviewLensContextInstructionText)
+	// told a reviewer that could not inspect the candidate to say so only in
+	// evidence prose -- which was the one signal the removed scan read. This
+	// value gives that case a typed status instead: a reviewer that could not
+	// inspect the candidate sets inspection.status to "unavailable" with a
+	// non-empty inspection.reason. Admission (below) treats this field as
+	// the primary completeness signal; a narrow evidence-text backstop is
+	// kept as defense in depth for a reviewer that reports an access
+	// failure in prose while leaving the status at "completed".
+	ArtifactInspectionUnavailable ArtifactInspectionStatus = "unavailable"
+)
 
 // ArtifactInspection is the reviewer's structured assertion that every path
-// in the immutable manifest was actually inspected.
+// in the immutable manifest was actually inspected. Reason is required and
+// non-empty only when Status is ArtifactInspectionUnavailable; it is the
+// reviewer's own account of why the candidate could not be inspected.
 type ArtifactInspection struct {
 	Status ArtifactInspectionStatus `json:"status"`
 	Paths  []string                 `json:"paths"`
+	Reason string                   `json:"reason,omitempty"`
 }
 
 // ArtifactAdmissionCausalDowngrade names one severe finding whose self-claimed
@@ -395,6 +414,13 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	for index, entry := range request.FrozenContext.ChangedPathManifest {
 		wantPaths[index] = entry.Path
 	}
+	if request.Inspection.Status == ArtifactInspectionUnavailable {
+		reason := strings.TrimSpace(request.Inspection.Reason)
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return fail(ArtifactAdmissionIncomplete, "reviewer declared inspection unavailable: "+reason+"; "+artifactRecaptureContinuation)
+	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
 		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
@@ -428,8 +454,29 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
 	wantCandidateCausalIDs := make([]string, 0)
 	for _, evidence := range canonical.Evidence {
+		// Issue #4256: whether inspection was completed is decided primarily,
+		// above, by the typed request.Inspection.Status field -- by the time
+		// this loop runs, Status is guaranteed "completed" (unavailable and
+		// every other non-completed value already returned above). Free-text
+		// evidence is ordinarily the reviewer's own citations and rationale,
+		// not a second inspection-completeness signal, so this admission no
+		// longer treats a bare word like "unavailable" as disqualifying:
+		// evidence such as "the fixture was unavailable in the previous
+		// release" is ordinary review prose and must be admitted.
+		//
+		// A narrow defense-in-depth backstop remains (review finding
+		// R4-false-completion-backstop-removed): Status is produced by a
+		// non-deterministic model, so a reviewer that could not read the
+		// candidate but leaves Status at "completed" -- the schema's own
+		// first example -- while its evidence names a read/access failure in
+		// the same narrow phrase family evidenceReportsUnavailableInspection
+		// already recognizes (never a bare "unavailable") must still be
+		// caught here, not admitted as a false completion.
 		if evidenceReportsUnavailableInspection(evidence) {
-			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
+			return fail(ArtifactAdmissionIncomplete,
+				"reviewer evidence reports the candidate could not be inspected even though inspection.status is \"completed\"; "+
+					"declare inspection.status: \"unavailable\" with a non-empty inspection.reason instead of describing the failure only in evidence: "+
+					artifactRecaptureContinuation)
 		}
 		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains, resolveBasename)
 		if lookupErr != nil {
