@@ -147,8 +147,14 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 			}
 		}
 	}
-	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); strings.Contains(frontmatter, "Bash") || strings.Contains(frontmatter, "Write") || strings.Contains(frontmatter, "Edit") {
-		t.Errorf("Claude refuter grants an execution or mutation tool: %s", frontmatter)
+	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); !strings.Contains(frontmatter, "tools: []") {
+		t.Errorf("Claude refuter is not tool-free (must match the tool-free fresh reviewer contract): %s", frontmatter)
+	} else {
+		for _, forbidden := range []string{"Bash", "Write", "Edit", "Read", "Grep", "Glob"} {
+			if strings.Contains(frontmatter, forbidden) {
+				t.Errorf("Claude refuter frontmatter grants live-worktree-reaching tool %q: %s", forbidden, frontmatter)
+			}
+		}
 	}
 	for _, path := range []string{
 		"kiro/agents/review-risk.md", "kiro/agents/review-readability.md",
