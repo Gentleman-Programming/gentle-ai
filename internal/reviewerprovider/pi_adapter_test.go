@@ -141,9 +141,6 @@ func TestPiAdapterReturnsNoBytesWhenUnavailable(t *testing.T) {
 }
 
 func TestPiAdapterUsesStdinLockedDownArgumentsAndReturnsUntouchedRawOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	promptPath := filepath.Join(t.TempDir(), "prompt")
 	var commandArguments []string
 	var command *exec.Cmd
@@ -179,9 +176,6 @@ func TestPiAdapterUsesStdinLockedDownArgumentsAndReturnsUntouchedRawOutput(t *te
 }
 
 func TestPiAdapterFailsClosedOnProcessFailureAndEmptyOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	for name, want := range map[string]string{"fail": "pi reviewer transport failed", "empty": "produced no final message"} {
 		adapter := &PiAdapter{
 			LookPath: func(string) (string, error) { return "pi", nil },
@@ -246,9 +240,6 @@ func piAdapterHelperOption(prefix string) string {
 // Issue #3289: a pi child that prints its reason to stdout and exits non-zero
 // must surface that reason instead of an empty tail after the exit status.
 func TestPiAdapterFailureNamesStdoutReasonWhenStderrIsEmpty(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	adapter := &PiAdapter{
 		LookPath: func(string) (string, error) { return "pi", nil },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
