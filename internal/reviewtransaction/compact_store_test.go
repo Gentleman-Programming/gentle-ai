@@ -1,9 +1,12 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -231,6 +234,140 @@ func newCompactTestStateWithIntended(t *testing.T, repo, lineage string, intende
 		t.Fatal(err)
 	}
 	return state
+}
+
+// TestReplaceContextGuardedCommitsAndReportsUnwritableTraceOutcome is issue
+// #1854, reworked to the issue's own accepted scope: the transition
+// genuinely succeeds, so it must commit exactly as it would without a
+// requested trace. A trace that cannot be persisted is represented as a
+// typed, committed-but-degraded outcome -- never a rolled-back commit and
+// never a stderr-only warning. The reproduction matches the issue exactly:
+// an existing directory supplied as the trace target, which can never be
+// opened as a file.
+func TestReplaceContextGuardedCommitsAndReportsUnwritableTraceOutcome(t *testing.T) {
+	const lineage = "compact-trace-unwritable-commits-and-reports"
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, lineage)
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.TracePath = t.TempDir() // an existing directory: never openable as a file
+	var outcome CompactTraceOutcome
+	store.TraceOutcome = &outcome
+
+	var warned []string
+	originalWarn := compactTraceWarn
+	compactTraceWarn = func(operation, path string, err error) { warned = append(warned, operation) }
+	t.Cleanup(func() { compactTraceWarn = originalWarn })
+
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("Replace() with an unwritable requested trace: %v", err)
+	}
+	if _, statErr := os.Stat(store.StatePath()); statErr != nil {
+		t.Fatalf("authority did not commit despite the trace failure: stat(review-state.json) = %v", statErr)
+	}
+	if outcome.Persisted || outcome.ErrorClass == "" || outcome.Revision != revision || outcome.Operation != "review/start" {
+		t.Fatalf("trace outcome = %#v, want persisted=false, a non-empty error class, and the committed revision %q", outcome, revision)
+	}
+	if outcome.Identity() == "" {
+		t.Fatal("trace outcome carries no event identity")
+	}
+	// A caller that wires TraceOutcome already has a home for this failure:
+	// the stderr fallback must not also fire, or an operator would see the
+	// same failure reported twice.
+	if len(warned) != 0 {
+		t.Fatalf("a projected trace outcome must suppress the stderr fallback, got warnings = %v", warned)
+	}
+}
+
+// TestReplaceContextGuardedWarnsWhenNoTraceOutcomeIsProjected is the R4
+// finding this test closes: a caller that sets TracePath without also
+// wiring TraceOutcome (no machine result exists to carry the outcome on that
+// call path) must still learn about a trace failure through the stderr
+// fallback, never total silence.
+func TestReplaceContextGuardedWarnsWhenNoTraceOutcomeIsProjected(t *testing.T) {
+	const lineage = "compact-trace-unwritable-warns-without-outcome"
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, lineage)
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.TracePath = t.TempDir() // an existing directory: never openable as a file
+	// store.TraceOutcome is deliberately left nil: no result on this call
+	// path can carry the outcome.
+
+	var warned []string
+	originalWarn := compactTraceWarn
+	compactTraceWarn = func(operation, path string, err error) {
+		if path != store.TracePath || err == nil {
+			t.Errorf("compactTraceWarn(%q, %q, %v)", operation, path, err)
+		}
+		warned = append(warned, operation)
+	}
+	t.Cleanup(func() { compactTraceWarn = originalWarn })
+
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatalf("Replace() with an unwritable requested trace: %v", err)
+	}
+	if _, statErr := os.Stat(store.StatePath()); statErr != nil {
+		t.Fatalf("authority did not commit despite the trace failure: stat(review-state.json) = %v", statErr)
+	}
+	if !reflect.DeepEqual(warned, []string{"review/start"}) {
+		t.Fatalf("stderr fallback warnings = %v, want exactly one for review/start", warned)
+	}
+}
+
+// TestReplaceContextGuardedCommitsAndReportsPersistedTraceOutcome is the
+// positive-path sibling: a writable trace path commits normally and reports
+// persisted=true with the committed revision.
+func TestReplaceContextGuardedCommitsAndReportsPersistedTraceOutcome(t *testing.T) {
+	const lineage = "compact-trace-writable-commits-and-reports"
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, lineage)
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.TracePath = filepath.Join(t.TempDir(), "trace.jsonl")
+	var outcome CompactTraceOutcome
+	store.TraceOutcome = &outcome
+
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("Replace() with a writable requested trace: %v", err)
+	}
+	if !outcome.Persisted || outcome.ErrorClass != "" || outcome.Revision != revision || outcome.Operation != "review/start" {
+		t.Fatalf("trace outcome = %#v, want persisted=true, no error class, and the committed revision %q", outcome, revision)
+	}
+	payload, err := os.ReadFile(store.TracePath)
+	if err != nil {
+		t.Fatalf("requested trace was not written: %v", err)
+	}
+	if !bytes.Contains(payload, []byte(`"review/start"`)) {
+		t.Fatalf("trace payload missing the committed operation: %s", payload)
+	}
+}
+
+// TestReplaceContextGuardedCommitsWhenNoTraceIsRequested pins the "no trace
+// requested preserves current behavior" bound from #1854: an empty
+// TracePath must never attempt a write or affect the commit.
+func TestReplaceContextGuardedCommitsWhenNoTraceIsRequested(t *testing.T) {
+	const lineage = "compact-trace-absent-commits-normally"
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, lineage)
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatalf("Replace() with no requested trace: %v", err)
+	}
+	if _, statErr := os.Stat(store.StatePath()); statErr != nil {
+		t.Fatalf("authority did not commit: stat(review-state.json) = %v", statErr)
+	}
 }
 
 func pendingCompactCorrection(t *testing.T, repo, lineage string) (CompactState, Snapshot) {

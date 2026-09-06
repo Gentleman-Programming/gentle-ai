@@ -55,6 +55,11 @@ type ApprovedCompactAcknowledgement struct {
 	TargetIdentity   string
 	ExpectedRevision string
 	Token            string
+	// TraceOutcome is set only when CommitApprovedCompactAcknowledgement was
+	// asked to record a trace for this exact commit (#1854). It is nil for
+	// every other construction of this type (PendingApprovedCompactAcknowledgement
+	// re-reads an already-committed record and issues no new trace write).
+	TraceOutcome *CompactTraceOutcome
 }
 
 func validCompactAcknowledgementToken(token string) bool {
@@ -105,6 +110,15 @@ func CommitApprovedCompactAcknowledgement(ctx context.Context, store CompactStor
 		return ApprovedCompactAcknowledgement{}, err
 	}
 	next.ApprovedAckToken = token
+	// #1854: TraceOutcome is filled in place by replaceContextGuarded through
+	// this shared pointer, after the CAS transition above has already
+	// committed. store is a local copy (value receiver), so setting this
+	// field here affects only this call's commit.
+	var traceOutcome *CompactTraceOutcome
+	if store.TracePath != "" {
+		traceOutcome = &CompactTraceOutcome{}
+		store.TraceOutcome = traceOutcome
+	}
 	revision, err := store.ReplaceContext(ctx, expectedRevision, operation, next)
 	if err != nil {
 		return ApprovedCompactAcknowledgement{}, err
@@ -113,6 +127,7 @@ func CommitApprovedCompactAcknowledgement(ctx context.Context, store CompactStor
 		LineageID:        next.LineageID,
 		TargetIdentity:   next.CurrentSnapshot.Identity,
 		ExpectedRevision: revision,
+		TraceOutcome:     traceOutcome,
 		Token:            token,
 	}, nil
 }

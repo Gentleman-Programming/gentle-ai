@@ -1099,6 +1099,13 @@ func TestReviewRepairPreflightNamesAWayForwardWhenTheStoreExceedsTheBound(t *tes
 	if preflight.Continuation != reviewRepairTruncatedContinuation {
 		t.Fatalf("truncated preflight continuation = %q, want the named way forward %q", preflight.Continuation, reviewRepairTruncatedContinuation)
 	}
+	// issue #3371: a truncated preflight must say so and how far it got
+	// (cap 256, scanned 257 -- one past the cap, the exact directory-listing
+	// bound), never leave every count at zero as if this 512-lineage store
+	// were healthy.
+	if !preflight.Assessment.Truncated || preflight.Assessment.TruncationCap != 256 || preflight.Assessment.TruncationScanned != 257 {
+		t.Fatalf("oversized-store preflight truncation bound = %#v", preflight.Assessment)
+	}
 	if !strings.Contains(output.String(), "gentle-ai review inspect-authority") {
 		t.Fatalf("truncated preflight named no runnable continuation:\n%s", output.String())
 	}

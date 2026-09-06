@@ -189,6 +189,11 @@ type CompactStore struct {
 	lockPath            string
 	maintenanceLockPath string
 	TracePath           string
+	// TraceOutcome, when non-nil, receives the outcome of a requested trace
+	// write a commit on this store performs (#1854). It is a pointer so a
+	// value-receiver commit method can report back through the caller's own
+	// CompactStore value without changing any exported commit signature.
+	TraceOutcome *CompactTraceOutcome
 }
 
 // CompactAtomicStartRequest holds the state prepared by the compact lifecycle
@@ -196,6 +201,9 @@ type CompactStore struct {
 type CompactAtomicStartRequest struct {
 	State   CompactState
 	Binding CompactAtomicStartBinding
+	// TracePath optionally requests a diagnostic trace entry for this exact
+	// atomic START, mirroring CompactStore.TracePath (#1854).
+	TracePath string
 }
 
 // CompactAtomicStartResult reports whether an exact atomic START created one
@@ -203,6 +211,9 @@ type CompactAtomicStartRequest struct {
 type CompactAtomicStartResult struct {
 	Record   CompactRecord
 	Replayed bool
+	// TraceOutcome is set only when TracePath was requested and this call
+	// actually committed (never on replay, which committed nothing new).
+	TraceOutcome *CompactTraceOutcome
 }
 
 // CompactAtomicStartConflictError reports an immutable field conflict without
@@ -1396,7 +1407,19 @@ func (store CompactStore) CreateOrReplayAtomicStart(ctx context.Context, request
 	if err := writeAtomic(store.StatePath(), recordPayload, 0o644); err != nil {
 		return CompactAtomicStartResult{}, err
 	}
-	return CompactAtomicStartResult{Record: record}, nil
+	result := CompactAtomicStartResult{Record: record}
+	// #1854: authority has already committed above; a requested trace that
+	// fails to persist is reported on the returned result, never a
+	// rolled-back commit. The outcome always has a home here (the function's
+	// own return value), so no stderr fallback is needed on this path.
+	if request.TracePath != "" {
+		outcome, _ := recordCompactTrace(request.TracePath, CompactTraceEntry{
+			Operation: "review/start", Revision: record.Revision,
+			State: state.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		result.TraceOutcome = &outcome
+	}
+	return result, nil
 }
 
 func compactAtomicStartActive(state State) bool {
@@ -1585,11 +1608,22 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
 		return "", err
 	}
+	// #1854: the transition above already committed. A requested trace that
+	// fails to persist is reported through TraceOutcome as a committed
+	// result, never a reason to roll back or refuse an authority mutation
+	// that genuinely succeeded. TraceOutcome is opt-in (a caller sets it
+	// alongside TracePath), so a caller that sets TracePath without it still
+	// gets the stderr fallback below rather than total silence.
 	if store.TracePath != "" {
-		recordCompactTrace(store.TracePath, CompactTraceEntry{
+		outcome, traceErr := recordCompactTrace(store.TracePath, CompactTraceEntry{
 			Operation: operation, PreviousRevision: currentRevision, Revision: record.Revision,
 			State: next.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
+		if store.TraceOutcome != nil {
+			*store.TraceOutcome = outcome
+		} else if traceErr != nil {
+			compactTraceWarn(operation, store.TracePath, traceErr)
+		}
 	}
 	return record.Revision, nil
 }
@@ -2125,47 +2159,130 @@ func deleteRetiredCompactField(fields map[string]json.RawMessage, path []string)
 	return true, nil
 }
 
-// compactTraceWarn reports a lost diagnostic-trace write (issue #1854). A
-// caller that supplies TracePath explicitly asked for that observability; the
-// authority mutation has already committed by the time this runs and must
-// never be rolled back or fail because of it, so this is report-only. It
-// follows the same "WARNING: ..." convention run.go already uses at the CLI
-// boundary for other non-fatal, already-succeeded-but-partially-degraded
-// operations (e.g. "could not add %s to PATH"). It is a package-level var, in
-// keeping with this file's existing test-seam convention (see
-// finalCompactInvalidationHook and similar hooks), so tests can observe the
-// report without capturing real stderr.
+// CompactTraceOutcome reports what happened to one requested, best-effort
+// diagnostic trace entry after its authority mutation already committed
+// (#1854). It is never a reason to fail or roll back the mutation that
+// produced it: Revision and Operation name the exact committed transition, so
+// a caller can represent "committed, trace degraded" as one typed fact
+// instead of a stderr-only warning a machine consumer cannot see.
+type CompactTraceOutcome struct {
+	// Persisted is true once the trace entry is durably appended.
+	Persisted bool
+	// ErrorClass names which phase of the write failed (see the
+	// compactTraceFailure* constants) when Persisted is false; empty when
+	// Persisted is true.
+	ErrorClass string
+	// Revision is the exact authority revision this trace entry describes,
+	// whether or not persistence succeeded.
+	Revision string
+	// Operation is the exact operation this trace entry describes.
+	Operation string
+}
+
+// Identity is a stable, path-free content identity for the exact trace entry
+// this outcome describes (#1854's "event_identity"): a caller who fixes the
+// trace path and wants to confirm they are looking at the same event, rather
+// than a different one, can compare this instead of trusting free-form text.
+func (outcome CompactTraceOutcome) Identity() string {
+	sum := sha256.Sum256([]byte("gentle-ai.compact-trace-entry/v1\n" + outcome.Operation + "\n" + outcome.Revision))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// compactTraceFailure* classifies exactly which phase of a best-effort trace
+// append failed (#1854's "distinguish mkdir/open/write/fsync/close
+// failures"), rather than reducing every failure to one undifferentiated
+// message.
+const (
+	compactTraceFailureMkdir = "mkdir_failed"
+	compactTraceFailureOpen  = "open_failed"
+	compactTraceFailureWrite = "write_failed"
+	compactTraceFailureSync  = "sync_failed"
+	compactTraceFailureClose = "close_failed"
+)
+
+// compactTraceWriteError carries the failed phase alongside the underlying
+// cause, so recordCompactTrace can classify a failure without re-deriving it
+// from an opaque *os.PathError.
+type compactTraceWriteError struct {
+	class string
+	cause error
+}
+
+func (err *compactTraceWriteError) Error() string {
+	return fmt.Sprintf("review trace %s: %v", err.class, err.cause)
+}
+
+func (err *compactTraceWriteError) Unwrap() error { return err.cause }
+
+// compactTraceWarn is the fallback report for a trace write failure on a
+// call path with no projected machine result to carry CompactTraceOutcome
+// (#1854): a native review finding (R4) is exactly this -- TraceOutcome is
+// opt-in per call, and a caller that sets TracePath without also wiring
+// TraceOutcome must still learn about a failure somehow, rather than the
+// mutation succeeding in total silence. Every caller that DOES project a
+// typed result must not also call this, so an operator never sees the same
+// failure reported twice. It follows the same "WARNING: ..." convention
+// run.go already uses at the CLI boundary for other non-fatal,
+// already-succeeded-but-partially-degraded operations (e.g. "could not add
+// %s to PATH"). It is a package-level var, in keeping with this file's
+// existing test-seam convention (see finalCompactInvalidationHook and
+// similar hooks), so tests can observe the report without capturing real
+// stderr.
 var compactTraceWarn = func(operation, path string, err error) {
 	fmt.Fprintf(os.Stderr, "WARNING: review trace for %s was not recorded at %s: %v\n", operation, path, err)
 }
 
-// recordCompactTrace appends a diagnostic trace entry and reports rather than
-// swallows a write failure. The trace is best-effort diagnostics only: it
-// never carries authority, so its failure must never affect an already
-// committed mutation's success/failure outcome.
-func recordCompactTrace(path string, entry CompactTraceEntry) {
-	if err := appendCompactTrace(path, entry); err != nil {
-		compactTraceWarn(entry.Operation, path, err)
+// recordCompactTrace appends a diagnostic trace entry and reports the result
+// as a typed outcome, returning the classifying error alongside it so a
+// caller with no projected result can still warn instead of falling silent
+// (#1854). The trace is best-effort diagnostics only: it never carries
+// authority, and its failure must never affect an already committed
+// mutation's success/failure outcome -- every caller invokes this only after
+// its own commit has already succeeded.
+func recordCompactTrace(path string, entry CompactTraceEntry) (CompactTraceOutcome, error) {
+	outcome := CompactTraceOutcome{Revision: entry.Revision, Operation: entry.Operation}
+	err := appendCompactTrace(path, entry)
+	if err != nil {
+		var writeErr *compactTraceWriteError
+		if errors.As(err, &writeErr) {
+			outcome.ErrorClass = writeErr.class
+		} else {
+			outcome.ErrorClass = "unknown_failed"
+		}
+		return outcome, err
 	}
+	outcome.Persisted = true
+	return outcome, nil
 }
 
+// appendCompactTrace distinguishes mkdir/open/write/fsync/close failures
+// (#1854) and, unlike a bare `defer file.Close()`, surfaces a close-only
+// failure instead of silently discarding it.
 func appendCompactTrace(path string, entry CompactTraceEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return &compactTraceWriteError{class: compactTraceFailureMkdir, cause: err}
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return &compactTraceWriteError{class: compactTraceFailureOpen, cause: err}
 	}
-	defer file.Close()
 	payload, err := json.Marshal(entry)
 	if err != nil {
-		return err
+		_ = file.Close()
+		return &compactTraceWriteError{class: compactTraceFailureWrite, cause: err}
 	}
 	if _, err := file.Write(append(payload, '\n')); err != nil {
-		return err
+		_ = file.Close()
+		return &compactTraceWriteError{class: compactTraceFailureWrite, cause: err}
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return &compactTraceWriteError{class: compactTraceFailureSync, cause: err}
+	}
+	if err := file.Close(); err != nil {
+		return &compactTraceWriteError{class: compactTraceFailureClose, cause: err}
+	}
+	return nil
 }
 
 func (store CompactStore) ExportTransport() (CompactTransport, error) {

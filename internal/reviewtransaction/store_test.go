@@ -61,6 +61,111 @@ func TestWriteAtomicToleratesUnsupportedParentDirectorySync(t *testing.T) {
 	}
 }
 
+// TestMkdirAllSyncSyncsParentOfEveryCreatedDirectory is issue #1721: a newly
+// created Unix authority directory entry must be durable (its parent synced)
+// before any dependent state is published beneath it. This uses the same
+// syncReviewDirectory recording seam as the writeAtomic tests above.
+func TestMkdirAllSyncSyncsParentOfEveryCreatedDirectory(t *testing.T) {
+	originalSync := syncReviewDirectory
+	var synced []string
+	syncReviewDirectory = func(path string) error {
+		synced = append(synced, path)
+		return nil
+	}
+	t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+	root := t.TempDir()
+	target := filepath.Join(root, "v2", "lineage-one", "leaf")
+	if err := mkdirAllSync(target, 0o755); err != nil {
+		t.Fatalf("mkdirAllSync() error = %v", err)
+	}
+	for _, dir := range []string{target, filepath.Dir(target), filepath.Join(root, "v2")} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("expected directory at %s, stat = %v, %v", dir, info, err)
+		}
+	}
+	want := map[string]bool{root: false, filepath.Join(root, "v2"): false, filepath.Join(root, "v2", "lineage-one"): false}
+	for _, path := range synced {
+		if _, tracked := want[path]; tracked {
+			want[path] = true
+		}
+	}
+	for parent, seen := range want {
+		if !seen {
+			t.Fatalf("mkdirAllSync() never synced parent %s of a newly created directory; recorded = %v", parent, synced)
+		}
+	}
+
+	// A second call against the same, now fully-existing chain must not
+	// re-sync anything: nothing new was created.
+	synced = nil
+	if err := mkdirAllSync(target, 0o755); err != nil {
+		t.Fatalf("mkdirAllSync() on existing chain error = %v", err)
+	}
+	if len(synced) != 0 {
+		t.Fatalf("mkdirAllSync() synced already-existing directories: %v", synced)
+	}
+}
+
+// TestMkdirAllSyncRejectsAFileWhereADirectoryIsRequired keeps the TOCTOU-free
+// Mkdir-per-component design from silently accepting a name collision.
+func TestMkdirAllSyncRejectsAFileWhereADirectoryIsRequired(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "not-a-dir")
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mkdirAllSync(filepath.Join(blocked, "child"), 0o755); err == nil {
+		t.Fatal("mkdirAllSync() accepted a file where a directory was required")
+	}
+}
+
+// TestStoreAppendRefusesHeadPublicationWhenEventsDirectorySyncFails is issue
+// #1721: the events/ directory must be durable before HEAD can name an event
+// inside it. Injecting a sync failure scoped to exactly the events/ path
+// proves the ordering: HEAD must never be written past that failure.
+func TestStoreAppendRefusesHeadPublicationWhenEventsDirectorySyncFails(t *testing.T) {
+	// EvalSymlinks: on macOS, t.TempDir() resolves through the /var ->
+	// /private/var symlink, which the store lock's O_NOFOLLOW parent walk
+	// (secure_open_unix.go) refuses to traverse for a root outside a real
+	// gentle-ai/review-transactions layout. Using the resolved path keeps
+	// this test about the events/-before-HEAD ordering, not that unrelated
+	// platform detail.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := Store{Dir: filepath.Join(base, "review-store")}
+	eventsDir := filepath.Join(store.Dir, "events")
+	originalSync := syncReviewDirectory
+	syncReviewDirectory = func(path string) error {
+		if path == eventsDir {
+			return errors.New("simulated events/ sync failure")
+		}
+		return originalSync(path)
+	}
+	t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("", Record{Operation: "review/start", Transaction: *tx}); err == nil ||
+		!strings.Contains(err.Error(), "sync parent directory") {
+		t.Fatalf("Append() error = %v, want an events/ sync failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "HEAD")); !os.IsNotExist(err) {
+		t.Fatalf("HEAD published despite a failed events/ directory sync: stat = %v", err)
+	}
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(events) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("event count = %d, want the event durably published even though HEAD was refused", len(entries))
+	}
+}
+
 func TestStoreIsAppendOnlyAtomicAndRejectsStaleWriters(t *testing.T) {
 	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
