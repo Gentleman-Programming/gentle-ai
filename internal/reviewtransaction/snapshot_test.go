@@ -2015,6 +2015,36 @@ func gitSnapshotSucceeds(repo string, args ...string) bool {
 	return cmd.Run() == nil
 }
 
+func TestCandidateLocationCausalityAnchorsBinaryMarkerToItsOwnLine(t *testing.T) {
+	t.Parallel()
+
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "notes.txt", "one\ntwo\n")
+	writeSnapshotFile(t, repo, "blob.bin", "\x00\x01\x02")
+	gitSnapshot(t, repo, "add", "--", "notes.txt", "blob.bin")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	// The text change quotes git's marker phrase inside an ordinary added line.
+	writeSnapshotFile(t, repo, "notes.txt", "one\nBinary files a/x and b/y differ\ntwo\n")
+	writeSnapshotFile(t, repo, "blob.bin", "\x00\x01\x03")
+	gitSnapshot(t, repo, "add", "--", "notes.txt", "blob.bin")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+
+	supported, degraded, err := builder.CandidateLocationSupportsCausality(t.Context(), snapshot, "notes.txt:2", CausalIntroduced)
+	if err != nil || !supported || degraded {
+		t.Fatalf("quoted marker inside a text hunk: supported=%v degraded=%v err=%v; want verified by hunk", supported, degraded, err)
+	}
+	supported, degraded, err = builder.CandidateLocationSupportsCausality(t.Context(), snapshot, "blob.bin:1", CausalIntroduced)
+	if err != nil || supported || !degraded {
+		t.Fatalf("real binary diff: supported=%v degraded=%v err=%v; want unsupported and degraded", supported, degraded, err)
+	}
+}
+
 func TestStagingCommandTimeoutIsBoundedByFloorAndCeiling(t *testing.T) {
 	t.Parallel()
 

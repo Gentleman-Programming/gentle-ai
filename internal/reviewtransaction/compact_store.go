@@ -1663,7 +1663,7 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			classification := view.Classifications[finding.ID]
 			switch classification.Causality {
 			case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
-				changed, err := builder.CandidateLocationSupportsCausality(ctx, next.InitialSnapshot, finding.Location, classification.Causality)
+				changed, _, err := builder.CandidateLocationSupportsCausality(ctx, next.InitialSnapshot, finding.Location, classification.Causality)
 				if err != nil || !changed {
 					return errors.New("candidate-causal compact finding is not on a repository-derived changed line")
 				}
