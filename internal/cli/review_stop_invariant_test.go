@@ -72,6 +72,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
 		ToolFault:     reviewStopToolFault(false),
 	},
+	"managed_assets_outdated": {
+		Terminal:      false,
+		Justification: "caller-continuable: the stop's own `continuation` field names the exact `gentle-ai sync` command that reconciles the recorded managed-asset digest; re-querying STATUS afterward offers the same candidate's START again — a concrete, flag-driven continuation (#3299, #4170), not a maintainer-only action",
+	},
 	"corrupted_or_unverifiable_authority": {
 		Terminal:      true,
 		Justification: "review repair --preflight already classified this authority unsupported/ambiguous/conflicting/truncated; requires a maintainer to inspect the review authority store directly",

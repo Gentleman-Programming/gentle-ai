@@ -1272,7 +1272,12 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 	}
 	if projection != ProjectionStaged {
 		if len(cachedEntries) > 0 {
-			if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
+			// #3993: this step's result is the exit code alone, so it discards
+			// output instead of bounding it, and its timeout scales with the
+			// tracked-path count `ls-files` just reported instead of the fixed
+			// local budget.
+			trackedPaths := bytes.Count(cachedEntries, []byte{0})
+			if err := runGitDiscardOutput(ctx, builder.Repo, env, nil, stagingCommandTimeout(trackedPaths), "add", "-u", "--", "."); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -1818,6 +1823,35 @@ var gitCommandWaitDelay = time.Second
 var gitCommandContext = exec.CommandContext
 var gitProcessTreeStarter = startGitProcessTree
 
+// StagingCommandTimeoutFloor and StagingCommandTimeoutPerTrackedPath bound
+// the runtime candidate's staging step (`git add -u -- .`, #3993). A fixed
+// LocalGitCommandTimeout starves that step on a repository whose tracked-path
+// count is large enough to make the walk I/O-bound rather than CPU-bound on a
+// slow filesystem (a WSL translation layer, network storage): every path is
+// individually fast, but the full walk is not. The floor keeps every existing
+// repository's effective budget unchanged; the per-path rate only ever adds
+// time, and StagingCommandTimeoutCeiling caps the product so a wedged walk on
+// a very large repository still releases the index lock within a bounded
+// window instead of holding the capture for hours. Exported, like the
+// timeouts above, as test seams.
+var StagingCommandTimeoutFloor = LocalGitCommandTimeout
+var StagingCommandTimeoutPerTrackedPath = 25 * time.Millisecond
+var StagingCommandTimeoutCeiling = 10 * time.Minute
+
+// stagingCommandTimeout returns the staging step's budget for a repository
+// with the given tracked-path count: the floor, or the proportional budget
+// when that is larger, clamped to the ceiling.
+func stagingCommandTimeout(trackedPaths int) time.Duration {
+	budget := StagingCommandTimeoutFloor
+	if proportional := time.Duration(trackedPaths) * StagingCommandTimeoutPerTrackedPath; proportional > budget {
+		budget = proportional
+	}
+	if StagingCommandTimeoutCeiling > 0 && budget > StagingCommandTimeoutCeiling {
+		budget = StagingCommandTimeoutCeiling
+	}
+	return budget
+}
+
 const (
 	defaultGitOutputLimit = 8 << 20
 	// defaultGitInventoryLimit bounds `git ls-files` inventories, whose size
@@ -1856,10 +1890,32 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 	return output, err
 }
 
+// runGitDiscardOutput runs a Git command whose stdout/stderr the caller does
+// not read at all: it never rejects on overflow, so a command that
+// incidentally emits more than the shared capture buffers hold (thousands of
+// tracked paths each triggering a CRLF or embedded-repository warning on
+// `git add -u -- .`, #3993) fails only on its actual exit code, never on
+// buffered-output size nobody downstream inspects. timeout overrides the
+// standard local/remote selection when positive.
+func runGitDiscardOutput(ctx context.Context, repo string, extraEnv []string, stdin []byte, timeout time.Duration, args ...string) error {
+	_, _, err := runGitCapturedRangeWithTimeout(ctx, repo, extraEnv, stdin, 0, defaultGitOutputLimit, false, false, false, timeout, args...)
+	return err
+}
+
 func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, args ...string) ([]byte, int, error) {
+	return runGitCapturedRangeWithTimeout(ctx, repo, extraEnv, stdin, outputOffset, outputLimit, isolateConfig, rejectStderr, rejectOverflow, 0, args...)
+}
+
+// runGitCapturedRangeWithTimeout is runGitCapturedRange with an optional
+// override for the standard local/remote timeout selection (#3993): a
+// positive timeout replaces it, zero keeps the existing selection unchanged
+// for every other caller.
+func runGitCapturedRangeWithTimeout(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, timeoutOverride time.Duration, args ...string) ([]byte, int, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
 	timeout := LocalGitCommandTimeout
-	if remote {
+	if timeoutOverride > 0 {
+		timeout = timeoutOverride
+	} else if remote {
 		timeout = RemoteGitCommandTimeout
 	}
 	commandContext, cancel := context.WithTimeout(ctx, timeout)

@@ -191,6 +191,13 @@ const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
 // (issue #2440). Naming the caller's own runtime keeps that check meaningful:
 // a runtime whose transport is unsupported is then refused, which is the
 // correct outcome for this build.
+//
+// It also names --consent relay (issue #2870): this is the exact invocation a
+// reader is most likely to copy and run verbatim, and reviewStartArguments
+// (the STATUS-supplied transition command, review_next_transition.go) already
+// includes it for every v2 contract. Without it here, a caller that copies
+// this named continuation and runs it without a TTY silently mints a
+// medium/high-risk review lineage with no consent envelope.
 func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAgent string) string {
 	identity := strings.TrimSpace(runtimeAgent)
 	command := fmt.Sprintf("gentle-ai review start --contract %s", ReviewIntegrationContractV2)
@@ -204,6 +211,7 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		command += " --base-ref " + snapshot.BaseTree + " --workspace-overlay"
 	}
+	command += " --consent relay"
 	return command
 }
 
@@ -904,12 +912,34 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				record, loadErr := store.LoadContext(ctx)
 				if loadErr == nil {
 					// Only an approved compact authority that still owns its
-					// acknowledgement can resume its immutable terminal target. Every
-					// other occupied lineage must derive live scope so correction and
-					// recovery detect new untracked artifacts and target changes.
-					if _, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); pending {
+					// acknowledgement can resume its immutable terminal target. A
+					// correction-required authority that already froze a non-empty
+					// intended-untracked SELECTION resumes it too, but only while the
+					// live workspace's eligible untracked population is still exactly
+					// that declared set: the exact bound STATUS continuation
+					// `review.capture-correction-plan` itself returns carries no
+					// untracked-scope flags, so demanding a fresh declaration on that
+					// plain re-entry dead-ended the correction lineage and bound the
+					// resulting collect input to a different (live, declaration-less)
+					// target identity than the one the authority is bound to (issue
+					// #3849). A frozen EXCLUDE declaration (empty selection) is left
+					// alone here -- it is indistinguishable on its own from "nothing
+					// was ever declared", and a brand new untracked artifact appearing
+					// mid-correction must still force a fresh declaration exactly as
+					// before (design intent: "detect new untracked artifacts").
+					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
+					resumeCorrectionUntracked := false
+					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
+						if inventoryErr != nil {
+							return reviewPreflightError(inventoryErr)
+						}
+						resumeCorrectionUntracked = reviewSameUntrackedPaths(inventory, declaredUntracked)
+					}
+					if pendingApproval || resumeCorrectionUntracked {
 						intendedScope = reviewIntendedUntrackedScope{
-							Intended: append([]string{}, record.State.InitialSnapshot.IntendedUntracked...), Declared: true,
+							Intended: append([]string{}, declaredUntracked...), Declared: true,
 						}
 						hydratedIntendedScope = true
 					}
@@ -2029,7 +2059,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// point where the kill switch can stop a start and consent can name the real
 	// reason. Nothing has been persisted yet, so refusing here leaves no
 	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated); err != nil {
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been

@@ -30,10 +30,23 @@
     "next_action": {"$ref": "../../v1/schemas/failure.schema.json#/properties/next_action"},
     "cause_category": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause_category"},
     "cause": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause"},
-    "context": {"$ref": "../../v1/schemas/failure.schema.json#/properties/context"}
+    "context": {"$ref": "../../v1/schemas/failure.schema.json#/properties/context"},
+    "continuation": {"$ref": "#/$defs/managed_assets_continuation"}
   },
   "allOf": [
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
-    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
-  ]
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"},
+    {"if": {"properties": {"code": {"const": "managed_assets_outdated"}}, "required": ["code"]}, "then": {"required": ["continuation"]}, "else": {"not": {"required": ["continuation"]}}}
+  ],
+  "$defs": {
+    "managed_assets_continuation": {
+      "type": "object", "additionalProperties": false, "required": ["operation", "command"],
+      "properties": {
+        "operation": {"const": "sync"},
+        "command": {"type": "string", "minLength": 1, "pattern": "^gentle-ai sync(?: --agent \\S+)?$"},
+        "agent": {"type": "string", "minLength": 1},
+        "stale_assets": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
 }
