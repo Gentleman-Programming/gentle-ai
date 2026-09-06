@@ -661,7 +661,9 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 			for _, wanted := range []string{
 				"Gentle AI",
 				"Read the configured models from `opencode.json`",
-				"Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable",
+				"Use the `question` tool only when it is available and all three groups (Pace, Artifacts, and PR strategy) are exactly representable",
+				"Review policy is fixed at 400 changed lines per PR",
+				"NEVER ask it as a fourth group or selectable budget",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
 				"### Research and Pre-Proposal Gate (MANDATORY)",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",

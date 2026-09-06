@@ -649,6 +649,9 @@ func buildProfileOrchestratorPrompt(profile model.Profile, options ...Orchestrat
 	// Also replace the orchestrator self-reference.
 	base = replacePhaseRef(base, "sdd-orchestrator", "sdd-orchestrator"+suffix)
 	base = appendProfileJDDelegationOverrides(base, profile)
+	if err := validateSDDSessionPreflight(base); err != nil {
+		return "", fmt.Errorf("validate profile session preflight: %w", err)
+	}
 
 	return base, nil
 }

@@ -1020,47 +1020,27 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 	}
 }
 
-func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
-	content := MustRead("opencode/sdd-orchestrator.md")
-
-	for _, required := range []string{
-		"### SDD Session Preflight (HARD GATE)",
-		"Before executing ANY SDD command or natural-language SDD request",
-		"Execution mode",
-		"Artifact store",
-		"Chained PR strategy",
-		"Review budget",
-		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
-		"Use the `question` tool for SDD Session Preflight",
-		"only when it is available in the current interactive runtime and all four groups are exactly representable",
-		"follow the Lossless Blocking Prompts fallback above and STOP",
-		"When the native route is representable, ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `question` tool calls",
-		"The single `question` tool call must contain these four localized groups in this order",
-		"Match the user's current language and active persona",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values",
-		"map the selected human labels to canonical values internally",
-		"¿Quiere ajustar algo o continuamos?",
-		"Artifacts: OpenSpec, Engram, Both",
-		"Review: 400 lines, 800 lines, Other",
-		"### SDD Entry Routing (MANDATORY)",
-		"Never launch `sdd-apply` just because the user asked to implement a feature",
-		"In **Interactive** mode, between phases",
-		"Ask before launching the next phase",
-		"Interactive approval is phase-scoped",
-		"approve only the immediate next phase",
-		"{{GENTLE_AI_RESEARCH_LIFECYCLE}}",
-	} {
-		if !strings.Contains(content, required) {
-			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
+func TestOpenCodeSDDOrchestratorDoesNotOwnSessionPreflight(t *testing.T) {
+	runtime := MustRead("opencode/sdd-orchestrator.md")
+	if strings.Count(runtime, "{{GENTLE_AI_SDD_SECTION:SDD Session Preflight (HARD GATE)}}") != 1 ||
+		strings.Count(runtime, "### SDD Session Preflight (HARD GATE)") != 1 {
+		t.Fatal("OpenCode orchestrator must keep one heading and dispatch one private session-preflight placeholder")
+	}
+	shared := MustRead("skills/_shared/sdd-orchestrator-sections.md")
+	for _, content := range []string{runtime, shared} {
+		for _, forbidden := range []string{
+			"<!-- gentle-ai:sdd-session-preflight -->",
+			"Before every SDD command or natural-language SDD request", "Both -> `hybrid`",
+			"Review: 400 lines, 800 lines, Other", "Both -> `both`",
+		} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("asset still owns private session-preflight content %q", forbidden)
+			}
+		}
+	}
+	for _, required := range []string{"### SDD Entry Routing (MANDATORY)", "### SDD Init Guard (MANDATORY)", "{{GENTLE_AI_RESEARCH_LIFECYCLE}}"} {
+		if !strings.Contains(runtime, required) {
+			t.Fatalf("OpenCode orchestrator missing surrounding contract %q", required)
 		}
 	}
 }
@@ -1091,28 +1071,6 @@ func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
 	workflowIndex := strings.Index(content, "## SDD Workflow")
 	if visibilityIndex < 0 || workflowIndex < 0 || visibilityIndex > workflowIndex {
 		t.Fatal("delegation visibility must appear before the SDD workflow")
-	}
-}
-
-func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValues(t *testing.T) {
-	content := MustRead("opencode/sdd-orchestrator.md")
-	start := strings.Index(content, "User-facing preflight question format:")
-	if start < 0 {
-		t.Fatal("opencode/sdd-orchestrator.md missing preflight question format block")
-	}
-	end := strings.Index(content[start:], "Map answers to canonical values")
-	if end < 0 {
-		t.Fatal("opencode/sdd-orchestrator.md missing end of preflight question format block")
-	}
-	uiBlock := content[start : start+end]
-
-	// `ask-always` used to sit here as a canonical value. It was never in the
-	// consumer's domain, so keeping it would have let this guard vouch for a
-	// retired vocabulary; the canonical delivery strategy is `ask-on-risk`.
-	for _, forbidden := range []string{"A1", "A2", "B1", "C1", "D1", "`interactive`", "`openspec`", "`ask-on-risk`"} {
-		if strings.Contains(uiBlock, forbidden) {
-			t.Fatalf("preflight UI instructions should not expose option codes or canonical values; found %q", forbidden)
-		}
 	}
 }
 

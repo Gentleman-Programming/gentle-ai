@@ -63,8 +63,10 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		name:   "session preflight",
 		marker: "### SDD Session Preflight (HARD GATE)",
 		sentinels: []string{
-			"all four preflight groups in one single `question` tool call",
-			"Do NOT issue four separate `question` tool calls",
+			"Ask Pace, Artifacts, and PR strategy in ONE `question` tool call",
+			"no three separate calls",
+			"Review policy is fixed at 400 changed lines per PR",
+			"NEVER ask it as a fourth group or selectable budget",
 			"Cache the choices for this session",
 		},
 	},

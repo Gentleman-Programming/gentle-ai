@@ -35,6 +35,9 @@ type OrchestratorRenderOptions struct {
 // sharedOrchestratorSection returns the canonical body for one shared section,
 // or the empty string when the shared asset does not define it.
 func sharedOrchestratorSection(name string) string {
+	if name == sddSessionPreflightSection {
+		return sddSessionPreflightBlock()
+	}
 	source := assets.MustRead(sharedOrchestratorSectionsAsset)
 	start := strings.Index(source, "<!-- sdd-orchestrator-section:"+name+":start -->")
 	end := strings.Index(source, "<!-- sdd-orchestrator-section:"+name+":end -->")
@@ -83,7 +86,13 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 	}
 	content = replacePiClosedSingleSelectRoute(content, agent)
 	content = renderBoundedReviewAssetBodyFromContent(agent, path, content)
-	return bindRuntimeAgentIdentity(content, agent)
+	content = bindRuntimeAgentIdentity(content, agent)
+	if agent == model.AgentOpenCode || agent == model.AgentKilocode {
+		if err := validateSDDSessionPreflight(content); err != nil {
+			panic(err.Error())
+		}
+	}
+	return content
 }
 
 const genericFallbackOnlyNativeRoute = "- Native route: This variant has no classified native question UI for this contract; always use the plain chat or terminal fallback below. When the closed domain of a single-select envelope is unrepresentable here, fall through to the Fallback clause below."

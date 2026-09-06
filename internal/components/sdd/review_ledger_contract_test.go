@@ -349,6 +349,28 @@ func TestReviewerBashPromptIsNativeAndWindowsPortable(t *testing.T) {
 	}
 }
 
+func TestOpenCodeSessionPreflightReachesShippedConsumers(t *testing.T) {
+	canonical := sddSessionPreflightBlock()
+	profile, err := buildProfileOrchestratorPrompt(model.Profile{Name: "rapid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, consumer := range []struct{ name, content string }{
+		{"OpenCode default", composeOrchestratorPrompt(model.AgentOpenCode)},
+		{"Kilocode default", composeOrchestratorPrompt(model.AgentKilocode)},
+		{"named profile", profile},
+	} {
+		t.Run(consumer.name, func(t *testing.T) {
+			if got := strings.Count(consumer.content, canonical); got != 1 {
+				t.Fatalf("exact canonical session-preflight count = %d, want 1", got)
+			}
+			if strings.Contains(consumer.content, "{{GENTLE_AI_SDD_SECTION:") {
+				t.Fatal("rendered consumer retained a shared-section placeholder")
+			}
+		})
+	}
+}
+
 func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	home := t.TempDir()
 	if _, err := Inject(home, kilocodeAdapter(), model.SDDModeMulti); err != nil {
@@ -485,7 +507,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// no-hallucination clause in every runtime orchestrator, so a design that
 	// names files apply will create is no longer failed by the gate. Kilo
 	// renders the OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "b3c375b834db28f97daaf05c19b55f088c470e7ed58b0ba3dd965569ef04c74c"
+	// #3499 projects the private marker-bounded preflight authority into Kilo,
+	// including Both -> hybrid and the fixed 400-line review policy.
+	const want = "87ac7dc83e4e28ee4779e31a964d4f6d92263e8d22c5bb15d76f27f19827c4f1"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
