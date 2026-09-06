@@ -120,6 +120,78 @@ func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing
 	validatePublishedReviewSchema(t, schema, output.Bytes())
 }
 
+func TestPublishedLastEventClosureSchemaAcceptsRejectedTargetedValidatorCapture(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{
+			"the exact corrected candidate still fails the original criterion",
+		}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{
+			"the bounded correction introduced no unrelated regression",
+		}},
+		FollowUps: []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: failedPayload})
+
+	var output bytes.Buffer
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+		"--agent", "pi",
+		"--execute=true",
+	}, &output); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v\\n%s", err, output.String())
+	}
+
+	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+
+	var closure map[string]any
+	if err := json.Unmarshal(output.Bytes(), &closure); err != nil {
+		t.Fatal(err)
+	}
+	evidence, ok := closure["targeted_validator_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("rejected targeted-validator closure omitted evidence: %#v", closure)
+	}
+	evidence["unexpected"] = true
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted unknown targeted validator evidence: %#v", closure)
+	}
+	delete(evidence, "unexpected")
+	check, ok := evidence["original_criteria"].(map[string]any)
+	if !ok {
+		t.Fatalf("targeted validator evidence omitted original criteria: %#v", evidence)
+	}
+	check["evidence"] = []any{}
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted empty targeted validator evidence: %#v", closure)
+	}
+	check["evidence"] = []any{"the exact corrected candidate still fails the original criterion"}
+	closure["operation"] = "review/capture-result"
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted targeted validator evidence outside capture validation: %#v", closure)
+	}
+}
+
 func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)

@@ -31,6 +31,15 @@
       "if": {"properties": {"state": {"const": "approved"}}, "required": ["state"]},
       "then": {"required": ["acknowledgement"]},
       "else": {"not": {"required": ["acknowledgement"]}}
+    },
+    {
+      "if": {"required": ["targeted_validator_evidence"]},
+      "then": {
+        "properties": {
+          "operation": {"const": "review/capture-validation"},
+          "state": {"const": "escalated"}
+        }
+      }
     }
   ],
   "properties": {
@@ -45,6 +54,21 @@
     "status_continuation": {"$ref": "transition-execution.schema.json#/$defs/last_event_status_execution"},
     "acknowledgement": {"$ref": "transition-execution.schema.json#/$defs/approved_acknowledgement_execution"},
     "store_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "targeted_validator_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targeted_validation_request_hash", "correction_target_identity", "original_criteria", "correction_regression", "follow_ups"],
+      "properties": {
+        "targeted_validation_request_hash": {"$ref": "#/$defs/sha256"},
+        "correction_target_identity": {"$ref": "#/$defs/sha256"},
+        "original_criteria": {"$ref": "#/$defs/targeted_validator_check_evidence"},
+        "correction_regression": {"$ref": "#/$defs/targeted_validator_check_evidence"},
+        "follow_ups": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/targeted_validator_follow_up"}
+        }
+      }
+    },
     "advisory_findings": {
       "type": "object",
       "additionalProperties": false,
@@ -65,6 +89,55 @@
               "disposition": {"enum": ["informational", "follow_up", "refuted"]}
             }
           }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "targeted_validator_check_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "evidence"],
+      "properties": {
+        "passed": {"type": "boolean"},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "regressions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/targeted_validator_regression"}
+        }
+      }
+    },
+    "targeted_validator_regression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "claim", "proof_refs"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "location": {"type": "string", "minLength": 1},
+        "claim": {"type": "string", "minLength": 1},
+        "proof_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "targeted_validator_follow_up": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation", "proof_refs"],
+      "properties": {
+        "observation": {"type": "string", "minLength": 1},
+        "proof_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
         }
       }
     }

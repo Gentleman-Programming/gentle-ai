@@ -201,8 +201,10 @@ func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing
 func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/gate-result.schema.json":        "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		"schemas/last-event-closure.schema.json": "9059651e39278f6932929392f4dacc3911d65fe3769171e2401b87df55da9030",
+		"schemas/gate-result.schema.json": "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
+		// Issue #4223 publishes the native rejected targeted-validator evidence
+		// carried by terminal last-event closures. Deliberate, not drift.
+		"schemas/last-event-closure.schema.json": "0f3d2dda07aef66a4b1acaf52a6798d83c4ab349ad5497a42c51a9711957c2b9",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
