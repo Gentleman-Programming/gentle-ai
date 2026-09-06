@@ -899,6 +899,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
 		hydratedIntendedScope := false
+		// pendingApprovedTerminalTarget carries the exact frozen target kind
+		// and base ref an approved-pending lineage resumed below, so a
+		// selectorless refresh can rebuild the same committed-range
+		// projection instead of silently defaulting to current-changes
+		// (gentle-pi#569).
+		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
@@ -920,6 +926,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							Intended: append([]string{}, record.State.InitialSnapshot.IntendedUntracked...), Declared: true,
 						}
 						hydratedIntendedScope = true
+						terminal := record.State.CurrentSnapshot
+						pendingApprovedTerminalTarget = &terminal
 					}
 				} else if reviewtransaction.IsCompactAuthorityOperationalFailure(loadErr) {
 					return fmt.Errorf("load explicit review lineage: %w", loadErr)
@@ -941,6 +949,22 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if selectedBaseTree != "" {
 				target.BaseRef = selectedBaseTree
 			}
+		}
+		// Issue gentle-pi#569: a caller-authorized committed-range approval
+		// (base-diff, committed-only) must survive a selectorless STATUS
+		// refresh performed only to reach `review.acknowledge-approved`. The
+		// caller supplied no --base-ref/--committed-only/--workspace-overlay
+		// of its own, so nothing above already claimed this target; without
+		// this, the default current-changes target above projects an empty
+		// diff on the clean approved worktree and the acknowledgement
+		// continuation is never offered. The subsequent status assessment
+		// re-derives the live snapshot from this exact target and compares
+		// its identity against the frozen one, so a worktree that actually
+		// drifted since approval still fails closed instead of being forced
+		// current.
+		if pendingApprovedTerminalTarget != nil && selectedBaseRef == "" && !*workspaceOverlay &&
+			pendingApprovedTerminalTarget.Kind == reviewtransaction.TargetBaseDiff {
+			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, pendingApprovedTerminalTarget.BaseTree
 		}
 		target.IntendedUntracked = intendedScope.Intended
 		var prePR *reviewtransaction.PrePRRequest
