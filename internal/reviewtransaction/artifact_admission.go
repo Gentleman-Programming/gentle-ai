@@ -56,6 +56,65 @@ type ArtifactInspection struct {
 	Reason string                   `json:"reason,omitempty"`
 }
 
+// ValidationInspectionStatus is the targeted validator's typed counterpart to
+// ArtifactInspectionStatus (issue #4266): the validator's own claim about
+// whether it read the frozen candidate trees before producing a check's
+// verdict.
+type ValidationInspectionStatus string
+
+const (
+	// ValidationInspectionCompleted marks a check whose verdict was produced
+	// after the validator actually read the frozen candidate trees.
+	ValidationInspectionCompleted ValidationInspectionStatus = "completed"
+	// ValidationInspectionUnavailable marks a check that produced no verdict
+	// because the validator could not read the frozen candidate trees. Reason
+	// is required whenever Status is this value.
+	ValidationInspectionUnavailable ValidationInspectionStatus = "unavailable"
+)
+
+// ValidationInspection is the targeted validator's structured assertion about
+// whether it inspected the frozen candidate trees before producing a check's
+// verdict, mirroring the reviewer's ArtifactInspection contract added for
+// issue #4256. Unlike the reviewer, a validator has no changed-path manifest
+// to prove complete coverage against, so its only claim is whether inspection
+// happened at all, plus a required Reason when it did not.
+//
+// When present, admission trusts this field exclusively and never scans
+// Evidence (issue #4266). See ValidationCheckInconclusive for the narrow
+// evidence-scan fallback that applies only when Inspection is absent.
+type ValidationInspection struct {
+	Status ValidationInspectionStatus `json:"status"`
+	Reason string                     `json:"reason,omitempty"`
+}
+
+// ValidationCheckInconclusive decides whether a targeted-validator check
+// produced no verdict. A check carrying ValidationInspection is judged by
+// that field alone: "completed" is conclusive, "unavailable" is inconclusive,
+// and any other value is a schema violation -- returned as an error rather
+// than silently treated as completed, so an unrecognized status never fails
+// open. A check that omits Inspection entirely predates the typed field:
+// trusting the absent default unconditionally would admit a legacy validator
+// that still reports in free text that it could not read the frozen trees as
+// a genuine verdict, so this narrow legacy case scans Evidence instead.
+func ValidationCheckInconclusive(inspection *ValidationInspection, evidence []string) (bool, error) {
+	if inspection != nil {
+		switch inspection.Status {
+		case ValidationInspectionCompleted:
+			return false, nil
+		case ValidationInspectionUnavailable:
+			return true, nil
+		default:
+			return false, fmt.Errorf("targeted validator inspection.status %q is invalid; the only admitted values are %q and %q; rerun gentle-ai review capture-validation --execute=true with a corrected result", inspection.Status, ValidationInspectionCompleted, ValidationInspectionUnavailable)
+		}
+	}
+	for _, line := range evidence {
+		if evidenceReportsUnavailableInspection(line) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ArtifactAdmissionCausalDowngrade names one severe finding whose self-claimed
 // candidate-causal disposition (introduced/behavior-activated/worsened) could
 // not be proven by repository-derived changed-line evidence. Admission
@@ -996,20 +1055,6 @@ func artifactReferenceTokens(value string) []artifactReferenceToken {
 	}
 	flush(len(value))
 	return tokens
-}
-
-// InconclusiveValidationEvidence reports whether a scoped-fix validation
-// check's evidence claims the immutable candidate could not be inspected.
-// Such a check carries no verdict in either direction: admitting it as
-// failed would consume the single correction attempt on a non-observation,
-// and admitting it as passed would approve without inspection.
-func InconclusiveValidationEvidence(evidence []string) bool {
-	for _, line := range evidence {
-		if evidenceReportsUnavailableInspection(line) {
-			return true
-		}
-	}
-	return false
 }
 
 func evidenceReportsUnavailableInspection(value string) bool {
