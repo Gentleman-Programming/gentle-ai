@@ -171,7 +171,14 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if contextHandle == "" {
 			return reviewPreflightError(errors.New("review capture-result --agent requires the provider-issued --repository-context")) // refusal:by-design operator-knowledge: provider invocation and host-relay submission must use negotiated opaque context
 		}
-		if _, err := reviewRuntimeWithImmutableTransport(string(providerRuntime)); err != nil {
+		// Eligibility here is decided by reviewCaptureRuntimeWithBoundTransport,
+		// not reviewRuntimeWithImmutableTransport (issue #4256): this call
+		// already carries a bound transaction (--lineage, --target,
+		// --expected-revision, --repository-context, all required above), so
+		// Pi's eligibility derives from that binding and the compiled --agent
+		// capability instead of the host-relay handshake env var that
+		// review start/status negotiation still requires.
+		if _, err := reviewCaptureRuntimeWithBoundTransport(string(providerRuntime)); err != nil {
 			return reviewPreflightError(err)
 		}
 		// Each refusal below names its own condition. They used to share one
@@ -180,20 +187,21 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		// or omitting --materialize for a runtime that has no in-process
 		// reviewer. Both state what the caller passed, what the runtime's
 		// compiled transport is, and the one form that would be accepted.
-		providerTransport := reviewImmutableRuntimeCapability(providerRuntime).Transport
+		providerTransport := reviewCaptureBoundRuntimeCapability(providerRuntime).Transport
+		isHostRelayMaterializeTransport := providerTransport == reviewImmutableTransportPiHostRelay
 		if *materialize {
 			if reviewProviderCaptureRuntime(providerRuntime) {
 				return reviewPreflightError(fmt.Errorf("review capture-result --materialize is unavailable for %q: a compiled runtime materializes internally; run the capture operation without --materialize", providerRuntime)) // refusal:by-design operator-knowledge: compiled subprocess adapters already receive the Go-materialized request in-process
 			}
-			if !reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
+			if !isHostRelayMaterializeTransport {
 				return reviewPreflightError(fmt.Errorf("review capture-result --materialize is unavailable for %q: printing the Go-materialized provider task is the host-relay form, and this runtime's compiled transport is %q; collect its reviewer result through that live host transport instead", providerRuntime, providerTransport)) // refusal:by-design world-action: only the Pi host relay collects a printed provider task
 			}
 		} else if hostRelaySubmission {
-			if !reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
+			if !isHostRelayMaterializeTransport {
 				return reviewPreflightError(fmt.Errorf("review capture-result --agent %q with --input is unavailable: only a compiled host-relay runtime may submit its raw reviewer result with the provider-owned runtime binding; this runtime's compiled transport is %q", providerRuntime, providerTransport)) // refusal:by-design world-action: caller input cannot impersonate an in-process provider runtime
 			}
 		} else if !reviewProviderCaptureRuntime(providerRuntime) {
-			if reviewProviderHostRelayMaterializeRuntime(providerRuntime) {
+			if isHostRelayMaterializeTransport {
 				return reviewPreflightError(fmt.Errorf("review capture-result --agent %q without --materialize has no in-process reviewer to run: its compiled transport is %q, whose host owns the reviewer subprocess; print the provider task with --materialize=true, run it in the host, then submit the raw result with --input and the same binding", providerRuntime, providerTransport)) // refusal:by-design world-action: the host relay owns the reviewer subprocess this process cannot launch
 			}
 			return reviewPreflightError(fmt.Errorf("review capture-result --agent %q has no compiled in-process reviewer adapter: its compiled transport is %q; collect its reviewer result through that live host transport instead", providerRuntime, providerTransport)) // refusal:by-design world-action: only compiled subprocess adapters use this capture path

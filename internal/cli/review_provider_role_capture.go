@@ -111,13 +111,19 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	// The runtime gate is symmetric across both modes: materialization and
 	// submission are two halves of the same host-relay transaction, so a
 	// runtime that may not receive the prompt may not return its verdict.
-	if _, err := reviewRuntimeWithImmutableTransport(string(binding.runtime)); err != nil {
+	// Eligibility is decided by reviewCaptureRuntimeWithBoundTransport, not
+	// reviewRuntimeWithImmutableTransport (issue #4256): this binding already
+	// carries --lineage, --target, and --expected-revision (checked above),
+	// so Pi's eligibility derives from that bound transaction and the
+	// compiled --agent capability instead of the host-relay handshake env
+	// var that review start/status negotiation still requires.
+	if _, err := reviewCaptureRuntimeWithBoundTransport(string(binding.runtime)); err != nil {
 		return nil, reviewPreflightError(err)
 	}
 	if reviewProviderCaptureRuntime(binding.runtime) && binding.materialize {
 		return nil, reviewPreflightError(fmt.Errorf("review %s --materialize is unavailable for %q: its compiled Go adapter executes the provider contract directly; rerun `gentle-ai review %s` with the same binding and --execute", command, binding.runtime, command))
 	}
-	if !reviewProviderCaptureRuntime(binding.runtime) && !reviewProviderHostRelayMaterializeRuntime(binding.runtime) {
+	if !reviewProviderCaptureRuntime(binding.runtime) && reviewCaptureBoundRuntimeCapability(binding.runtime).Transport != reviewImmutableTransportPiHostRelay {
 		return nil, reviewPreflightError(fmt.Errorf("review %s provider runtime %q has no Go-owned role capture contract", command, binding.runtime)) // refusal:by-design world-action: only compiled adapters and the Pi host relay collect non-lens provider roles
 	}
 	ctx := context.Background()

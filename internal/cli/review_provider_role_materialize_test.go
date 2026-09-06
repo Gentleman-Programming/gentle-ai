@@ -251,9 +251,13 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "either --materialize",
 		},
 		{
-			name: "without relay handshake", env: "",
+			// Issue #4256: without a real bound transaction, an unrelayed Pi
+			// materialize call is refused by the same repository-context
+			// binding check every other runtime hits -- never by an
+			// eligibility gate keyed on the relay handshake env var.
+			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "not eligible for immutable receipt review",
+			want: "repository_context_unavailable",
 		},
 		{
 			name: "without materialize or input", env: reviewPiHostRelayContract,
@@ -284,9 +288,12 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "invalid_request",
 		},
 		{
-			name: "execution without relay handshake", env: "",
+			// Same as the materialize case above: the fake binding is
+			// refused on its own merits, never by the relay handshake env
+			// var (issue #4256).
+			name: "execution without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true"),
-			want: "not eligible for immutable receipt review",
+			want: "repository_context_unavailable",
 		},
 	}
 	for _, test := range tests {
