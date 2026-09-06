@@ -751,6 +751,89 @@ func frozenCandidateGitDiff(t *testing.T, repo string, frozen FrozenCandidateCon
 	return output
 }
 
+// installShowObjectFormatRejectingGitShim puts a `git` shim first on PATH
+// that reproduces #3541: it rejects only `rev-parse --show-object-format`,
+// the exact way git < 2.38 does — printing the unrecognized flag back
+// verbatim on stdout with exit 0 — and delegates every other invocation to
+// the real git.
+func installShowObjectFormatRejectingGitShim(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH shim requires a POSIX shell")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is unavailable")
+	}
+	shimDir := t.TempDir()
+	shim := "#!/bin/sh\n" +
+		"for arg in \"$@\"; do\n" +
+		"  if [ \"$arg\" = \"--show-object-format\" ]; then\n" +
+		"    printf '%s\\n' \"$arg\"\n" +
+		"    exit 0\n" +
+		"  fi\n" +
+		"done\n" +
+		"exec \"$GENTLE_AI_TEST_REAL_GIT\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// resetGitObjectFormatCapabilityCache isolates #3541's process-wide cache
+// between tests: without this, whichever test runs first would decide the
+// cached capability for every test that runs after it in the same process.
+func resetGitObjectFormatCapabilityCache(t *testing.T) {
+	t.Helper()
+	gitShowObjectFormatMu.Lock()
+	previous := gitShowObjectFormatUnsupported
+	gitShowObjectFormatUnsupported = false
+	gitShowObjectFormatMu.Unlock()
+	t.Cleanup(func() {
+		gitShowObjectFormatMu.Lock()
+		gitShowObjectFormatUnsupported = previous
+		gitShowObjectFormatMu.Unlock()
+	})
+}
+
+// TestGitObjectFormatDegradesOnPreShowObjectFormatGit reproduces #3541: on
+// git < 2.38, `rev-parse --show-object-format` is unrecognized and git
+// echoes it back verbatim with exit 0 instead of failing, which previously
+// made gitObjectFormat misread the echoed flag as the object format and
+// reject every repository as "unsupported Git object format". It must
+// instead degrade to reading extensions.objectformat directly, and it must
+// do so only once per process (the second call below runs with the shim
+// still installed, proving the cached decision skips the failing probe
+// rather than re-discovering it).
+func TestGitObjectFormatDegradesOnPreShowObjectFormatGit(t *testing.T) {
+	requireSnapshotGit(t)
+	resetGitObjectFormatCapabilityCache(t)
+	repo := initSnapshotRepo(t)
+	installShowObjectFormatRejectingGitShim(t)
+
+	format, err := gitObjectFormat(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("gitObjectFormat with a pre-2.38 git = %v, want the extensions.objectformat fallback", err)
+	}
+	if format != "sha1" {
+		t.Fatalf("gitObjectFormat = %q, want sha1 for a repository with no extensions.objectformat override", format)
+	}
+	gitShowObjectFormatMu.Lock()
+	cached := gitShowObjectFormatUnsupported
+	gitShowObjectFormatMu.Unlock()
+	if !cached {
+		t.Fatal("gitObjectFormat did not cache the unsupported --show-object-format capability")
+	}
+
+	// The cached decision must be reused: a second call must not re-probe
+	// --show-object-format and must still succeed via the fallback.
+	format, err = gitObjectFormat(context.Background(), repo)
+	if err != nil || format != "sha1" {
+		t.Fatalf("cached gitObjectFormat = %q, err=%v, want sha1 with no error", format, err)
+	}
+}
+
 func frozenCandidatePorcelainGitDiff(t *testing.T, repo string, frozen FrozenCandidateContext, logicalPath string) []byte {
 	t.Helper()
 	args := []string{

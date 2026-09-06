@@ -336,6 +336,62 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 	}
 }
 
+// installLargeStderrGitAddShim puts a `git` shim first on PATH that
+// reproduces #3993's byte-cap bound: `git add -u -- .` emits more than 64
+// KiB of incidental warning output (the shape thousands of tracked paths
+// triggering CRLF or embedded-repository warnings produce) and still exits
+// 0, exactly like a real large `git add -u` would. Every other invocation
+// delegates to the real git so the rest of buildCurrentChanges works
+// normally.
+func installLargeStderrGitAddShim(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH shim requires a POSIX shell")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is unavailable")
+	}
+	shimDir := t.TempDir()
+	shim := "#!/bin/sh\n" +
+		"prev=\"\"\n" +
+		"for arg in \"$@\"; do\n" +
+		"  if [ \"$prev\" = \"add\" ] && [ \"$arg\" = \"-u\" ]; then\n" +
+		"    i=0\n" +
+		"    while [ $i -lt 2000 ]; do\n" +
+		"      printf 'warning: adding embedded git repository or CRLF notice for path %d\\n' \"$i\" >&2\n" +
+		"      i=$((i + 1))\n" +
+		"    done\n" +
+		"    exit 0\n" +
+		"  fi\n" +
+		"  prev=\"$arg\"\n" +
+		"done\n" +
+		"exec \"$GENTLE_AI_TEST_REAL_GIT\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestBuildCurrentChangesToleratesLargeStagingOutput reproduces #3993: a
+// repository whose tracked paths make `git add -u -- .` emit more than the
+// shared 64 KiB stderr capture buffer must not fail candidate capture on
+// that account. Before the fix, the staging step used the same overflow-
+// rejecting capture as every other Git call, so this exact shape returned
+// "output exceeds deterministic 65536-byte limit" before an attempt token
+// was ever issued.
+func TestBuildCurrentChangesToleratesLargeStagingOutput(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed\n")
+	installLargeStderrGitAddShim(t)
+
+	if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}); err != nil {
+		t.Fatalf("Build() with a staging step producing >64 KiB of output error = %v, want tolerated", err)
+	}
+}
+
 // TestSnapshotIdentityIsRepresentationInvariant is the headline proof for
 // issue #2659 (root 21 of #2471): a declared intended-untracked path and the
 // exact same path staged into the index instead are two REPRESENTATIONS of
@@ -1957,4 +2013,30 @@ func gitSnapshot(t *testing.T, repo string, args ...string) string {
 func gitSnapshotSucceeds(repo string, args ...string) bool {
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 	return cmd.Run() == nil
+}
+
+func TestStagingCommandTimeoutIsBoundedByFloorAndCeiling(t *testing.T) {
+	t.Parallel()
+
+	floor := StagingCommandTimeoutFloor
+	perPath := StagingCommandTimeoutPerTrackedPath
+	ceiling := StagingCommandTimeoutCeiling
+	if ceiling <= floor {
+		t.Fatalf("ceiling %s must exceed floor %s", ceiling, floor)
+	}
+	if got := stagingCommandTimeout(0); got != floor {
+		t.Fatalf("zero tracked paths: got %s, want floor %s", got, floor)
+	}
+	small := int(floor/perPath) / 2
+	if got := stagingCommandTimeout(small); got != floor {
+		t.Fatalf("%d tracked paths: got %s, want floor %s", small, got, floor)
+	}
+	mid := int(floor/perPath) * 2
+	if got, want := stagingCommandTimeout(mid), time.Duration(mid)*perPath; got != want {
+		t.Fatalf("%d tracked paths: got %s, want proportional %s", mid, got, want)
+	}
+	huge := int(ceiling/perPath) * 100
+	if got := stagingCommandTimeout(huge); got != ceiling {
+		t.Fatalf("%d tracked paths: got %s, want ceiling %s", huge, got, ceiling)
+	}
 }
