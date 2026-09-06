@@ -425,6 +425,11 @@ type facadeValidationCheck struct {
 	Passed      bool                           `json:"passed"`
 	Evidence    []string                       `json:"evidence"`
 	Regressions []reviewtransaction.Regression `json:"regressions,omitempty"`
+	// Inspection is the validator's typed claim about whether it read the
+	// frozen candidate trees before producing this check's verdict (issue
+	// #4266). A nil Inspection (the field omitted) is treated as completed,
+	// matching every producer that predates this field.
+	Inspection *reviewtransaction.ValidationInspection `json:"inspection,omitempty"`
 }
 
 type facadeValidationResult struct {
@@ -443,26 +448,36 @@ type facadeValidationResult struct {
 // consumed and the same validation can simply be run again (issue #3378).
 var errReviewTargetedValidationInconclusive = errors.New("targeted validation is inconclusive") // refusal:by-design world-action: restore the validator's read-only access to the frozen trees and run the same targeted validation again
 
-// conclusive rejects validation checks whose evidence reports the immutable
-// candidate could not be inspected. Such a check is not a verdict: admitted as
-// failed it consumes the single correction attempt on a non-observation
-// (issue #1309 follow-up), and admitted as passed it approves uninspected
-// bytes. No state transitions, so the same validation can be captured again
-// once the validator regains access to the frozen trees.
+// conclusive rejects validation checks that produced no verdict, via
+// reviewtransaction.ValidationCheckInconclusive (issue #4266): the typed
+// inspection field decides alone when present, falling back to a narrow
+// Evidence scan only when a legacy producer omits it. Admitted anyway, a
+// failed check would consume the single correction attempt on a
+// non-observation (issue #1309); a passed one would approve uninspected
+// bytes.
 func (result facadeValidationResult) conclusive() error {
 	for _, check := range []struct {
-		name     string
-		evidence []string
+		name       string
+		inspection *reviewtransaction.ValidationInspection
+		evidence   []string
 	}{
-		{name: "original_criteria", evidence: result.OriginalCriteria.Evidence},
-		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
+		{name: "original_criteria", inspection: result.OriginalCriteria.Inspection, evidence: result.OriginalCriteria.Evidence},
+		{name: "correction_regression", inspection: result.CorrectionRegression.Inspection, evidence: result.CorrectionRegression.Evidence},
 	} {
-		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
-			// The exit is named on the sentinel this wraps: restore the
-			// validator's access to the frozen trees and run the same
-			// targeted validation again.
-			return fmt.Errorf("%w: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and run the same targeted validation again", errReviewTargetedValidationInconclusive, check.name)
+		inconclusive, err := reviewtransaction.ValidationCheckInconclusive(check.inspection, check.evidence)
+		if err != nil {
+			return fmt.Errorf("%s %w", check.name, err)
 		}
+		if !inconclusive {
+			continue
+		}
+		// The exit is named on the sentinel this wraps: restore the
+		// validator's access to the frozen trees and run the same
+		// targeted validation again.
+		if check.inspection != nil {
+			return fmt.Errorf("%w: %s inspection.status reports the immutable candidate could not be inspected (%s), so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and run the same targeted validation again", errReviewTargetedValidationInconclusive, check.name, check.inspection.Reason)
+		}
+		return fmt.Errorf("%w: %s evidence reports the immutable candidate could not be inspected and this check omits the typed inspection field, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees, run the same targeted validation again, and emit inspection.status on this check", errReviewTargetedValidationInconclusive, check.name)
 	}
 	return nil
 }
