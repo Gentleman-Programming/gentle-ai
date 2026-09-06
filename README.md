@@ -213,7 +213,6 @@ Gentle-AI configures each agent using that agent's own native features, so capab
 | **Kilo Code** | Multi-mode overlay | OpenCode-compatible config in `~/.config/kilo` |
 | **Gemini CLI** | Experimental | Custom agents in `~/.gemini/agents/` |
 | **Cursor** | Native subagents | 10 SDD agents in `~/.cursor/agents/` |
-| **VS Code Copilot** | runSubagent | Parallel execution |
 | **Codex** | Native multi-agent | CLI-native TOML config; enabled by default with solo-agent fallback |
 | **Antigravity** | Dynamic subagents | Mission Control uses `define_subagent` + `invoke_subagent` for SDD phases |
 | **Kimi Code** | Native custom agents | Modular prompt templates in `~/.kimi` |
@@ -229,6 +228,7 @@ Gentle-AI configures each agent using that agent's own native features, so capab
 | **Windsurf** | Plan Mode, Code Mode, native workflows |
 | **OpenClaw** | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config |
 | **Trae** | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
+| **VS Code Copilot** | Desktop IDE with GitHub Copilot; inline SDD orchestrator via instructions, `~/.copilot/skills/`, and MCP |
 
 > **Hermes must be installed manually first.** Gentle-AI detects and configures the existing runtime; it does not install Hermes.
 

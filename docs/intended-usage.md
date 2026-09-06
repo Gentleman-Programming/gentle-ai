@@ -105,9 +105,9 @@ This pattern works today in several delegation models:
 
 | Model | Agents | How it runs |
 | ----- | ------ | ----------- |
-| **Full sub-agents** | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi | Each SDD phase can run in a focused context through native delegation, package-managed subagents, or an OpenCode-compatible overlay |
+| **Full sub-agents** | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, Kimi Code, Kiro IDE, Qwen Code, Pi | Each SDD phase can run in a focused context through native delegation, package-managed subagents, or an OpenCode-compatible overlay |
 | **Hermes delegate_task** | Hermes | The orchestrator spawns ephemeral workers with self-contained missions and verifies their summaries before reporting success |
-| **Solo-agent** | Codex, Windsurf, Antigravity, OpenClaw, Trae | SDD phases run inline in one conversation; Engram still provides cross-phase persistence when available |
+| **Solo-agent** | Codex, Windsurf, Antigravity, VS Code Copilot, OpenClaw, Trae | SDD phases run inline in one conversation; Engram still provides cross-phase persistence when available |
 
 You don't need to configure any of this. The installer sets up the right model for your agent, and the orchestrator manages delegation automatically.
 
