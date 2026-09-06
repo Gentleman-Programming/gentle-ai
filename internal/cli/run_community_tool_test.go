@@ -20,6 +20,10 @@ import (
 )
 
 func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	runtime := &installRuntime{
 		homeDir:      t.TempDir(),
 		workspaceDir: "/work/project",
@@ -42,7 +46,46 @@ func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testin
 	}
 }
 
+func TestInstallRuntimeStagePlanSkipsCodeGraphOnUnsupportedPlatform(t *testing.T) {
+	supported := false
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
+	runtime := &installRuntime{
+		homeDir:      t.TempDir(),
+		workspaceDir: "/work/project",
+		selection: model.Selection{
+			Agents:         []model.AgentID{model.AgentPi},
+			CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+		},
+		resolved: planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}},
+		profile:  system.PlatformProfile{},
+		state:    &runtimeState{},
+	}
+
+	plan := runtime.stagePlan()
+	for _, step := range plan.Apply {
+		if step.ID() == "community-tool:codegraph" {
+			t.Fatal("install plan on unsupported platform must not include CodeGraph community tool step")
+		}
+		if step.ID() == "community-tool:pi-codegraph-reconcile" {
+			t.Fatal("install plan on unsupported platform must not reconcile Pi CodeGraph (should deselect instead)")
+		}
+	}
+	// On unsupported platform with Pi agent, the deselect step should appear
+	// to clean up any previously installed Pi CodeGraph artifacts.
+	if !slices.ContainsFunc(plan.Apply, func(step pipeline.Step) bool {
+		return step.ID() == "community-tool:pi-codegraph-deselect"
+	}) {
+		t.Fatal("install plan on unsupported platform with Pi agent must include deselect step for cleanup")
+	}
+}
+
 func TestInstallRuntimeStagePlanKeepsPiReconcileIndependentFromOpenCode(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	runtime := &installRuntime{
 		homeDir:      t.TempDir(),
 		workspaceDir: "/work/project",
@@ -63,6 +106,10 @@ func TestInstallRuntimeStagePlanKeepsPiReconcileIndependentFromOpenCode(t *testi
 }
 
 func TestInstallRuntimeStagePlanDeselectionCleansOwnedPiIntegration(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	writePiInstallFixture(t, home)
 	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{
@@ -184,6 +231,10 @@ func TestBackupTargetsIncludeSelectedOpenCodePluginPaths(t *testing.T) {
 }
 
 func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
 		t.Fatal(err)
@@ -217,6 +268,10 @@ func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testin
 }
 
 func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistration(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	for _, test := range []struct {
 		name        string
 		preexisting bool
@@ -417,6 +472,10 @@ func TestRenderInstallManualActionsIncludesPiCodeGraphDrift(t *testing.T) {
 }
 
 func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	tests := []struct {
 		name      string
 		setupHome func(t *testing.T, home string)
@@ -501,6 +560,10 @@ func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
 }
 
 func TestComponentApplyStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	withCodeGraphLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
 
@@ -651,6 +714,10 @@ func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 }
 
 func TestInstallPipelinePropagatesInitialPiPendingWhenPiUnselected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph runtime verification is pending."}}
@@ -746,6 +813,10 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 }
 
 func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	runtime, err := newSyncRuntime(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},

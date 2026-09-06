@@ -6,6 +6,12 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
+)
+
+var (
+	overrideMu                         sync.Mutex
+	codeGraphPlatformSupportedOverride *bool
 )
 
 type SystemInfo struct {
@@ -216,3 +222,53 @@ func osReleaseID(linuxOSRelease string) string {
 
 	return LinuxDistroUnknown
 }
+
+// IsAndroid returns true if the current environment appears to be Android.
+// This includes Termux (TERMUX_VERSION set) and other Android environments
+// (ANDROID_ROOT set). Node.js on Android may report "android" as the platform
+// instead of "linux", causing the npm-shim to look for non-existent
+// "android-<arch>" bundles.
+func IsAndroid() bool {
+	return runtime.GOOS == "android" || os.Getenv("TERMUX_VERSION") != "" || os.Getenv("ANDROID_ROOT") == "/system"
+}
+
+// CodeGraphPlatformSupported returns true if the current platform has prebuilt
+// CodeGraph native binaries available. CodeGraph publishes optionalDependencies
+// for: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-arm64, win32-x64.
+// Android (linux-arm64 with TERMUX_VERSION or ANDROID_ROOT set) is not
+// supported because Node.js on Android may report "android" as the platform,
+// causing the npm-shim to look for a non-existent "android-arm64" bundle.
+func CodeGraphPlatformSupported() bool {
+	overrideMu.Lock()
+	if codeGraphPlatformSupportedOverride != nil {
+		v := *codeGraphPlatformSupportedOverride
+		overrideMu.Unlock()
+		return v
+	}
+	overrideMu.Unlock()
+	if IsAndroid() {
+		return false
+	}
+	if !IsSupportedOS(runtime.GOOS) {
+		return false
+	}
+	// Only amd64 and arm64 have prebuilt binaries published.
+	return runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64"
+}
+
+// SetCodeGraphPlatformSupportedForTest allows tests to override the platform
+// support check for CodeGraph. Pass nil to reset to automatic detection.
+func SetCodeGraphPlatformSupportedForTest(v *bool) {
+	overrideMu.Lock()
+	codeGraphPlatformSupportedOverride = v
+	overrideMu.Unlock()
+}
+
+// PRoot detection
+
+var (
+	prootMu sync.Mutex
+	prootInfoCache *PRootInfo
+)
+
+// PRootInfo is defined in internal/system/proot.go
