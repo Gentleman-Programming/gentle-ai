@@ -191,6 +191,13 @@ const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
 // (issue #2440). Naming the caller's own runtime keeps that check meaningful:
 // a runtime whose transport is unsupported is then refused, which is the
 // correct outcome for this build.
+//
+// It also names --consent relay (issue #2870): this is the exact invocation a
+// reader is most likely to copy and run verbatim, and reviewStartArguments
+// (the STATUS-supplied transition command, review_next_transition.go) already
+// includes it for every v2 contract. Without it here, a caller that copies
+// this named continuation and runs it without a TTY silently mints a
+// medium/high-risk review lineage with no consent envelope.
 func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAgent string) string {
 	identity := strings.TrimSpace(runtimeAgent)
 	command := fmt.Sprintf("gentle-ai review start --contract %s", ReviewIntegrationContractV2)
@@ -204,6 +211,7 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		command += " --base-ref " + snapshot.BaseTree + " --workspace-overlay"
 	}
+	command += " --consent relay"
 	return command
 }
 
