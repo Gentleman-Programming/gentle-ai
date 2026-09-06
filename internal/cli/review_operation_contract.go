@@ -720,14 +720,27 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	var gitFailure *reviewtransaction.GitCommandError
 	if errors.As(runErr, &gitFailure) {
 		failure.Phase = "pre_native"
-		failure.Code = "git_command_failed"
-		failure.Message = "A Git subprocess failed before review authority mutation."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
 		failure.Cause = reviewIntegrationFailureCause(gitFailure)
+		// #3497: a Git dubious-ownership refusal (a UNC share, for example)
+		// is a distinct, typed, path-free condition -- reviewGitOwnershipRefusal
+		// already exists to name it -- and no review action can repair it, since
+		// gentle-ai never provisions safe.directory. Before this branch, only
+		// resolveOpaqueReviewRepositoryRoot consulted that classifier, so every
+		// other route through this generic mapper (including negotiated
+		// review.status) reported the same refusal as the content-free
+		// git_command_failed code.
+		if reviewGitOwnershipRefusal(gitFailure) {
+			failure.Code = reviewGitTrustRefusalCode
+			failure.Message = reviewGitTrustRefusalAction
+			return failure
+		}
+		failure.Code = "git_command_failed"
+		failure.Message = "A Git subprocess failed before review authority mutation."
 		return failure
 	}
 	var gitControl *reviewtransaction.GitProcessControlError
