@@ -105,8 +105,8 @@ func TestGoldenSDD_Claude(t *testing.T) {
 	assertGolden(t, "sdd-claude-claudemd.golden", claudeMD)
 
 	for _, name := range []string{
-		"sdd-apply", "sdd-archive", "sdd-continue", "sdd-explore",
-		"sdd-ff", "sdd-init", "sdd-new", "sdd-onboard", "sdd-research", "sdd-status", "sdd-verify",
+		"gentle-sdd-apply", "gentle-sdd-archive", "gentle-sdd-continue", "gentle-sdd-explore",
+		"gentle-sdd-ff", "gentle-sdd-init", "gentle-sdd-new", "gentle-sdd-onboard", "gentle-sdd-research", "gentle-sdd-status", "gentle-sdd-verify",
 	} {
 		content := readTestFile(t, filepath.Join(home, ".claude", "commands", name+".md"))
 		assertGolden(t, "sdd-claude-cmd-"+name+".golden", content)
@@ -174,9 +174,13 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 
 	// Golden-check the settings file with multi overlay merged.
 	settingsJSON := readTestFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	for _, toolName := range []string{"\"task\""} {
-		if !strings.Contains(string(settingsJSON), toolName) {
-			t.Fatalf("multi-mode settings missing orchestrator tool %s", toolName)
+	var settings map[string]any
+	if err := json.Unmarshal(settingsJSON, &settings); err != nil {
+		t.Fatalf("unmarshal generated OpenCode settings: %v", err)
+	}
+	for name, raw := range settings["agent"].(map[string]any) {
+		if _, exists := raw.(map[string]any)["tools"]; exists {
+			t.Fatalf("generated managed agent %q emits deprecated tools", name)
 		}
 	}
 	assertGolden(t, "sdd-opencode-multi-settings.golden", settingsJSON)

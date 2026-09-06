@@ -92,6 +92,7 @@ func TestCapturePreflightBoundsChangedPathManifestLineCost(t *testing.T) {
 	started := runNegotiatedReviewStart(t, repo, "manifest-preflight-line-budget")
 	var output bytes.Buffer
 	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,
@@ -110,11 +111,15 @@ func TestCapturePreflightBoundsChangedPathManifestLineCost(t *testing.T) {
 	}
 }
 
-// TestNegotiatedStatusBoundsChangedPathManifestLineCost pins the bound on the
-// negotiated collection transition, which repeats the identical manifest once
-// per uncaptured lens. The repetition itself is fixed by the published schema
-// and is not what this pins; the per-entry line cost of each copy is.
-func TestNegotiatedStatusBoundsChangedPathManifestLineCost(t *testing.T) {
+// TestNegotiatedStatusOmitsChangedPathManifestPerLens proves the fix for
+// issue #3922 / #4199 / gentle-pi#543: the negotiated collection transition
+// used to repeat the identical manifest once per uncaptured lens, turning a
+// 200-file candidate into a ~46 KB STATUS the host had to echo back on every
+// poll. Each collect input already commits to the manifest through
+// artifact_subject.changed_path_manifest_sha256, so it no longer inlines a
+// copy at all; the manifest itself stays on the START envelope, once per
+// lineage, unchanged.
+func TestNegotiatedStatusOmitsChangedPathManifestPerLens(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	// Forty paths, matching the START and preflight fixtures above. This used
@@ -140,14 +145,15 @@ func TestNegotiatedStatusBoundsChangedPathManifestLineCost(t *testing.T) {
 		t.Fatalf("negotiated status did not offer a collection transition: %s", output.String())
 	}
 	for _, input := range status.NextTransition.Collect.Inputs {
-		if input.ChangedPathManifest == nil || len(*input.ChangedPathManifest) != paths {
-			t.Fatalf("collection input manifest = %v, want %d entries", input.ChangedPathManifest, paths)
+		if input.ChangedPathManifest != nil {
+			t.Fatalf("collection input still inlines a %d-entry manifest, want none", len(*input.ChangedPathManifest))
+		}
+		if input.ArtifactSubject == nil || input.ArtifactSubject.ChangedPathManifestSHA256 == "" {
+			t.Fatalf("collection input lacks the manifest digest binding: %#v", input.ArtifactSubject)
 		}
 	}
-	inputs := len(status.NextTransition.Collect.Inputs)
-	if cost := manifestEntryLineCost(t, output.Bytes(), paths); cost > reviewManifestLineBudget {
-		t.Fatalf("negotiated status spends %.2f lines per manifest entry across %d inputs, want at most %d (payload = %d lines, %d bytes)",
-			cost, inputs, reviewManifestLineBudget, bytes.Count(output.Bytes(), []byte("\n")), output.Len())
+	if bytes.Contains(output.Bytes(), []byte(reviewManifestArrayKey)) {
+		t.Fatalf("negotiated status still emits a %q array: %s", reviewManifestArrayKey, output.String())
 	}
 }
 

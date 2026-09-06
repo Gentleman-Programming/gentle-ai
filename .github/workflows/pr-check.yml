@@ -131,8 +131,8 @@ jobs:
               if (!labels.includes('status:approved')) {
                 failures.push(
                   `❌ Issue #${issueNumber} does not have the "status:approved" label.\n` +
-                  '   Issues must be approved by a maintainer before work begins.\n' +
-                  '   Please comment on the issue and wait for it to be labelled status:approved.'
+                  '   The linked issue must have status:approved under the canonical issue-creation workflow contract.\n' +
+                  '   Without a current direct instruction and target-host capability granting the exact action, comment on the issue and wait.'
                 );
               } else {
                 console.log(`✅ Issue #${issueNumber} has status:approved.`);

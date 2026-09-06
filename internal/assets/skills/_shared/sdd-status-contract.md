@@ -17,12 +17,12 @@ Commands that select, continue, apply, verify, or archive an SDD change MUST fir
 
 Native `gentle-ai.sdd-status/v2` is the sole status contract. A request for v1 or another prior contract fails read-only with one instruction: start a fresh implementation state and rerun `gentle-ai sdd-status --contract gentle-ai.sdd-status/v2`. When status recommends `propose`, the orchestrator-owned pre-proposal gate separately requires confirmed decisions, valid evidence references, and matching hybrid state; selected research must be `done`.
 
-- When the session artifact store is `openspec` or `hybrid` and the `gentle-ai` binary is available, prefer `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for read-only status and `gentle-ai sdd-continue [change] --cwd <repo>` for dispatcher output. When the store is `engram`, do not invoke those OpenSpec dispatcher commands.
-- The native dispatcher reads only OpenSpec file artifacts and emits `artifactStore: openspec`; it cannot observe Engram-backed changes. Treat dispatcher status as authoritative only when the selected artifact store is `openspec` or `hybrid`. When the selected store is `engram`, resolve artifact status from Engram (`mem_search` + `mem_get_observation` on the change topic keys) using the manual schema below.
+- When the `gentle-ai` binary is available, prefer `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for read-only status and `gentle-ai sdd-continue [change] --cwd <repo>` for dispatcher output. This holds for every artifact store: the dispatcher resolves the declared store itself.
+- The native dispatcher resolves the artifact store the workspace DECLARES in `openspec/config.yaml` and reports it in `artifactStore`. A declared store is authoritative in both directions: it selects the resolver, and an empty declared store reports as empty rather than silently serving the other store's artifacts. Never re-resolve artifact status yourself, and never branch on the store: read the locators the dispatcher returned in `artifactPaths`.
 - Runtime-attempt authority is different from artifact dispatch: normal runtime-bearing OpenSpec and Engram continuations MUST bracket external execution with `gentle-ai sdd-attempt acquire|settle --cwd <repo> --change <change>`. Their bounded result contains only `proceed`, `blocked`, or `complete` plus an opaque continuation token when required, and MAY carry `settle_obligation` on a `proceed`. The Git-common-dir immutable chain remains the sole authority for ordinals, cumulative attempt/line budgets, runtime evidence, and ordinary SDD failed-evidence remediation. Full `status|begin|finish|reset` payloads MUST NOT be embedded in the SDD v2 status document. Never create OpenSpec attempt-ledger files or Engram attempt-ledger topics.
 - A phase actor launched by a parent that already holds a `proceed` acquire for that exact work unit authenticates as that same attempt with the returned `--token`; it MUST NOT acquire again blind.
 - When `sdd-attempt status` carries a `gentle-ai.sdd-integration.consent/v1` consent block, the ledger is ASKING, not reporting. Treat it as a Lossless Blocking Prompt: relay the complete envelope in order, preserve answer tokens and invocations, and never answer on their behalf. In a non-interactive runtime, emit the complete envelope and STOP. Attempts that never ran the work are not evidence about the candidate.
-- For `openspec` and `hybrid` stores, treat native status JSON as authoritative over prompt inference or manually reconstructed state.
+- For every store, treat native status JSON as authoritative over prompt inference or manually reconstructed state.
 - When `blockedReasons` is non-empty, do not proceed to terminal, archive, or apply work. Return or report `blockedReasons` and stop unless `nextRecommended` is `verify`, in which case verification may run only to remediate or refresh evidence for the blockers. When `nextRecommended` is `resolve-blockers`, always report `blockedReasons` and stop. When `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase — missing planning artifacts are the expected output of those phases, not genuine blockers.
 - `nextRecommended` is a bounded machine token for routing, not human prose. Route only by `nextRecommended` and dependency states. Human-readable explanation belongs in `blockedReasons`.
 - If the binary is unavailable, fall back to this prompt contract and the manual status schema below. Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON even when values are reconstructed manually.
@@ -35,7 +35,7 @@ Return status as markdown with these fields, or as equivalent JSON when the host
 schemaName: gentle-ai.sdd-status
 schemaVersion: 2
 changeName: <change-name-or-null>
-artifactStore: openspec | engram | none
+artifactStore: openspec | engram | hybrid | none
 planningHome:
   mode: repo-local
   path: <absolute path to openspec>
@@ -135,12 +135,12 @@ The orchestrator MUST carry `actionContext` into any phase launch.
 
 ## Edit Authority Consent
 
-A change whose tasks.md work units target paths outside `allowedEditRoots` never reports apply ready. Native status reports `applyState: blocked` and `blockedReasons` carries a `blocked(edit_authority_missing)` reason naming each unauthorized edit root and both exits: edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named edit roots.
+A change whose tasks.md work units target paths outside `allowedEditRoots` never reports apply ready. Native status reports `applyState: blocked` and `blockedReasons` carries a `blocked(edit_authority_missing)` reason naming each unauthorized edit root and the three exits: edit tasks.md so every work unit stays inside the authorized edit roots, grant this change edit authority for the named edit roots, or mark a read-only input with `(read-only)` on its line.
 
-- Detection is conservative prose inspection: backticked path-like tokens inside markdown checkbox lines that resolve to a path in a Git repository outside the authorized roots. A different repository is named by its Git root; a same-repository target is narrowed to its containing edit root. A context reference can raise a false consent question; the consequence is a question, never silent authority.
+- Detection is conservative prose inspection: backticked path-like tokens inside markdown checkbox lines that resolve to a path outside the authorized roots. A different repository is named by its Git root; a same-repository target is narrowed to its containing edit root; a directory in no Git repository is named as itself. A backticked path immediately followed by `(read-only)` (case-insensitive) is a read-only input and not an edit target; the marker annotates only the path it follows, so an unmarked path on the same line still counts.
 - An OpenSpec-backed native status that reports `blocked(edit_authority_missing)` also carries the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block: headline, reason, `value`, the missing roots as evidence, exactly two choices with answer tokens `granted` and `declined` (each with label, effect, and an exact invocation), and an off-path note.
 - Answer flow: the orchestrator relays the COMPLETE envelope losslessly as a blocking prompt. Only on the human's explicit `granted` answer does the agent execute the envelope's named grant invocation, verbatim and exactly once, then re-enter through native status. The agent NEVER runs the grant unprompted and NEVER answers on the human's behalf.
-- Decline stays blocked: the agent runs the envelope's decline invocation, nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the reason names both exits.
+- Decline stays blocked: the agent runs the envelope's decline invocation, nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the reason names all three exits.
 
 ## Status Output
 
@@ -150,4 +150,4 @@ Every command that acts on a change MUST show status before launching an executo
 - Artifact statuses and paths/topics used as context.
 - Task progress and unchecked task list when tasks exist.
 - Next recommended action.
-- `blockedReasons` when `nextRecommended` is not `verify`, plus any edit-root blockers.
+- `blockedReasons` whenever it is non-empty, including a `verify` route that must refresh stale or post-remediation evidence, plus any edit-root blockers.

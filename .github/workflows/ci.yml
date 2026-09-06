@@ -83,7 +83,8 @@ jobs:
             completed_once("j111-approved-transaction-burns-and-shipped-gates-are-unmanaged") and
             completed_once("j113-correction-removes-candidate-only-path") and
             completed_once("j114-last-reviewer-capture-closes-and-burns") and
-            completed_once("j116-codex-committed-correction-runs-returned-status-continuation")
+            completed_once("j116-codex-committed-correction-runs-returned-status-continuation") and
+            completed_once("j123-rejected-provider-validator-starts-fresh-high-risk-review")
           ' "$RUNNER_TEMP/bench-portable.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
           jq -e '
@@ -226,6 +227,21 @@ jobs:
           go test -v ./internal/components/filemerge -count=1 -run $selector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Every Windows git launch goes through the suspended-start / job-object
+      # / resume sequence; the crashes in #4081, #4128 and #4152 were a Go
+      # runtime fault on that path at roughly one launch in four, so the lane
+      # bursts real launches instead of trusting a single green run.
+      - name: Run native Windows git process tree tests
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $selector = '^(TestStartGitProcessTreeSurvivesRepeatedLaunches|TestStartGitProcessTreeKillsUnboundChildOnFailure)$'
+          $selected = @(go test ./internal/reviewtransaction -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list native Windows git process tree tests' }
+          if ($selected.Count -ne 2) { throw "Missing native Windows git process tree tests: $($selected -join ', ')" }
+          go test -v ./internal/reviewtransaction -count=1 -run $selector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build native test binary
         shell: pwsh
         run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai
@@ -265,13 +281,10 @@ jobs:
             'TestStdioHandshake_PreservesCallerCancellation',
             'TestProbeStdio_MissingAbsoluteConfiguredCommandFails',
             'TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled',
-            'TestCompactEffectMarkerStrictValidation',
-            'TestCompactEffectMarkerIsPrivateSeparateAndStable',
-            'TestCompactRepositoryContextIntentAndReconcilerContract',
-            'TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot',
-            'TestLastReviewerCaptureApprovesAndBurnsWithoutFinalize',
+            'TestLastReviewerCaptureIssuesReplayableAcknowledgementThenBurns',
             'TestCaptureCorrectionPlanBindsExactRequestAndRefusesBudgetOverrun',
-            'TestTargetedValidatorCaptureApprovesAndBurnsWithoutFinalize',
+            'TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize',
+            'TestReviewStartWithZeroLensesIssuesAcknowledgement',
             'TestReviewRecoverEscalatedRequiresExactSuccessorBoundAuthorization',
             'TestCompactReceiptAndGateAPIsAreAbsentFromProductionPackages'
           )

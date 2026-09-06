@@ -226,50 +226,6 @@ func acquireLocalStoreLock(path string) (*storeLock, error) {
 	return &storeLock{file: file, owner: owner}, nil
 }
 
-// readOnlyStoreLockTimeout and readOnlyStoreLockPollInterval bound how long a
-// read-only authority evaluation waits out transient contention. They mirror
-// the START acquisition budget (compactStartLockTimeout) so every bounded
-// waiter in this package converges on the same wall-clock ceiling.
-var readOnlyStoreLockTimeout = 2 * time.Second
-var readOnlyStoreLockPollInterval = 25 * time.Millisecond
-
-// acquireStoreLockForConvergentCompletion admits the second caller class that
-// may wait out transient contention instead of refusing: idempotent
-// post-terminal completion. Once authority is terminal, the receipt bytes are
-// derived deterministically from that authority, publication accepts an
-// identical existing receipt, and the finalize-journal completion flags are
-// monotonic — so every completer converges on the same bytes and flags, and
-// waiting cannot double-apply anything. Refusing instantly here turned a
-// competitor's milliseconds-long critical section into a reported publication
-// failure for an operation whose outcome had already committed.
-//
-// The pre-commit mutation paths keep the instant refusal: there, waiting
-// cannot make a second writer legitimate, it can only delay its refusal.
-func acquireStoreLockForConvergentCompletion(ctx context.Context, path string) (*storeLock, error) {
-	// guard:population convergent-lock-contention too-tight: legitimate lock contenders include idempotent post-terminal completers that can safely wait for identical publication
-	return acquireStoreLockWithBoundedWait(ctx, path)
-}
-
-func acquireStoreLockWithBoundedWait(ctx context.Context, path string) (*storeLock, error) {
-	deadline := time.NewTimer(readOnlyStoreLockTimeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(readOnlyStoreLockPollInterval)
-	defer ticker.Stop()
-	for {
-		lock, err := acquireStoreLock(path)
-		if err == nil || !errors.Is(err, ErrStoreLockContended) {
-			return lock, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, &AuthorityLockCancelledError{Cause: ctx.Err()}
-		case <-deadline.C:
-			return nil, &AuthorityLockTimeoutError{Timeout: readOnlyStoreLockTimeout}
-		case <-ticker.C:
-		}
-	}
-}
-
 func acquireMaintenanceLock(ctx context.Context, path string, mode maintenanceLockMode) (*MaintenanceLock, error) {
 	return acquireMaintenanceLockInternal(ctx, path, mode, false)
 }
@@ -374,6 +330,10 @@ func (lock *storeLock) release() error {
 	if lock == nil || lock.file == nil {
 		return nil
 	}
+	// #2504: clear the owner payload while the advisory lock is still held,
+	// so no observer ever reads an exited process as the recorded holder.
+	// Kernel ownership stays the truth; the payload is only ever a hint.
+	truncateErr := lock.file.Truncate(0)
 	unlockErr := unlockFile(lock.file)
 	closeErr := lock.file.Close()
 	lock.file = nil
@@ -382,7 +342,7 @@ func (lock *storeLock) release() error {
 		maintenanceErr = lock.maintenance.Release()
 		lock.maintenance = nil
 	}
-	return errors.Join(unlockErr, closeErr, maintenanceErr)
+	return errors.Join(truncateErr, unlockErr, closeErr, maintenanceErr)
 }
 
 // secureLockRoot locates the repository's Git common directory that this

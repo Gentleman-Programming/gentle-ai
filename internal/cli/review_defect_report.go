@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,7 +120,24 @@ var (
 	// reviewDefectReportEnvAssignmentRegexp matches a KEY=VALUE token shaped
 	// like an environment variable assignment.
 	reviewDefectReportEnvAssignmentRegexp = regexp.MustCompile(`\b[A-Z][A-Z0-9_]{2,}=\S+`)
+	// reviewDefectReportPublicIdentifierRegexp matches the product's own
+	// public identifiers: contract and schema ids such as
+	// gentle-ai.review-integration/v2, gentle-ai.review-integration.status/v7,
+	// or gentle-pi.review-relay/v1, plus the one exact relay handshake
+	// assignment. None of them describe a filesystem or a secret, and a
+	// report that hides them tells the reader to run a command that does not
+	// exist (#3443). Every other KEY=VALUE token and every path still redact.
+	reviewDefectReportPublicIdentifierRegexp = regexp.MustCompile(
+		regexp.QuoteMeta(reviewPiHostRelayContractEnvironment+"="+reviewPiHostRelayContract) +
+			`|gentle-(?:ai|pi)\.[A-Za-z0-9.-]+/v[0-9]+`)
 )
+
+// reviewDefectReportPlaceholder is the shape a protected public identifier
+// takes while the redactions run: no slash, no `=`, no `@`, so no redaction
+// rule can match it, and NUL never appears in a rendered field.
+func reviewDefectReportPlaceholder(index int) string {
+	return "\x00" + strconv.Itoa(index) + "\x00"
+}
 
 // reviewScrubDefectReportField is the field-level privacy gate: every string
 // that reaches a rendered report passes through this exact function first.
@@ -133,9 +151,17 @@ func reviewScrubDefectReportField(value string) string {
 	if newline := strings.IndexByte(value, '\n'); newline >= 0 {
 		value = value[:newline]
 	}
+	var protected []string
+	value = reviewDefectReportPublicIdentifierRegexp.ReplaceAllStringFunc(value, func(match string) string {
+		protected = append(protected, match)
+		return reviewDefectReportPlaceholder(len(protected) - 1)
+	})
 	value = reviewDefectReportEnvAssignmentRegexp.ReplaceAllString(value, reviewDefectReportRedactionMarker)
 	value = reviewDefectReportEmailRegexp.ReplaceAllString(value, reviewDefectReportRedactionMarker)
 	value = reviewDefectReportAbsolutePathRegexp.ReplaceAllString(value, reviewDefectReportRedactionMarker)
+	for index, identifier := range protected {
+		value = strings.ReplaceAll(value, reviewDefectReportPlaceholder(index), identifier)
+	}
 	return strings.TrimSpace(value)
 }
 

@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,8 +41,13 @@ func piRefuterReview(t *testing.T) (string, reviewtransaction.CompactStore, revi
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	handle, err := reviewtransaction.PublishReviewRepositoryContext(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
-		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+	updated, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	record = updated
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,16 +55,17 @@ func piRefuterReview(t *testing.T) (string, reviewtransaction.CompactStore, revi
 	return repo, store, record, handle
 }
 
-func piRefuterBinding(record reviewtransaction.CompactRecord, handle string) []string {
+func piRefuterBinding(repo string, record reviewtransaction.CompactRecord, handle string) []string {
 	return []string{
+		"--cwd", repo,
 		"--repository-context", handle, "--lineage", record.State.LineageID,
-		"--target", record.State.InitialSnapshot.Identity, "--expected-revision", record.Revision,
+		"--target", record.State.InitialSnapshot.Identity, "--expected-revision", record.State.CapturePhaseRevision,
 	}
 }
 
 func piRefuterRawResult(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord) []byte {
 	t.Helper()
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.Revision)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,13 +82,16 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
-	binding := piRefuterBinding(record, handle)
+	handle = rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	binding := piRefuterBinding(repo, record, handle)
 
 	var first bytes.Buffer
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--materialize=true"), &first); err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.Revision)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +105,9 @@ func TestReviewCaptureRefuterMaterializePrintsPiProviderTaskWithoutCapturing(t *
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Fatal("repeated refuter materialization changed the provider task bytes")
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || slot.Occupied {
-		t.Fatalf("refuter materialize occupied the refuter result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatalf("refuter materialize mutated compact authority: %#v, %v", current, err)
 	}
 }
 
@@ -129,11 +142,79 @@ func overrideProviderRoleHostAdapter(t *testing.T, adapter reviewerprovider.Adap
 	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return adapter }
 }
 
+type controlledDeadlineContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+	mu   sync.RWMutex
+	err  error
+}
+
+func (ctx *controlledDeadlineContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *controlledDeadlineContext) Err() error {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+	return ctx.err
+}
+
+func (ctx *controlledDeadlineContext) expire(err error) {
+	ctx.once.Do(func() {
+		ctx.mu.Lock()
+		ctx.err = err
+		ctx.mu.Unlock()
+		close(ctx.done)
+	})
+}
+
+type deadlineAfterReadyAdapter struct {
+	adapter   reviewerprovider.Adapter
+	readyPath string
+}
+
+type providerReviewResult struct {
+	raw []byte
+	err error
+}
+
+func (adapter deadlineAfterReadyAdapter) Review(ctx context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+	controlled := &controlledDeadlineContext{Context: ctx, done: make(chan struct{})}
+	results := make(chan providerReviewResult, 1)
+	go func() {
+		raw, err := adapter.adapter.Review(controlled, invocation)
+		results <- providerReviewResult{raw: raw, err: err}
+	}()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	lifeline := time.NewTimer(5 * time.Second)
+	defer lifeline.Stop()
+	for {
+		select {
+		case result := <-results:
+			return result.raw, result.err
+		case <-ticker.C:
+			if _, err := os.Stat(adapter.readyPath); err == nil {
+				controlled.expire(context.DeadlineExceeded)
+				returnResult := <-results
+				return returnResult.raw, returnResult.err
+			}
+		case <-ctx.Done():
+			controlled.expire(ctx.Err())
+			returnResult := <-results
+			return returnResult.raw, returnResult.err
+		case <-lifeline.C:
+			controlled.expire(context.Canceled)
+			returnResult := <-results
+			return returnResult.raw, fmt.Errorf("fake pi did not signal readiness: %w", returnResult.err)
+		}
+	}
+}
+
 func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
-	binding := piRefuterBinding(record, handle)
+	binding := piRefuterBinding(repo, record, handle)
 	// An execution without the identified host-relay runtime is refused; the
 	// gate is symmetric with the materialize form.
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--execute=true"), io.Discard); err == nil || !strings.Contains(err.Error(), "requires --agent") {
@@ -150,13 +231,16 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *test
 		terminal.LineageID != record.State.LineageID || terminal.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("refuter capture closure = %#v", terminal)
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("refuter submission did not occupy the refuter result slot: %#v, %v", slot, err)
-	}
 	final, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
+	}
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, captured := final.State.AdmittedRoleResult(reviewtransaction.CompactRoleRefuter, record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity, request.RequestHash); !captured {
+		t.Fatal("refuter submission did not merge an in-record role value")
 	}
 	if final.State.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("terminal state = %q, want corroborated blocking finding to require correction", final.State.State)
@@ -172,21 +256,27 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 		t.Skip("the stalled fake pi is a POSIX shell script")
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	_, store, record, handle := piRefuterReview(t)
+	repo, store, record, handle := piRefuterReview(t)
 	previous := reviewProviderRoleCaptureTimeout
 	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
-	reviewProviderRoleCaptureTimeout = 100 * time.Millisecond
+	reviewProviderRoleCaptureTimeout = 10 * time.Second
+	ready := filepath.Join(t.TempDir(), "pi-ready")
 	stalled := filepath.Join(t.TempDir(), "stalled-pi")
-	if err := os.WriteFile(stalled, []byte("#!/bin/sh\nsleep 10\n"), 0o700); err != nil {
+	if err := os.WriteFile(stalled, []byte("#!/bin/sh\n: > "+strconv.Quote(ready)+"\nexec sleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	overrideProviderRoleHostAdapter(t, &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }})
-	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
+	realPi := &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }}
+	overrideProviderRoleHostAdapter(t, deadlineAfterReadyAdapter{adapter: realPi, readyPath: ready})
+	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("stalled pi deadline refusal = %v", err)
 	}
-	if slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir); err != nil || slot.Occupied {
-		t.Fatalf("stalled pi execution mutated the refuter slot: %#v, %v", slot, err)
+	if _, readinessErr := os.Stat(ready); readinessErr != nil {
+		t.Fatalf("fake pi did not announce readiness before deadline: %v", readinessErr)
+	}
+	current, loadErr := store.Load()
+	if loadErr != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatalf("stalled pi execution mutated compact authority: %#v, %v", current, loadErr)
 	}
 }
 
@@ -238,9 +328,13 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "either --materialize",
 		},
 		{
-			name: "without relay handshake", env: "",
+			// Issue #4256: without a real bound transaction, an unrelayed Pi
+			// materialize call is refused by the same repository-context
+			// binding check every other runtime hits -- never by an
+			// eligibility gate keyed on the relay handshake env var.
+			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "not eligible for immutable receipt review",
+			want: "repository_context_unavailable",
 		},
 		{
 			name: "without materialize or input", env: reviewPiHostRelayContract,
@@ -271,9 +365,12 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "invalid_request",
 		},
 		{
-			name: "execution without relay handshake", env: "",
+			// Same as the materialize case above: the fake binding is
+			// refused on its own merits, never by the relay handshake env
+			// var (issue #4256).
+			name: "execution without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true"),
-			want: "not eligible for immutable receipt review",
+			want: "repository_context_unavailable",
 		},
 	}
 	for _, test := range tests {
@@ -399,16 +496,23 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	// The rendered transition is executable exactly as issued: the vector
 	// itself materializes, spawns the Go-owned pi process, and admits.
 	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
-	execute := []string{"capture-refuter"}
+	execute := []string{"capture-refuter", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		execute = append(execute, argument.Token)
 	}
 	if err := RunReview(execute, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
-	if err != nil || !slot.Occupied {
-		t.Fatalf("rendered execution did not occupy the refuter result slot: %#v, %v", slot, err)
+	final, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range final.State.AdmittedRoleResults {
+		found = found || entry.Role == reviewtransaction.CompactRoleRefuter
+	}
+	if !found {
+		t.Fatal("rendered execution did not merge an in-record refuter value")
 	}
 }
 
@@ -460,7 +564,7 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 
 	// Materialize form of the same rendered binding: idempotent,
 	// byte-identical to the Go-materialized validator request, slot-free.
-	prelude := []string{"capture-validation"}
+	prelude := []string{"capture-validation", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		if argument.Name == "execute" {
 			continue
@@ -476,7 +580,7 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, err := reviewProviderNewTargetedValidatorRequest(t.Context(), repo, record.State, record.Revision, correction)
+	native, err := reviewProviderNewTargetedValidatorRequest(t.Context(), repo, record.State, record.State.CapturePhaseRevision, correction)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,15 +594,15 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Fatal("repeated validator materialization changed the provider task bytes")
 	}
-	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, request)
-	if err != nil || slot.Occupied {
-		t.Fatalf("validator materialize occupied the result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleTargetedValidator) {
+		t.Fatalf("validator materialize mutated compact authority: %#v, %v", current, err)
 	}
 
 	// Execution: the rendered vector spawns the Go-owned pi transport and the
 	// raw bytes close the bounded correction on their terminal capture.
 	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: providerTargetedValidationPayload(t, request)})
-	execute := []string{"capture-validation"}
+	execute := []string{"capture-validation", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		execute = append(execute, argument.Token)
 	}
@@ -527,13 +631,14 @@ func TestReviewCaptureValidationBindsFrozenRequestHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := reviewtransaction.PublishTargetedValidationReviewRepositoryContext(t.Context(), repo, request)
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, reviewtransaction.ReviewRepositoryContextBinding{LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision})
 	if err != nil {
 		t.Fatal(err)
 	}
 	binding := []string{
+		"--cwd", repo,
 		"--repository-context", handle, "--lineage", lineage,
-		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.Revision,
+		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 	}
 	stale := append(slices.Clone(binding), "--request-hash", "sha256:"+strings.Repeat("0", 64),
 		"--agent", string(model.AgentPi), "--materialize=true")
@@ -592,5 +697,34 @@ func TestNegotiatedStatusOffersCurrentValidationCaptureForOtherRuntimes(t *testi
 		task == nil || task.Agent != "review-validator" || task.Role != string(reviewerprovider.RoleTargetedValidator) ||
 		!strings.HasPrefix(task.Prompt, reviewProviderTaskBindingHeader+" ") {
 		t.Fatalf("OpenCode validation rendering changed: %#v", opencodeInput)
+	}
+}
+
+func recordHasAdmittedRole(state reviewtransaction.CompactState, role reviewtransaction.CompactRole) bool {
+	for _, entry := range state.AdmittedRoleResults {
+		if entry.Role == role {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRefuterRequestCarriesTheFindingClaimText is #3482: the compiled refuter
+// batch listed each inferential finding as finding_id plus proof locations
+// only, so the refuter had no proposition to corroborate or refute and could
+// honestly return nothing but inconclusive, which escalates every lineage.
+func TestRefuterRequestCarriesTheFindingClaimText(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, _, record, handle := piRefuterReview(t)
+	handle = rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	var prompt bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", string(model.AgentPi), "--materialize=true"), &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt.String(), `"finding_id":"R3-001"`) || !strings.Contains(prompt.String(), `"claim":"candidate failure"`) {
+		t.Fatalf("refuter request omits the finding's claim text; the refuter can only return inconclusive:\n%s", prompt.String())
 	}
 }

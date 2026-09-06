@@ -14,9 +14,9 @@ import (
 // names the exact contract value the caller must pass, not only the concept.
 func TestReviewStatusTargetSelectorsRequireContractNamesValue(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	err := RunReviewStatus([]string{"--cwd", repo, "--lineage", "target-selector-needs-contract"}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "--contract "+ReviewIntegrationContractV1) {
-		t.Fatalf("review status target selector error = %v, want it to name --contract %s", err, ReviewIntegrationContractV1)
+	err := RunReviewStatus([]string{"--cwd", repo, "--base-ref", "target-selector-needs-contract"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--contract "+ReviewIntegrationContractV1) || !strings.Contains(err.Error(), ReviewIntegrationContractV2) {
+		t.Fatalf("review status target selector error = %v, want it to name --contract %s or %s", err, ReviewIntegrationContractV1, ReviewIntegrationContractV2)
 	}
 }
 
@@ -91,6 +91,7 @@ func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.
 		t.Fatalf("START result = %#v", started)
 	}
 	err := RunReviewCaptureResult([]string{
+		"--cwd", repo,
 		"--repository-context", started.RepositoryContext.Handle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,

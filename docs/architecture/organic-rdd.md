@@ -24,6 +24,8 @@ selectorless STATUS -> exact START -> bound collection/finalize -> approved + bu
 
 ### Preflight and START
 
+The orchestrator enters this lifecycle once per candidate, after an authorized implementation is complete and normalized and before reporting it complete, whenever the switch reads enabled. It never skips the preflight because the user did not explicitly ask for a review; only a trivial passive documentation-only edit, an explicitly unreviewed candidate, or an already-bound transaction excuses the STATUS call.
+
 Selectorless STATUS does not scan or resume ambient authority. It preflights the current worktree candidate and returns one exact START invocation. START creates one compact transaction whose lineage, worktree, and target are explicit and immutable.
 
 The parent retains the lineage, revision, and target returned by START. Every subsequent STATUS, capture, and FINALIZE call uses those exact tokens. An exact active START replay can report `replayed`; a genuinely new START is independent. A burned lineage is never reused.
@@ -63,7 +65,7 @@ Review completion is evidence about the completed transaction, not delivery auth
 
 ## Runtime boundary
 
-The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ordinary SDD behavior and makes no review-transport promise. Pi receives the lifecycle dynamically over the generic base only when its compiled capability advertises the provider contract.
+The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ordinary SDD behavior and makes no review-transport promise. Pi receives the review execution contract through `orchestration/pi.md` in the provider contract bundle, which gentle-pi mirrors and injects at session start; gentle-ai writes nothing into the Pi system prompt.
 
 ## Historical compatibility
 

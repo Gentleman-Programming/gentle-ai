@@ -86,11 +86,13 @@ func issue2138AssertGeneratedFallbacks(mode string) func(*Sandbox, Observation) 
 		if !ok {
 			return fmt.Errorf("generated %s OpenCode settings have no agent object", mode)
 		}
-		wantTools := map[string]map[string]bool{
-			"general": {"read": true, "write": true, "edit": true, "bash": true, "task": false},
-			"explore": {"read": true, "write": false, "edit": false, "bash": false, "task": false, "codegraph_codegraph_explore": true},
+		// Fallback agents use permission boundaries so global sensitive-path read
+		// rules remain authoritative without deprecated agent-local tools maps.
+		wantPermissions := map[string]map[string]string{
+			"general": {"task": "deny"},
+			"explore": {"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
 		}
-		for name, toolsWant := range wantTools {
+		for name, permissionsWant := range wantPermissions {
 			raw, ok := agents[name].(map[string]any)
 			if !ok {
 				return fmt.Errorf("generated %s settings omit fallback agent %q", mode, name)
@@ -112,14 +114,20 @@ func issue2138AssertGeneratedFallbacks(mode string) func(*Sandbox, Observation) 
 			if name == "explore" && strings.Contains(strings.ToLower(description+" "+prompt), "web search") {
 				return fmt.Errorf("generated %s explore fallback advertises unavailable web search", mode)
 			}
-			tools, ok := raw["tools"].(map[string]any)
-			if !ok {
-				return fmt.Errorf("generated %s fallback agent %q has no tool boundary", mode, name)
+			if _, exists := raw["tools"]; exists {
+				return fmt.Errorf("generated %s fallback agent %q emits deprecated tools", mode, name)
 			}
-			for tool, want := range toolsWant {
-				got, exists := tools[tool].(bool)
+			permissions, ok := raw["permission"].(map[string]any)
+			if !ok {
+				return fmt.Errorf("generated %s fallback agent %q has no permission boundary", mode, name)
+			}
+			if len(permissions) != len(permissionsWant) {
+				return fmt.Errorf("generated %s fallback agent %q permissions=%v, want %v", mode, name, permissions, permissionsWant)
+			}
+			for permission, want := range permissionsWant {
+				got, exists := permissions[permission].(string)
 				if !exists || got != want {
-					return fmt.Errorf("generated %s fallback agent %q tool %s=%v, want %t", mode, name, tool, tools[tool], want)
+					return fmt.Errorf("generated %s fallback agent %q permission %s=%v, want %s", mode, name, permission, permissions[permission], want)
 				}
 			}
 		}

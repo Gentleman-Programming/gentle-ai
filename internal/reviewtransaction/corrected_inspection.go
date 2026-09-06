@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 )
 
 // CorrectedCandidateInspectionRepositoryContextError marks opaque repository
@@ -18,11 +19,19 @@ func (err *CorrectedCandidateInspectionRepositoryContextError) Unwrap() error { 
 // ResolveCorrectedCandidateInspection resolves the immutable correction snapshot
 // for a captured targeted-validation request without rebuilding live workspace
 // content. The returned snapshot can be passed to SnapshotBuilder.InspectCandidate.
-func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextHandle string, request TargetedValidationRequest) (Snapshot, error) {
+func ResolveCorrectedCandidateInspection(ctx context.Context, repo string, repositoryContextHandle string, request TargetedValidationRequest) (Snapshot, error) {
 	if err := ValidateTargetedValidationRequest(request); err != nil {
 		return Snapshot{}, errors.New("corrected candidate inspection request is invalid") // refusal:by-design operator-knowledge: only a fresh native transition can provide an exact provider-issued request
 	}
-	repo, binding, err := resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
+	var binding ReviewRepositoryContextBinding
+	var err error
+	if strings.HasPrefix(repositoryContextHandle, reviewRepositoryContextV2HandlePrefix) {
+		repo, binding, err = resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx, repo, repositoryContextHandle, ReviewRepositoryContextBinding{
+			LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+		})
+	} else {
+		repo, binding, err = resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
+	}
 	if err != nil {
 		return Snapshot{}, &CorrectedCandidateInspectionRepositoryContextError{cause: err}
 	}
@@ -39,7 +48,7 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextH
 		return Snapshot{}, err
 	}
 	state := record.State
-	if record.Revision != request.ExpectedRevision || state.LineageID != request.LineageID ||
+	if state.CapturePhaseRevision != request.ExpectedRevision || state.LineageID != request.LineageID ||
 		state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() {
 		return Snapshot{}, errors.New("corrected candidate inspection requires current unconsumed correction authority") // refusal:by-design operator-knowledge: only current compact authority can identify an open correction transaction
 	}
@@ -64,7 +73,7 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repositoryContextH
 	if err := builder.ValidateEvidence(ctx, correction); err != nil || correction.Identity != request.CorrectionTargetIdentity {
 		return Snapshot{}, errors.New("corrected candidate inspection tree evidence does not match request") // refusal:by-design world-action: missing or mismatched Git objects require a fresh correction capture
 	}
-	expected, err := targetedValidationRequestForCorrection(state, record.Revision, correction)
+	expected, err := targetedValidationRequestForCorrection(state, state.CapturePhaseRevision, correction)
 	if err != nil || !reflect.DeepEqual(request, expected) {
 		return Snapshot{}, errors.New("corrected candidate inspection request does not match authority") // refusal:by-design operator-knowledge: only native authority can derive the exact targeted-validation request
 	}
@@ -101,8 +110,8 @@ func frozenCorrectedCandidateInspectionRequest(ctx context.Context, repo string,
 }
 
 // ResolveCorrectedCandidateInspectionBinding verifies a provider-issued targeted inspection binding.
-func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryContextHandle string, binding ReviewRepositoryContextBinding, requestHash string) (SnapshotBuilder, Snapshot, error) {
-	repo, contextBinding, frozen, err := resolveTargetedValidationReviewRepositoryContext(ctx, repositoryContextHandle)
+func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repo string, repositoryContextHandle string, binding ReviewRepositoryContextBinding, requestHash string) (SnapshotBuilder, Snapshot, error) {
+	repo, contextBinding, frozen, err := resolveTargetedValidationReviewRepositoryContext(ctx, repo, repositoryContextHandle, binding)
 	if err != nil {
 		return SnapshotBuilder{}, Snapshot{}, &CorrectedCandidateInspectionRepositoryContextError{cause: err}
 	}
@@ -120,18 +129,18 @@ func ResolveCorrectedCandidateInspectionBinding(ctx context.Context, repositoryC
 	if err != nil {
 		return SnapshotBuilder{}, Snapshot{}, err
 	}
-	if record.Revision != binding.Revision || record.State.State != StateCorrectionRequired ||
+	if record.State.CapturePhaseRevision != binding.Revision || record.State.State != StateCorrectionRequired ||
 		record.State.ProposedCorrectionLines == nil || record.State.CorrectionAttemptConsumed() {
 		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection requires current unconsumed correction authority") // refusal:by-design operator-knowledge: a stale or spent correction must be refreshed through STATUS
 	}
-	request, err := frozenCorrectedCandidateInspectionRequest(ctx, repo, record.State, record.Revision, frozen.CorrectionCandidateTree)
+	request, err := frozenCorrectedCandidateInspectionRequest(ctx, repo, record.State, record.State.CapturePhaseRevision, frozen.CorrectionCandidateTree)
 	if err != nil || request.CorrectionTargetIdentity != binding.TargetIdentity || request.RequestHash != requestHash {
 		return SnapshotBuilder{}, Snapshot{}, errors.New("corrected candidate inspection request hash does not match authority") // refusal:by-design operator-knowledge: only the native targeted request owns this hash
 	}
 	// The frozen correction tree belongs to this exact provider context. The
 	// canonical resolver revalidates it without rebuilding the live correction
 	// candidate after the validator was issued.
-	snapshot, err := ResolveCorrectedCandidateInspection(ctx, repositoryContextHandle, request)
+	snapshot, err := ResolveCorrectedCandidateInspection(ctx, repo, repositoryContextHandle, request)
 	if err != nil {
 		return SnapshotBuilder{}, Snapshot{}, err
 	}

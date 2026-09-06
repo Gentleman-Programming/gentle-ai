@@ -52,11 +52,7 @@ When native SDD status reports `blocked(edit_authority_missing)`, its structured
 
 ### Language Domain Contract
 
-- The active persona controls direct user/orchestrator conversation only. Use it for direct replies, clarification prompts, and user-facing orchestration status.
-- Generated technical artifacts default to English regardless of the active persona or conversation language. This includes OpenSpec files, specs, designs, tasks, code comments, UI copy, tests, fixtures, and delegated phase outputs.
-- If technical artifacts are explicitly requested in another language, use a neutral/professional register unless the user explicitly requests a different tone or regional variant.
-- Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; otherwise use a neutral/professional register unless the target context clearly calls for another tone or regional variant.
-- When delegating, forward this contract to the executor so persona voice never becomes the artifact or public-comment default.
+{{GENTLE_AI_SDD_SECTION:Language Domain Contract}}
 
 ### Delegation Rules
 
@@ -114,10 +110,13 @@ The canonical native bounded-review contract is injected from the shared provide
 
 {{GENTLE_AI_RESEARCH_LIFECYCLE}}
 
+<!-- gentle-ai:sdd-model-assignments -->
+<!-- /gentle-ai:sdd-model-assignments -->
+
 ## SDD Workflow (lazy-loaded)
 
 The detailed SDD procedure is intentionally NOT embedded in this always-on parent thread. Before handling any SDD command, meta-command, continuation, apply/verify/archive routing, or SDD/Judgment-Day phase delegation, read:
 
-`~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
+`.claude/skills/_shared/sdd-orchestrator-workflow.md` under the workspace when a workspace-scope install wrote it there, otherwise `~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
 
-That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, model assignments, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
+That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, sub-agent launch protocol, context protocol, topic keys, and recovery rules.

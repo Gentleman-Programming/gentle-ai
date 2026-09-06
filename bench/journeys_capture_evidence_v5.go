@@ -11,7 +11,8 @@ const (
 	captureEvidenceDescriptorNormalLineage     = "capture-evidence-v5-normal"
 	captureEvidenceDescriptorCorrectionLineage = "capture-evidence-v5-correction"
 	targetedInspectionLineage                  = "targeted-validator-inspection"
-	statusSchemaV5                             = "gentle-ai.review-integration.status/v5"
+	statusSchemaV6                             = "gentle-ai.review-integration.status/v6"
+	statusSchemaV7                             = "gentle-ai.review-integration.status/v7"
 	verificationEvidenceSchemaV1               = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
 	verificationEvidenceRecordSchemaV2         = "gentle-ai.review-verification-evidence/v2"
 )
@@ -112,10 +113,10 @@ func finalizeV5NormalReview(r *journeyRun) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("finalize normal v5 evidence: %s", firstLine(observation.Stderr))
 	}
-	if err := requireBurnedApproval(captureEvidenceDescriptorNormalLineage)(r.sandbox, observation); err != nil {
+	if err := requirePendingApproval(captureEvidenceDescriptorNormalLineage)(r.sandbox, observation); err != nil {
 		return err
 	}
-	return requireAtomicLineageBurned(r, captureEvidenceDescriptorNormalLineage)
+	return requireAtomicLineageAcknowledged(r, captureEvidenceDescriptorNormalLineage)
 }
 
 func captureV5NormalEvidenceDescriptor(r *journeyRun) error {
@@ -157,7 +158,7 @@ func executeV5CaptureEvidenceDescriptor(r *journeyRun, lineage, evidenceName str
 	if err != nil {
 		return waveCorrectionStatus{}, err
 	}
-	if status.Schema != statusSchemaV5 || status.Authority == nil || status.NextTransition == nil ||
+	if status.Schema != statusSchemaV7 || status.Authority == nil || status.NextTransition == nil ||
 		status.NextTransition.Kind != "collect" || status.NextTransition.Collect == nil ||
 		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].CaptureOperation != "review.capture-evidence" {
 		return waveCorrectionStatus{}, fmt.Errorf("v5 status did not publish capture-evidence: %+v", status)
@@ -246,7 +247,7 @@ func completeBurnedV5DescriptorCorrectionFor(r *journeyRun, lineage string) erro
 	if err := completeV5DescriptorCorrectionFor(r, lineage); err != nil {
 		return err
 	}
-	return requireAtomicLineageBurned(r, lineage)
+	return requireAtomicLineageAcknowledged(r, lineage)
 }
 
 func completeV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {

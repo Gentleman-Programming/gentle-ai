@@ -43,6 +43,14 @@ func TestReviewFacadeStartDirectRouteRefusesUncompletableReview(t *testing.T) {
 	if !strings.Contains(err.Error(), "--base-ref") || !strings.Contains(err.Error(), "--committed-only") {
 		t.Fatalf("refusal error = %v, want it to carry the base-diff continuation flags", err)
 	}
+	// Issue #2870: the named negotiated continuation must itself ask for
+	// consent, exactly like the STATUS-supplied transition command already
+	// does (reviewStartArguments). Without --consent relay, a caller that
+	// copies this exact provider-supplied invocation and runs it without a
+	// TTY mints a medium/high-risk review lineage with no consent envelope.
+	if !strings.Contains(err.Error(), "--consent relay") {
+		t.Fatalf("refusal error = %v, want the named negotiated continuation to include --consent relay", err)
+	}
 
 	stores, storesErr := reviewtransaction.CompactAuthorityLeaves(context.Background(), repo)
 	if storesErr != nil {

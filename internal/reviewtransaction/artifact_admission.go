@@ -28,27 +28,135 @@ const (
 
 type ArtifactInspectionStatus string
 
-const ArtifactInspectionCompleted ArtifactInspectionStatus = "completed"
+const (
+	ArtifactInspectionCompleted ArtifactInspectionStatus = "completed"
+	// ArtifactInspectionUnavailable is issue #4256's typed replacement for the
+	// removed free-text evidence scan: the published reviewer-result schema
+	// (reviewerprovider.LensResultSchema) pins inspection.status to the
+	// constant "completed" alone, and the reviewer prompt
+	// (internal/cli/review_lens_context.go's reviewLensContextInstructionText)
+	// told a reviewer that could not inspect the candidate to say so only in
+	// evidence prose -- which was the one signal the removed scan read. This
+	// value gives that case a typed status instead: a reviewer that could not
+	// inspect the candidate sets inspection.status to "unavailable" with a
+	// non-empty inspection.reason. Admission (below) treats this field as
+	// the primary completeness signal; a narrow evidence-text backstop is
+	// kept as defense in depth for a reviewer that reports an access
+	// failure in prose while leaving the status at "completed".
+	ArtifactInspectionUnavailable ArtifactInspectionStatus = "unavailable"
+)
 
 // ArtifactInspection is the reviewer's structured assertion that every path
-// in the immutable manifest was actually inspected.
+// in the immutable manifest was actually inspected. Reason is required and
+// non-empty only when Status is ArtifactInspectionUnavailable; it is the
+// reviewer's own account of why the candidate could not be inspected.
 type ArtifactInspection struct {
 	Status ArtifactInspectionStatus `json:"status"`
 	Paths  []string                 `json:"paths"`
+	Reason string                   `json:"reason,omitempty"`
+}
+
+// ValidationInspectionStatus is the targeted validator's typed counterpart to
+// ArtifactInspectionStatus (issue #4266): the validator's own claim about
+// whether it read the frozen candidate trees before producing a check's
+// verdict.
+type ValidationInspectionStatus string
+
+const (
+	// ValidationInspectionCompleted marks a check whose verdict was produced
+	// after the validator actually read the frozen candidate trees.
+	ValidationInspectionCompleted ValidationInspectionStatus = "completed"
+	// ValidationInspectionUnavailable marks a check that produced no verdict
+	// because the validator could not read the frozen candidate trees. Reason
+	// is required whenever Status is this value.
+	ValidationInspectionUnavailable ValidationInspectionStatus = "unavailable"
+)
+
+// ValidationInspection is the targeted validator's structured assertion about
+// whether it inspected the frozen candidate trees before producing a check's
+// verdict, mirroring the reviewer's ArtifactInspection contract added for
+// issue #4256. Unlike the reviewer, a validator has no changed-path manifest
+// to prove complete coverage against, so its only claim is whether inspection
+// happened at all, plus a required Reason when it did not.
+//
+// When present, admission trusts this field exclusively and never scans
+// Evidence (issue #4266). See ValidationCheckInconclusive for the narrow
+// evidence-scan fallback that applies only when Inspection is absent.
+type ValidationInspection struct {
+	Status ValidationInspectionStatus `json:"status"`
+	Reason string                     `json:"reason,omitempty"`
+}
+
+// ValidationCheckInconclusive decides whether a targeted-validator check
+// produced no verdict. A check carrying ValidationInspection is judged by
+// that field alone: "completed" is conclusive, "unavailable" is inconclusive,
+// and any other value is a schema violation -- returned as an error rather
+// than silently treated as completed, so an unrecognized status never fails
+// open. A check that omits Inspection entirely predates the typed field:
+// trusting the absent default unconditionally would admit a legacy validator
+// that still reports in free text that it could not read the frozen trees as
+// a genuine verdict, so this narrow legacy case scans Evidence instead.
+func ValidationCheckInconclusive(inspection *ValidationInspection, evidence []string) (bool, error) {
+	if inspection != nil {
+		switch inspection.Status {
+		case ValidationInspectionCompleted:
+			return false, nil
+		case ValidationInspectionUnavailable:
+			return true, nil
+		default:
+			return false, fmt.Errorf("targeted validator inspection.status %q is invalid; the only admitted values are %q and %q; rerun gentle-ai review capture-validation --execute=true with a corrected result", inspection.Status, ValidationInspectionCompleted, ValidationInspectionUnavailable)
+		}
+	}
+	for _, line := range evidence {
+		if evidenceReportsUnavailableInspection(line) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ArtifactAdmissionCausalDowngrade names one severe finding whose self-claimed
+// candidate-causal disposition (introduced/behavior-activated/worsened) could
+// not be proven by repository-derived changed-line evidence. Admission
+// downgrades exactly this finding to CausalUnknown -- the same disposition
+// CompactReviewView's replay already assigns an unverified claim -- and
+// admits the rest of the artifact, instead of rejecting the whole result for
+// one borderline finding.
+type ArtifactAdmissionCausalDowngrade struct {
+	FindingID string `json:"finding_id"`
+	Reason    string `json:"reason"`
 }
 
 // ArtifactAdmission records the provider's decision and exact raw/canonical
 // payload identities. Only completed records are reviewer results.
 type ArtifactAdmission struct {
-	Schema                    string                    `json:"schema"`
-	Decision                  ArtifactAdmissionDecision `json:"decision"`
-	SubjectHash               string                    `json:"subject_hash"`
-	RawSHA256                 string                    `json:"raw_sha256"`
-	CanonicalSHA256           string                    `json:"canonical_sha256"`
-	ResultHash                string                    `json:"result_hash,omitempty"`
-	CandidateCausalFindingIDs []string                  `json:"candidate_causal_finding_ids"`
-	Diagnostic                string                    `json:"diagnostic,omitempty"`
+	Schema                    string                             `json:"schema"`
+	Decision                  ArtifactAdmissionDecision          `json:"decision"`
+	SubjectHash               string                             `json:"subject_hash"`
+	RawSHA256                 string                             `json:"raw_sha256"`
+	CanonicalSHA256           string                             `json:"canonical_sha256"`
+	ResultHash                string                             `json:"result_hash,omitempty"`
+	CandidateCausalFindingIDs []string                           `json:"candidate_causal_finding_ids"`
+	DowngradedCausalFindings  []ArtifactAdmissionCausalDowngrade `json:"downgraded_causal_findings,omitempty"`
+	Diagnostic                string                             `json:"diagnostic,omitempty"`
 }
+
+// EvidenceDerivationStatus reports whether CandidateCausalFindingIDs was
+// computed from a complete repository-derived changed-line signal for every
+// self-claimed candidate-causal finding it covers, or whether that derivation
+// degraded for at least one of them (binary content, an untraceable rename,
+// or another condition the changed-line derivation could not resolve). A
+// request that never sets this field defaults to EvidenceDerivationComplete,
+// matching every caller that replays an already-admitted result rather than
+// freshly deriving evidence -- the degraded case can only have been produced
+// by a fresh derivation that already gated it before the replay was ever
+// persisted.
+type EvidenceDerivationStatus string
+
+const (
+	EvidenceDerivationComplete EvidenceDerivationStatus = "complete"
+	EvidenceDerivationDegraded EvidenceDerivationStatus = "degraded"
+)
 
 type ArtifactAdmissionRequest struct {
 	ExpectedSubject   ArtifactSubject
@@ -60,8 +168,17 @@ type ArtifactAdmissionRequest struct {
 	// causality the provider verified against repository-derived changed-line
 	// evidence before admission.
 	CandidateCausalFindingIDs []string
-	RawPayload                []byte
-	CanonicalPayload          []byte
+	// EvidenceDerivation and EvidenceDerivationReason report the quality of
+	// the changed-line derivation behind CandidateCausalFindingIDs. When
+	// EvidenceDerivationDegraded, AdmitArtifact refuses to downgrade any
+	// unverified self-claimed finding to CausalUnknown -- a degraded
+	// derivation cannot distinguish "proven not caused by the candidate" from
+	// "no dependable signal could be derived", and downgrading on that
+	// ambiguity would silently neutralize a real blocker.
+	EvidenceDerivation       EvidenceDerivationStatus
+	EvidenceDerivationReason string
+	RawPayload               []byte
+	CanonicalPayload         []byte
 }
 
 // ArtifactAdmissionError exposes the stable native decision without requiring
@@ -229,7 +346,15 @@ func NewArtifactLocationAdmissionError(findingID, location string, cause error) 
 	}
 }
 
-func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
+// Validate checks admission is a self-consistent completed binding for
+// subject. canonicalPayload is the exact bytes the caller stores or intends
+// to store as the admitted result's envelope Result (see
+// CanonicalReviewerResultPayload) -- it is only compared against
+// CanonicalSHA256 when DowngradedCausalFindings is non-empty, since that is
+// the one case where CanonicalSHA256 is derived from a rewritten (not
+// caller-submitted) canonical form and a caller-local re-serialization could
+// silently drift from what AdmitArtifact actually hashed.
+func (admission ArtifactAdmission) Validate(subject ArtifactSubject, canonicalPayload []byte) error {
 	if admission.Schema != ArtifactAdmissionSchema || admission.Decision != ArtifactAdmissionCompleted ||
 		admission.SubjectHash != subject.SubjectHash || !validSHA256(admission.RawSHA256) ||
 		!validSHA256(admission.CanonicalSHA256) || !validSHA256(admission.ResultHash) ||
@@ -244,6 +369,20 @@ func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
 		if !artifactFindingID.MatchString(id) {
 			return errors.New("artifact admission candidate-causal finding ID is invalid")
 		}
+	}
+	downgradedIDs := make([]string, len(admission.DowngradedCausalFindings))
+	for index, downgrade := range admission.DowngradedCausalFindings {
+		if !artifactFindingID.MatchString(downgrade.FindingID) || downgrade.Reason != "unverified_location" || stringIndex(ids, downgrade.FindingID) >= 0 {
+			return errors.New("artifact admission downgraded causal finding is invalid") // refusal:by-design world-action: only AdmitArtifact constructs this record, so a malformed entry is a provider code defect no operator command can repair
+		}
+		downgradedIDs[index] = downgrade.FindingID
+	}
+	canonicalDowngradedIDs, err := canonicalStrings(downgradedIDs, "downgraded causal finding id")
+	if err != nil || !equalStrings(canonicalDowngradedIDs, downgradedIDs) {
+		return errors.New("artifact admission downgraded causal finding IDs are not canonical") // refusal:by-design world-action: only AdmitArtifact constructs this record, so non-canonical IDs are a provider code defect no operator command can repair
+	}
+	if len(admission.DowngradedCausalFindings) > 0 && admission.CanonicalSHA256 != payloadSHA256(canonicalPayload) {
+		return errors.New("artifact admission canonical digest does not match the downgraded canonical payload") // refusal:by-design world-action: only AdmitArtifact and its exact stored bytes can satisfy this; a mismatch requires storage inspection, not an operator command
 	}
 	return ValidateArtifactSubject(subject)
 }
@@ -334,6 +473,13 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	for index, entry := range request.FrozenContext.ChangedPathManifest {
 		wantPaths[index] = entry.Path
 	}
+	if request.Inspection.Status == ArtifactInspectionUnavailable {
+		reason := strings.TrimSpace(request.Inspection.Reason)
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return fail(ArtifactAdmissionIncomplete, "reviewer declared inspection unavailable: "+reason+"; "+artifactRecaptureContinuation)
+	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
 		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
@@ -363,13 +509,35 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup is unavailable")
 	}
 	defer cleanup()
+	resolveBasename := candidateBasenameResolver(request.FrozenContext.ChangedPathManifest)
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
 	wantCandidateCausalIDs := make([]string, 0)
 	for _, evidence := range canonical.Evidence {
+		// Issue #4256: whether inspection was completed is decided primarily,
+		// above, by the typed request.Inspection.Status field -- by the time
+		// this loop runs, Status is guaranteed "completed" (unavailable and
+		// every other non-completed value already returned above). Free-text
+		// evidence is ordinarily the reviewer's own citations and rationale,
+		// not a second inspection-completeness signal, so this admission no
+		// longer treats a bare word like "unavailable" as disqualifying:
+		// evidence such as "the fixture was unavailable in the previous
+		// release" is ordinary review prose and must be admitted.
+		//
+		// A narrow defense-in-depth backstop remains (review finding
+		// R4-false-completion-backstop-removed): Status is produced by a
+		// non-deterministic model, so a reviewer that could not read the
+		// candidate but leaves Status at "completed" -- the schema's own
+		// first example -- while its evidence names a read/access failure in
+		// the same narrow phrase family evidenceReportsUnavailableInspection
+		// already recognizes (never a bare "unavailable") must still be
+		// caught here, not admitted as a false completion.
 		if evidenceReportsUnavailableInspection(evidence) {
-			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
+			return fail(ArtifactAdmissionIncomplete,
+				"reviewer evidence reports the candidate could not be inspected even though inspection.status is \"completed\"; "+
+					"declare inspection.status: \"unavailable\" with a non-empty inspection.reason instead of describing the failure only in evidence: "+
+					artifactRecaptureContinuation)
 		}
-		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains)
+		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains, resolveBasename)
 		if lookupErr != nil {
 			return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
 		}
@@ -395,10 +563,23 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 				findingAdmissionDiagnostic("invalid_finding_location", finding.ID, finding.Location, reason), locationErr)
 		}
 		if stringIndex(wantPaths, location.Path) < 0 {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			// The same citation shape reaches a finding's own location, and
+			// resolving it in evidence and proofs but not here would refuse the
+			// exact artifact the rest of this admission just accepted.
+			resolved, unique, resolveErr := resolveBasename(location.Path)
+			if resolveErr != nil {
+				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
+			}
+			if !unique || stringIndex(wantPaths, resolved) < 0 {
+				return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
+			}
+			// The citation is left as the reviewer wrote it. Normalizing it here
+			// would rewrite the reviewer's own text for no consumer: nothing
+			// downstream reads this location, and an unobserved rewrite is a
+			// claim no test can hold.
 		}
 		for _, proof := range finding.ProofRefs {
-			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains)
+			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains, resolveBasename)
 			if lookupErr != nil {
 				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
 			}
@@ -428,26 +609,111 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	// the same candidate-causal findings in a different order or with
 	// non-canonical formatting must still admit, since admission persists the
 	// canonical form below rather than the caller's raw bytes.
-	if !equalStrings(verifiedIDs, wantCandidateCausalIDs) {
-		var findingID, location string
-		for _, finding := range canonical.Findings {
-			if stringIndex(wantCandidateCausalIDs, finding.ID) >= 0 && stringIndex(verifiedIDs, finding.ID) < 0 {
-				findingID, location = finding.ID, finding.Location
-				break
-			}
+	//
+	// verifiedIDs is only ever computed (review_artifact.go's
+	// verifiedCandidateCausalFindingIDs) from findings that already self-claim
+	// candidate causality, so it can never legitimately name an ID outside
+	// wantCandidateCausalIDs. A caller that names one anyway disagrees with the
+	// canonical findings about which findings even exist -- a structural
+	// defect distinct from an unproven claim on a real finding -- and still
+	// rejects the whole artifact.
+	for _, id := range verifiedIDs {
+		if stringIndex(wantCandidateCausalIDs, id) < 0 {
+			return failFinding(ArtifactAdmissionOutOfScope,
+				"verified candidate-causal finding IDs are not a subset of the reviewer's self-claimed candidate-causal findings",
+				findingAdmissionDiagnostic("candidate_causality_unclaimed_id", id, "", "id_not_self_claimed_by_finding"), nil)
+		}
+	}
+	// A self-claimed candidate-causal finding the caller could not verify
+	// against repository-derived changed-line evidence is downgraded to
+	// CausalUnknown here -- the disposition CompactReviewView's replay already
+	// assigns an unverified claim (compact.go) -- rather than rejecting the
+	// whole artifact for one borderline finding (#1757, #2782). The finding
+	// still admits with every other finding; its outcome becomes the
+	// non-blocking inconclusive follow-up path; and it can never become a
+	// correction target, since ValidateCorrectionPlanRequest only accepts a
+	// CausalIntroduced, CausalBehaviorActivated, or CausalWorsened
+	// disposition.
+	downgraded := make([]ArtifactAdmissionCausalDowngrade, 0, len(wantCandidateCausalIDs))
+	downgradedIDs := make(map[string]bool, len(wantCandidateCausalIDs))
+	for _, id := range wantCandidateCausalIDs {
+		if stringIndex(verifiedIDs, id) < 0 {
+			downgraded = append(downgraded, ArtifactAdmissionCausalDowngrade{FindingID: id, Reason: "unverified_location"})
+			downgradedIDs[id] = true
+		}
+	}
+	if len(downgraded) > 0 && request.EvidenceDerivation == EvidenceDerivationDegraded {
+		// A degraded changed-line derivation cannot tell "this finding is
+		// proven not caused by the candidate" from "no dependable signal could
+		// be derived at all" (binary content, an untraceable rename, or
+		// another gap named in the reason). Downgrading on that ambiguity
+		// would silently neutralize a real blocker the exact same way the
+		// old whole-artifact hard-reject did for a genuinely unproven claim --
+		// so this keeps the whole-artifact rejection instead of downgrading.
+		reason := strings.TrimSpace(request.EvidenceDerivationReason)
+		if reason == "" {
+			reason = "repository-derived changed-line evidence could not be fully resolved for this candidate"
 		}
 		return failFinding(ArtifactAdmissionOutOfScope,
-			"candidate-causal findings are not proven by repository-derived changed-line evidence",
-			findingAdmissionDiagnostic("candidate_causality_unproven", findingID, location, "line_not_changed_by_candidate"), nil)
+			"candidate-causal findings cannot be downgraded because their changed-line evidence derivation is degraded: "+reason+"; "+artifactRecaptureContinuation,
+			findingAdmissionDiagnostic("candidate_causality_evidence_degraded", downgraded[0].FindingID, "", "evidence_derivation_degraded"), nil)
+	}
+	if len(downgraded) > 0 {
+		// canonical.Findings is a freshly built slice of value copies (see
+		// canonicalLensResult), so rewriting a disposition here never aliases
+		// the caller's original request.Result.Findings. The rewrite happens
+		// before canonical.ResultHash and CanonicalSHA256 are (re)derived, so
+		// the hashes -- and every persisted artifact keyed off them -- reflect
+		// the downgraded disposition instead of the reviewer's unproven
+		// self-claim.
+		for index := range canonical.Findings {
+			if downgradedIDs[canonical.Findings[index].ID] {
+				canonical.Findings[index].CausalDisposition = CausalUnknown
+			}
+		}
+		canonical.ResultHash = LensResultHash(canonical)
+		canonicalPayload, payloadErr := CanonicalReviewerResultPayload(request.EchoedSubjectHash, request.Inspection, canonical)
+		if payloadErr != nil {
+			return fail(ArtifactAdmissionIncomplete, payloadErr.Error())
+		}
+		admission.CanonicalSHA256 = payloadSHA256(canonicalPayload)
 	}
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash
 	admission.CandidateCausalFindingIDs = verifiedIDs
+	if len(downgraded) > 0 {
+		admission.DowngradedCausalFindings = downgraded
+	}
 	return canonical, admission, nil
 }
 
 func payloadSHA256(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// CanonicalReviewerResultPayload deterministically serializes one admitted
+// reviewer result into the exact envelope-payload bytes (including the
+// trailing newline) whose SHA-256 becomes an ArtifactAdmission's
+// CanonicalSHA256. AdmitArtifact calls this to derive CanonicalSHA256 from
+// the findings it actually admits -- including any it just rewrote to
+// CausalUnknown -- and every consumer that needs to persist or re-verify that
+// same payload (the compact store's capture path, Validate's own
+// re-derivation) calls this identical function, so the bytes a constructor
+// hashes and the bytes a caller persists can never independently drift.
+func CanonicalReviewerResultPayload(subjectHash string, inspection ArtifactInspection, result LensResult) ([]byte, error) {
+	paths, err := canonicalPaths(inspection.Paths)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(compactProviderReviewerResult{
+		SubjectHash: subjectHash,
+		Inspection:  ArtifactInspection{Status: inspection.Status, Paths: paths},
+		Lens:        result.Lens, Findings: result.Findings, Evidence: result.Evidence,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(payload, '\n'), nil
 }
 
 // ExtractBoundedSingleJSONObject accepts transport prose around exactly one
@@ -461,10 +727,15 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 	candidates := []candidate{}
 	start, depth := -1, 0
 	inString, escaped := false, false
+	// The census below is what a truncated payload reports (issue #2791): a
+	// bare "no complete object" could not say whether an array, a nested
+	// object, or the whole payload was left open, nor where the scan stopped.
+	var census jsonStructuralCensus
 	for index, value := range payload {
 		if depth == 0 {
 			if value == '{' {
 				start, depth, inString, escaped = index, 1, false, false
+				census.count(index, &census.objectsOpened)
 			}
 			continue
 		}
@@ -484,10 +755,16 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 		switch value {
 		case '"':
 			inString = true
+		case '[':
+			census.count(index, &census.arraysOpened)
+		case ']':
+			census.count(index, &census.arraysClosed)
 		case '{':
 			depth++
+			census.count(index, &census.objectsOpened)
 		case '}':
 			depth--
+			census.count(index, &census.objectsClosed)
 			if depth == 0 {
 				var object map[string]json.RawMessage
 				fragment := bytes.TrimSpace(payload[start : index+1])
@@ -499,13 +776,42 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 		}
 	}
 	if depth != 0 || len(candidates) == 0 {
-		return nil, ArtifactAdmissionIncomplete, errors.New("reviewer payload contains no complete JSON object")
+		return nil, ArtifactAdmissionIncomplete, fmt.Errorf("reviewer payload contains no complete JSON object: %s", census.describe(len(payload))) // refusal:by-design operator-knowledge: only the reviewer runtime can return one complete JSON object; the census names what it left open
 	}
 	if len(candidates) != 1 {
 		return nil, ArtifactAdmissionAmbiguous, errors.New("reviewer payload contains multiple JSON objects")
 	}
 	match := candidates[0]
 	return append([]byte(nil), bytes.TrimSpace(payload[match.start:match.end])...), ArtifactAdmissionCompleted, nil
+}
+
+// jsonStructuralCensus counts the structural tokens ExtractBoundedSingleJSONObject
+// consumed outside strings and remembers how far the scan got, so an
+// incomplete payload is refused with a diagnosis instead of a verdict.
+type jsonStructuralCensus struct {
+	objectsOpened, objectsClosed, arraysOpened, arraysClosed int
+	lastStructuralEnd                                        int
+}
+
+func (census *jsonStructuralCensus) count(index int, counter *int) {
+	*counter++
+	census.lastStructuralEnd = index + 1
+}
+
+func (census jsonStructuralCensus) describe(length int) string {
+	if census.objectsOpened == 0 {
+		return fmt.Sprintf("no object start was found in %d bytes", length)
+	}
+	return fmt.Sprintf("%s opened, %d closed; %s opened, %d closed; scan ended at byte %d",
+		pluralCount(census.objectsOpened, "object"), census.objectsClosed,
+		pluralCount(census.arraysOpened, "array"), census.arraysClosed, census.lastStructuralEnd)
+}
+
+func pluralCount(count int, noun string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 var artifactFindingID = regexp.MustCompile(`^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -516,12 +822,53 @@ type artifactReferenceToken struct {
 	quoted bool
 }
 
+// frozenRepositoryPathListingLimit bounds the one full path listing the
+// basename index needs. The frozen trees are a reviewed candidate, not an
+// arbitrary repository, and an unbounded listing here would be a way to make
+// admission allocate on a caller's schedule.
 type frozenRepositoryPathLookup struct {
 	ctx       context.Context
 	repo      string
 	isolation []string
 	trees     []string
 	cache     map[string]bool
+}
+
+// candidateBasenameResolver answers the one citation shape a Go-owned reviewer
+// produces that a literal lookup cannot satisfy (#3042): a file of the
+// candidate named by its basename rather than its repository-relative path. The
+// path IS in the frozen candidate, so refusing it as outside is both wrong and
+// unrecoverable -- the reviewer is locked down, so no caller can correct the
+// citation and every retry reproduces it.
+//
+// It resolves against the frozen changed-path manifest rather than the tree:
+// that is the exact set the reviewer was shown, it is bounded by construction,
+// and it costs no Git call on a path that is deliberately bounded.
+//
+// Exactly one match resolves. Two or more do not, because choosing between them
+// would attach a finding to a file the reviewer never read, which is worse than
+// the refusal. A citation that already carries a directory prefix said where it
+// meant, so it is not eligible: being wrong about that is not ambiguity.
+func candidateBasenameResolver(manifest []ChangedPathManifestEntry) func(string) (string, bool, error) {
+	index := make(map[string]string, len(manifest))
+	for _, entry := range manifest {
+		base := entry.Path[strings.LastIndex(entry.Path, "/")+1:]
+		if base == "" || base == entry.Path {
+			continue
+		}
+		if existing, seen := index[base]; seen && existing != entry.Path {
+			index[base] = ""
+			continue
+		}
+		index[base] = entry.Path
+	}
+	return func(name string) (string, bool, error) {
+		if name == "" || strings.ContainsRune(name, '/') {
+			return "", false, nil
+		}
+		resolved := index[name]
+		return resolved, resolved != "", nil
+	}
 }
 
 func newFrozenRepositoryPathLookup(ctx context.Context, frozen FrozenCandidateContext) (*frozenRepositoryPathLookup, func(), error) {
@@ -585,7 +932,7 @@ func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, er
 // The offender return names the first malformed or unknown token verbatim so
 // a rejection is diagnosable after the fact; detection semantics are
 // unchanged.
-func referenceOutsideRepository(value string, lookup func(string) (bool, error)) (outside bool, offender string, err error) {
+func referenceOutsideRepository(value string, lookup func(string) (bool, error), resolveBasename func(string) (string, bool, error)) (outside bool, offender string, err error) {
 	for _, token := range artifactReferenceTokens(value) {
 		path, malformed := artifactRepositoryPathReference(token)
 		if malformed {
@@ -595,6 +942,22 @@ func referenceOutsideRepository(value string, lookup func(string) (bool, error))
 			continue
 		}
 		known, err := lookup(path)
+		if err != nil {
+			return false, "", err
+		}
+		if known {
+			continue
+		}
+		// A literal miss is not yet proof the citation left the candidate: it
+		// may be a bare basename that exactly one candidate path answers.
+		resolved, unique, err := resolveBasename(path)
+		if err != nil {
+			return false, "", err
+		}
+		if !unique {
+			return true, token.value, nil
+		}
+		known, err = lookup(resolved)
 		if err != nil {
 			return false, "", err
 		}
@@ -694,20 +1057,6 @@ func artifactReferenceTokens(value string) []artifactReferenceToken {
 	return tokens
 }
 
-// InconclusiveValidationEvidence reports whether a scoped-fix validation
-// check's evidence claims the immutable candidate could not be inspected.
-// Such a check carries no verdict in either direction: admitting it as
-// failed would consume the single correction attempt on a non-observation,
-// and admitting it as passed would approve without inspection.
-func InconclusiveValidationEvidence(evidence []string) bool {
-	for _, line := range evidence {
-		if evidenceReportsUnavailableInspection(line) {
-			return true
-		}
-	}
-	return false
-}
-
 func evidenceReportsUnavailableInspection(value string) bool {
 	value = strings.ToLower(strings.Join(strings.Fields(value), " "))
 	for _, phrase := range []string{
@@ -722,6 +1071,11 @@ func evidenceReportsUnavailableInspection(value string) bool {
 		"could not be inspected", "cannot be inspected", "can not be inspected",
 		"was not able to be inspected", "were not able to be inspected",
 		"no candidate contents were available", "no candidate content was available",
+		// Read failures reported as such (issue #1867). "read the manifest"
+		// alone would match a completed inspection, so every phrase here
+		// carries its own negation.
+		"read denied", "denied by filesystem", "cannot read diff", "cannot read manifest",
+		"could not read the candidate", "unable to read the candidate",
 	} {
 		if strings.Contains(value, phrase) {
 			return true

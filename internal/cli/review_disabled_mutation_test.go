@@ -63,12 +63,10 @@ func TestDisabledReviewRefusesEveryAuthorityProgressingVerb(t *testing.T) {
 		{verb: "capture-correction-plan", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--correction-lines", "1"}},
 		{verb: "capture-refuter", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--agent", "pi", "--execute"}},
 		{verb: "capture-validation", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--request-hash", digest, "--agent", "pi", "--execute"}},
-		{verb: "preserve-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
 		{verb: "repair", args: []string{"--contract", ReviewIntegrationContractV1}},
 		{verb: "invalidate", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest}},
 		{verb: "recover", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--disposition", "scope_changed"}},
 		{verb: "reclaim", args: []string{"--lineage", "review-disabled-sweep", "--reason", "reason", "--actor", "maintainer"}},
-		{verb: "dispose-result", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--lens", "review-risk", "--order", "0", "--artifact-digest", digest, "--class", "empty_result", "--diagnostic", "diagnostic", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "reopen-results", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 	} {
 		t.Run(testCase.verb, func(t *testing.T) {
@@ -209,5 +207,28 @@ func TestDisabledReviewCaptureResultEmitsTheTypedFailure(t *testing.T) {
 	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("capture-result failure envelope is invalid: %v", err)
+	}
+}
+
+// Issue #2981: a well-formed staged workspace-overlay STATUS with reviews off
+// failed in `pre_native` with a content-free envelope because the selector's
+// snapshot work ran before the kill switch was consulted. The plain STATUS
+// answers `stop rdd_disabled`; the overlay selector must answer the same.
+func TestDisabledReviewOverlayStatusAnswersRddDisabled(t *testing.T) {
+	repo, _ := disabledReviewRepo(t, "review-disabled-overlay")
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code",
+		"--next-transition", "--workspace-overlay", "--projection", "staged", "--base-ref", "HEAD",
+	}, &output)
+	if err != nil {
+		t.Fatalf("staged overlay STATUS while disabled failed: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "rdd_disabled" {
+		t.Fatalf("staged overlay transition while disabled = %#v, want stop rdd_disabled", status.NextTransition)
 	}
 }

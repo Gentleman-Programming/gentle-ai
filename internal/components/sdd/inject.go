@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -27,6 +28,9 @@ type InjectionResult struct {
 
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
+	// OpenCodeSettingsPath is the resolver-selected effective config path. When
+	// empty, injection preserves the adapter's global-path fallback.
+	OpenCodeSettingsPath string
 	// IncludeOpenCodeBackgroundPolicy includes the resolved OpenCode-only
 	// background-task policy in rendered prompts. The zero value is false. The
 	// caller MUST set this only after a later intent/capability resolution step;
@@ -233,7 +237,7 @@ var compatibilitySDDSkillIDs = []model.SkillID{
 	"sdd-onboard", "judgment-day",
 }
 
-// SkillDirectoryPaths returns every file that InjectSkillDirectory may write or
+// SkillDirectoryPaths returns every file that InjectSkillDirectoryForAgent may write or
 // remove. The legacy marker remains a transaction target so a failed refresh can
 // restore it from the compatibility backup.
 func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
@@ -259,25 +263,33 @@ func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 	return append(paths, skillPaths...), nil
 }
 
-// InjectSkillDirectory refreshes the SDD skills and their shared references in
-// an already-selected skills directory. It is separate from adapter injection
-// so compatibility paths can be refreshed once per operation.
-func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) {
-	return InjectSkillDirectoryWithWriter(skillDir, capability, filemerge.WriteFileAtomic)
-}
-
-// InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
-func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
-	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacySharedSkillMarker)
+// InjectSkillDirectoryForAgent refreshes SDD skills for one runtime, binding
+// the runtime identity the shared assets state (issue #2846: the deployed
+// skills/_shared review ledger contract kept the raw placeholder while the
+// inline orchestrator copy was rendered). An empty agent is the shared
+// compatibility root, which every runtime reads, so it renders the generic
+// `<runtime>` slot instead of one runtime's identity.
+func InjectSkillDirectoryForAgent(skillDir, capability string, agent model.AgentID) (InjectionResult, error) {
+	return injectSkillDirectoryWithWriter(skillDir, capability, agent, filemerge.WriteFileAtomic, removeLegacySharedSkillMarker)
 }
 
 // InjectSkillDirectoryWithCompatibilityWriter refreshes SDD skills through a
 // compatibility-root writer that owns both writes and legacy-marker removal.
 func InjectSkillDirectoryWithCompatibilityWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
-	return injectSkillDirectoryWithWriter(skillDir, capability, writeFile, removeLegacyMarker)
+	return injectSkillDirectoryWithWriter(skillDir, capability, "", writeFile, removeLegacyMarker)
 }
 
-func injectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
+// bindSharedSkillRuntimeIdentity renders the runtime placeholder a shared
+// asset carries with the identity of the runtime receiving it, or with the
+// generic `<runtime>` slot for the shared compatibility root.
+func bindSharedSkillRuntimeIdentity(content string, agent model.AgentID) string {
+	if agent == "" {
+		return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, "<runtime>")
+	}
+	return bindRuntimeAgentIdentity(content, agent)
+}
+
+func injectSkillDirectoryWithWriter(skillDir, capability string, agent model.AgentID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeLegacyMarker func(string) (bool, error)) (InjectionResult, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
@@ -297,7 +309,7 @@ func injectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(
 		}
 
 		path := filepath.Join(skillDir, "_shared", fileName)
-		writeResult, err := writeFile(path, []byte(content), 0o644)
+		writeResult, err := writeFile(path, []byte(bindSharedSkillRuntimeIdentity(content, agent)), 0o644)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -348,6 +360,24 @@ func removeLegacySharedSkillMarker(markerPath string) (bool, error) {
 	return true, nil
 }
 
+// Engram registers under two valid shapes for Claude Code: `claude mcp add
+// engram` exposes its tools as mcp__engram__*, and the plugin route namespaces
+// them as mcp__plugin_engram_engram__*. #2698/#3778: the agent contracts
+// hardcoded the plugin form, so on the direct route every declared Engram tool
+// named a tool that does not exist and the phase actor returned an empty
+// result.
+//
+// The assets carry {{ENGRAM_TOOL_PREFIX}}<tool> and injection expands it to
+// BOTH shapes, which is what #2698 proposes. Probing the ambient config
+// instead would be order-dependent: the Engram component registers the
+// user-scope entry during the same sync that renders these agents, so a probe
+// resolves one way on first render and the other way on the next.
+var engramToolPlaceholder = regexp.MustCompile(`\{\{ENGRAM_TOOL_PREFIX\}\}([A-Za-z0-9_]+)`)
+
+func expandEngramToolNames(content string) string {
+	return engramToolPlaceholder.ReplaceAllString(content, "mcp__engram__$1, mcp__plugin_engram_engram__$1")
+}
+
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
@@ -355,18 +385,18 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if err := validateOpenClawWorkspacePath(homeDir, adapter); err != nil {
 		return InjectionResult{}, err
 	}
-	var defaultPlan *opencodedefault.InstallPlan
-	if adapter.Agent() == model.AgentOpenCode {
-		var err error
-		defaultPlan, err = opencodedefault.PrepareInstall(adapter.SettingsPath(homeDir))
-		if err != nil {
-			return InjectionResult{}, err
-		}
-	}
-
 	var opts InjectOptions
 	if len(options) > 0 {
 		opts = options[0]
+	}
+	settingsPath := openCodeSettingsPath(homeDir, adapter, opts.OpenCodeSettingsPath)
+	var defaultPlan *opencodedefault.InstallPlan
+	if adapter.Agent() == model.AgentOpenCode {
+		var err error
+		defaultPlan, err = opencodedefault.PrepareInstall(settingsPath)
+		if err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	files := make([]string, 0)
@@ -487,6 +517,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 				changed = changed || writeResult.Changed
 				files = append(files, path)
+
+				// Retire the unprefixed name a pre-#2644 install managed so an
+				// upgraded Claude Code never keeps both command names.
+				legacy := LegacyClaudeCommandPath(adapter.Agent(), commandsDir, entry.Name())
+				if legacy == "" {
+					continue
+				}
+				if err := os.Remove(legacy); err != nil {
+					if !os.IsNotExist(err) {
+						return InjectionResult{}, fmt.Errorf("remove retired Claude command %s: %w", legacy, err)
+					}
+				} else {
+					changed = true
+					files = append(files, legacy)
+				}
 			}
 		}
 	}
@@ -495,14 +540,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// Ensure that agent is present even when persona component is not installed.
 	//
 	// mergedSettingsBytes holds the final merged opencode.json bytes produced by
-	// mergeJSONFile. We keep them in memory so the post-check (step 4) can validate
+	// the production merge helper. We keep them in memory so the post-check (step 4) can validate
 	// the merge result without re-reading from disk — on Windows/WSL2, the atomic
 	// rename (temp → target) may not be immediately visible to a subsequent
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
-		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
@@ -578,7 +622,11 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, fmt.Errorf("default OpenCode share mode: %w", err)
 			}
 
-			agentResult, err := mergeJSONFile(settingsPath, overlayBytes)
+			mergeSettings := mergeOpenCodeCompatibleJSONFile
+			if adapter.Agent() == model.AgentOpenCode {
+				mergeSettings = mergeOpenCodeJSONFile
+			}
+			agentResult, err := mergeSettings(settingsPath, overlayBytes)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -607,11 +655,24 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("clean stale profile JD agents %q: %w", profile.Name, cleanupErr)
 				}
 				changed = changed || cleanupResult.Changed
+				if adapter.Agent() == model.AgentKilocode {
+					cleanupResult, cleanupErr = cleanupKilocodeProfileJDPermissions(settingsPath, profile)
+					if cleanupErr != nil {
+						return InjectionResult{}, fmt.Errorf("clean Kilocode profile JD permissions %q: %w", profile.Name, cleanupErr)
+					}
+					changed = changed || cleanupResult.Changed
+				}
 				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown, opts.orchestratorPolicyRenderOptions())
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
 				}
-				profileResult, profileErr := mergeJSONFile(settingsPath, profileOverlay)
+				if adapter.Agent() == model.AgentKilocode {
+					profileOverlay, profileErr = restoreKilocodeManagedAgentToolsInOverlay(profileOverlay)
+					if profileErr != nil {
+						return InjectionResult{}, fmt.Errorf("restore Kilocode profile tools %q: %w", profile.Name, profileErr)
+					}
+				}
+				profileResult, profileErr := mergeSettings(settingsPath, profileOverlay)
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("merge profile overlay %q: %w", profile.Name, profileErr)
 				}
@@ -633,7 +694,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			skillResult, skillErr := InjectSkillDirectory(skillDir, opts.Capability)
+			skillResult, skillErr := InjectSkillDirectoryForAgent(skillDir, opts.Capability, adapter.Agent())
 			if skillErr != nil {
 				return InjectionResult{}, skillErr
 			}
@@ -646,7 +707,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// workflow procedure is installed as a lazy shared skill document and read
 	// only when an SDD command or SDD/Judgment-Day delegation needs it.
 	if adapter.Agent() == model.AgentClaudeCode {
-		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments)
+		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter)
 		if workflowErr != nil {
 			return InjectionResult{}, workflowErr
 		}
@@ -742,6 +803,8 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				contentStr = injectClaudeEffortFrontmatter(contentStr, assignment)
 			}
 
+			contentStr = expandEngramToolNames(contentStr)
+
 			if isMarkdownSubAgentPromptFile(entry.Name()) {
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
@@ -793,7 +856,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// opposite failure mode can also occur (in-memory buffer stale but
 	// disk has the correct content).
 	if adapter.Agent() == model.AgentOpenCode {
-		settingsPath := adapter.SettingsPath(homeDir)
 		settingsText := string(mergedSettingsBytes)
 
 		// Fallback: if in-memory bytes are empty but the merge succeeded
@@ -869,6 +931,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
+func openCodeSettingsPath(homeDir string, adapter agents.Adapter, effectivePath string) string {
+	if effectivePath != "" {
+		return effectivePath
+	}
+	return adapter.SettingsPath(homeDir)
+}
+
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
 	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) == "" {
 		return fmt.Errorf("openclaw workspace path is required for workspace-first injection")
@@ -890,7 +959,10 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
-	expandOpenCodeBoundedReviewAgents(agentsMap)
+	expandOpenCodeBoundedReviewAgents(agentsMap, agent == model.AgentOpenCode)
+	if agent == model.AgentKilocode {
+		restoreKilocodeManagedAgentTools(agentsMap)
+	}
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -1051,16 +1123,71 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-// expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
-// sub-agents shared by the OpenCode and Kilocode overlays. Both identities
-// get the identical shell-less, read-less shape. The OpenCode relay replaces
-// each review task prompt with the provider-owned immutable contract before
-// launch, so the lens itself needs no bash and no read tool — that contract is
-// its only byte source. Kilocode is not RDD-eligible and never receives the
-// relay, so review never starts there; it gets the identical denied shape
-// rather than a permissive one that a fresh Kilocode-specific entry point
-// could someday reach.
-func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
+// restoreKilocodeManagedAgentTools restores the exact Kilocode tools and
+// permission shapes that the shared OpenCode-compatible overlays carried before
+// managed OpenCode tools were removed.
+func restoreKilocodeManagedAgentTools(agentsMap map[string]any) {
+	for name, raw := range agentsMap {
+		agent, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch {
+		case name == "gentle-orchestrator" || strings.HasPrefix(name, "sdd-orchestrator-"):
+			agent["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}}
+		case isKilocodeProfilePhase(name):
+			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+			if name == "sdd-research" {
+				agent["permission"] = kilocodeResearchPermission()
+			} else {
+				delete(agent, "permission")
+			}
+		case name == "jd-judge-a" || name == "jd-judge-b" || strings.HasPrefix(name, "jd-judge-a-") || strings.HasPrefix(name, "jd-judge-b-"):
+			if name == "jd-judge-a" || name == "jd-judge-b" {
+				agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+			} else {
+				agent["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "bash": true}}
+			}
+			delete(agent, "permission")
+		case name == "jd-fix-agent" || strings.HasPrefix(name, "jd-fix-agent-"):
+			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+			delete(agent, "permission")
+		}
+	}
+}
+
+func kilocodeResearchPermission() map[string]any {
+	return map[string]any{"bash": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny"}
+}
+
+func restoreKilocodeManagedAgentToolsInOverlay(overlayBytes []byte) ([]byte, error) {
+	var overlay map[string]any
+	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
+		return nil, fmt.Errorf("unmarshal Kilocode profile overlay: %w", err)
+	}
+	agentsMap, ok := overlay["agent"].(map[string]any)
+	if !ok {
+		return overlayBytes, nil
+	}
+	restoreKilocodeManagedAgentTools(agentsMap)
+	result, err := json.MarshalIndent(overlay, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal Kilocode profile overlay: %w", err)
+	}
+	return append(result, '\n'), nil
+}
+
+func isKilocodeProfilePhase(name string) bool {
+	for _, phase := range subAgentPhaseOrder {
+		if name == phase || strings.HasPrefix(name, phase+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions ...bool) {
+	permissions := len(usePermissions) > 0 && usePermissions[0]
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
@@ -1068,8 +1195,12 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		}
 		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
-		agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
+		if permissions {
+			agent["permission"] = map[string]any{"*": "deny"}
+		} else {
+			agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+			agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
+		}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -1078,12 +1209,44 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 			continue
 		}
 		agent["prompt"] = judgmentDayReviewerContract()
-		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		if permissions {
+			agent["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		} else {
+			delete(agent, "permission")
+			agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		}
 	}
 
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
-		refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		if permissions {
+			refuter["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		} else {
+			delete(refuter, "permission")
+			refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		}
+	}
+
+	if validator, ok := agentsMap[opencode.ReviewValidatorAgent].(map[string]any); ok {
+		if permissions {
+			// The validator handles untrusted candidate input, so its shell is
+			// pinned to the single provider-issued read-only inspection command
+			// its briefing names (reviewerprovider contract); everything else
+			// is denied. Read stays unspecified so the global sensitive-path
+			// read denies remain authoritative.
+			validator["permission"] = map[string]any{
+				"write": "deny",
+				"edit":  "deny",
+				"task":  "deny",
+				"bash": map[string]any{
+					"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
+					"*": "deny",
+				},
+			}
+		} else {
+			delete(validator, "permission")
+			validator["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": true, "task": false}
+		}
 	}
 }
 
@@ -1532,8 +1695,10 @@ func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
 	}
 
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(data); err != nil {
 		return "", nil
+	} else {
+		root = parsedRoot
 	}
 
 	agentsRaw, ok := root["agent"]
@@ -1570,8 +1735,10 @@ func readMisnamedOpenCodeGentlemanSDDPrompt(settingsPath string) (string, error)
 	}
 
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(data); err != nil {
 		return "", nil
+	} else {
+		root = parsedRoot
 	}
 	agentsRaw, ok := root["agent"]
 	if !ok {
@@ -1613,7 +1780,11 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("install Claude skill-registry hook: %w", err)
 	}
-	return InjectionResult{Changed: changed, Files: []string{settingsPath}}, nil
+	stopHookChanged, err := ensureClaudeReviewStopHook(settingsPath, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
+	}
+	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
@@ -1726,12 +1897,108 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
+// ensureClaudeReviewStopHook appends the managed review preflight commands to
+// hooks.Stop and hooks.SessionStart in the Claude Code settings file. The
+// pair makes the review preflight deterministic across a Claude turn.
+// `gentle-ai review stop-hook --agent <agentID>` reads `hook_event_name` from
+// the payload on stdin: at SessionStart it records the session's starting
+// candidate as the per-session baseline, and at Stop it prints a block
+// decision only when RDD is enabled and the session has produced an
+// unreviewed candidate since that baseline. It never starts a review by
+// itself. The runtime identity is always the caller-supplied agentID (never
+// a compiled literal) per issue #2440: only the caller states which runtime
+// is executing.
+func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	command := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+
+	stopChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "Stop", settingsPath, command, map[string]any{
+		"matcher": "",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 60,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	sessionStartChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "SessionStart", settingsPath, command, map[string]any{
+		"matcher": "startup|resume|clear|compact",
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": command,
+				"timeout": 30,
+			},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if !stopChanged && !sessionStartChanged {
+		return false, nil
+	}
+
+	root["hooks"] = hooksMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
+// appendClaudeReviewStopHookEntry appends entry to hooksMap[hookKey] unless
+// an entry with the identical command is already present under that exact
+// key, so the Stop reminder and the SessionStart baseline (which share the
+// same command string) are tracked independently and both keys can coexist
+// with the UserPromptSubmit skill-registry hook.
+func appendClaudeReviewStopHookEntry(hooksMap map[string]any, hookKey, settingsPath, command string, entry map[string]any) (bool, error) {
+	raw, has := hooksMap[hookKey]
+	entries, _ := raw.([]any)
+	if has && entries == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.%s shape: want array", settingsPath, hookKey)
+	}
+	if claudeHookListContains(entries, command) {
+		return false, nil
+	}
+	entries = append(entries, entry)
+	hooksMap[hookKey] = entries
+	return true, nil
+}
+
 func claudeHookExists(root map[string]any, command string) bool {
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
 		hookEntries, ok := hooksMap[key].([]any)
 		if !ok {
 			continue
@@ -2004,29 +2271,58 @@ type mergeJSONResult struct {
 	merged []byte
 }
 
-func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+// mergeOpenCodeCompatibleJSONFile applies the legacy settings migrations shared
+// by OpenCode and Kilocode while preserving each provider's managed tools.
+func mergeOpenCodeCompatibleJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	baseJSON, err := readAndMigrateOpenCodeCompatibleJSON(path)
+	if err != nil {
+		return mergeJSONResult{}, err
+	}
+	return mergeJSONFileContents(path, baseJSON, overlay)
+}
+
+// mergeOpenCodeJSONFile applies the shared legacy settings migrations and then
+// removes deprecated agent-local tools only for OpenCode managed agent keys.
+func mergeOpenCodeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	baseJSON, err := readAndMigrateOpenCodeCompatibleJSON(path)
+	if err != nil {
+		return mergeJSONResult{}, err
+	}
+	baseJSON, err = removeManagedOpenCodeAgentTools(baseJSON, overlay)
+	if err != nil {
+		return mergeJSONResult{}, fmt.Errorf("remove managed OpenCode agent tools: %w", err)
+	}
+	return mergeJSONFileContents(path, baseJSON, overlay)
+}
+
+func readAndMigrateOpenCodeCompatibleJSON(path string) ([]byte, error) {
 	baseJSON, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return mergeJSONResult{}, fmt.Errorf("read json file %q: %w", path, err)
+			return nil, fmt.Errorf("read json file %q: %w", path, err)
 		}
 		baseJSON = nil
 	}
 
 	baseJSON, err = migrateLegacyOpenCodeAgentsKey(baseJSON)
 	if err != nil {
-		return mergeJSONResult{}, fmt.Errorf("migrate opencode agents key: %w", err)
+		return nil, fmt.Errorf("migrate OpenCode-compatible agents key: %w", err)
 	}
 	baseJSON, err = migrateLegacyOpenCodeSDDOrchestrator(baseJSON)
 	if err != nil {
-		return mergeJSONResult{}, fmt.Errorf("migrate opencode sdd orchestrator agent: %w", err)
+		return nil, fmt.Errorf("migrate OpenCode-compatible sdd orchestrator agent: %w", err)
 	}
 	baseJSON, err = migrateLegacyOpenCodeCommandPrompt(baseJSON)
 	if err != nil {
-		return mergeJSONResult{}, fmt.Errorf("migrate opencode command prompt field: %w", err)
+		return nil, fmt.Errorf("migrate OpenCode-compatible command prompt field: %w", err)
 	}
+	return baseJSON, nil
+}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResult, error) {
+	var merged []byte
+	var err error
+	merged, err = filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, err
 	}
@@ -2037,6 +2333,46 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	}
 
 	return mergeJSONResult{writeResult: writeResult, merged: merged}, nil
+}
+
+func removeManagedOpenCodeAgentTools(baseJSON, overlay []byte) ([]byte, error) {
+	keys := append([]string{"gentle-orchestrator", "general", "explore"}, ProfilePhaseOrder()...)
+	keys = append(keys, opencode.JDPhases()...)
+	keys = append(keys, opencode.ReviewPhases()...)
+	if overlayRoot, err := filemerge.UnmarshalJSONObject(overlay); err == nil {
+		if overlayAgents, ok := overlayRoot["agent"].(map[string]any); ok {
+			for key := range overlayAgents {
+				keys = append(keys, key)
+			}
+		}
+	}
+	keys = append(keys, discoverManagedProfileAgentKeys(baseJSON)...)
+	return filemerge.RemoveJSONAgentTools(baseJSON, keys...)
+}
+
+// discoverManagedProfileAgentKeys returns every profile-derived managed agent
+// key already present in the base settings. Install and reinstall merge no
+// profile overlay, so without this discovery a stale tools block on a named
+// profile agent (for example agent.sdd-apply-fast.tools) would survive and
+// keep bypassing the global sensitive-path read denies. Only canonical managed
+// prefixes with a valid profile-name suffix qualify; user-owned agents are
+// never returned.
+func discoverManagedProfileAgentKeys(baseJSON []byte) []string {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
+		return nil
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make([]string, 0, len(agents))
+	for key := range agents {
+		if _, managed := managedProfileAgentName(key); managed {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD
@@ -2074,8 +2410,8 @@ func openCodeSettingsHasShare(settingsPath string) bool {
 		return false
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(content, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(content)
+	if err != nil {
 		return false
 	}
 	_, exists := root["share"]
@@ -2096,8 +2432,10 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(baseJSON); err != nil {
 		return baseJSON, nil
+	} else {
+		root = parsedRoot
 	}
 
 	agentsRaw, ok := root["agent"]
@@ -2128,11 +2466,11 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 		delete(agentsMap, "gentleman")
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agentsMap}})
 	if err != nil {
 		return nil, err
 	}
-	return append(encoded, '\n'), nil
+	return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
 }
 
 func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
@@ -2164,8 +2502,8 @@ func looksLikeOpenCodeSDDConductor(agentRaw any) bool {
 }
 
 func hasOpenCodeAgentKey(settingsText, agentKey string) bool {
-	root := map[string]any{}
-	if err := json.Unmarshal([]byte(settingsText), &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject([]byte(settingsText))
+	if err != nil {
 		return false
 	}
 	agentsRaw, ok := root["agent"]
@@ -2189,9 +2527,11 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	}
 
 	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	if parsedRoot, err := filemerge.UnmarshalJSONObject(baseJSON); err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
+	} else {
+		root = parsedRoot
 	}
 
 	legacyRaw, hasLegacy := root["agents"]
@@ -2201,12 +2541,7 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 
 	legacy, ok := legacyRaw.(map[string]any)
 	if !ok {
-		delete(root, "agents")
-		encoded, err := json.MarshalIndent(root, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		return append(encoded, '\n'), nil
+		return filemerge.RemoveTopLevelJSONCValue(baseJSON, "agents"), nil
 	}
 
 	current := map[string]any{}
@@ -2225,12 +2560,15 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 	root["agent"] = current
 	delete(root, "agents")
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": current}})
 	if err != nil {
 		return nil, err
 	}
-
-	return append(encoded, '\n'), nil
+	updated, err := filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
+	if err != nil {
+		return nil, err
+	}
+	return filemerge.RemoveTopLevelJSONCValue(updated, "agents"), nil
 }
 
 // migrateLegacyOpenCodeCommandPrompt normalizes inline OpenCode command entries
@@ -2247,8 +2585,8 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(baseJSON, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
 		// Preserve prior behavior for non-JSON/non-parseable inputs.
 		return baseJSON, nil
 	}
@@ -2281,12 +2619,11 @@ func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
 		return baseJSON, nil
 	}
 
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	overlay, err := json.Marshal(map[string]any{"command": map[string]any{"__replace__": commandsRaw}})
 	if err != nil {
 		return nil, err
 	}
-
-	return append(encoded, '\n'), nil
+	return filemerge.MergeJSONObjectsPreserveJSONC(baseJSON, overlay)
 }
 
 // sddOrchestratorMarkers are used to detect if SDD content was already injected
@@ -2467,6 +2804,66 @@ func stripBareOrchestratorForFilePrompt(content string) string {
 	return result
 }
 
+// legacyPiSystemPromptSectionIDs lists every gentle-ai:-marked section that a
+// Pi install made before the capability manifest started reporting
+// SupportsSystemPrompt()==false for Pi (see 965187e6) could have left behind
+// in the Pi adapter's SystemPromptFile. Nothing manages this file anymore, so
+// none of these blocks self-heal on install/sync/uninstall. The
+// "codegraph-guidance" entry mirrors communitytool.codeGraphGuidanceSectionID,
+// which is unexported; agentguidance.RoutingSectionID covers the routing
+// guidance block a defect once wrote here instead of skipping Pi (#4063).
+var legacyPiSystemPromptSectionIDs = []string{
+	"sdd-orchestrator",
+	"strict-tdd-mode",
+	"persona",
+	"codegraph-guidance",
+	agentguidance.RoutingSectionID,
+}
+
+// RetirePiSystemPromptBlocks removes any gentle-ai managed markdown sections
+// (and a bare legacy SDD orchestrator block) that an older gentle-ai build
+// wrote into the Pi adapter's SystemPromptFile. gentle-pi owns the Pi system
+// prompt, so this file should carry no gentle-ai content going forward.
+//
+// It is safe to call unconditionally: a missing file is a no-op, and repeated
+// calls are idempotent. Content outside the managed markers is preserved
+// byte-for-byte. If nothing but whitespace remains after stripping, the file
+// is rewritten with that whitespace-only remainder rather than deleted: a
+// whitespace-only file is harmless (Pi appends nothing), the rewrite is
+// recoverable and consistent with every other managed-section rewrite, and
+// only the uninstall call site registers a backup target for this file.
+//
+// Only ever call this with the Pi adapter. Unlike the SupportsSystemPrompt()
+// gated helpers elsewhere in this package, it strips these sections
+// unconditionally regardless of what the adapter reports.
+func RetirePiSystemPromptBlocks(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	promptPath := adapter.SystemPromptFile(homeDir)
+
+	existing, err := readFileOrEmpty(promptPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	updated := existing
+	if hasLegacyBareOrchestrator(updated) {
+		updated = stripBareOrchestratorForFilePrompt(updated)
+	}
+	for _, sectionID := range legacyPiSystemPromptSectionIDs {
+		updated = filemerge.InjectMarkdownSection(updated, sectionID, "")
+	}
+
+	if updated == existing {
+		return InjectionResult{}, nil
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
 const instructionsFrontmatter = "---\n" +
 	"name: Gentle AI Persona\n" +
 	"description: Gentleman persona with SDD orchestration and Engram protocol\n" +
@@ -2545,6 +2942,13 @@ func stripBareOrchestratorSection(content string) string {
 func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, renderOptions OrchestratorRenderOptions) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 	content := renderSDDOrchestratorAsset(adapter.Agent(), renderOptions)
+	if adapter.Agent() == model.AgentClaudeCode {
+		var err error
+		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+	}
 
 	existing, err := readFileOrEmpty(promptPath)
 	if err != nil {
@@ -2571,7 +2975,7 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssign
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
 }
 
-func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {
+func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if adapter.Agent() != model.AgentClaudeCode {
 		return InjectionResult{}, nil
 	}
@@ -2581,13 +2985,6 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAs
 	}
 
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	if len(legacyAssignments) > 0 || len(phaseAssignments) > 0 {
-		var err error
-		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-	}
 
 	path := filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md")
 	writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
@@ -2629,7 +3026,7 @@ var claudeModelAssignmentReasons = map[string]string{
 	"jd-judge-a":   "Adversarial review — blind judge A",
 	"jd-judge-b":   "Adversarial review — blind judge B",
 	"jd-fix-agent": "Surgical fixes from confirmed issues",
-	"default":      "SDD/JD phase fallback",
+	"default":      "Generic and SDD/JD delegation fallback",
 }
 
 func injectClaudeModelAssignments(content string, assignments map[string]model.ClaudeModelAlias) (string, error) {
@@ -2710,9 +3107,9 @@ func renderClaudeEffortFrontmatter(assignment model.ClaudePhaseAssignment) strin
 func renderClaudeModelAssignmentsSection(assignments map[string]model.ClaudePhaseAssignment) string {
 	var b strings.Builder
 	b.WriteString("## Model Assignments\n\n")
-	b.WriteString("Read this table at session start (or before first SDD/Judgment-Day delegation), cache it for the session, and use the mapped alias only for SDD/Judgment-Day phase agents. If an SDD/Judgment-Day phase is missing, use the `default` fallback row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.\n\n")
-	b.WriteString("The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD/Judgment-Day phase sub-agents, not generic delegation.\n\n")
-	b.WriteString("**Mandatory phase model gate:** Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`. Generic/non-SDD delegation MUST NOT use this table; omit `model` unless the user explicitly requested an override. Before each SDD/Judgment-Day Agent call, resolve the target phase to an alias from this table.\n\n")
+	b.WriteString("Read this table at session start (or before the first Claude Agent delegation), cache it for the session, and use the mapped alias for every Claude Agent call. Named SDD/Judgment-Day roles use their named row; organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment. If a named SDD/Judgment-Day role is missing, use the `default` row. If you do not have access to the assigned model (for example, no Opus access), substitute `sonnet` and continue.\n\n")
+	b.WriteString("The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model.\n\n")
+	b.WriteString("**Mandatory model gate:** Every Claude Agent tool call MUST include `model`. Before each Claude Agent call, resolve named SDD/Judgment-Day roles from this table; for organic explorer/mapper/writer/verifier and other generic delegations, use the `default` assignment.\n\n")
 	b.WriteString("| Phase | Default Model | Effort | Reason |\n")
 	b.WriteString("|-------|---------------|--------|--------|\n")
 	for _, key := range claudeModelAssignmentRowOrder {
@@ -2875,8 +3272,8 @@ func readOpenCodeRootModel(path string) (string, error) {
 		return "", fmt.Errorf("read opencode root model from %q: %w", path, err)
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return "", nil
 	}
 
@@ -2897,8 +3294,8 @@ func readExistingAgentModels(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("read existing agent keys from %q: %w", path, err)
 	}
 
-	root := map[string]any{}
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return map[string]bool{}, nil
 	}
 

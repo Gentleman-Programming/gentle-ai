@@ -13,26 +13,26 @@ SDD is the structured planning layer for substantial changes. This file is the l
 
 Skills and slash commands:
 
-- `/sdd-init` → initialize SDD context; detects stack and testing capabilities.
-- `/sdd-explore <topic>` → investigate an idea; no implementation.
-- `/sdd-status [change]` → read-only structured status.
-- `/sdd-apply [change]` → implement pending tasks in batches.
-- `/sdd-verify [change]` → validate implementation against specs/tasks.
-- `/sdd-archive [change]` → close a completed change.
-- `/sdd-onboard` → guided end-to-end walkthrough.
+- `/gentle-sdd-init` → initialize SDD context; detects stack and testing capabilities.
+- `/gentle-sdd-explore <topic>` → investigate an idea; no implementation.
+- `/gentle-sdd-status [change]` → read-only structured status.
+- `/gentle-sdd-apply [change]` → implement pending tasks in batches.
+- `/gentle-sdd-verify [change]` → validate implementation against specs/tasks.
+- `/gentle-sdd-archive [change]` → close a completed change.
+- `/gentle-sdd-onboard` → guided end-to-end walkthrough.
 
 Meta-commands are handled by the orchestrator directly and do not appear in autocomplete:
 
-- `/sdd-new <change>` → run exploration then proposal.
-- `/sdd-continue [change]` → run the next dependency-ready phase.
-- `/sdd-ff <name>` → fast-forward proposal → specs → design → tasks.
+- `/gentle-sdd-new <change>` → run exploration then proposal.
+- `/gentle-sdd-continue [change]` → run the next dependency-ready phase.
+- `/gentle-sdd-ff <name>` → fast-forward proposal → specs → design → tasks.
 
 ### Native SDD Dispatcher Guard
 
-Before routing, continuing, applying, verifying, or archiving an SDD change, first determine this session's artifact store. The native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`) reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes.
+Before routing, continuing, applying, verifying, or archiving an SDD change, invoke the native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`). It resolves the artifact store the workspace declares and reports it in `artifactStore`.
 
-- For `engram`, do NOT invoke the dispatcher. Resolve status from Engram topic keys with `mem_search` followed by `mem_get_observation`.
-- For `openspec` or `hybrid`, use the dispatcher when available and treat its JSON as authoritative over prompt inference.
+- Do NOT determine the artifact store yourself, and do NOT branch on it. The dispatcher already did, and it returns the locators for the store it resolved.
+- Use the dispatcher for every store and treat its JSON as authoritative over prompt inference.
 - Route only by structured `nextRecommended`, dependency states, and `blockedReasons`; never infer from free text.
 - If blocked, stop and report the blocker. Do not proceed to apply, archive, or terminal work.
 
@@ -40,7 +40,7 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, fir
 
 Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit `SDD Session Preflight` decision block.
 
-This applies to `/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
+This applies to `/gentle-sdd-new`, `/gentle-sdd-ff`, `/gentle-sdd-continue`, `/gentle-sdd-explore`, `/gentle-sdd-status`, `/gentle-sdd-apply`, `/gentle-sdd-verify`, `/gentle-sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
 
 Required preflight choices:
 
@@ -90,7 +90,7 @@ Hard gate rules:
 
 ### SDD Entry Routing (MANDATORY)
 
-For a new product/code change request that says to use SDD, start at preflight -> init guard -> explore/proposal (`/sdd-new` equivalent). Never launch `sdd-apply` just because the user asked to implement a feature.
+For a new product/code change request that says to use SDD, start at preflight -> init guard -> explore/proposal (`/gentle-sdd-new` equivalent). Never launch `sdd-apply` just because the user asked to implement a feature.
 
 Only launch `sdd-apply` when all are true:
 
@@ -98,7 +98,7 @@ Only launch `sdd-apply` when all are true:
 2. The active change has existing spec, design, and tasks artifacts.
 3. The user explicitly asked to apply/continue implementation, or the prior SDD planning phase completed and the orchestrator has passed the review workload guard.
 
-If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement.
+If any dependency is missing, STOP and propose `/gentle-sdd-new` or `/gentle-sdd-ff`; do not implement.
 
 ### SDD Init Guard (MANDATORY)
 
@@ -148,8 +148,9 @@ Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `
 1. Before an actor or harness launch, call `gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
    - Exception: when this launch is a phase actor started BY a parent that already ran this exact acquire and got `state: proceed`, do not acquire blind — pass the parent's returned token as `--token <token>` on the actor's own acquire call. A matching token proves the actor is continuing that SAME attempt and returns `proceed` with zero ledger mutation; acquiring without it collides with the parent's own active attempt and deadlocks on `blocked: active_attempt` (#2291).
 2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
-3. After the external run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> ...` with a request ID distinct from the acquire operation's request ID, outcome, and bounded evidence. Reuse each operation's own ID only for its idempotent replay. Settle derives native binding/remediation inputs; pass `--successor-lineage` only for a distinct approved successor, otherwise the bound lineage remains its own successor.
-4. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
+3. After a failed or passed run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> --outcome <passed|failed> --evidence-revision <sha256> --diagnosis "<proven-diagnosis>" --harness-disposition <reused|invalidated> --cleanup-evidence "<evidence>" --process-evidence "<evidence>"`. After an interrupted run, pass `--outcome interrupted` and omit `--evidence-revision`. When the acquire carried `--remediates-evidence-revision <sha256>`, settle with the same `--remediates-evidence-revision <sha256>`. Use a `<settle-id>` distinct from the acquire operation's request ID; reuse each operation's own ID only for its idempotent replay. Settle defines no other flag and derives native binding and remediation inputs itself.
+4. On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure.
+5. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 
@@ -209,30 +210,6 @@ Always pass the resolved `delivery_strategy`, `chain_strategy`, and PR boundary/
 
 When launching `sdd-apply`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
 
-<!-- gentle-ai:sdd-model-assignments -->
-
-## Model Assignments
-
-Read this table before the first SDD/Judgment-Day delegation in a session, cache it, and use the mapped alias only for SDD/Judgment-Day phase agents. If a phase is missing, use `default`. If the assigned model is unavailable, substitute `sonnet` and continue.
-
-The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD/Judgment-Day phase sub-agents, not generic delegation.
-
-**Mandatory phase model gate:** Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`. Generic/non-SDD delegation MUST NOT use this table; omit `model` unless the user explicitly requested an override.
-
-| Phase       | Default Model | Effort  | Reason                                     |
-| ----------- | ------------- | ------- | ------------------------------------------ |
-| sdd-explore | sonnet        | default | Reads code, structural - not architectural |
-| sdd-propose | opus          | default | Architectural decisions                    |
-| sdd-spec    | sonnet        | default | Structured writing                         |
-| sdd-design  | opus          | default | Architecture decisions                     |
-| sdd-tasks   | sonnet        | default | Mechanical breakdown                       |
-| sdd-apply   | sonnet        | default | Implementation                             |
-| sdd-verify  | sonnet        | default | Validation against spec                    |
-| sdd-archive | haiku         | default | Copy and close                             |
-| default     | sonnet        | default | SDD/JD phase fallback                      |
-
-<!-- /gentle-ai:sdd-model-assignments -->
-
 ### Sub-Agent Launch Deduplication (MANDATORY)
 
 Maintain a session-scoped launch log of `(phase, task-fingerprint)` pairs. If the same pair already exists, do NOT launch again. Emit exactly one launch per distinct task and append the pair after launch.
@@ -240,13 +217,6 @@ Maintain a session-scoped launch log of `(phase, task-fingerprint)` pairs. If th
 ### Sub-Agent Launch Protocol
 
 ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved skill paths from the skill registry. Follow `~/.claude/skills/_shared/skill-resolver.md`.
-
-Pre-flight before every SDD/Judgment-Day Agent call:
-
-1. Identify the phase key (`sdd-apply`, `sdd-verify`, `jd-judge-a`, etc.).
-2. Look up the model alias in the Model Assignments table.
-3. Include `model: "<alias>"` in SDD/Judgment-Day Agent calls.
-4. For generic/non-SDD delegation, omit `model` unless the user explicitly requested one.
 
 Resolve skills once per session, cache the registry, and pass exact `SKILL.md` paths. If a delegated result reports `skill_resolution` as `fallback-registry`, `fallback-path`, or `none`, re-read the registry before subsequent delegations.
 

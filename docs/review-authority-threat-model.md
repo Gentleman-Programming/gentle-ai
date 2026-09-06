@@ -25,7 +25,7 @@ Review authority governs review lifecycle continuation and recovery only. Receip
 - Legal-transition validation against the currently locked state and repository-derived evidence.
 - Atomic file replacement, with file and directory synchronization where practical.
 - A writer lock and expected revision for concurrent-writer detection.
-- Native authority mutations first take a shared advisory maintenance lock at `<git-common-dir>/gentle-ai/REVIEW-MAINTENANCE.lock`, outside the replaceable `review-transactions` authority subtree, then their lineage or v2 lock; release is reversed. Approved maintenance tools take the same lock exclusively with a bounded context. The lock coordinates cooperative Gentle AI participants only and is not a defense against a malicious same-user actor.
+- Native authority mutations first take a shared advisory maintenance lock at `<git-common-dir>/gentle-ai/REVIEW-MAINTENANCE.lock`, outside the replaceable `review-transactions` authority subtree, then their lineage or v2 lock; release is reversed. Approved maintenance tools take the same lock exclusively with a bounded context. The lock coordinates cooperative Gentle AI™ participants only and is not a defense against a malicious same-user actor.
 - Exact retry recognition for idempotent operations.
 - Live-Git review-context re-derivation rather than trusting persisted mirrors; its result governs review continuation or recovery only, never delivery or archive.
 - Request-scoped status projection: one validated live snapshot is compared in memory with once-loaded authority, graph, and receipt evidence, so terminal history cannot amplify Git subprocesses.

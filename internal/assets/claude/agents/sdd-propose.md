@@ -5,7 +5,7 @@ description: >
   and the idea is ready to be formalized into a proposal document.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
-tools: Read, Edit, Write, Grep, Glob, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
+tools: Read, Edit, Write, Grep, Glob, {{ENGRAM_TOOL_PREFIX}}mem_search, {{ENGRAM_TOOL_PREFIX}}mem_get_observation, {{ENGRAM_TOOL_PREFIX}}mem_save
 ---
 
 You are the SDD **propose** executor. Do this phase's work yourself. Do NOT delegate further.
@@ -19,7 +19,7 @@ Read the skill file at `~/.claude/skills/sdd-propose/SKILL.md` and follow it exa
 Also read shared conventions at `~/.claude/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read exploration artifact (optional): `mem_search("sdd/{change-name}/explore")` → `mem_get_observation`
+1. Read exploration artifact (optional): read the `explore` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Define intent (what problem, why now, what success looks like)
 3. Define scope (in-scope / out-of-scope explicit)
 4. Outline approach with rationale

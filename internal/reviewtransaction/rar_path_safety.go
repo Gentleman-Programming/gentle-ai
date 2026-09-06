@@ -127,7 +127,12 @@ func ensureRARDirectoryChain(commonDir, root, want string, privateFrom int, crea
 			return statErr
 		}
 		if private {
-			if err := validatePrivateRARDirectory(current); err != nil {
+			// #3416: route through the same repair helper the create path
+			// above uses, whether this entry was just created or already
+			// existed -- previously an already-existing directory skipped the
+			// create branch entirely and was refused on its first validation,
+			// never given the repair a freshly created one always got.
+			if err := repairAndValidatePrivateRARDirectory(current); err != nil {
 				return fmt.Errorf("validate private RAR directory %q: %w", current, err)
 			}
 		} else if err := validateRARRepositoryParent(current); err != nil {
@@ -326,43 +331,6 @@ func publishPrivateRARImmutable(path string, payload []byte) error {
 		return err
 	}
 	return SyncReviewDirectory(dir)
-}
-
-func writePrivateRARAtomic(path string, payload []byte) error {
-	if len(payload) == 0 || len(payload) > rarAuthorityMaxBytes {
-		return errors.New("RAR atomic payload size is invalid") // refusal:by-design operator-knowledge: callers must supply a non-empty payload within the closed authority size bound
-	}
-	dir := filepath.Dir(path)
-	if err := validatePrivateRARDirectory(dir); err != nil {
-		return err
-	}
-	temp, err := createPrivateRARTempFile(dir)
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if _, err := temp.Write(payload); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := replaceFileAtomic(tempPath, path); err != nil {
-		return err
-	}
-	if err := validatePrivateRARFile(path); err != nil {
-		return err
-	}
-	if err := SyncReviewDirectory(dir); err != nil {
-		return &directorySyncError{path: path, cause: err}
-	}
-	return nil
 }
 
 func createPrivateRARTempFile(dir string) (*os.File, error) {

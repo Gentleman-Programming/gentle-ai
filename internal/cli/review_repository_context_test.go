@@ -32,13 +32,21 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	contextHandle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, Revision: started.RepositoryContext.Revision,
+	})
 	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
 	if err := os.WriteFile(resultPath, admittedReviewerPayloadForTest(t, repo, record, started.SelectedLenses[0], 0), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The process cwd stays unrelated on purpose: the capability is that a
+	// caller can capture from anywhere, and it now names the repository the
+	// provider-issued digest is verified against instead of reading a path out
+	// of the token.
 	t.Chdir(t.TempDir())
 	bindingArgs := []string{
-		"--repository-context", started.RepositoryContext.Handle,
+		"--cwd", repo,
+		"--repository-context", contextHandle,
 		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 		"--expected-revision", started.RepositoryContext.Revision,
 		"--lens", started.SelectedLenses[0], "--order", "0",
@@ -52,35 +60,25 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 	if checked.RepositoryRoot != "" || bytes.Contains(preflight.Bytes(), []byte(repo)) {
 		t.Fatalf("repository-context preflight leaked repository root: %s", preflight.String())
 	}
-
-	var preserved bytes.Buffer
-	if err := RunReviewPreserveResult(append(append([]string{}, bindingArgs...), "--input", resultPath), &preserved); err != nil {
-		t.Fatalf("preserve-result from unrelated cwd: %v", err)
+	beforeRefusal, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
 	}
-	var preservedEnvelope map[string]json.RawMessage
-	decodeStrictReviewJSON(t, preserved.Bytes(), &preservedEnvelope)
-	if _, leaked := preservedEnvelope["path"]; leaked || len(preservedEnvelope["reference"]) == 0 || bytes.Contains(preserved.Bytes(), []byte(repo)) || bytes.Contains(preserved.Bytes(), []byte(os.Getenv("HOME"))) {
-		t.Fatalf("opaque preserve response leaked provider paths or omitted its reference: %s", preserved.String())
-	}
-	var incident reviewIncidentArtifact
-	decodeStrictReviewJSON(t, preserved.Bytes(), &incident)
-	if incident.LineageID != started.LineageID || incident.TargetIdentity != started.RepositoryContext.TargetIdentity ||
-		incident.Lens != started.SelectedLenses[0] || incident.SelectedOrder != 0 || incident.Path != "" ||
-		!strings.HasPrefix(incident.Reference, reviewIncidentReferencePrefix) {
-		t.Fatalf("preserved incident = %#v", incident)
-	}
-	missingPreserveRevision := append(append([]string{}, bindingArgs...), "--input", resultPath)
-	for index := 0; index < len(missingPreserveRevision); index++ {
-		if missingPreserveRevision[index] == "--expected-revision" {
-			missingPreserveRevision = append(missingPreserveRevision[:index], missingPreserveRevision[index+2:]...)
-			break
+	for _, args := range [][]string{
+		replaceReviewContextArgument(t, bindingArgs, "rctx2_not-base64"),
+		replaceReviewArgument(t, bindingArgs, "--expected-revision", "sha256:"+strings.Repeat("0", 64)),
+	} {
+		if err := RunReviewCaptureResult(append(args, "--preflight"), io.Discard); err == nil ||
+			!strings.Contains(err.Error(), "repository_context_") || strings.Contains(err.Error(), repo) {
+			t.Fatalf("invalid rctx2 preflight error = %v", err)
 		}
-	}
-	if err := RunReviewPreserveResult(missingPreserveRevision, io.Discard); err == nil {
-		t.Fatal("repository-context preserve accepted a missing revision")
-	}
-	if err := RunReviewPreserveResult(append(append([]string{}, bindingArgs...), "--cwd", repo, "--input", resultPath), io.Discard); err == nil {
-		t.Fatal("repository-context preserve accepted an explicit cwd")
+		afterRefusal, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(beforeRefusal, afterRefusal) {
+			t.Fatal("invalid rctx2 preflight mutated compact authority")
+		}
 	}
 
 	args := append(append([]string{}, bindingArgs...), "--input", resultPath)
@@ -99,83 +97,34 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 	if err := RunReviewCaptureResult(args, &captured); err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(captured.Bytes(), []byte(repo)) || bytes.Contains(captured.Bytes(), []byte(os.Getenv("HOME"))) {
-		t.Fatalf("opaque capture response leaked provider paths: %s", captured.String())
-	}
 	var closure reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, captured.Bytes(), &closure)
 	if closure.Operation != "review/capture-result" || closure.LineageID != started.LineageID ||
 		closure.State != reviewtransaction.StateApproved {
 		t.Fatalf("opaque terminal capture = %#v", closure)
 	}
-}
-
-func TestPreserveResultRequiresExactLiveSelectedLensBinding(t *testing.T) {
-	for _, contextMode := range []bool{false, true} {
-		name := "legacy-cwd"
-		if contextMode {
-			name = "opaque-context"
-		}
-		t.Run(name, func(t *testing.T) {
-			reviewEnabledHome(t)
-			repo := initReviewCLIRepo(t)
-			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc preserveBinding() {}\n", 0o644)
-			started := runNegotiatedReviewStart(t, repo, "preserve-selected-binding-"+name)
-			if started.RepositoryContext == nil || len(started.SelectedLenses) != 1 {
-				t.Fatalf("START result = %#v", started)
-			}
-			input := filepath.Join(t.TempDir(), "reviewer.json")
-			writeReviewCLIJSON(t, input, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"binding test"}})
-			base := []string{"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity, "--input", input}
-			if contextMode {
-				base = append(base, "--repository-context", started.RepositoryContext.Handle, "--expected-revision", started.RepositoryContext.Revision)
-			} else {
-				base = append(base, "--cwd", repo)
-			}
-			wrongLens := reviewtransaction.LensRisk
-			if wrongLens == started.SelectedLenses[0] {
-				wrongLens = reviewtransaction.LensReliability
-			}
-			for _, binding := range []struct {
-				name  string
-				lens  string
-				order string
-			}{
-				{name: "wrong lens", lens: wrongLens, order: "0"},
-				{name: "wrong order", lens: started.SelectedLenses[0], order: "1"},
-			} {
-				t.Run(binding.name, func(t *testing.T) {
-					args := append(append([]string{}, base...), "--lens", binding.lens, "--order", binding.order)
-					if err := RunReviewPreserveResult(args, io.Discard); err == nil {
-						t.Fatalf("preserve-result accepted unselected lens/order %q/%s", binding.lens, binding.order)
-					}
-				})
-			}
-		})
+	if closure.Acknowledgement == nil {
+		t.Fatalf("opaque terminal capture omitted acknowledgement: %#v", closure)
 	}
+	assertApprovedAcknowledgementTransition(t, closure.Acknowledgement, repo, started.LineageID, closure.Acknowledgement.Binding.TargetIdentity, closure.StoreRevision)
 }
 
 func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
-	for _, damage := range []string{"locator", "authority"} {
+	for _, damage := range []string{"authority"} {
 		t.Run(damage, func(t *testing.T) {
 			home := reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc opaqueFailure() {}\n", 0o644)
 			started := runNegotiatedReviewStart(t, repo, "opaque-error-"+damage)
-			if damage == "locator" {
-				if err := os.RemoveAll(filepath.Join(home, ".gentle-ai", "review-contexts")); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Remove(store.StatePath()); err != nil {
-					t.Fatal(err)
-				}
+			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+			if err != nil {
+				t.Fatal(err)
 			}
-			err := RunReviewCaptureResult([]string{
+			if err := os.Remove(store.StatePath()); err != nil {
+				t.Fatal(err)
+			}
+			err = RunReviewCaptureResult([]string{
+				"--cwd", repo,
 				"--repository-context", started.RepositoryContext.Handle,
 				"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
 				"--expected-revision", started.RepositoryContext.Revision,
@@ -266,7 +215,7 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc corrected() int { return 2 }\n", 0o644)
 	debugStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	debugRecord, _ := debugStore.Load()
-	if _, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, debugRecord.State, debugRecord.Revision); err != nil {
+	if _, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, debugRecord.State, debugRecord.State.CapturePhaseRevision); err != nil {
 		t.Fatalf("derive targeted validation request from corrected candidate: %v", err)
 	}
 	var statusOutput bytes.Buffer
@@ -313,7 +262,7 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 	}
 	request := status.ValidationRequest
 	if request.Schema != reviewtransaction.TargetedValidationRequestSchema ||
-		request.LineageID != started.LineageID || request.ExpectedRevision != status.Authority.Revision ||
+		request.LineageID != started.LineageID || request.ExpectedRevision != debugRecord.State.CapturePhaseRevision ||
 		request.TargetIdentity != started.RepositoryContext.TargetIdentity || len(request.FixFindingIDs) != 1 ||
 		request.CorrectionCandidateTree == "" || request.CorrectionTargetIdentity == "" ||
 		reviewtransaction.ValidateTargetedValidationRequest(*request) != nil {
@@ -327,6 +276,10 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 		t.Fatalf("validation transition = %#v", status.NextTransition)
 	}
 
+	captureArgs := reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0])
+	captureArgs = replaceReviewContextToken(t, captureArgs, rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: started.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	}))
 	previous := reviewProviderRoleHostAdapter
 	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
@@ -335,7 +288,7 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	var output bytes.Buffer
-	if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, status.NextTransition.Collect.Inputs[0]), &output); err != nil {
+	if err := RunReviewCaptureValidation(captureArgs, &output); err != nil {
 		t.Fatalf("capture exact targeted-validator transition: %v\n%s", err, output.String())
 	}
 	var closure reviewLastEventClosureResult
@@ -344,9 +297,10 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 		closure.LineageID != started.LineageID {
 		t.Fatalf("targeted-validator terminal capture = %#v", closure)
 	}
-	if bytes.Contains(output.Bytes(), []byte(filepath.Join(repo, ".git", "gentle-ai"))) || bytes.Contains(output.Bytes(), []byte(repo)) {
-		t.Fatalf("targeted validator response leaked provider internals: %s", output.String())
+	if closure.Acknowledgement == nil {
+		t.Fatalf("targeted-validator terminal capture omitted acknowledgement: %#v", closure)
 	}
+	assertApprovedAcknowledgementTransition(t, closure.Acknowledgement, repo, started.LineageID, closure.Acknowledgement.Binding.TargetIdentity, closure.StoreRevision)
 }
 
 func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
@@ -435,21 +389,19 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	}
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, first.Bytes(), &started)
-	startSchema := compileWholePublishedReviewSchema(t, "v2", "start.schema.json")
+	startSchema := compileWholePublishedReviewSchema(t, "v2", "start-v4.schema.json")
 	validatePublishedReviewSchema(t, startSchema, first.Bytes())
 	if started.RepositoryContext == nil || started.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
-		started.RepositoryContext.Handle == "" || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) {
-		t.Fatalf("repository context = %#v", started.RepositoryContext)
+		!strings.HasPrefix(started.RepositoryContext.Handle, "rctx2_") || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) {
+		t.Fatalf("START emitted legacy or invalid repository context = %#v", started.RepositoryContext)
 	}
-	// The published v3 START schema makes the operation-event pair optional;
-	// atomic START has no receipt or recovery event to synthesize.
-	if started.RepositoryContext.EventID != "" || started.RepositoryContext.Outcome != "" {
-		t.Fatalf("atomic START synthesized repository-context event data = %#v", started.RepositoryContext)
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".gentle-ai", "review-contexts")); !os.IsNotExist(err) {
+		t.Fatalf("START persisted a retired repository-context locator: %v", err)
 	}
 	if bytes.Contains(first.Bytes(), []byte(repo)) || bytes.Contains(first.Bytes(), []byte(filepath.Join(repo, ".git"))) {
 		t.Fatalf("negotiated START leaked a repository path: %s", first.String())
 	}
-	root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
+	root, err := reviewtransaction.ResolveReviewRepositoryContext(context.Background(), repo, started.RepositoryContext.Handle, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, Revision: started.RepositoryContext.Revision,
 	})
 	if err != nil || root != repo {
@@ -475,15 +427,34 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	if status.RepositoryContext == nil || status.RepositoryContext.Handle != started.RepositoryContext.Handle {
 		t.Fatalf("status repository context = %#v", status.RepositoryContext)
 	}
-	if status.RepositoryContext.EventID != "" || status.RepositoryContext.Outcome != "" {
-		t.Fatalf("atomic START STATUS synthesized repository-context event data = %#v", status.RepositoryContext)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wrongRevision := status
-	wrongRevisionContext := *status.RepositoryContext
-	wrongRevisionContext.Revision = "sha256:" + strings.Repeat("f", 64)
-	wrongRevision.RepositoryContext = &wrongRevisionContext
-	if err := wrongRevision.Validate(); err == nil {
-		t.Fatal("STATUS accepted repository context bound to the wrong authority revision")
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Authority == nil || status.RepositoryContext.Revision != record.State.CapturePhaseRevision {
+		t.Fatalf("STATUS repository context is not Pn-bound: status=%#v record=%#v", status, record)
+	}
+	// CapturePhaseRevision is deliberately an internal producer invariant, not a
+	// new v2 wire field. Restore it only for this in-memory tamper check.
+	status.Authority.CapturePhaseRevision = record.State.CapturePhaseRevision
+	wrongStatusRevision := status
+	wrongStatusContext := *status.RepositoryContext
+	wrongStatusContext.Revision = "sha256:" + strings.Repeat("e", 64)
+	wrongStatusRevision.RepositoryContext = &wrongStatusContext
+	if err := wrongStatusRevision.Validate(); err == nil {
+		t.Fatal("STATUS accepted repository context bound to a different capture phase")
+	}
+	wrongCapturePhase := "sha256:" + strings.Repeat("f", 64)
+	if err := RunReviewCaptureResult([]string{
+		"--repository-context", status.RepositoryContext.Handle, "--lineage", status.Authority.LineageID,
+		"--target", status.RepositoryContext.TargetIdentity, "--expected-revision", wrongCapturePhase,
+		"--lens", started.SelectedLenses[0], "--order", "0", "--preflight",
+	}, io.Discard); err == nil {
+		t.Fatal("capture preflight accepted repository context bound to the wrong capture phase")
 	}
 	wrongTarget := status
 	wrongTargetContext := *status.RepositoryContext
@@ -498,42 +469,6 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	wrongStartRevision.RepositoryContext = &wrongStartRevisionContext
 	if err := wrongStartRevision.Validate(); err == nil {
 		t.Fatal("START accepted repository context bound to the wrong authority revision")
-	}
-}
-
-func TestStatusRepositoryContextIntentSelection(t *testing.T) {
-	if hasRepositoryContextIntent([]reviewtransaction.CompactEffectIntent{{Class: "requested_trace"}}) {
-		t.Fatal("START/STATUS effect-only authority selected repository context reconciliation")
-	}
-	if !hasRepositoryContextIntent([]reviewtransaction.CompactEffectIntent{{Class: reviewtransaction.CompactEffectClassRepositoryContext}}) {
-		t.Fatal("repository context authority preserved direct publication fallback")
-	}
-}
-
-func TestRepositoryContextReferenceRejectsInvalidEventContract(t *testing.T) {
-	valid := ReviewRepositoryContextReference{
-		Capability: reviewtransaction.ReviewRepositoryContextCapability,
-		Handle:     "rctx1_" + strings.Repeat("a", 64), Revision: "sha256:" + strings.Repeat("b", 64),
-		TargetIdentity: "sha256:" + strings.Repeat("c", 64), EventID: "sha256:" + strings.Repeat("d", 64),
-		Outcome: reviewtransaction.CompactRepositoryContextApplied,
-	}
-	tests := []struct {
-		name   string
-		mutate func(*ReviewRepositoryContextReference)
-	}{
-		{name: "event without outcome", mutate: func(reference *ReviewRepositoryContextReference) { reference.Outcome = "" }},
-		{name: "outcome without event", mutate: func(reference *ReviewRepositoryContextReference) { reference.EventID = "" }},
-		{name: "invalid event shape", mutate: func(reference *ReviewRepositoryContextReference) { reference.EventID = "event" }},
-		{name: "unknown outcome", mutate: func(reference *ReviewRepositoryContextReference) { reference.Outcome = "unknown" }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reference := valid
-			tt.mutate(&reference)
-			if err := validateReviewRepositoryContextReference(reference); err == nil {
-				t.Fatal("invalid repository context event contract was accepted")
-			}
-		})
 	}
 }
 
@@ -585,6 +520,53 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 			}
 		})
 	}
+}
+
+// rctx2ReviewRepositoryContextForTest issues the same provider-owned handle the
+// lifecycle issues. The handle is a digest, so a test cannot hand-assemble one:
+// deriving it here is what keeps these tests honest about what a host receives.
+func rctx2ReviewRepositoryContextForTest(t *testing.T, repo string, binding reviewtransaction.ReviewRepositoryContextBinding) string {
+	t.Helper()
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Surfaces that take the handle without a --cwd flag -- the OpenCode relay
+	// the managed shim starts in place -- verify the digest against process
+	// cwd, so a test holding this handle stands where a real host stands.
+	t.Chdir(repo)
+	return handle
+}
+
+func replaceReviewContextArgument(t *testing.T, args []string, handle string) []string {
+	t.Helper()
+	return replaceReviewArgument(t, args, "--repository-context", handle)
+}
+
+func replaceReviewArgument(t *testing.T, args []string, name, value string) []string {
+	t.Helper()
+	result := slices.Clone(args)
+	for index, argument := range result {
+		if argument == name && index+1 < len(result) {
+			result[index+1] = value
+			return result
+		}
+	}
+	t.Fatalf("review arguments omit %q: %v", name, args)
+	return nil
+}
+
+func replaceReviewContextToken(t *testing.T, args []string, handle string) []string {
+	t.Helper()
+	result := slices.Clone(args)
+	for index, argument := range result {
+		if strings.HasPrefix(argument, "--repository-context=") {
+			result[index] = "--repository-context=" + handle
+			return result
+		}
+	}
+	t.Fatalf("review tokens omit repository context: %v", args)
+	return nil
 }
 
 func TestLegacyStartBytesDoNotContainRepositoryContext(t *testing.T) {

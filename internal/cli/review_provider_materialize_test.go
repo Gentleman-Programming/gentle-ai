@@ -24,9 +24,10 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 	lens := record.State.SelectedLenses[0]
 	subjectHash := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
 	return []string{
+		"--cwd", repo,
 		"--repository-context", handle,
 		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--expected-revision", record.Revision, "--lens", lens, "--order", "0",
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens, "--order", "0",
 		"--subject-hash", subjectHash,
 	}
 }
@@ -47,7 +48,11 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 		t.Fatal("materialized provider task omits the frozen target identity")
 	}
 	var native bytes.Buffer
-	if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens}, &native); err != nil {
+	if err := RunReview([]string{
+		"lens-context", "--cwd", repo, "--repository-context", handle,
+		"--lineage", record.State.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--lens", lens,
+	}, &native); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), native.Bytes()) {
@@ -64,15 +69,52 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
-	if err != nil || slot.Occupied {
-		t.Fatalf("materialize occupied the reviewer result slot: %#v, %v", slot, err)
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleLens) {
+		t.Fatalf("materialize mutated compact authority: %#v, %v", current, err)
 	}
 
 	stale := replaceInspectionArg(t, slices.Clone(binding), "--subject-hash", "sha256:"+strings.Repeat("0", 64))
 	err = RunReviewCaptureResult(append(stale, "--agent", string(model.AgentPi), "--materialize=true"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "materialize subject hash does not match") {
 		t.Fatalf("stale materialize subject hash refusal = %v", err)
+	}
+}
+
+// TestReviewCaptureResultMaterializeIsEligibleWithoutRelayHandshake is issue
+// #4256: a Pi capture-result --materialize=true call must derive eligibility
+// from the bound transaction (lineage, revision, target) and the compiled
+// --agent capability, never from the GENTLE_PI_REVIEW_RELAY_CONTRACT host
+// environment variable. An unrelayed shell (no handshake exported) holding a
+// genuinely bound transaction is eligible and materializes exactly like a
+// relayed one, while the same unrelayed shell presenting a mismatched
+// (stale) binding is refused with the existing subject-hash mismatch
+// continuation -- a literal `gentle-ai …` invocation -- proving the binding
+// is still enforced even though the handshake no longer is.
+func TestReviewCaptureResultMaterializeIsEligibleWithoutRelayHandshake(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
+	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	binding := piHostRelayCaptureBinding(t, repo, args, record)
+
+	var materialized bytes.Buffer
+	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--agent", string(model.AgentPi), "--materialize=true"), &materialized); err != nil {
+		t.Fatalf("unrelayed pi materialize with a valid bound transaction was refused: %v", err)
+	}
+	if !bytes.Contains(materialized.Bytes(), []byte(record.State.InitialSnapshot.Identity)) {
+		t.Fatal("materialized provider task omits the frozen target identity")
+	}
+
+	stale := replaceInspectionArg(t, slices.Clone(binding), "--subject-hash", "sha256:"+strings.Repeat("0", 64))
+	err := RunReviewCaptureResult(append(stale, "--agent", string(model.AgentPi), "--materialize=true"), io.Discard)
+	if err == nil {
+		t.Fatal("unrelayed pi materialize with a mismatched binding was admitted")
+	}
+	if !strings.Contains(err.Error(), "materialize subject hash does not match") {
+		t.Fatalf("mismatched binding refusal = %v, want the subject hash mismatch cause", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review status") {
+		t.Fatalf("mismatched binding refusal does not carry a gentle-ai continuation: %v", err)
 	}
 }
 
@@ -90,7 +132,7 @@ func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t 
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--input", input), &output); err != nil {
+	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--agent", string(model.AgentPi), "--input", input), &output); err != nil {
 		t.Fatal(err)
 	}
 	var terminal reviewLastEventClosureResult
@@ -148,14 +190,25 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "cannot be combined with --input or --preflight",
 		},
 		{
+			name: "compiled runtime cannot label caller input", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--input", "-"),
+			want: "only a compiled host-relay runtime may submit its raw reviewer result",
+		},
+		{
 			name: "without agent", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--materialize=true"),
 			want: "requires --agent",
 		},
 		{
-			name: "without relay handshake", env: "",
+			// Issue #4256: without a real bound transaction, an unrelayed Pi
+			// materialize call is refused by the same repository-context
+			// binding check every other runtime hits -- never by an
+			// eligibility gate keyed on the relay handshake env var, which
+			// TestReviewCaptureResultMaterializeIsEligibleWithoutRelayHandshake
+			// proves separately with a genuine binding.
+			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "not eligible for immutable receipt review",
+			want: "repository_context_unavailable",
 		},
 	}
 	for _, test := range tests {
@@ -201,9 +254,9 @@ func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T)
 	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
 		t.Fatalf("pi host relay capture arguments = %#v", input.Arguments)
 	}
-	wantTokens := make([]string, 0, len(input.Arguments)-1)
+	wantTokens := make([]string, 0, len(input.Arguments))
 	for _, argument := range input.Arguments {
-		if argument.Name != "agent" && argument.Name != "materialize" {
+		if argument.Name != "materialize" {
 			wantTokens = append(wantTokens, argument.Token)
 		}
 	}

@@ -84,7 +84,7 @@ func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeSt
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.Revision)
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, record.State, record.State.CapturePhaseRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeSt
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", record.Revision, "--request-hash", request.RequestHash,
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi), "--execute=true",
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)
@@ -234,5 +234,62 @@ func TestReviewRecoverStillNeverSweepsUndeclaredUntracked(t *testing.T) {
 		if path == "appeared-later.txt" {
 			t.Fatalf("successor manifest contains the undeclared untracked file: %v", successor.State.InitialSnapshot.Paths)
 		}
+	}
+}
+
+// TestReviewRecoverInheritsDeclarationAfterDeclaredPathWasCommitted is #3759.
+//
+// Inheriting the predecessor's frozen declaration (#3159) replayed it
+// verbatim, so once ordinary development committed one of those paths the
+// successor build refused with "already tracked" and named one path per
+// attempt. A committed path is no longer untracked: the index carries it and
+// the current-changes target already covers it, so there is nothing left to
+// declare. Inheritance keeps only the entries that are still untracked.
+func TestReviewRecoverInheritsDeclarationAfterDeclaredPathWasCommitted(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, predecessor := escalatedIntendedUntrackedRecoveryFixture(t, "recover-3759")
+
+	// Unrelated development lands one declared path between escalation and
+	// recovery; the other declared path stays untracked.
+	runReviewCLIGit(t, repo, "add", "notes-a.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "land notes-a")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	complete, err := builder.Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+		IntendedUntracked: []string{"notes-b.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision,
+		complete.Identity, "maintainer", "recover after landing a declared path")
+
+	var output bytes.Buffer
+	if err := RunReviewRecover([]string{
+		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision,
+		"--successor-lineage", "recover-3759-successor", "--disposition", "escalated",
+		"--reason", "recover after landing a declared path", "--actor", "maintainer",
+		"--maintainer-authorization", authorization,
+	}, &output); err != nil {
+		t.Fatalf("recovery inheriting a declaration with one committed path was refused: %v\n%s", err, output.String())
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "recover-3759-successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(successor.State.InitialSnapshot.IntendedUntracked, ","); got != "notes-b.txt" {
+		t.Fatalf("successor declaration = %q, want only the still-untracked notes-b.txt", got)
+	}
+	if successor.State.InitialSnapshot.Identity != complete.Identity {
+		t.Fatalf("successor identity %s does not bind the authorized candidate %s", successor.State.InitialSnapshot.Identity, complete.Identity)
 	}
 }

@@ -23,8 +23,8 @@ Also read shared conventions from the same skills root:
 - Windows: `%USERPROFILE%\\.kiro\\skills\\_shared\\sdd-phase-common.md`
 
 Execute all steps from the skill directly in this context window:
-1. Read spec artifact (required): `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-2. Read design artifact (required): `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
+1. Read spec artifact (required): read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+2. Read design artifact (required): read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 3. Break down into hierarchically numbered tasks (1.1, 1.2, 2.1, etc.) grouped by phase
 4. Each task must be atomic enough to complete in one session
 5. Map tasks to files from the design's file-change table

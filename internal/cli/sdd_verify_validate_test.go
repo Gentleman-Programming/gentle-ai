@@ -68,6 +68,47 @@ func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 	}
 }
 
+// #2828: the help never said what the first line must be, so a report that
+// opened with a BOM, a `yml` tag, or a heading was refused with no way to
+// learn the contract from the command itself.
+func TestRunSDDVerifyValidateHelpNamesTheFenceContract(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
+	}
+	for _, want := range []string{"first non-empty line must be ```yaml", "yml", "UTF-8 BOM"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help omits the fence contract %q:\n%s", want, output.String())
+		}
+	}
+}
+
+// #4089: --help listed evidence_revision as required but never documented
+// its accepted format, so a caller had no way to construct a valid value
+// without reading the Go source.
+func TestRunSDDVerifyValidateHelpNamesTheEvidenceRevisionFormat(t *testing.T) {
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {
+		t.Fatalf("runSDDVerifyValidate(-h): %v", err)
+	}
+	for _, want := range []string{"evidence_revision", "test_output_hash", "build_output_hash", "sha256:<64 lowercase hex>"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help omits the evidence_revision format %q:\n%s", want, output.String())
+		}
+	}
+}
+
+// #4089: an invalid evidence_revision was refused with an opaque "invalid
+// evidence_revision" message that named no resolution.
+func TestRunSDDVerifyValidateRefusalNamesEvidenceRevisionFormat(t *testing.T) {
+	report := "```yaml\nschema: gentle-ai.verify-result/v1\nevidence_revision: sha256:nope\nverdict: fail\nblockers: 1\ncritical_findings: 0\nrequirements: 1/1\nscenarios: 1/1\ntest_command: go test ./...\ntest_exit_code: 0\ntest_output_hash: sha256:" + strings.Repeat("b", 64) + "\nbuild_command: go vet ./...\nbuild_exit_code: 0\nbuild_output_hash: sha256:" + strings.Repeat("c", 64) + "\n```"
+	err := runSDDVerifyValidate([]string{"--input", "-", "--requirements", "1", "--scenarios", "1"}, strings.NewReader(report), &bytes.Buffer{})
+	const want = "evidence_revision must be sha256:<64 lowercase hex>"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want containing %q", err, want)
+	}
+}
+
 func TestRunSDDVerifyValidateHelpExcludesMissingReviewSkipProtocol(t *testing.T) {
 	var output bytes.Buffer
 	if err := runSDDVerifyValidate([]string{"-h"}, strings.NewReader("must not be read"), &output); err != nil {

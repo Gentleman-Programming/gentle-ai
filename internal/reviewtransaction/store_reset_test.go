@@ -328,7 +328,6 @@ func TestResetReviewStorePreservesEverythingItDoesNotOwn(t *testing.T) {
 		"sdd-runtime":      filepath.Join(root, "sdd-runtime", "v1", "some-change", "HEAD"),
 		"defect-reports":   filepath.Join(root, "defect-reports", "operation-outcome-unknown-00ff.md"),
 		"review-artifacts": filepath.Join(root, "review-artifacts", "issue-1107", "notes.md"),
-		"incidents":        filepath.Join(root, "incidents", "1462", "notes.md"),
 	}
 	for _, path := range preserved {
 		writeStoreResetFile(t, path, "keep me\n")

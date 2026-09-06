@@ -24,7 +24,11 @@ type ArtifactStore string
 const (
 	ArtifactStoreOpenSpec ArtifactStore = "openspec"
 	ArtifactStoreEngram   ArtifactStore = "engram"
-	ArtifactStoreNone     ArtifactStore = "none"
+	// ArtifactStoreHybrid used to exist only in prompt prose. #3636 reported
+	// the consequence: a workspace declaring it was reported as openspec, and
+	// its file writes were invisible to a status that read it as pure Engram.
+	ArtifactStoreHybrid ArtifactStore = "hybrid"
+	ArtifactStoreNone   ArtifactStore = "none"
 )
 
 type ArtifactState string
@@ -177,10 +181,15 @@ type Status struct {
 	// granted choice names the exact runnable grant invocation. Structural
 	// absence (nil, omitempty) everywhere else — the same optional-block
 	// discipline ReviewOffer established.
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *PhaseInstructions           `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
+	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	// Archived is #4002's positive terminal projection: present exactly when
+	// the named change is already archived, so closure stops answering through
+	// the blocked channel. Structural absence (nil, omitempty) everywhere else
+	// — the same optional-block discipline ReviewOffer established.
+	Archived          *ArchivedProjection `json:"archived,omitempty"`
+	PhaseInstructions *PhaseInstructions  `json:"phaseInstructions,omitempty"`
+	NextRecommended   string              `json:"nextRecommended"`
+	BlockedReasons    []string            `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -197,6 +206,17 @@ type Status struct {
 type ReviewOfferBlock struct {
 	Available  bool   `json:"available"`
 	Invocation string `json:"invocation"`
+}
+
+// ArchivedProjection is the positive terminal projection for a change that is
+// already archived. Path names the location fact the resolving store can
+// expose: the repo-relative archive folder for OpenSpec
+// (openspec/changes/archive/YYYY-MM-DD-<change>), the archive report topic key
+// for Engram (sdd/<change>/archive-report). When present, NextRecommended is
+// "archived", no phase remains, and nothing is blocked (#4002; gentle-pi#538
+// ships the same contract).
+type ArchivedProjection struct {
+	Path string `json:"path"`
 }
 
 // applyReviewOfferRouting is status's one review edge. It runs only after strict
@@ -313,12 +333,97 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 
 	changes := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != "archive" {
+		if entry.IsDir() && entry.Name() != "archive" && entry.Name() != "active" &&
+			!openSpecChangeContainer(filepath.Join(workspaceRoot, "openspec", "changes", entry.Name())) {
 			changes = append(changes, entry.Name())
 		}
 	}
 	sort.Strings(changes)
 	return changes, nil
+}
+
+// archiveDatePrefixPattern matches the 11-character YYYY-MM-DD- prefix the
+// archive phase stamps on every openspec/changes/archive/ entry.
+var archiveDatePrefixPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}-$`)
+
+// newestArchivedOpenSpecEntry returns the newest archive entry for a change.
+// Archive folders are named YYYY-MM-DD-<change>; only an exact <change> suffix
+// after a full date prefix matches (change "foo-bar" never matches
+// "2026-01-01-foo-bar-baz"). Date prefixes sort lexicographically, so the
+// greatest match is the newest one.
+func newestArchivedOpenSpecEntry(workspaceRoot, changeName string) (string, bool) {
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, "openspec", "changes", "archive"))
+	if err != nil {
+		return "", false
+	}
+	newest := ""
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || len(name) != 11+len(changeName) ||
+			!archiveDatePrefixPattern.MatchString(name[:11]) || name[11:] != changeName {
+			continue
+		}
+		if name > newest {
+			newest = name
+		}
+	}
+	return newest, newest != ""
+}
+
+// archivedOpenSpecStatus is the positive terminal projection for a change
+// whose folder moved into openspec/changes/archive/ (#4002): every phase is
+// all_done, nothing is blocked, and the repo-relative archive folder is the
+// location fact on the wire.
+func archivedOpenSpecStatus(workspaceRoot, changeName, archiveEntry string, includeInstructions bool) Status {
+	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, &changeName, nil, "archived", nil)
+	status.Dependencies = allDoneDependencies()
+	status.ApplyState = ApplyAllDone
+	status.Archived = &ArchivedProjection{Path: filepath.Join("openspec", "changes", "archive", archiveEntry)}
+	if includeInstructions {
+		instructions := renderPhaseInstructions(status)
+		status.PhaseInstructions = &instructions
+	}
+	return status
+}
+
+// allDoneDependencies is the terminal dependency vector an archived change
+// reports: no phase remains, so every phase answers all_done.
+func allDoneDependencies() Dependencies {
+	return Dependencies{
+		Proposal: DependencyAllDone,
+		Specs:    DependencyAllDone,
+		Design:   DependencyAllDone,
+		Tasks:    DependencyAllDone,
+		Apply:    DependencyAllDone,
+		Verify:   DependencyAllDone,
+		Archive:  DependencyAllDone,
+	}
+}
+
+// openSpecChangeContainer reports whether a directory under openspec/changes
+// is a container of changes rather than a change (#2317): it holds no SDD
+// artifact itself while a subdirectory does, the legacy `active/` layout. An
+// empty scaffold keeps its historical standing as a candidate, and a marker
+// that fails to stat for any reason other than not existing counts as present.
+func openSpecChangeContainer(changeRoot string) bool {
+	holdsArtifact := func(dir string) bool {
+		for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs", "spec.md", "verify-report.md", "state.yaml", "exploration.md"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); !errors.Is(err, os.ErrNotExist) {
+				return true
+			}
+		}
+		return false
+	}
+	entries, err := os.ReadDir(changeRoot)
+	if err != nil || holdsArtifact(changeRoot) {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && holdsArtifact(filepath.Join(changeRoot, entry.Name())) {
+			return true
+		}
+	}
+	return false
 }
 
 // selectableOpenSpecChanges filters exploration-only directories out of the
@@ -359,7 +464,83 @@ func explorationOnlyChangeDir(changeRoot string) bool {
 	return true
 }
 
+// Resolve reports SDD status for a workspace. A workspace that DECLARES an
+// artifact store gets that store: the declaration selects the resolver instead
+// of decorating whatever the OpenSpec-first preference order happened to find.
+//
+// #3636 / #3814: before this, Engram was consulted only as a fallback when
+// OpenSpec held nothing, so `sdd.artifact_store` could not change the outcome
+// whenever OpenSpec data existed. The enum, the config key, and the documented
+// "choose your store" vocabulary were decoration over a hardcoded order.
 func Resolve(options ResolveOptions) (Status, error) {
+	workspaceRoot, err := resolveWorkspaceRoot(options)
+	if err != nil {
+		return Status{}, err
+	}
+	declared, declaredOK := declaredArtifactStore(workspaceRoot)
+
+	if declaredOK && declared == ArtifactStoreEngram {
+		reviewDisabled, err := resolveReviewDisabled(options, workspaceRoot)
+		if err != nil {
+			return Status{}, err
+		}
+		status, resolved, err := resolveEngramStatus(workspaceRoot, strings.TrimSpace(options.ChangeName), options.IncludeInstructions, reviewDisabled)
+		if err != nil {
+			return Status{}, err
+		}
+		if resolved {
+			return status, nil
+		}
+		// An empty declared store is an empty declared store. Serving the
+		// OpenSpec artifacts that happen to sit on disk would report a store
+		// the workspace did not declare.
+		//
+		// But an empty Engram resolution is not only the genuinely-empty case:
+		// inferEngramProject falls back to the directory name, so a project
+		// mismatch or an unpopulated store also returns zero changes. Saying
+		// "start a new change" then, while OpenSpec work sits on disk, invites
+		// an orchestrator that routes on nextRecommended to open a duplicate on
+		// top of live work. That disagreement is a human decision.
+		active, activeErr := listActiveOpenSpecChanges(workspaceRoot)
+		if activeErr != nil {
+			return Status{}, activeErr
+		}
+		if len(active) > 0 {
+			return blockedStatus(ArtifactStoreEngram, workspaceRoot, nil, nil, "resolve-blockers", []string{
+				"The workspace declares the engram artifact store, but it resolved no changes for the inferred project.",
+				fmt.Sprintf("These openspec changes are on disk and were not served because they are not the declared store: %s.", strings.Join(active, ", ")),
+				"Populate the declared store, correct the inferred project, or change sdd.artifact_store to match where the work lives.",
+			}, options.IncludeInstructions), nil
+		}
+		return blockedEngramStatus(workspaceRoot, nil, "sdd-new", []string{
+			"No SDD changes found in the declared Engram artifact store.",
+		}, options.IncludeInstructions), nil
+	}
+
+	status, err := resolveByPreferenceOrder(options)
+	if err != nil {
+		return status, err
+	}
+	// A hybrid workspace is ONE declared store. Reporting engram for the change
+	// that happened to resolve from the Engram half, and openspec for the one
+	// that resolved from disk, is the same inference-over-declaration defect in
+	// a different direction.
+	if declaredOK && declared == ArtifactStoreHybrid && status.ArtifactStore != ArtifactStoreNone {
+		status.ArtifactStore = ArtifactStoreHybrid
+	}
+	return status, nil
+}
+
+// resolveReviewDisabled applies the caller's per-workspace review-mode hook
+// exactly once, shared by both resolution routes.
+func resolveReviewDisabled(options ResolveOptions, workspaceRoot string) (bool, error) {
+	if options.ReviewDisabledForWorkspace == nil {
+		return options.ReviewDisabled, nil
+	}
+	return options.ReviewDisabledForWorkspace(workspaceRoot)
+}
+
+func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
 		return Status{}, err
@@ -411,6 +592,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
 		}
+		// #4002: an absent active folder may mean the change was archived, and
+		// closure is a positive terminal fact, not a not-found block.
+		if archiveEntry, ok := newestArchivedOpenSpecEntry(workspaceRoot, changeName); ok {
+			return archivedOpenSpecStatus(workspaceRoot, changeName, archiveEntry, options.IncludeInstructions), nil
+		}
 		return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
 	}
 
@@ -455,9 +641,14 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
-	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
-		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
+	if artifacts["specs"] == ArtifactPartial {
+		blockedReasons.genuine = append(blockedReasons.genuine, openSpecSpecsLayoutReason(changeName))
+	}
+	if artifacts["verifyReport"] == ArtifactDone {
+		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
+			blockedReasons.genuine = append(blockedReasons.genuine, reason)
+		}
 	}
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
@@ -495,6 +686,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
+		blockedReasons.genuine = appendMissingReason(blockedReasons.genuine, runtimeRemediationVerifyRefreshInstruction)
+	}
+	if len(unauthorizedRoots) == 0 && runtimeStatus != nil && runtimeStatusErr == nil {
+		applyRuntimeTopologyBlock(context.Background(), &applyState, &dependencies, &nextRecommended, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, changeName)
 	}
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
@@ -575,6 +770,30 @@ func workspaceHasGitMetadata(workspaceRoot string) bool {
 		}
 		current = parent
 	}
+}
+
+// verifyReportRefreshReason names why a persisted verification report cannot
+// stand as final evidence. A report that exists yet leaves verify at ready
+// must never project a silent tuple (#3538): the stale reason carries the
+// exact native totals the report has to match, so the agent re-verifies
+// against the current specs instead of re-validating the same envelope.
+func verifyReportRefreshReason(verify verifyResultEvaluation) string {
+	switch {
+	case verify.Incomplete:
+		return verify.Reason
+	case verify.Stale:
+		return "persisted verification report is stale: " + verify.Reason + "; rerun SDD verification and persist a report whose totals match the current specs before archive"
+	}
+	return ""
+}
+
+// appendMissingReason appends reason unless the list already carries it, so a
+// route that is explained from two sites never repeats itself.
+func appendMissingReason(reasons []string, reason string) []string {
+	if contains(reasons, reason) {
+		return reasons
+	}
+	return append(reasons, reason)
 }
 
 func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation) bool {
@@ -725,11 +944,13 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	runtimeStatus, runtimeAttemptTokens, _, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
-	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
-	if artifacts["verifyReport"] == ArtifactDone && verifyResult.Incomplete {
-		blockedReasons.genuine = append(blockedReasons.genuine, verifyResult.Reason)
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
+	if artifacts["verifyReport"] == ArtifactDone {
+		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
+			blockedReasons.genuine = append(blockedReasons.genuine, reason)
+		}
 	}
-	applyState, _ = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
+	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
 	// Stale or incomplete evidence always re-enters independent SDD verification.
 	verifyReportCurrent := artifacts["verifyReport"] == ArtifactDone && !verifyResult.Stale && !verifyResult.Incomplete
@@ -749,6 +970,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 		remediationState = RemediationState{}
+		blockedReasons.genuine = appendMissingReason(blockedReasons.genuine, runtimeRemediationVerifyRefreshInstruction)
+	}
+	if len(unauthorizedRoots) == 0 && runtimeStatus != nil && runtimeStatusErr == nil {
+		applyRuntimeTopologyBlock(context.Background(), &applyState, &dependencies, &nextRecommended, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, changeName)
 	}
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
@@ -768,7 +993,23 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		applyNativeRuntimeRouting(&status)
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, reviewDisabled)
-	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
+	if _, archived := artifactsByType["archive-report"]; archived {
+		// The archive phase wrote the archive report, so the change is closed.
+		// Discovery already skips it (#3008); naming it must not send an
+		// orchestrator back to archive (#3480). #4002: closure is a positive
+		// terminal fact, not a blocker — project it the way OpenSpec projects an
+		// archived folder. The location fact this store can expose is the
+		// archive report topic key, and a closed change has nothing left to
+		// block or remediate.
+		status.Dependencies = allDoneDependencies()
+		status.ApplyState = ApplyAllDone
+		status.NextRecommended = "archived"
+		status.Archived = &ArchivedProjection{Path: fmt.Sprintf("sdd/%s/archive-report", changeName)}
+		status.BlockedReasons = []string{}
+		status.RemediationState = RemediationState{}
+	} else {
+		status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
+	}
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
 	}
@@ -786,29 +1027,44 @@ func blockedEngramStatus(workspaceRoot string, changeName *string, next string, 
 }
 
 func shouldTryEngram(workspaceRoot string) bool {
+	// A declaration is authoritative in both directions: it opts a workspace
+	// in, and it also opts one out even when a .engram directory is present.
+	if declared, ok := declaredArtifactStore(workspaceRoot); ok {
+		return declared == ArtifactStoreEngram || declared == ArtifactStoreHybrid
+	}
 	if os.Getenv("GENTLE_AI_SDD_STATUS_ENGRAM") != "" {
 		return true
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, ".engram")); err == nil {
 		return true
 	}
-	for _, path := range []string{filepath.Join(workspaceRoot, "openspec", "config.yaml"), filepath.Join(workspaceRoot, "openspec", "config.yml")} {
-		content, err := os.ReadFile(path)
-		if err == nil && configMentionsEngram(string(content)) {
-			return true
-		}
-	}
 	return false
 }
 
-func configMentionsEngram(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
-		if strings.HasPrefix(trimmed, "artifact_store:") || strings.HasPrefix(trimmed, "artifactStore:") {
-			return strings.Contains(strings.ToLower(trimmed), "engram") || strings.Contains(strings.ToLower(trimmed), "hybrid")
+// declaredArtifactStore reads the store a workspace declares in
+// openspec/config.yaml. It replaces the previous substring probe, which could
+// only answer the binary question "does this mention engram or hybrid" and so
+// could never distinguish the two or honour a declared openspec.
+func declaredArtifactStore(workspaceRoot string) (ArtifactStore, bool) {
+	for _, path := range []string{filepath.Join(workspaceRoot, "openspec", "config.yaml"), filepath.Join(workspaceRoot, "openspec", "config.yml")} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+			if !strings.HasPrefix(trimmed, "artifact_store:") && !strings.HasPrefix(trimmed, "artifactStore:") {
+				continue
+			}
+			value := strings.ToLower(strings.Trim(strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1]), `"'`))
+			switch ArtifactStore(value) {
+			case ArtifactStoreEngram, ArtifactStoreOpenSpec, ArtifactStoreHybrid, ArtifactStoreNone:
+				return ArtifactStore(value), true
+			}
+			return "", false
 		}
 	}
-	return false
+	return "", false
 }
 
 func exportEngramObservations(workspaceRoot string) ([]engramObservation, error) {
@@ -1274,7 +1530,7 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 			AllowedEditRoots: append([]string{workspaceRoot}, grantedRoots...),
 		},
 		Relationships: Relationships{
-			DependsOn:               []string{},
+			DependsOn:               openSpecStateDependsOn(store, changeRoot),
 			Supersedes:              []string{},
 			Amends:                  []string{},
 			ConflictsWith:           []string{},
@@ -1513,7 +1769,22 @@ func countTaskProgress(tasksPath string) (TaskProgress, error) {
 
 func countTaskProgressText(content string) TaskProgress {
 	var progress TaskProgress
+	fence := ""
 	for _, line := range strings.Split(content, "\n") {
+		// #2480: a checkbox row inside a ``` or ~~~ fence is an example. A fence
+		// closes on a same-character run at least as long as the opener, alone.
+		if run := fencedCodeRun(line); run != "" {
+			switch {
+			case fence == "":
+				fence = run
+			case run[0] == fence[0] && len(run) >= len(fence) && strings.TrimSpace(line) == run:
+				fence = ""
+			}
+			continue
+		}
+		if fence != "" {
+			continue
+		}
 		matches := taskCheckbox.FindStringSubmatch(line)
 		if len(matches) == 0 {
 			continue
@@ -1529,13 +1800,31 @@ func countTaskProgressText(content string) TaskProgress {
 	return progress
 }
 
-func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress) blockerReasons {
+// fencedCodeRun returns the leading run of three or more backticks or tildes
+// that opens or closes a fenced code block, or "" when the line is not a fence.
+func fencedCodeRun(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	if trimmed == "" || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return ""
+	}
+	run := strings.TrimLeft(trimmed, string(trimmed[0]))
+	if len(trimmed)-len(run) < 3 {
+		return ""
+	}
+	return trimmed[:len(trimmed)-len(run)]
+}
+
+func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress, changeName string) blockerReasons {
 	var reasons blockerReasons
+	if changeName == "" {
+		changeName = "<change>"
+	}
+	specsDir := "openspec/changes/" + changeName + "/specs/"
 	if artifacts["proposal"] != ArtifactDone {
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "proposal.md is missing or partial.")
 	}
 	if artifacts["specs"] != ArtifactDone {
-		reasons.expectedPlanning = append(reasons.expectedPlanning, "spec.md or specs/**/spec.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, specsDir+"<domain>/spec.md is missing or partial.")
 	}
 	if artifacts["design"] != ArtifactDone {
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "design.md is missing or partial.")
@@ -1547,6 +1836,19 @@ func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress Tas
 		reasons.genuine = append(reasons.genuine, "tasks.md has no markdown task checkboxes.")
 	}
 	return reasons
+}
+
+// openSpecSpecsLayoutReason names the change-local layout when the OpenSpec
+// specs/ directory has entries but no <domain>/spec.md (#2212). That flat
+// layout is what an actor produces after the shipped skill sent a new
+// capability elsewhere, and the dispatcher can never read it. The spec route
+// drops expected planning blockers, so this guidance is a genuine reason;
+// otherwise the reporter sees nextRecommended: spec with no reason forever.
+// The Engram store reports partial for an empty artifact, not a layout, so
+// only the OpenSpec resolver appends it.
+func openSpecSpecsLayoutReason(changeName string) string {
+	specsDir := "openspec/changes/" + changeName + "/specs/"
+	return specsDir + " has files but no non-empty <domain>/spec.md; the spec phase writes every capability (new ones as full specs) at " + specsDir + "<domain>/spec.md, and sdd-archive promotes new ones to openspec/specs/<domain>/spec.md"
 }
 
 func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
@@ -1634,6 +1936,35 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 
 const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
 
+// artifactLocator renders the locators the native surface already resolved
+// for one artifact. #3814: phase instructions must name what Resolve produced
+// for the ACTIVE artifact store -- an OpenSpec path or an Engram topic key --
+// so a delegated actor never has to detect the store or guess a filename.
+// Unresolved is explicit rather than silently omitted: a phase actor that
+// cannot be told where its input lives must fail loudly, not read the wrong
+// store.
+func artifactLocator(locators []string) string {
+	if len(locators) == 0 {
+		return "<unresolved>"
+	}
+	return strings.Join(locators, ", ")
+}
+
+// artifactReadVerb names how the active store's locators are read. It is the
+// second half of the locator contract: the brief carries WHERE the artifact
+// lives and HOW to read it, which is exactly what the phase agent contracts
+// used to hardcode per store.
+func artifactReadVerb(store ArtifactStore) string {
+	switch store {
+	case ArtifactStoreEngram:
+		return "read the Engram observation named by that locator"
+	case ArtifactStoreHybrid:
+		return "read the file at that path when the locator is a path, or the Engram observation when it is a topic key"
+	default:
+		return "read the file at that path"
+	}
+}
+
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"
 	if status.ChangeName != nil {
@@ -1644,7 +1975,10 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		fmt.Sprintf("Change: %s", change),
 		fmt.Sprintf("State: %s", status.Dependencies.Apply),
 		"Read proposal, specs, design, and tasks before editing.",
-		"Implement only unchecked tasks and update tasks.md checkboxes as work completes.",
+		fmt.Sprintf("Artifact store: %s; %s.", status.ArtifactStore, artifactReadVerb(status.ArtifactStore)),
+		fmt.Sprintf("Tasks locator: %s", artifactLocator(status.ArtifactPaths.Tasks)),
+		fmt.Sprintf("Apply-progress locator: %s", artifactLocator(status.ArtifactPaths.ApplyProgress)),
+		"Resume from the apply-progress locator when it resolves; implement only unchecked tasks and mark each complete at the tasks locator as work completes.",
 	}
 	verifyInstructions := []string{
 		fmt.Sprintf("Change: %s", change),
@@ -1669,7 +2003,8 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		Archive: []string{
 			fmt.Sprintf("Change: %s", change),
 			fmt.Sprintf("State: %s", status.Dependencies.Archive),
-			"Archive only when verify-report.md exists and every task checkbox is complete.",
+			fmt.Sprintf("Verify-report locator: %s", artifactLocator(status.ArtifactPaths.VerifyReport)),
+			fmt.Sprintf("Archive only when a verify report resolves at that locator (%s) and every task is complete.", artifactReadVerb(status.ArtifactStore)),
 		},
 	}
 }
@@ -1727,6 +2062,17 @@ func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 			"",
 			"### Next Selection Operation",
 			fmt.Sprintf("- Rerun with an explicit change name from Blocked Reasons above: `gentle-ai sdd-status --cwd %s <change-name>` or `gentle-ai sdd-continue --cwd %s <change-name>`.", pathquote.Quote(status.ActionContext.WorkspaceRoot), pathquote.Quote(status.ActionContext.WorkspaceRoot)),
+		}, true
+	case "archived":
+		location := ""
+		if status.Archived != nil {
+			location = fmt.Sprintf(" at %s", status.Archived.Path)
+		}
+		return []string{
+			"",
+			"### Archived Change",
+			fmt.Sprintf("- This change is already archived%s; no phase remains and nothing is blocked.", location),
+			fmt.Sprintf("- Start new work with a fresh change: `gentle-ai sdd-status --cwd %s` lists what is active.", pathquote.Quote(status.ActionContext.WorkspaceRoot)),
 		}, true
 	default:
 		return nil, false

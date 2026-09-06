@@ -13,17 +13,17 @@ func issue3587Journeys() []Journey {
 	return []Journey{{
 		ID:     "j114-last-reviewer-capture-closes-and-burns",
 		Review: reviewOptedIn,
-		Title:  "The last admitted reviewer capture closes and burns a clean 4R review",
-		Source: "issue #3587: FINALIZE is not a public phase in atomic review",
+		Title:  "The last admitted reviewer capture closes a clean 4R review with pending acknowledgement",
+		Source: "issue #3797: FINALIZE is not a public phase; exact acknowledgement is the only approved terminal continuation",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged high-risk candidate", Fixture: stageAuthCode},
 			{Name: "start exact high-risk lineage", Requires: startNamedCapability,
 				Args: productArgs("review", "start", "--lineage", issue3587Lineage)},
-			{Name: "capture every lens; the final capture reduces and burns", Requires: captureResultCapability,
+			{Name: "capture every lens; the final capture reduces and emits acknowledgement", Requires: captureResultCapability,
 				Composite: captureIssue3587LensesAndClose},
-			{Name: "no review authority survives the terminal capture", Requires: statusCapability,
-				Composite: func(r *journeyRun) error { return requireAtomicLineageBurned(r, issue3587Lineage) }},
+			{Name: "no review authority survives the exact acknowledgement", Requires: statusCapability,
+				Composite: func(r *journeyRun) error { return requireAtomicLineageAcknowledged(r, issue3587Lineage) }},
 		},
 	}}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
@@ -107,6 +108,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(args[1:]), stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
+		case "sdd-archive-compose":
+			return cli.RunSDDArchiveCompose(args[1:], stdout)
+		case "sdd-task-result":
+			return cli.RunSDDTaskResult(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":
@@ -200,9 +205,12 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 		// Load persisted state so the TUI pre-selects the agents the user
 		// previously chose instead of re-selecting every detected config dir.
-		// A missing or unreadable state file is not an error — NewModel falls
-		// back to filesystem detection for first-time installs.
-		installedState, _ := state.Read(homeDir)
+		// Missing state preserves the first-time filesystem fallback; unreadable
+		// state cannot safely be treated as an empty selection.
+		installedState, err := state.Read(homeDir)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read install state: %w", err)
+		}
 
 		// Deferred sync: if a previous gentle-ai self-upgrade set PendingSync=true,
 		// run sync now with the new binary before entering the TUI. On success,
@@ -570,6 +578,7 @@ func updateCheckError(results []update.UpdateResult) error {
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
 var appUserHomeDir = os.UserHomeDir
+var appStateWriteReconciled = state.WriteReconciled
 
 func tuiExecuteWithBackground(
 	selection model.Selection,
@@ -596,45 +605,44 @@ func tuiExecuteWithBackground(
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
-		agentIDs := make([]string, 0, len(selection.Agents))
-		for _, a := range selection.Agents {
-			agentIDs = append(agentIDs, string(a))
-		}
-		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		installState, readErr := state.Read(homeDir)
-		if errors.Is(readErr, os.ErrNotExist) {
-			installState = state.InstallState{}
-		} else if readErr != nil {
-			execResult.Err = fmt.Errorf("read persisted install state: %w", readErr)
-			if orchestrator != nil {
-				rollback := orchestrator.Rollback(execResult)
-				if rollback.Err != nil {
-					execResult.Err = errors.Join(execResult.Err, rollback.Err)
-				}
+		persistErr := statecoord.WithLock(homeDir, func() error {
+			agentIDs := make([]string, 0, len(selection.Agents))
+			for _, a := range selection.Agents {
+				agentIDs = append(agentIDs, string(a))
 			}
-			return execResult
-		}
-		installState.InstalledAgents = agentIDs
-		installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
-		installState.CommunityToolsConfigured = true
-		installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
-		installState.ClaudePhaseAssignments = claudePhaseState
-		installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
-		installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
-		installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
-		installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
-		installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
-		installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
-		installState.Persona = string(selection.Persona)
-		installState.SetSelection(selection)
-		if backgroundPersist != "" {
-			installState.BackgroundIntent = backgroundPersist
-		}
-		if piBackgroundPersist != "" {
-			installState.PiBackgroundIntent = piBackgroundPersist
-		}
-		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
-			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+			installState, readErr := state.Read(homeDir)
+			if errors.Is(readErr, os.ErrNotExist) {
+				installState = state.InstallState{}
+			} else if readErr != nil {
+				return fmt.Errorf("read persisted install state: %w", readErr)
+			}
+			installState.InstalledAgents = agentIDs
+			installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
+			installState.CommunityToolsConfigured = true
+			installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
+			installState.ClaudePhaseAssignments = claudePhaseState
+			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+			installState.Persona = string(selection.Persona)
+			installState.SetSelection(selection)
+			if backgroundPersist != "" {
+				installState.BackgroundIntent = backgroundPersist
+			}
+			if piBackgroundPersist != "" {
+				installState.PiBackgroundIntent = piBackgroundPersist
+			}
+			if writeErr := appStateWriteReconciled(homeDir, installState); writeErr != nil {
+				return fmt.Errorf("persist install state: %w", writeErr)
+			}
+			return nil
+		})
+		if persistErr != nil {
+			execResult.Err = persistErr
 			if orchestrator != nil {
 				rollback := orchestrator.Rollback(execResult)
 				if rollback.Err != nil {
@@ -820,6 +828,13 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 		if selection.SDDMode == "" {
 			selection.SDDMode = model.SDDModeMulti
 		}
+	}
+	// A persisted component selection loaded earlier via loadPersistedAssignments
+	// may omit the SDD component (e.g. an install that predates profiles). When
+	// the caller explicitly asked for profile or model assignment work through
+	// this override, that request must not be silently dropped — see issue #3430.
+	if model.CarriesSDDWork(overrides.Profiles, overrides.ModelAssignments) {
+		selection.EnsureComponent(model.ComponentSDD)
 	}
 }
 

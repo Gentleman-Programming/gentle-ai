@@ -193,7 +193,7 @@ func detectedCodeGraphTargets(homeDir string) []string {
 		return nil
 	}
 	targets := make([]string, 0)
-	for _, installed := range agents.DiscoverInstalled(reg, homeDir) {
+	for _, installed := range agents.DiscoverSelected(reg, homeDir) {
 		compatibility, ok := codeGraphCompatibilityFor(installed.ID)
 		if ok && compatibility.Strategy == codeGraphNative && compatibility.Target != "" {
 			targets = append(targets, compatibility.Target)

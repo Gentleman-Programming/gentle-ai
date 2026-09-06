@@ -512,6 +512,78 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 	}
 }
 
+// TestNegotiatedGitOwnershipRefusalMapsToTypedTrustCode proves #3497: the
+// generic pre-native Git-failure branch inside newReviewIntegrationFailure
+// must recognize a Git dubious-ownership refusal (the exact failure a
+// UNC-hosted repository produces) and report the existing typed
+// git_repository_untrusted code and its carry-outable action, instead of
+// collapsing it into the generic git_command_failed classification that
+// reviewGitOwnershipRefusal already exists to distinguish. Before this fix,
+// reviewGitOwnershipRefusal was reachable only from
+// resolveOpaqueReviewRepositoryRoot; every other call path through this
+// generic mapper -- including negotiated review.status -- printed the
+// content-free git_command_failed code for the same refusal.
+func TestNegotiatedGitOwnershipRefusalMapsToTypedTrustCode(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "unc-style-repo")
+	for _, tt := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name: "current git wording",
+			output: fmt.Sprintf(
+				"fatal: detected dubious ownership in repository at '%s'\n"+
+					"To add an exception for this directory, call:\n\n"+
+					"\tgit config --global --add safe.directory %s",
+				repo, repo,
+			),
+			want: reviewGitTrustRefusalCode,
+		},
+		{
+			name: "git 2.35.2 wording",
+			output: fmt.Sprintf(
+				"fatal: unsafe repository ('%s' is owned by someone else)\n"+
+					"To add an exception for this directory, call:\n\n"+
+					"\tgit config --global --add safe.directory %s",
+				repo, repo,
+			),
+			want: reviewGitTrustRefusalCode,
+		},
+		{
+			name:   "unrelated exit-128 failure stays generic",
+			output: "fatal: not a git repository (or any of the parent directories): .git",
+			want:   "git_command_failed",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &reviewtransaction.GitCommandError{
+				Args: []string{"rev-parse", "--show-toplevel"}, ExitCode: gitDieExitCode, Output: tt.output,
+			}
+			failure := newReviewIntegrationFailure("review.status", []string{"--lineage", "git-ownership-mapper"}, err)
+			if failure.Code != tt.want {
+				t.Fatalf("code = %q, want %q (failure = %#v)", failure.Code, tt.want, failure)
+			}
+			if failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted ||
+				failure.AuthorityApplicability != "not_evaluated" || failure.RetrySafe ||
+				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
+				t.Fatalf("git ownership mapper failure = %#v", failure)
+			}
+			if tt.want == reviewGitTrustRefusalCode {
+				if strings.Contains(failure.Message, gitSafeDirectoryHint) {
+					t.Fatalf("failure prints the literal safe.directory remediation, which is a documented non-goal: %q", failure.Message)
+				}
+				if !strings.Contains(failure.Message, "Restart the host process") {
+					t.Fatalf("failure carries no instruction the caller can carry out: %q", failure.Message)
+				}
+				if strings.Contains(failure.Message, repo) {
+					t.Fatalf("failure leaked the repository path: %q", failure.Message)
+				}
+			}
+		})
+	}
+}
+
 // TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted proves 1781: a
 // failure that happens before the authoritative store lock is acquired must
 // classify as not-started, exactly like the pre-mutation Git failure family,
@@ -556,7 +628,7 @@ func TestNegotiatedStatusProcessControlFailureIsTypedAndDiagnosable(t *testing.T
 	}
 }
 
-func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl(t *testing.T) {
+func TestNegotiatedReadOnlyCatchAllScrubsItsCauseAndNeverAbsorbsProcessControl(t *testing.T) {
 	leaky := fmt.Errorf("assess negotiated review target: %w",
 		errors.New("open /home/user/.git/review-authority/receipt.json: permission denied"))
 	failure := newReviewIntegrationFailure("review.status", nil, leaky)
@@ -567,6 +639,9 @@ func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl
 	}
 	if failure.Message != "The negotiated read-only review operation failed safely." {
 		t.Fatalf("read-only catch-all message is not content-free: %q", failure.Message)
+	}
+	if strings.Contains(failure.Cause, "/home/user") || !strings.Contains(failure.Cause, "permission denied") {
+		t.Fatalf("read-only catch-all cause is not the scrubbed native reason: %q", failure.Cause)
 	}
 	control := fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
 		Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
@@ -703,11 +778,12 @@ func TestNewReviewIntegrationFailureCause(t *testing.T) {
 		t.Fatalf("operation_outcome_unknown failure with cause validation = %v", err)
 	}
 
-	// The read-only catch-all stays content-free: it must never leak the raw
-	// cause, which is exactly why it resets the message to a canned string.
+	// The read-only catch-all keeps the canned message and carries the same
+	// scrubbed cause (issues #2981 and #3379): a caller with no cause has
+	// nothing to change and retries the same deterministic refusal forever.
 	readOnly := newReviewIntegrationFailure("review.status", nil, runErr)
-	if readOnly.Cause != "" {
-		t.Fatalf("read-only catch-all leaked cause = %q", readOnly.Cause)
+	if readOnly.Message != "The negotiated read-only review operation failed safely." || readOnly.Cause != runErr.Error() {
+		t.Fatalf("read-only catch-all = %#v, want the canned message with the scrubbed cause", readOnly)
 	}
 }
 
@@ -803,10 +879,31 @@ func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
 		t.Fatalf("legacy envelope discarded the typed cause: %#v", failure)
 	}
 
-	// The read-only catch-all is the ONE branch whose contract is
-	// content-free retry; it must clear the universal default, not inherit it.
-	readOnly := newReviewIntegrationFailure("review.status", nil, errors.New("internal detail that must not leak"))
-	if readOnly.Code != "operation_failed" || readOnly.Cause != "" {
-		t.Fatalf("read-only catch-all = %#v, want content-free", readOnly)
+	// The read-only catch-all inherits the universal scrubbed cause too
+	// (issues #2981 and #3379): a deterministic selector refusal with no cause
+	// was retried forever.
+	readOnly := newReviewIntegrationFailure("review.status", nil, errors.New("selector refused for this input"))
+	if readOnly.Code != "operation_failed" || readOnly.Cause != "selector refused for this input" {
+		t.Fatalf("read-only catch-all = %#v, want the scrubbed cause", readOnly)
+	}
+}
+
+// Issues #2981 and #3379: the read-only catch-all cleared its cause, so an
+// unclassified read-only failure was content-free. It keeps the scrubbed
+// cause that says what to change; retry stays, because this branch is the
+// residue of everything the typed classifier did not recognise.
+func TestNegotiatedStatusPreNativeFailurePreservesScrubbedCause(t *testing.T) {
+	failure := newReviewIntegrationFailure("review.status", nil, fmt.Errorf("freeze negotiated fresh review target: %w",
+		errors.New("staged --workspace-overlay requires exactly --base-ref")))
+	if failure.Code != "operation_failed" || failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		!failure.RetrySafe || failure.NextAction != "retry" || !strings.Contains(failure.Cause, "requires exactly --base-ref") {
+		t.Fatalf("read-only failure = %#v, want retry with the cause", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("read-only catch-all with cause validation = %v", err)
+	}
+	scrubbed := newReviewIntegrationFailure("review.status", nil, errors.New("open /home/user/.git/receipt.json: permission denied"))
+	if strings.Contains(scrubbed.Cause, "/home/user") || !strings.Contains(scrubbed.Cause, "permission denied") {
+		t.Fatalf("read-only catch-all cause is not scrubbed: %q", scrubbed.Cause)
 	}
 }

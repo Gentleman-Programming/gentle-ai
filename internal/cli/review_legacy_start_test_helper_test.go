@@ -114,7 +114,7 @@ func runLegacyFacadeStartForTest(t *testing.T, args []string, stdout io.Writer) 
 	if *allowDuplicateAuthority && trimmedLineage == "" {
 		return errors.New("--allow-duplicate-authority requires --lineage")
 	}
-	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, trimmedLineage, *policySource, target, snapshot, assessment, assessment.ChangedLines, lenses)
+	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, trimmedLineage, *policySource, target, snapshot, assessment, assessment.ChangedLines, lenses, "")
 	if err != nil {
 		return fmt.Errorf("prepare compact atomic test fixture: %w", err)
 	}
@@ -261,18 +261,86 @@ func seedHistoricalApprovalForLineage(t *testing.T, repo, lineage string) histor
 	if record.State.LineageID != lineage || record.State.State != reviewtransaction.StateReviewing {
 		t.Fatalf("historical compatibility reviewing precondition failed: %#v", record.State)
 	}
+	record = captureHistoricalCompactReviewerResults(t, repo, store, record)
 	state := record.State
-	results := make([]reviewtransaction.LensResult, len(state.SelectedLenses))
-	for index, lens := range state.SelectedLenses {
-		results[index] = reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"historical compatibility review completed"}}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
+	if err := state.CompleteReview(compactReviewInputFromView(view)); err != nil {
 		t.Fatalf("complete historical compatibility review: %v", err)
 	}
 	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
 		t.Fatalf("close historical compatibility review: %v", err)
 	}
 	return persistHistoricalCompatibilityCompactApproval(t, store, record, "review/complete-review", state)
+}
+
+func captureHistoricalCompactReviewerResults(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord) reviewtransaction.CompactRecord {
+	t.Helper()
+	state := record.State
+	frozen, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), state.InitialSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection := reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted}
+	for _, entry := range frozen.ChangedPathManifest {
+		inspection.Paths = append(inspection.Paths, entry.Path)
+	}
+	for order := range state.SelectedLenses {
+		captureCompactTestReviewerResult(t, store, state, frozen, inspection, order, nil)
+	}
+	current, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return current
+}
+
+func captureCompactTestReviewerResult(t *testing.T, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, inspection reviewtransaction.ArtifactInspection, order int, findings []reviewtransaction.Finding) {
+	t.Helper()
+	lens := state.SelectedLenses[order]
+	subject, err := reviewtransaction.NewArtifactSubject(state, state.CapturePhaseRevision, frozen, lens, order, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateCausal := []string{}
+	for _, finding := range findings {
+		if finding.Severity == "CRITICAL" || finding.Severity == "BLOCKER" {
+			if finding.CausalDisposition == reviewtransaction.CausalIntroduced || finding.CausalDisposition == reviewtransaction.CausalBehaviorActivated || finding.CausalDisposition == reviewtransaction.CausalWorsened {
+				candidateCausal = append(candidateCausal, finding.ID)
+			}
+		}
+	}
+	result := reviewtransaction.LensResult{Lens: lens, Findings: append([]reviewtransaction.Finding{}, findings...), Evidence: []string{"historical compatibility review completed"}}
+	if _, err := store.CaptureAdmittedReviewerResult(t.Context(), reviewtransaction.CompactAdmittedReviewerResultRequest{
+		ExpectedRevision: state.CapturePhaseRevision, TargetIdentity: state.InitialSnapshot.Identity,
+		FrozenContext: frozen, ArtifactSubject: subject, Inspection: inspection, Result: result,
+		CandidateCausalFindingIDs: candidateCausal, RawPayload: []byte("historical reviewer output\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func captureCompactTestReview(t *testing.T, repo string, store reviewtransaction.CompactStore, record reviewtransaction.CompactRecord, findingsByOrder map[int][]reviewtransaction.Finding) reviewtransaction.CompactRecord {
+	t.Helper()
+	state := record.State
+	frozen, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), state.InitialSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection := reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted}
+	for _, entry := range frozen.ChangedPathManifest {
+		inspection.Paths = append(inspection.Paths, entry.Path)
+	}
+	for order := range state.SelectedLenses {
+		captureCompactTestReviewerResult(t, store, state, frozen, inspection, order, findingsByOrder[order])
+	}
+	current, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return current
 }
 
 // persistHistoricalCompatibilityCompactApproval writes one approved compact
@@ -320,29 +388,16 @@ func seedHistoricalCapturedApprovalForLineage(t *testing.T, repo, lineage string
 	if record.State.State != reviewtransaction.StateReviewing {
 		t.Fatalf("historical captured review precondition = %#v", record.State)
 	}
+	record = captureHistoricalCompactReviewerResults(t, repo, store, record)
 	state := record.State
-	results := make([]reviewtransaction.LensResult, len(state.SelectedLenses))
-	for index, lens := range state.SelectedLenses {
-		results[index] = reviewtransaction.LensResult{
-			Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"historical captured review completed"},
-		}
-	}
-	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
+	view, err := state.CompactReviewView()
 	if err != nil {
-		t.Fatalf("derive historical captured review context: %v", err)
+		t.Fatal(err)
 	}
-	subjects := make([]string, len(state.SelectedLenses))
-	for index, lens := range state.SelectedLenses {
-		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, record.Revision, frozen, lens, index, "")
-		if subjectErr != nil {
-			t.Fatalf("derive historical captured reviewer subject: %v", subjectErr)
-		}
-		subjects[index] = subject.SubjectHash
-	}
-	state.ReviewerContextLevel = reviewtransaction.DiscoverReviewerContextLevel(
-		store.Dir, state.LineageID, state.InitialSnapshot.Identity, record.Revision, state.SelectedLenses, subjects,
-	)
-	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
+	// Current delivery context is ephemeral. Historical receipt setup does not
+	// synthesize a semantic emission record.
+	state.ReviewerContextLevel = ""
+	if err := state.CompleteReview(compactReviewInputFromView(view)); err != nil {
 		t.Fatalf("complete captured historical review: %v", err)
 	}
 	if err := state.CloseCleanReviewOnLastEvent(); err != nil {
@@ -369,7 +424,7 @@ func seedHistoricalCorrectionApprovalForLineage(t *testing.T, repo, lineage stri
 	if err != nil {
 		t.Fatalf("build historical correction verification target: %v", err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, record.State, record.Revision, fix)
+	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(ctx, repo, record.State, record.State.CapturePhaseRevision, fix)
 	if err != nil {
 		t.Fatalf("build historical correction validation request: %v", err)
 	}

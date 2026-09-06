@@ -8,7 +8,7 @@
 //     through a fresh Node Task-hook process with HOST-assembled binding frames,
 //     against an immutable base tree and committed candidate. Covers the lens
 //     frame, correction closure re-entry, and validator role frame.
-//   - claude lane: one low-risk lifecycle ending in authority burn and five
+//   - claude lane: one low-risk lifecycle ending in exact acknowledgement then authority burn and five
 //     ordinary-policy gates, plus a committed medium candidate exercised by a
 //     local provider-shaped fixture through the real Claude process transport.
 //     This is deterministic process proof, not live model proof.
@@ -58,6 +58,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "crosslane: binary %q is not usable: %v\n", *binary, err)
 		return 2
 	}
+	operatorHome := os.Getenv("HOME")
+	operatorPath := os.Getenv("PATH")
+	piEnvironment, piEnvironmentErr := piReviewEnvironment(operatorHome, operatorPath)
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crosslane: %v\n", err)
@@ -70,13 +73,15 @@ func run() int {
 	}
 
 	b := &battery{
-		binary:      resolved,
-		repoRoot:    repoRoot,
-		workRoot:    workRoot,
-		withModel:   *withModel,
-		withHost:    *withHost,
-		sandboxHome: filepath.Join(workRoot, "home"),
-		lineages:    map[string]lineageScope{},
+		binary:           resolved,
+		repoRoot:         repoRoot,
+		workRoot:         workRoot,
+		withModel:        *withModel,
+		withHost:         *withHost,
+		piEnvironment:    piEnvironment,
+		piEnvironmentErr: piEnvironmentErr,
+		sandboxHome:      filepath.Join(workRoot, "home"),
+		lineages:         map[string]lineageScope{},
 	}
 	if !*keepWork {
 		defer os.RemoveAll(workRoot)

@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -70,5 +71,38 @@ func TestArchiveReportAloneDoesNotCreateAChange(t *testing.T) {
 	}, "demo")
 	if len(changes) != 0 {
 		t.Fatalf("collectEngramChanges = %v, want none", changes)
+	}
+}
+
+// TestNamedArchivedEngramChangeDoesNotRecommendArchive pins #3480's residue:
+// naming an archived Engram change still answered `archive: ready` and
+// `nextRecommended: archive`, so an orchestrator was told to archive a change
+// whose archive report already exists. #4002 upgrades #3480's suppression from
+// a blocked-channel prose reason to the same positive terminal projection
+// OpenSpec gets for an archived folder: the location fact this store can
+// expose is the archive report topic key the reason used to name.
+func TestNamedArchivedEngramChangeDoesNotRecommendArchive(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "openspec", "config.yaml"), "sdd:\n  artifact_store: engram\n")
+	t.Setenv("ENGRAM_PROJECT", "gentle-ai")
+	t.Cleanup(stubEngramExport(t, []engramObservation{
+		{Title: "sdd/wave-one/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/wave-one/spec", Content: "### Requirement: Wave\n#### Scenario: Done\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/wave-one/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/wave-one/tasks", Content: "- [x] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/wave-one/verify-report", Content: testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0), Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/wave-one/archive-report", Content: "# Archive\n", Project: "gentle-ai", Scope: "project"},
+	}))
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "wave-one"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended == string(PhaseArchive) || status.Dependencies.Archive == DependencyReady {
+		t.Fatalf("archived change routed to archive again: archive %q next %q", status.Dependencies.Archive, status.NextRecommended)
+	}
+	assertArchivedTerminal(t, status, "sdd/wave-one/archive-report")
+	if status.RemediationState.Required {
+		t.Fatalf("RemediationState = %#v, want no remediation on a closed change", status.RemediationState)
 	}
 }

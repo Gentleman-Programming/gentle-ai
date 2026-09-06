@@ -170,3 +170,66 @@ func TestDiscoverCatalogClassifiesCommandFailuresAndEmptyCatalog(t *testing.T) {
 		t.Fatalf("empty catalog = %v, %v; want empty successful catalog", providers, err)
 	}
 }
+
+func TestMergeConfiguredCatalogKeepsRuntimeAuthoritative(t *testing.T) {
+	runtimeCatalog := map[string]Provider{
+		"runtime": {
+			ID:   "runtime",
+			Name: "Runtime Provider",
+			URL:  "http://runtime.example/v1",
+			Models: map[string]Model{
+				"shared": {ID: "shared", Name: "Runtime Shared", ToolCall: true},
+			},
+		},
+	}
+	configuredCatalog := map[string]Provider{
+		"runtime": {
+			ID:   "runtime",
+			Name: "Configured Provider",
+			URL:  "http://configured.example/v1",
+			Models: map[string]Model{
+				"shared":    {ID: "shared", Name: "Configured Shared"},
+				"file-only": {ID: "file-only", Name: "File Only", ToolCall: true},
+			},
+		},
+		"custom": {
+			ID:   "custom",
+			Name: "Custom Provider",
+			URL:  "http://custom.example/v1",
+			Models: map[string]Model{
+				"custom-model": {ID: "custom-model", Name: "Custom Model", ToolCall: true},
+			},
+		},
+	}
+
+	merged := MergeConfiguredCatalog(runtimeCatalog, configuredCatalog)
+	if got := merged["runtime"].Name; got != "Runtime Provider" {
+		t.Fatalf("runtime provider name = %q, want runtime value", got)
+	}
+	if got := merged["runtime"].URL; got != "http://runtime.example/v1" {
+		t.Fatalf("runtime provider URL = %q, want runtime value", got)
+	}
+	if got := merged["runtime"].Models["shared"].Name; got != "Runtime Shared" {
+		t.Fatalf("shared model = %q, want runtime value", got)
+	}
+	if _, ok := merged["runtime"].Models["file-only"]; !ok {
+		t.Fatal("missing configured-only model on runtime provider")
+	}
+	if _, ok := merged["custom"].Models["custom-model"]; !ok {
+		t.Fatal("missing configured-only provider/model")
+	}
+}
+
+func TestMergeConfiguredCatalogFillsMissingRuntimeURL(t *testing.T) {
+	runtimeCatalog := map[string]Provider{
+		"lmstudio": {ID: "lmstudio", Name: "LM Studio", Models: map[string]Model{"runtime": {ID: "runtime", Name: "Runtime"}}},
+	}
+	configuredCatalog := map[string]Provider{
+		"lmstudio": {ID: "lmstudio", URL: "http://localhost:1234/v1", Models: map[string]Model{}},
+	}
+
+	merged := MergeConfiguredCatalog(runtimeCatalog, configuredCatalog)
+	if got := merged["lmstudio"].URL; got != "http://localhost:1234/v1" {
+		t.Fatalf("merged URL = %q, want configured URL filling missing runtime metadata", got)
+	}
+}

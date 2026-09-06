@@ -37,19 +37,21 @@ func TestEmptyWorkspaceStatusProjectsV2(t *testing.T) {
 		wantNext  string
 	}{
 		{
-			name: "openspec store with no engram changes",
+			name: "declared hybrid store with no engram changes",
 			workspace: func(t *testing.T) string {
 				return engramWorkspaceWithArchivedChangesOnly(t)
 			},
-			wantStore: ArtifactStoreOpenSpec,
+			// #3636: this fixture declares artifact_store: hybrid. Reporting it
+			// as openspec was the defect, not the contract.
+			wantStore: ArtifactStoreHybrid,
 			wantNext:  "sdd-new",
 		},
 		{
-			name: "engram store with only archived engram changes",
+			name: "declared hybrid store with only archived engram changes",
 			workspace: func(t *testing.T) string {
 				return engramWorkspaceWithArchivedChangesOnly(t, "alpha-change", "beta-change")
 			},
-			wantStore: ArtifactStoreEngram,
+			wantStore: ArtifactStoreHybrid,
 			wantNext:  "select-change",
 		},
 	}

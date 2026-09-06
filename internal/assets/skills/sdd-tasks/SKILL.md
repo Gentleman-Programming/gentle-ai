@@ -139,6 +139,8 @@ Each task MUST be:
 
 Every applicable threat-matrix case MUST become an explicit RED-test task before its production task. Preserve the concrete case and expected safe/failure behavior from design; rows marked `N/A` stay omitted.
 
+- Every backticked path on a checkbox line counts as an edit target for edit authority. A path the task only reads (a sibling repository's release artifact, a fixture, a reference file) MUST carry `(read-only)` immediately after its backticked path, for example `- [ ] 1.2 Compare against \`../service-b/dist/release-1.0.tgz\` (read-only)`; the marker annotates only the path it follows, so an unmarked path on the same line is still an edit target, and without the marker a path outside the authorized edit roots blocks apply with `blocked(edit_authority_missing)`.
+
 ### Review Workload Forecast Rules
 
 Before finalizing tasks, estimate whether implementation is likely to exceed the **400 changed-line review budget** (`additions + deletions`). This is a planning guard, not an exact diff count.
@@ -247,6 +249,7 @@ Return to the orchestrator:
 - Testing tasks should reference specific scenarios from the specs
 - Each task should be completable in ONE session (if a task feels too big, split it)
 - Use hierarchical numbering: 1.1, 1.2, 2.1, 2.2, etc.
+- When tasks.md already exists, regeneration MUST preserve the existing task list and numbering: append new tasks or edit tasks in place, never rewrite the file from scratch
 - NEVER include vague tasks like "implement feature" or "add tests"
 - Apply any `rules.tasks` from `openspec/config.yaml`
 - If the project uses TDD, integrate test-first tasks: RED task (write failing test) → GREEN task (make it pass) → REFACTOR task (clean up)

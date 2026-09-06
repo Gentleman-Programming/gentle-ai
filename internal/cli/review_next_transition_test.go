@@ -99,26 +99,33 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 		if err := json.Unmarshal(payload, &document); err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"} {
+		for _, field := range []string{"artifact_subject", "base_tree", "candidate_tree"} {
 			if len(document[field]) == 0 {
 				t.Fatalf("restart reviewer input %d omits %q: %s", order, field, payload)
 			}
 		}
+		// issue #3922 / #4199 / gentle-pi#543: the native-git transport no
+		// longer inlines the manifest on this per-lens input -- it is already
+		// committed to by artifact_subject.changed_path_manifest_sha256.
+		if _, found := document["changed_path_manifest"]; found {
+			t.Fatalf("restart reviewer input %d still inlines changed_path_manifest: %s", order, payload)
+		}
 		var subject reviewtransaction.ArtifactSubject
-		var manifest []reviewtransaction.ChangedPathManifestEntry
 		if err := json.Unmarshal(document["artifact_subject"], &subject); err != nil {
 			t.Fatal(err)
 		}
-		if err := json.Unmarshal(document["changed_path_manifest"], &manifest); err != nil {
+		wantManifestDigest, err := reviewtransaction.ChangedPathManifestDigest(wantContext.ChangedPathManifest)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if subject.LineageID != record.State.LineageID || subject.AuthorityRevision != record.Revision ||
+		if subject.LineageID != record.State.LineageID || subject.AuthorityRevision != record.State.CapturePhaseRevision ||
 			subject.TargetIdentity != record.State.InitialSnapshot.Identity || subject.Lens != record.State.SelectedLenses[order] ||
-			subject.SelectedOrder != order || subject.BaseTree != wantContext.BaseTree || subject.CandidateTree != wantContext.CandidateTree {
+			subject.SelectedOrder != order || subject.BaseTree != wantContext.BaseTree || subject.CandidateTree != wantContext.CandidateTree ||
+			subject.ChangedPathManifestSHA256 != wantManifestDigest {
 			t.Fatalf("restart subject %d = %#v", order, subject)
 		}
-		if input.BaseTree != wantContext.BaseTree || input.CandidateTree != wantContext.CandidateTree || !reflect.DeepEqual(manifest, wantContext.ChangedPathManifest) {
-			t.Fatalf("restart context %d differs from frozen candidate\ngot trees=%s..%s manifest=%#v\nwant trees=%s..%s manifest=%#v", order, input.BaseTree, input.CandidateTree, manifest, wantContext.BaseTree, wantContext.CandidateTree, wantContext.ChangedPathManifest)
+		if input.BaseTree != wantContext.BaseTree || input.CandidateTree != wantContext.CandidateTree {
+			t.Fatalf("restart context %d differs from frozen candidate\ngot trees=%s..%s\nwant trees=%s..%s", order, input.BaseTree, input.CandidateTree, wantContext.BaseTree, wantContext.CandidateTree)
 		}
 	}
 }
@@ -170,6 +177,7 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 				input = reviewNextTransitionInput{Successor: "review-next-successor", Reason: "authorized recovery", Actor: "maintainer"}
 				input.Authorization = "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + tt.status.Authority.LineageID + "\npredecessor_revision=" + tt.status.Authority.Revision + "\ntarget_identity=" + tt.status.TargetIdentity + "\nactor=" + input.Actor + "\nreason=" + input.Reason
 			}
+			tt.status.repositoryRoot = "/review-next-transition-repo"
 			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, nil, input)
 			if tt.wantKind == "" {
 				if got != (ReviewNextTransition{}) {
@@ -213,6 +221,8 @@ func TestReviewNextTransitionDefaultWorkspaceOverlayCollectsTargetBeforeAuthoriz
 	}
 	binding := reviewTransitionBinding(status.Authority, status.TargetIdentity, "")
 	input.Authorization = reviewTransitionRecoveryAuthorization(binding, input.Successor, input.Actor, input.Reason)
+
+	status.repositoryRoot = "/review-next-transition-repo"
 
 	got := newReviewNextTransition(status, nil, nil, nil, input)
 	if got.Kind != reviewNextTransitionCollect || got.ReasonCode != "recovery_target_unrepresentable" ||
@@ -260,6 +270,7 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.status.repositoryRoot = "/review-next-transition-repo"
 			got := newReviewNextTransition(tt.status, nil, nil, nil, tt.input)
 			if got.Kind != reviewNextTransitionExecute || got.Execute == nil {
 				t.Fatalf("next transition = %#v, want an execute transition", got)
@@ -301,6 +312,7 @@ func TestReviewCaptureTransitionArgumentToken(t *testing.T) {
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
 	}
 	lenses := []string{reviewtransaction.LensReliability}
+	status.repositoryRoot = "/review-next-transition-repo"
 	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
 		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
 	})
@@ -356,6 +368,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
 			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + changedTarget + "\nactor=maintainer\nreason=authorized recovery",
 		}
+		status.repositoryRoot = "/review-next-transition-repo"
 		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
 			t.Fatalf("escalated changed-target transition = %#v, want an execute review.recover transition", got)
@@ -378,6 +391,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
 			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + unchangedTarget + "\nactor=maintainer\nreason=authorized recovery",
 		}
+		status.repositoryRoot = "/review-next-transition-repo"
 		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
 			t.Fatalf("escalated unchanged-target transition (no selector) = %#v, want an execute review.recover transition — status.Action already vetted this as legal (accounting-only escalation), so this switch must not re-derive a target-changed requirement", got)
@@ -394,6 +408,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 	t.Run("unchanged target with a selector still stops via the generic recovery_scope_unchanged guard", func(t *testing.T) {
 		status := baseStatus(unchangedTarget, unchangedTarget)
 		input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}}}
+		status.repositoryRoot = "/review-next-transition-repo"
 		got := newReviewNextTransition(status, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
 			t.Fatalf("escalated unchanged-target transition (selector) = %#v, want a bare stop", got)
@@ -402,6 +417,41 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			t.Fatalf("escalated unchanged-target reason (selector) = %q, want the generic reviewRecoveryCollection guard reason %q", got.ReasonCode, "recovery_scope_unchanged")
 		}
 	})
+}
+
+func TestReviewRecoveryCollectionSameTargetSelectorGuard(t *testing.T) {
+	t.Parallel()
+
+	target := "sha256:" + strings.Repeat("b", 64)
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionRecover,
+		Replayability:  reviewtransaction.ReplayabilityManualActionRequired,
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "same-target-selector", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateInvalidated},
+		TargetIdentity: target, AuthorityTargetIdentity: target,
+		ActionDisposition: reviewtransaction.RecoveryInvalidated,
+		Frozen:            &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Projection:        ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
+	}
+	for _, tt := range []struct {
+		name       string
+		recovery   reviewtransaction.Target
+		wantKind   string
+		wantReason string
+	}{
+		{name: "invalidated current changes collects authorization", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}, wantKind: reviewNextTransitionCollect, wantReason: "recovery_authorization_required"},
+		{name: "unchanged base diff stops", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseDiff}, wantKind: reviewNextTransitionStop, wantReason: "recovery_scope_unchanged"},
+		{name: "unchanged workspace overlay stops", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay}, wantKind: reviewNextTransitionStop, wantReason: "recovery_scope_unchanged"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{
+				Selector: &reviewTransitionSelector{Recovery: &tt.recovery},
+			})
+			if got.Kind != tt.wantKind || got.ReasonCode != tt.wantReason {
+				t.Fatalf("same-target recovery transition = %#v", got)
+			}
+		})
+	}
 }
 
 // TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedSchema
@@ -417,6 +467,7 @@ func TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedSchema(t *t
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
 	lenses := []string{reviewtransaction.LensReliability}
+	status.repositoryRoot = "/review-next-transition-repo"
 	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
 		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
 	})
@@ -441,11 +492,15 @@ func TestReviewNextTransitionCollectContextValidatesAgainstPublishedSchema(t *te
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
 	lenses := []string{reviewtransaction.LensReliability}
+	status.repositoryRoot = "/review-next-transition-repo"
 	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
 		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
 	})
+	// issue #3922 / #4199 / gentle-pi#543: the native-git transport no longer
+	// inlines the manifest on this per-lens input -- it is already committed
+	// to by artifact_subject.changed_path_manifest_sha256.
 	if got.Collect == nil || len(got.Collect.Inputs) != 1 || got.Collect.Inputs[0].ArtifactSubject == nil ||
-		got.Collect.Inputs[0].ChangedPathManifest == nil {
+		got.Collect.Inputs[0].ChangedPathManifest != nil {
 		t.Fatalf("capture context = %#v", got)
 	}
 	payload, err := json.Marshal(got)
@@ -482,6 +537,7 @@ func TestReviewNextTransitionRecoverySelectorArgumentsValidateAgainstPublishedSc
 		}
 		binding := reviewTransitionBinding(status.Authority, status.TargetIdentity, "")
 		input.Authorization = reviewTransitionRecoveryAuthorization(binding, input.Successor, input.Actor, input.Reason)
+		status.repositoryRoot = "/review-next-transition-repo"
 		got := newReviewNextTransition(status, nil, nil, nil, input)
 		wantSelectors := []ReviewTransitionArgument{{Name: "base-ref", Value: "main"}, {Name: "committed-only", Value: "true"}}
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" ||
@@ -509,6 +565,7 @@ func TestReviewNextTransitionCollectArgumentsValidateAgainstPublishedV2Schema(t 
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
 	lenses := []string{reviewtransaction.LensReliability}
+	status.repositoryRoot = "/review-next-transition-repo"
 	got := newReviewNextTransition(status, lenses, nil, nil, reviewNextTransitionInput{
 		CaptureContext: nextTransitionTestCaptureContext(t, status, lenses),
 	})
@@ -607,6 +664,8 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 		resources = append(resources,
 			struct{ version, name string }{"v2", "artifact-subject.schema.json"},
 			struct{ version, name string }{"v2", "start.schema.json"},
+			struct{ version, name string }{"v2", "transition-binding.schema.json"},
+			struct{ version, name string }{"v2", "transition-execution.schema.json"},
 		)
 	}
 	for _, resource := range resources {
@@ -671,6 +730,7 @@ func TestReviewNextTransitionRefusesTargetDriftAndUnverifiableCaptures(t *testin
 		Authority:      &ReviewTargetStatusAuthority{LineageID: "target-drift", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64), Frozen: &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskHigh},
 	}
+	status.repositoryRoot = "/review-next-transition-repo"
 	got := newReviewNextTransition(status, []string{reviewtransaction.LensRisk}, nil, errors.New("tampered capture"), reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionStop || got.ReasonCode != "captured_artifacts_unverifiable" || got.Execute != nil || got.Collect != nil {
 		t.Fatalf("target drift transition = %#v", got)

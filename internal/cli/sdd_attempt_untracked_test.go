@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,7 +29,7 @@ func TestRunSDDAttemptAcquireRefusesUndeclaredEligibleUntrackedScopeBeforeToken(
 	if err == nil {
 		t.Fatalf("undeclared eligible untracked scope issued authority: %s", output.String())
 	}
-	if !strings.Contains(err.Error(), "gentle-ai review status --next-transition") || !strings.Contains(err.Error(), "gentle-ai sdd-attempt acquire") {
+	if !strings.Contains(err.Error(), reviewIntendedUntrackedInventoryCommand) || !strings.Contains(err.Error(), "gentle-ai sdd-attempt acquire") {
 		t.Fatalf("undeclared scope guidance = %q, want inventory then acquire commands", err)
 	}
 	status, statusErr := store.Status()
@@ -104,6 +105,130 @@ func TestRunSDDAttemptAcquireTokenReusesSelectedUntrackedScope(t *testing.T) {
 		if after := snapshotRuntimeAuthorityFiles(t, store.Dir); !reflect.DeepEqual(before, after) {
 			t.Fatal("foreign token or changed selection mutated authority")
 		}
+	}
+}
+
+func TestRunSDDAttemptRescopeSuccessorInheritsSelectedUntrackedScope(t *testing.T) {
+	for _, operation := range []string{"begin", "acquire"} {
+		t.Run(operation, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			change := "rescoped-selected-" + operation
+			writeUndeclaredWorkspaceFile(t, repo, "selected.txt", "selected\n", 0o644)
+			writeUndeclaredWorkspaceFile(t, repo, "unrelated.txt", "unrelated\n", 0o644)
+			_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			acquired, _ := runCompactSDDAttempt(t, []string{
+				"acquire", "--cwd", repo, "--change", change, "--request-id", "selected-acquire-a",
+				"--work-unit", "objective A", "--evidence-goal", "prove selected scope", "--max-attempts", "2", "--max-changed-lines", "20",
+				"--untracked-scope", "select", "--expected-untracked-inventory", digest, "--intended-untracked", "selected.txt",
+			})
+			failed, _ := runCompactSDDAttempt(t, append([]string{
+				"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "selected-settle-a",
+				"--outcome", "failed", "--evidence-revision", cliAttemptHash('a'),
+			}, "--diagnosis", "zero-drift failure", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup complete", "--process-evidence", "process scan clean"))
+			if failed.State != "proceed" {
+				t.Fatalf("zero-drift selected settlement = %#v", failed)
+			}
+			settled := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+			rescoped := runSDDAttemptStatus(t, []string{
+				"rescope", "--cwd", repo, "--change", change, "--expected-revision", settled.Revision, "--request-id", "selected-rescope-b",
+				"--work-unit", "objective B", "--evidence-goal", "prove inherited selected scope", "--max-attempts", "2", "--max-changed-lines", "20",
+				"--reason", "maintainer narrowed the failed zero-drift objective", "--actor", "maintainer",
+			})
+
+			status := runSDDAttemptStatus(t, []string{
+				"status", "--cwd", repo, "--change", change, "--work-unit", "objective B", "--evidence-goal", "prove inherited selected scope",
+				"--max-attempts", "2", "--max-changed-lines", "20",
+			})
+			if status.BlockedReason != "" || status.BlockedExit != "" {
+				t.Fatalf("declaration-free rescope-successor status = reason %q exit %q, want an executable continuation", status.BlockedReason, status.BlockedExit)
+			}
+
+			continuation := []string{
+				operation, "--cwd", repo, "--change", change, "--request-id", "selected-" + operation + "-b",
+				"--work-unit", "objective B", "--evidence-goal", "prove inherited selected scope", "--max-attempts", "2", "--max-changed-lines", "20",
+			}
+			if operation == "begin" {
+				continuation = append(continuation, "--expected-revision", rescoped.Revision)
+			}
+			store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			divergent := append(append([]string{}, continuation...), "--untracked-scope", "select", "--expected-untracked-inventory", digest, "--intended-untracked", "unrelated.txt")
+			if operation == "acquire" {
+				result, _ := runCompactSDDAttempt(t, divergent)
+				if result.State != "blocked" || result.Reason != string(sddstatus.CompactBlockMaintainerDecision) {
+					t.Fatalf("divergent rescope-successor acquire = %#v", result)
+				}
+			} else if err := RunSDDAttempt(divergent, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "objective changed") {
+				t.Fatalf("divergent rescope-successor begin = %v", err)
+			}
+			afterDivergence, err := store.Status()
+			if err != nil || afterDivergence.Revision != rescoped.Revision || afterDivergence.ActiveAttempt != nil {
+				t.Fatalf("divergent rescope-successor declaration mutated authority: status=%#v err=%v", afterDivergence, err)
+			}
+			if operation == "acquire" {
+				result, _ := runCompactSDDAttempt(t, continuation)
+				if result.State != "proceed" || result.Token == "" {
+					t.Fatalf("declaration-free rescope-successor acquire = %#v", result)
+				}
+			}
+			if operation == "begin" {
+				started := runSDDAttemptStatus(t, continuation)
+				if started.ActiveAttempt == nil || len(started.ActiveAttempt.IntendedUntracked) != 1 || started.ActiveAttempt.IntendedUntracked[0] != "selected.txt" {
+					t.Fatalf("declaration-free rescope-successor begin = %#v", started)
+				}
+			}
+			current, err := store.Status()
+			if err != nil || current.ActiveAttempt == nil || len(current.ActiveAttempt.IntendedUntracked) != 1 || current.ActiveAttempt.IntendedUntracked[0] != "selected.txt" {
+				t.Fatalf("rescope successor swept unrelated untracked paths: status=%#v err=%v", current, err)
+			}
+		})
+	}
+}
+
+func TestRunSDDAttemptAcquireReplayPreservesInheritedRescopeSelection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const change = "rescoped-replay"
+	writeUndeclaredWorkspaceFile(t, repo, "selected.txt", "selected\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "unrelated.txt", "unrelated\n", 0o644)
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "selected-acquire-a",
+		"--work-unit", "objective A", "--evidence-goal", "prove selected scope", "--max-attempts", "2", "--max-changed-lines", "20",
+		"--untracked-scope", "select", "--expected-untracked-inventory", digest, "--intended-untracked", "selected.txt",
+	})
+	runCompactSDDAttempt(t, append(compactSettleArgs(repo, change, acquired.Token, "selected-settle-a", "failed"), "--evidence-revision", cliAttemptHash('a')))
+	settled := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	runSDDAttemptStatus(t, []string{
+		"rescope", "--cwd", repo, "--change", change, "--expected-revision", settled.Revision, "--request-id", "selected-rescope-b",
+		"--work-unit", "objective B", "--evidence-goal", "prove inherited selected scope", "--max-attempts", "2", "--max-changed-lines", "20",
+		"--reason", "maintainer narrowed the failed zero-drift objective", "--actor", "maintainer",
+	})
+	args := []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "selected-acquire-b",
+		"--work-unit", "objective B", "--evidence-goal", "prove inherited selected scope", "--max-attempts", "2", "--max-changed-lines", "20",
+	}
+	first, _ := runCompactSDDAttempt(t, args)
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotRuntimeAuthorityFiles(t, store.Dir)
+	replayed, _ := runCompactSDDAttempt(t, args)
+	if first.State != "proceed" || first.Token == "" || replayed.State != first.State || replayed.Token != first.Token || !reflect.DeepEqual(before, snapshotRuntimeAuthorityFiles(t, store.Dir)) {
+		t.Fatalf("declaration-free replay = %#v, want %#v without authority mutation", replayed, first)
+	}
+	divergent, _ := runCompactSDDAttempt(t, append(append([]string{}, args...), "--untracked-scope", "select", "--expected-untracked-inventory", digest, "--intended-untracked", "unrelated.txt"))
+	if divergent.State != "blocked" || divergent.Reason != string(sddstatus.CompactBlockInvalidContinuation) || !reflect.DeepEqual(before, snapshotRuntimeAuthorityFiles(t, store.Dir)) {
+		t.Fatalf("divergent replay = %#v, want invalid_continuation without authority mutation", divergent)
 	}
 }
 
@@ -185,5 +310,294 @@ func TestRunSDDAttemptRejectsNestedRepositoryUntrackedScope(t *testing.T) {
 	}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "another Git repository") {
 		t.Fatalf("nested repository refusal = %v, want an untracked nested-repository refusal", err)
+	}
+}
+
+// TestRunSDDAttemptSettleDeclaresUntrackedFilesBornDuringTheAttempt drives the
+// whole of #3806 through the real CLI: an attempt that starts against a
+// workspace with nothing eligible, creates a file while it runs, and then has
+// to say what that file is before it can settle.
+func TestRunSDDAttemptSettleDeclaresUntrackedFilesBornDuringTheAttempt(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		scope        string
+		selected     []string
+		changedLines int
+	}{
+		{"select accounts the file", "select", []string{"born.txt"}, 3},
+		{"exclude leaves it out on the record", "exclude", nil, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			change := "born-during-" + test.scope
+			acquired, _ := runCompactSDDAttempt(t, []string{
+				"acquire", "--cwd", repo, "--change", change, "--request-id", "born-acquire",
+				"--work-unit", "born during", "--evidence-goal", "account what the attempt creates",
+				"--max-attempts", "2", "--max-changed-lines", "20",
+			})
+			if acquired.State != "proceed" || acquired.Token == "" {
+				t.Fatalf("clean acquire = %#v", acquired)
+			}
+			writeUndeclaredWorkspaceFile(t, repo, "born.txt", "one\ntwo\nthree\n", 0o644)
+
+			settle := []string{
+				"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "born-settle",
+				"--outcome", "passed", "--evidence-revision", "sha256:" + strings.Repeat("a", 64),
+				"--diagnosis", "work unit complete", "--harness-disposition", "invalidated",
+				"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan clean",
+			}
+			blocked, _ := runCompactSDDAttempt(t, settle)
+			if blocked.State != "blocked" || blocked.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
+				t.Fatalf("undeclared born-during settlement = %#v, want blocked/%s", blocked, sddstatus.CompactBlockUndeclaredUntracked)
+			}
+			if !strings.Contains(blocked.Exit, "born.txt") ||
+				!strings.Contains(blocked.Exit, "--untracked-scope=select") ||
+				!strings.Contains(blocked.Exit, "--untracked-scope=exclude") {
+				t.Fatalf("refusal does not name the file and both exits: %#v", blocked)
+			}
+
+			_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			declared := append(append([]string{}, settle...), "--untracked-scope", test.scope, "--expected-untracked-inventory", digest)
+			for _, path := range test.selected {
+				declared = append(declared, "--intended-untracked", path)
+			}
+			settled, _ := runCompactSDDAttempt(t, declared)
+			if settled.State != "complete" {
+				t.Fatalf("declared settlement = %#v", settled)
+			}
+			store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := store.Status()
+			if err != nil || len(status.Attempts) != 1 {
+				t.Fatalf("declared settlement did not settle one attempt: status=%#v err=%v", status, err)
+			}
+			settledAttempt := status.Attempts[0]
+			if settledAttempt.ChangedLines != test.changedLines {
+				t.Fatalf("changed lines = %d, want %d: %#v", settledAttempt.ChangedLines, test.changedLines, settledAttempt)
+			}
+			if len(settledAttempt.IntendedUntracked) != len(test.selected) ||
+				(len(test.selected) == 1 && settledAttempt.IntendedUntracked[0] != test.selected[0]) {
+				t.Fatalf("settlement provenance = %#v, want %#v", settledAttempt.IntendedUntracked, test.selected)
+			}
+		})
+	}
+}
+
+// sddAttemptFinishSettleFixture starts a clean attempt through the CLI
+// (`begin` for `finish`, `acquire` for `settle`) and returns the request
+// tokens each operation needs to settle it.
+type sddAttemptFinishSettleFixture struct {
+	repo, change         string
+	beginRevision, token string
+}
+
+func newSDDAttemptFinishSettleFixture(t *testing.T, operation, change string) sddAttemptFinishSettleFixture {
+	t.Helper()
+	repo := initReviewCLIRepo(t)
+	fixture := sddAttemptFinishSettleFixture{repo: repo, change: change}
+	if operation == "finish" {
+		started := runSDDAttemptStatus(t, []string{
+			"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", change + "-begin",
+			"--work-unit", "ledger untracked provenance", "--evidence-goal", "prove ledger-owned refusal", "--max-attempts", "2", "--max-changed-lines", "20",
+		})
+		fixture.beginRevision = started.Revision
+		return fixture
+	}
+	acquired, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", change + "-acquire",
+		"--work-unit", "ledger untracked provenance", "--evidence-goal", "prove ledger-owned refusal", "--max-attempts", "2", "--max-changed-lines", "20",
+	})
+	if acquired.State != "proceed" || acquired.Token == "" {
+		t.Fatalf("clean acquire = %#v", acquired)
+	}
+	fixture.token = acquired.Token
+	return fixture
+}
+
+func (fixture sddAttemptFinishSettleFixture) settlementArgs(operation, requestID string) []string {
+	if operation == "finish" {
+		return []string{
+			"finish", "--cwd", fixture.repo, "--change", fixture.change, "--expected-revision", fixture.beginRevision, "--request-id", requestID,
+			"--outcome", "passed", "--evidence-revision", cliAttemptHash('a'),
+			"--diagnosis", "work unit complete", "--harness-disposition", "reused",
+			"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan clean",
+		}
+	}
+	return compactSettleArgs(fixture.repo, fixture.change, fixture.token, requestID, "passed")
+}
+
+// TestRunSDDAttemptFinishAndSettleSurfaceLedgerUntrackedFreshnessMessage
+// proves R6: after a declared untracked selection goes stale (the workspace
+// gains another eligible path after the declaration was made), `finish` and
+// `settle` must surface the runtime ledger's refusal -- the one naming both
+// digests and the exact rerun command (runtime_ledger.go:1037) -- not the
+// generic CLI-side "untracked inventory changed" message a duplicate
+// workspace read used to produce ahead of the ledger.
+func TestRunSDDAttemptFinishAndSettleSurfaceLedgerUntrackedFreshnessMessage(t *testing.T) {
+	for _, operation := range []string{"finish", "settle"} {
+		t.Run(operation, func(t *testing.T) {
+			fixture := newSDDAttemptFinishSettleFixture(t, operation, "stale-untracked-"+operation)
+
+			writeUndeclaredWorkspaceFile(t, fixture.repo, "born.txt", "one\n", 0o644)
+			_, staleDigest, err := (reviewtransaction.SnapshotBuilder{Repo: fixture.repo}).IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeUndeclaredWorkspaceFile(t, fixture.repo, "another.txt", "two\n", 0o644)
+
+			args := append(fixture.settlementArgs(operation, "stale-"+operation),
+				"--untracked-scope", "select", "--expected-untracked-inventory", staleDigest, "--intended-untracked", "born.txt")
+
+			// `finish` refuses through a plain Go error; `settle` (the compact
+			// lifecycle) reports the same refusal as a "blocked" JSON result
+			// with a Go error of nil (issue #2540 S1's compact output shape),
+			// so the two operations are read through different surfaces even
+			// though they refuse through the exact same ledger check.
+			var message string
+			if operation == "finish" {
+				err = RunSDDAttempt(args, &bytes.Buffer{})
+				if err == nil {
+					t.Fatalf("%s with a stale digest issued authority", operation)
+				}
+				if !errors.Is(err, sddstatus.ErrRuntimeUndeclaredUntracked) {
+					t.Fatalf("%s stale digest error = %v, want it to wrap ErrRuntimeUndeclaredUntracked", operation, err)
+				}
+				message = err.Error()
+			} else {
+				result, _ := runCompactSDDAttempt(t, args)
+				if result.State != "blocked" || result.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
+					t.Fatalf("%s with a stale digest = %#v, want blocked/%s", operation, result, sddstatus.CompactBlockUndeclaredUntracked)
+				}
+				message = result.Exit
+			}
+			if !strings.Contains(message, "this declaration was made against untracked inventory") {
+				t.Fatalf("%s stale digest message = %q, want the ledger's provenance message", operation, message)
+			}
+			if strings.Contains(message, "untracked inventory changed") {
+				t.Fatalf("%s stale digest message = %q, want the ledger's message, not the CLI's generic preflight message", operation, message)
+			}
+		})
+	}
+}
+
+// TestRunSDDAttemptFinishAndSettleNegativeControlsStillRefuse proves R7: the
+// flag-shape checks that Fix B extracts into intendedUntrackedDeclarationShape
+// still refuse every malformed declaration for finish/settle, and begin's
+// untouched CLI-side preflight still refuses a stale digest on its own,
+// proving the ledger-ownership change did not weaken either path.
+func TestRunSDDAttemptFinishAndSettleNegativeControlsStillRefuse(t *testing.T) {
+	for _, operation := range []string{"finish", "settle"} {
+		t.Run(operation, func(t *testing.T) {
+			fixture := newSDDAttemptFinishSettleFixture(t, operation, "shape-negative-"+operation)
+
+			writeUndeclaredWorkspaceFile(t, fixture.repo, "born.txt", "one\n", 0o644)
+			_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: fixture.repo}).IntendedUntrackedInventory(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, test := range []struct {
+				name  string
+				extra []string
+			}{
+				{"exclude with intended-untracked", []string{"--untracked-scope", "exclude", "--expected-untracked-inventory", digest, "--intended-untracked", "born.txt"}},
+				{"select with no paths", []string{"--untracked-scope", "select", "--expected-untracked-inventory", digest}},
+				{"bogus scope", []string{"--untracked-scope", "bogus", "--expected-untracked-inventory", digest, "--intended-untracked", "born.txt"}},
+				{"intended-untracked alone", []string{"--intended-untracked", "born.txt"}},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					args := append(fixture.settlementArgs(operation, "shape-"+operation+"-"+test.name), test.extra...)
+					if err := RunSDDAttempt(args, &bytes.Buffer{}); err == nil {
+						t.Fatalf("%s %s issued authority", operation, test.name)
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("begin still refuses a stale digest at the CLI", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		writeUndeclaredWorkspaceFile(t, repo, "born.txt", "one\n", 0o644)
+		_, staleDigest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeUndeclaredWorkspaceFile(t, repo, "another.txt", "two\n", 0o644)
+
+		err = RunSDDAttempt([]string{
+			"begin", "--cwd", repo, "--change", "begin-stale-untracked", "--expected-revision=", "--request-id", "begin-stale-request",
+			"--work-unit", "stale begin", "--evidence-goal", "prove begin preflight unchanged", "--max-attempts", "2", "--max-changed-lines", "20",
+			"--untracked-scope", "select", "--expected-untracked-inventory", staleDigest, "--intended-untracked", "born.txt",
+		}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatal("begin with a stale digest issued authority")
+		}
+		if !strings.Contains(err.Error(), "untracked inventory changed") {
+			t.Fatalf("begin stale digest error = %q, want the CLI's own preflight refusal (begin keeps its own check)", err)
+		}
+	})
+}
+
+// TestRunSDDAttemptRescopeAdmitsFreshUntrackedSelection is the CLI-level
+// reproduction of #4195: eligible untracked files authored after a clean
+// interrupted settle -- outside any active attempt -- can be admitted by a
+// maintainer-authorized rescope carrying an explicit fresh selection, and a
+// following acquire that selects the exact same files then proceeds instead
+// of being refused as an objective change.
+func TestRunSDDAttemptRescopeAdmitsFreshUntrackedSelection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	change := "rescope-4195-cli"
+
+	acquired, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "4195-acquire-1",
+		"--work-unit", "worker task", "--evidence-goal", "do work", "--max-attempts", "2", "--max-changed-lines", "400",
+	})
+	if acquired.State != "proceed" || acquired.Token == "" {
+		t.Fatalf("initial acquire = %#v", acquired)
+	}
+	interrupted, _ := runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "4195-settle-1",
+		"--outcome", "interrupted", "--diagnosis", "worker stalled, no changes", "--harness-disposition", "reused",
+		"--cleanup-evidence", "none needed", "--process-evidence", "n/a",
+	})
+	if interrupted.State != "proceed" {
+		t.Fatalf("interrupted settle = %#v", interrupted)
+	}
+
+	// Files authored after settlement, outside any active attempt (#4195).
+	writeUndeclaredWorkspaceFile(t, repo, "client.go", "package demo\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "client_test.go", "package demo_test\n", 0o644)
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settled := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	rescoped := runSDDAttemptStatus(t, []string{
+		"rescope", "--cwd", repo, "--change", change, "--expected-revision", settled.Revision, "--request-id", "4195-rescope-1",
+		"--work-unit", "add client and tests", "--evidence-goal", "implement client with tests",
+		"--max-attempts", "2", "--max-changed-lines", "400",
+		"--reason", "narrow to additive client+tests", "--actor", "maintainer",
+		"--untracked-scope", "select", "--expected-untracked-inventory", digest,
+		"--intended-untracked", "client.go", "--intended-untracked", "client_test.go",
+	})
+	if rescoped.Objective == nil {
+		t.Fatal("rescoped status has no objective")
+	}
+
+	began, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "4195-acquire-2",
+		"--work-unit", "add client and tests", "--evidence-goal", "implement client with tests",
+		"--max-attempts", "2", "--max-changed-lines", "400",
+		"--untracked-scope", "select", "--expected-untracked-inventory", digest,
+		"--intended-untracked", "client.go", "--intended-untracked", "client_test.go",
+	})
+	if began.State != "proceed" || began.Token == "" {
+		t.Fatalf("acquire with the rescope-admitted selection was refused: %#v", began)
 	}
 }

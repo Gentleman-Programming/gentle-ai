@@ -1,6 +1,6 @@
 # Testing Agents Deterministically
 
-How Gentle AI proves that an agent did what it was asked — in CI, on every push, with no API keys and no token cost.
+How Gentle AI™ proves that an agent did what it was asked — in CI, on every push, with no API keys and no token cost.
 
 ← [Back to README](../README.md)
 

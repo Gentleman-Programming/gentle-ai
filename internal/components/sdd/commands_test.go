@@ -2,10 +2,13 @@ package sdd
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
@@ -36,6 +39,41 @@ func TestOpenCodeCommandsIncludesCoreWorkflow(t *testing.T) {
 	}
 }
 
+func TestOpenCodeReviewValidatorPermissionContract(t *testing.T) {
+	// The validator processes untrusted candidate input, so its shell surface
+	// is pinned to the one provider-issued read-only inspection command its
+	// briefing names (reviewerprovider.targetedValidatorPromptInstruction);
+	// every other bash invocation is denied by the wildcard.
+	wantPermission := map[string]any{
+		"write": "deny",
+		"edit":  "deny",
+		"task":  "deny",
+		"bash": map[string]any{
+			"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
+			"*": "deny",
+		},
+	}
+	for _, path := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
+		t.Run(path, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal([]byte(assets.MustRead(path)), &root); err != nil {
+				t.Fatalf("unmarshal %s: %v", path, err)
+			}
+			validator := root["agent"].(map[string]any)["review-validator"].(map[string]any)
+			if _, exists := validator["tools"]; exists {
+				t.Fatalf("%s validator emits deprecated tools: %#v", path, validator)
+			}
+			permission, ok := validator["permission"].(map[string]any)
+			if !ok || !reflect.DeepEqual(permission, wantPermission) {
+				t.Fatalf("%s validator permission = %#v, want %#v", path, validator["permission"], wantPermission)
+			}
+			if _, exists := permission["read"]; exists {
+				t.Fatalf("%s validator overrides global read policy: %#v", path, permission)
+			}
+		})
+	}
+}
+
 func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *testing.T) {
 	command := assets.MustRead("opencode/commands/sdd-research.md")
 	for _, required := range []string{"agent: gentle-orchestrator", "hidden `sdd-research` sub-agent", "SDD Session Preflight must already be complete"} {
@@ -62,10 +100,16 @@ func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *tes
 			if !ok || research["mode"] != "subagent" || research["hidden"] != true {
 				t.Fatalf("%s missing hidden sdd-research subagent", path)
 			}
-			tools := research["tools"].(map[string]any)
-			for _, denied := range []string{"webfetch", "websearch", "task"} {
-				if got := tools[denied]; got != false {
-					t.Fatalf("%s research tool %q = %v, want explicit false", path, denied, got)
+			if _, exists := research["tools"]; exists {
+				t.Fatalf("%s research agent emits deprecated tools: %#v", path, research)
+			}
+			researchPermission, ok := research["permission"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s research permission = %#v, want object", path, research["permission"])
+			}
+			for _, denied := range []string{"bash", "webfetch", "websearch", "task"} {
+				if got := researchPermission[denied]; got != "deny" {
+					t.Fatalf("%s research permission %q = %v, want deny", path, denied, got)
 				}
 			}
 			prompt := research["prompt"].(string)
@@ -82,5 +126,31 @@ func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *tes
 				}
 			}
 		})
+	}
+}
+
+// #2644: only Claude Code namespaces its commands, and only there does a
+// retired unprefixed predecessor exist.
+func TestSlashCommandPathsNamespaceClaudeOnly(t *testing.T) {
+	dir := filepath.Join("home", ".claude", "commands")
+	claude := SlashCommandPaths(model.AgentClaudeCode, dir)
+	if len(claude) != 2*len(OpenCodeCommands()) {
+		t.Fatalf("claude paths = %d, want new and retired name per command", len(claude))
+	}
+	if claude[0] != filepath.Join(dir, "gentle-sdd-init.md") || claude[1] != filepath.Join(dir, "sdd-init.md") {
+		t.Fatalf("claude paths start = %v", claude[:2])
+	}
+	if !IsLegacyClaudeCommandPath(claude[1]) || IsLegacyClaudeCommandPath(claude[0]) {
+		t.Fatalf("legacy detection wrong for %v", claude[:2])
+	}
+	if IsLegacyClaudeCommandPath(filepath.Join("home", ".config", "opencode", "commands", "sdd-init.md")) {
+		t.Fatal("OpenCode command misreported as retired Claude command")
+	}
+	opencode := SlashCommandPaths(model.AgentOpenCode, "cmds")
+	if len(opencode) != len(OpenCodeCommands()) || opencode[0] != filepath.Join("cmds", "sdd-init.md") {
+		t.Fatalf("opencode paths = %v", opencode)
+	}
+	if got := LegacyClaudeCommandPath(model.AgentOpenCode, "cmds", "gentle-sdd-init.md"); got != "" {
+		t.Fatalf("OpenCode legacy path = %q, want none", got)
 	}
 }

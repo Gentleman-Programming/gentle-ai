@@ -60,11 +60,17 @@ func (adapter *ClaudeAdapter) Review(ctx context.Context, invocation Invocation)
 	}
 	command := commandContext(ctx, binary, claudeReviewerArguments...)
 	command.Dir = scratch
+	// On Windows, `claude` from an npm-style install resolves to a `.cmd`
+	// shim; launching it goes through cmd.exe's own command-line reparsing,
+	// which needs its own quoting when the resolved path contains a space
+	// (issue #4039). This is a no-op for every other binary and platform: the
+	// binary is otherwise launched directly, with no shell.
+	configureWindowsBatchLaunch(command, binary, claudeReviewerArguments)
 	command.Stdin = bytes.NewReader(invocation.Prompt())
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("claude reviewer transport failed: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("claude reviewer transport failed: %w: %s", err, reviewerTransportFailureDetail(stderr.String(), stdout.String()))
 	}
 	return stdout.Bytes(), nil
 }

@@ -25,6 +25,9 @@ func TestReviewStartAlwaysCreatesCompactAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, repo, "add", "docs/atomic-start.md")
+	// Windows has no executable bit: record the fixture's 0o755 intent in the
+	// index so risk classification matches POSIX.
+	runReviewCLIGit(t, repo, "update-index", "--chmod=+x", "docs/atomic-start.md")
 
 	var out bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &out); err != nil {

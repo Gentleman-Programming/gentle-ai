@@ -10,9 +10,11 @@ RDD is opt-in. Until a user enables it with `gentle-ai review mode enable --scop
 
 ## Quick path
 
+The orchestrator enters this lifecycle once per candidate, after an authorized implementation is complete and normalized and before reporting it complete, whenever the switch reads enabled; it does not wait for the user to ask for a review.
+
 1. Preflight only the current worktree with selectorless negotiated STATUS.
 2. Execute its exact START, then retain the returned lineage, revision, and target tokens.
-3. Use those exact tokens for every STATUS and capture call until native approval burns the transaction.
+3. Use those exact tokens for every STATUS and capture call; after approval, run only the exact acknowledgement transition STATUS or the terminal response owns.
 4. Follow ordinary repository policy for commit, push, PR, release, and archive.
 
 ```bash
@@ -22,6 +24,8 @@ gentle-ai review status \
   --agent claude-code \
   --next-transition
 ```
+
+Claude Code also gets a deterministic per-session baseline and end-of-turn reminder through its installed `SessionStart` and `Stop` hooks, both backed by the review stop-hook subcommand: SessionStart records the session's starting candidate, and Stop reminds only about candidates that session itself produced; neither starts a review by itself.
 
 ## Cross-repository root
 
@@ -51,7 +55,7 @@ An exact replay of an active START can return `replayed`. A genuinely new START 
 
 ### 3. Bound calls drive the transaction
 
-Every later STATUS and bound capture call for this transaction carries the exact captured lineage, revision, and target tokens. The parent routes only from that transaction's returned `next_transition`:
+A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:
 
 | Transition | Parent action |
 | --- | --- |
@@ -61,15 +65,24 @@ Every later STATUS and bound capture call for this transaction carries the exact
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
 
-### 4. Approval burns authority
+### 4. Approved authority awaits acknowledgement, then burns
 
-Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. On success it reads back terminal approval, then burns the exact lineage and its artifacts before returning `approved`.
+Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. A successful final capture or zero-lens START first records `approved` with one exact acknowledgement transition. The terminal closure and approved authority remain replayable until that acknowledgement succeeds.
 
-No terminal receipt, tombstone, witness, mirror, or delivery authority survives the burn. Other lineages and worktrees are unaffected. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
+| Moment | Consumer action | Native behavior |
+| --- | --- | --- |
+| Approval response | Retain the provider-owned acknowledgement operation, ordered arguments, binding, and token exactly as returned. | START or the terminal closure returns `approved` without burning the authority. |
+| Retry before acknowledgement | Re-query bound STATUS; do not reconstruct or substitute an acknowledgement. | STATUS reoffers the same exact acknowledgement transition while the approved authority remains current. |
+| Wrong, stale, or mismatched acknowledgement | Treat the error as non-mutating, retain the original binding, then re-query bound STATUS. | Validation fails before mutation; the authority and pending acknowledgement remain replayable. |
+| Exact acknowledgement | Run the returned command once. If its outcome is uncertain, re-query bound STATUS instead of guessing or replaying an invented command. | Under the existing lock, Go validates the complete binding and token, then burns the exact lineage and artifacts. |
+
+The acknowledgement transition is an execution detail of `gentle-ai.review-integration/v2`; it does not authorize delivery. Escalated and other non-approved terminal paths retain their existing response and STATUS behavior and do not gain an acknowledgement transition. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
+
+After a successful burn, no terminal receipt, tombstone, witness, mirror, or delivery authority survives. Other lineages and worktrees are unaffected.
 
 ## Reviewer transport
 
-The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go derives frozen trees, manifest, subject hash, role, binding, schema, evidence limits, and admission. Adapters transport opaque provider output and never parse bindings, manufacture a verdict, or mutate review authority.
+The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go derives frozen trees, manifest, subject hash, role, binding, schema, evidence limits, and admission. Adapters transport opaque provider output and never parse bindings, manufacture a verdict, or mutate review authority. Gentle AI writes nothing into the Pi system prompt because gentle-pi owns it, so this contract ships as `orchestration/pi.md` in the published provider contract bundle, which gentle-pi mirrors and injects at session start.
 
 Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
@@ -109,12 +122,14 @@ A `stop` carries one reason code and no executable transition. The table below i
 | `corrected_candidate_unavailable` | Change the correction candidate in B, then re-query `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition` with the captured lineage and target. Do not reuse the pre-correction target. |
 | `empty_base_diff_bootstrap_required` | Terminal — the committed base has no reviewable paths. Use the separately authorized empty-root bootstrap for a new target, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `lens_context_budget_exceeded` | Terminal — immutable reviewer context cannot be truncated. Reduce the B candidate scope and start a new transaction, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `managed_assets_outdated` | Run the exact `gentle-ai sync` command named in the stop's `continuation` field (bound to the runtime agent STATUS was asked for), then re-query the exact repository-bound STATUS command; the same candidate is offered again once the recorded digest converges. |
 | `corrupted_or_unverifiable_authority` | Terminal — the authority is unreadable or unsupported. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `manual_intervention_required` | Terminal — the authority state is outside the negotiated lifecycle. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `missing_authority_binding` | Terminal — a current target had no authority binding. File a bounded defect with the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `native_stop_required` | Terminal — the lineage is escalated but has no native continuation. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `recovery_scope_unchanged` | Change B so its target identity differs, then retry the exact returned `gentle-ai review recover` invocation. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and start a fresh target; otherwise run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable under current conditions. If that was transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the same slot. If it is not transient, reduce the B candidate scope and start a new `gentle-ai review start`, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered by STATUS, then re-run its exact repository-bound STATUS command. |
 
 ## Published v1 compatibility reference
@@ -132,6 +147,6 @@ The published v1 directory contains 23 strict JSON Schemas and 24 deterministic 
 - [ ] Selectorless STATUS was used only to preflight the current worktree candidate.
 - [ ] START's lineage, revision, and target tokens were retained and replayed unchanged.
 - [ ] Reviewers and validators used only provider-issued immutable context.
-- [ ] `approved` was reported only after native burn completed.
+- [ ] `approved` acknowledgement was retained and run only from the provider-owned START, STATUS, or terminal-closure transition.
 - [ ] Commit, push, PR, release, and archive followed ordinary repository policy.
 - [ ] Each delivery action has explicit authorization.

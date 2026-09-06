@@ -159,17 +159,22 @@ func CleanLegacyCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, erro
 	return result, nil
 }
 
-// InjectCodeGraphGuidance writes the shared CodeGraph lifecycle guidance to all
-// detected supported agents. Detection is intentionally based on existing agent
-// config directories so standalone Community Tools setup does not create agent
-// configs for tools the user does not use.
+// InjectCodeGraphGuidance writes the shared CodeGraph lifecycle guidance to the
+// supported agents the user selected at install time.
+//
+// agents.DiscoverSelected intersects the persisted selection with existing
+// config directories, keeping the original property — standalone Community
+// Tools setup never creates configs for tools the user does not use — while
+// also honouring the selection, so guidance never lands in an IDE the user
+// declined. Installs predating state persistence have no
+// selection to honour, and there guidance still reaches every detected agent.
 func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return GuidanceInjectionResult{}, err
 	}
 
-	installed := agents.DiscoverInstalled(reg, homeDir)
+	installed := agents.DiscoverSelected(reg, homeDir)
 	result := GuidanceInjectionResult{}
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
@@ -192,14 +197,19 @@ func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 }
 
 // CodeGraphGuidancePaths returns the system prompt files that the CodeGraph
-// guidance injector may touch for currently detected supported agents.
+// guidance injector and the legacy-guidance cleaner may WRITE, scoped to the
+// selected supported agents.
 func CodeGraphGuidancePaths(homeDir string) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return nil
 	}
+	return codeGraphGuidancePathsFor(reg, homeDir, agents.DiscoverSelected(reg, homeDir))
+}
 
-	installed := agents.DiscoverInstalled(reg, homeDir)
+// codeGraphGuidancePathsFor resolves guidance paths for a given agent set, so
+// the write and backup scopes share one resolution.
+func codeGraphGuidancePathsFor(reg *agents.Registry, homeDir string, installed []agents.InstalledAgent) []string {
 	paths := make([]string, 0, len(installed))
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
@@ -214,17 +224,21 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 	return paths
 }
 
-// CodeGraphManagedPaths returns every detected agent file that CodeGraph setup
-// or managed guidance may update. Sync uses this complete set for backup and
-// changed-file accounting before invoking the upstream installer.
+// CodeGraphManagedPaths returns every file CodeGraph setup or managed guidance
+// may update, for every DETECTED agent. Sync and install use it purely as the
+// backup and changed-file accounting set. It is deliberately broader than the
+// write set: what we back up must cover what the third-party installer might
+// touch, not only what we intend to write — its blind-install path passes no
+// --target and picks its own agents.
 func CodeGraphManagedPaths(homeDir string) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return nil
 	}
 
-	paths := append([]string(nil), CodeGraphGuidancePaths(homeDir)...)
-	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+	detected := agents.DiscoverInstalled(reg, homeDir)
+	paths := codeGraphGuidancePathsFor(reg, homeDir, detected)
+	for _, installedAgent := range detected {
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
 			continue
@@ -257,7 +271,7 @@ func NeedsOpenCodeCodeGraphReconcile(homeDir string) bool {
 	if !ok {
 		return false
 	}
-	detected := slices.ContainsFunc(agents.DiscoverInstalled(reg, homeDir), func(agent agents.InstalledAgent) bool {
+	detected := slices.ContainsFunc(agents.DiscoverSelected(reg, homeDir), func(agent agents.InstalledAgent) bool {
 		return agent.ID == model.AgentOpenCode
 	})
 	if !detected {

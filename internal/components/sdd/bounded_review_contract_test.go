@@ -8,28 +8,68 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // boundedReviewRequiredClausesFor is agent-parameterized because two of these
 // clauses state the runtime identity the negotiated route must carry. Pinning
 // them to a constant is what let issue #2440 ship: every runtime's generated
 // instructions claimed to be claude-code, and the test suite agreed.
-func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+// captureTransportClausesFor returns the capture clauses that belong to the
+// transport this runtime actually uses. A runtime whose compiled adapter
+// captures in process is never told to assemble a reviewer prompt, because
+// following that instruction would move the complete candidate onto the parent
+// for every lens to reach a result one returned command already produces
+// (issue #3825). Every other runtime keeps the relay wording: it is their only
+// capture path.
+func captureTransportClausesFor(agent model.AgentID) []string {
+	if reviewerprovider.CapturesInProcess(agent) {
+		return []string{
+			"with its argument tokens exactly as returned",
+			"This runtime captures in process",
+			"Never assemble a reviewer prompt",
+			"never add `--input` to a returned token list",
+		}
+	}
 	return []string{
-		"Native Compact Review Orchestration",
-		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
-		"Selectorless STATUS only preflights the current worktree candidate",
-		"START freezes one compact atomic transaction",
-		"exact captured lineage, revision, and target tokens",
-		"Route only from that transaction's returned `next_transition`",
-		"Forecast is informational; route only from `next_transition`",
 		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
 		"one-line JSON assembled only from that input",
 		"`revision` from `expected-revision`",
 		"`subject_hash` from `artifact_subject.subject_hash`",
+	}
+}
+
+func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+	if agent == model.AgentPi {
+		return []string{
+			"`gentle_review` with {\"operation\":\"inspect\"}",
+			"`gentle_review` with operation `status`, the exact retained `lineageId`, and `workspaceRoot` only when needed",
+			"`gentle_review_capture` for one current returned slot",
+			"`gentle_review_capture_group` for the complete current reviewer group",
+			"Pi never reconstructs lineage, target, revision, repository context, lens, order, or commands",
+			"`gentle_review` with operation `answer-consent` and the exact `consentBinding`",
+			"relay it losslessly in the user's language",
+			"Forecast is informational; route only from the returned transition.",
+			"The final reviewer, refuter, or targeted-validator capture owns closure.",
+			"A validator that cannot inspect the immutable trees produced no verdict",
+			"`rdd_disabled`",
+		}
+	}
+	return append(captureTransportClausesFor(agent), []string{
+		"Native Compact Review Orchestration",
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
+		"## Entry rule",
+		"before reporting it complete",
+		"Selectorless STATUS only preflights the current worktree candidate",
+		"START freezes one compact atomic transaction",
+		"run that provider-issued command verbatim",
+		"exact tokens each returned transition names",
+		"Route only from that transaction's returned `next_transition`",
+		"Forecast is informational; route only from `next_transition`",
 		"query the same exact-lineage STATUS",
 		"reoffers the same bound slot",
-		"repeated `--result-artifact-file <path>`",
+		"through `--input <path|->`",
 		"Only candidate-caused severe findings block",
 		"four-lens review is long work",
 		"at-most-one bounded correction",
@@ -40,11 +80,11 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Never hand candidate bytes through `/tmp`",
 		"### Authority-First Terminal Procedure",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
-		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 		"### Cross-repository lifecycle root",
 		"explicit user authorization",
@@ -54,7 +94,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Never append, remove, or rebuild provider-issued command tokens",
 		"Opaque `repository_context` can capture or materialize from any process cwd",
 		"Go owns repository binding; adapters never parse authorization or roots",
-		"Approval burns B only; A remains untouched",
+		"Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
@@ -65,7 +105,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"one lossless grouped prompt",
 		"persist the pending state before prompting",
 		"STOP without invoking `sdd-propose`",
-	}
+	}...)
 }
 
 func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *testing.T) {
@@ -73,11 +113,11 @@ func TestReviewLifecycleContractRequiresAtomicBurnAndNonDecidingDelivery(t *test
 	for _, want := range []string{
 		"Selectorless STATUS only preflights the current worktree candidate",
 		"START freezes one compact atomic transaction",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 		"enabled gates return `invalidated/unmanaged`",
 		"disabled gates return `disabled/unmanaged`",
 		"The final reviewer, refuter, or targeted-validator capture owns closure.",
-		"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+		"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 		"Commit, push, PR, and release remain separate human decisions under ordinary repository policy.",
 	} {
 		if !strings.Contains(content, want) {
@@ -168,6 +208,25 @@ func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
 	}
 }
 
+func TestPiRenderedReviewContractUsesOnlyTheClosedChoiceRoute(t *testing.T) {
+	content := renderSDDOrchestratorAsset(model.AgentPi)
+	for _, clause := range []string{
+		"ask_user_choice",
+		"2-4 ordered-option domain",
+		"envelope-owned canonical option token as value",
+		"returns exactly one value; map it to the exact envelope-owned choice once",
+		"ask_user_question is the external open/free-text questionnaire and must not be used for a closed domain",
+		"open/free-text questionnaires may use ask_user_question",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("Pi closed-choice route missing %q", clause)
+		}
+	}
+	if strings.Contains(renderSDDOrchestratorAsset(model.AgentKilocode), "ask_user_choice") {
+		t.Fatal("generic fallback-only runtime received the Pi-only closed choice route")
+	}
+}
+
 func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
@@ -196,13 +255,13 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		"orchestrator": {
 			"Selectorless STATUS only preflights the current worktree candidate",
 			"Invoke only the returned START operation and its ordered tokens unchanged",
-			"Every later STATUS and collection call",
+			"every later STATUS and collection call",
 			"For `execute`", "For `collect`", "For `stop`",
 		},
 		"post-apply": {
 			"exact returned START",
 			"exact-lineage STATUS and collect",
-			"native readback, exact authority/artifact burn, then `approved`",
+			"native readback, approved authority, and one exact acknowledgement continuation",
 		},
 	}
 	for name, required := range controllers {
@@ -248,7 +307,11 @@ func TestSharedReviewLifecycleRendersOnlyForAdvertisedRuntimes(t *testing.T) {
 				agent.ID == model.AgentOpenCode ||
 				agent.ID == model.AgentCodex ||
 				agent.ID == model.AgentPi
-			if got := strings.Contains(content, lifecycleSentinel); got != want {
+			if agent.ID == model.AgentPi {
+				if !strings.Contains(content, "`gentle_review` with {\"operation\":\"inspect\"}") {
+					t.Fatal("Pi lifecycle did not render its facade entry route")
+				}
+			} else if got := strings.Contains(content, lifecycleSentinel); got != want {
 				t.Fatalf("shared review lifecycle rendered = %t, want %t", got, want)
 			}
 			if !want {
@@ -287,6 +350,11 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClausesFor(agent.ID))
+			if agent.ID == model.AgentPi {
+				if strings.Contains(content, "gentle-ai review status") {
+					t.Fatal("Pi lifecycle exposes raw STATUS")
+				}
+			}
 			if strings.Count(content, researchLifecycleContract()) != 1 {
 				t.Fatal("rendered orchestrator must contain one canonical research lifecycle")
 			}
@@ -333,20 +401,29 @@ func TestOpenCodeOrchestratorAddsOnlyOneConcurrentReviewerGroupContract(t *testi
 		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
 		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 
+	const concurrentReviewerGroupContract = "### Concurrent Reviewer Group (MANDATORY)\n\n" +
+		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
+		"Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
+
 	for _, test := range []struct {
-		name  string
-		agent model.AgentID
-		count int
+		name          string
+		agent         model.AgentID
+		openCodeCount int
+		genericCount  int
 	}{
-		{name: "opencode", agent: model.AgentOpenCode, count: 1},
-		{name: "claude", agent: model.AgentClaudeCode},
-		{name: "codex", agent: model.AgentCodex},
+		{name: "opencode", agent: model.AgentOpenCode, openCodeCount: 1},
+		{name: "claude", agent: model.AgentClaudeCode, genericCount: 1},
+		{name: "codex", agent: model.AgentCodex, genericCount: 1},
 		{name: "kilocode", agent: model.AgentKilocode},
-		{name: "generic", agent: model.AgentPi},
+		{name: "pi", agent: model.AgentPi},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := strings.Count(renderSDDOrchestratorAsset(test.agent), openCodeConcurrentReviewerGroupContract); got != test.count {
-				t.Fatalf("rendered %s concurrent reviewer group contract count = %d, want %d", test.name, got, test.count)
+			rendered := renderSDDOrchestratorAsset(test.agent)
+			if got := strings.Count(rendered, openCodeConcurrentReviewerGroupContract); got != test.openCodeCount {
+				t.Fatalf("rendered %s OpenCode concurrent reviewer group contract count = %d, want %d", test.name, got, test.openCodeCount)
+			}
+			if got := strings.Count(rendered, concurrentReviewerGroupContract); got != test.genericCount {
+				t.Fatalf("rendered %s concurrent reviewer group contract count = %d, want %d", test.name, got, test.genericCount)
 			}
 		})
 	}
@@ -449,7 +526,14 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					// identical wording and differ only in which process
 					// supplies the block, so the reviewer input contract no
 					// longer names a Claude-specific nature for the context.
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					//
+					// The marker followed the same collapse. A Claude-only
+					// GENTLE_AI_CLAUDE_REVIEW_CONTEXT made this definition
+					// require a block the one renderer never emits, so no
+					// relayed prompt was admissible and the Claude path could
+					// not reach a receipt at all (issue #2777). The name is now
+					// read from the canonical constant the renderer uses.
+					for _, want := range []string{reviewtransaction.ReviewerContextMarker, "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}
@@ -518,8 +602,9 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndAtomic(t *testing.T) {
 		{order: 1, operation: "canonical initial STATUS above", result: "exactly one current-worktree START preflight; no authority discovery"},
 		{order: 2, operation: "exact returned START", result: "one compact lineage/worktree/target binding; retain lineage, revision, and target"},
 		{order: 3, operation: "exact-lineage STATUS and collect", result: "only returned transaction actions; no ambient resume, reuse, or delivery gate"},
-		{order: 4, operation: "final admitted capture", result: "native readback, exact authority/artifact burn, then `approved`"},
-		{order: 5, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
+		{order: 4, operation: "final admitted capture", result: "native readback, approved authority, and one exact acknowledgement continuation"},
+		{order: 5, operation: "STATUS restart + exact acknowledgement", result: "replayed operation/token/revision; only exact acknowledgement burns authority"},
+		{order: 6, operation: "terminal lifecycle stop", result: "ordinary repository policy owns any later delivery decision"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("authority-first rows = %d, want %d", len(rows), len(want))
@@ -539,8 +624,19 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 		}
 		rendered++
 		t.Run(string(agent.ID), func(t *testing.T) {
-			procedure := bindRuntimeAgentIdentity(authorityFirstTerminalProcedure(), agent.ID)
 			content := renderSDDOrchestratorAsset(agent.ID)
+			if agent.ID == model.AgentPi {
+				if !strings.Contains(content, "Only the exact provider-issued acknowledgement continuation burns approved authority") {
+					t.Fatal("Pi lifecycle lost its facade acknowledgement rule")
+				}
+				for _, want := range []string{"Forecast is informational; route only from the returned transition.", "The final reviewer, refuter, or targeted-validator capture owns closure.", "relay it as a Lossless Blocking Prompt"} {
+					if !strings.Contains(content, want) {
+						t.Errorf("Pi lifecycle missing %q", want)
+					}
+				}
+				return
+			}
+			procedure := bindRuntimeAgentIdentity(authorityFirstTerminalProcedure(), agent.ID)
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
 			}
@@ -556,8 +652,53 @@ func TestAuthorityFirstLifecycleRendersForAdvertisedRuntimes(t *testing.T) {
 	}
 }
 
+// TestReviewLifecycleContractNamesTheEntryRuleBeforeTheAtomicLifecycle pins
+// issue #4051: the shared contract described only how the lifecycle runs
+// once entered, never when an orchestrator must enter it. Commit b43e0928
+// removed the old entry sentence and pre-commit gate table without
+// replacing them, so an orchestrator could finish an implementation with
+// RDD enabled and never run the selectorless STATUS preflight.
+func TestReviewLifecycleContractNamesTheEntryRuleBeforeTheAtomicLifecycle(t *testing.T) {
+	content := boundedReviewContract()
+	if got := strings.Count(content, "## Entry rule"); got != 1 {
+		t.Fatalf("shared contract contains %d entry rule sections, want exactly one", got)
+	}
+	entryIndex := strings.Index(content, "## Entry rule")
+	lifecycleIndex := strings.Index(content, "## Atomic lifecycle")
+	if entryIndex < 0 || lifecycleIndex < 0 || entryIndex >= lifecycleIndex {
+		t.Fatalf("entry rule index %d must precede atomic lifecycle index %d", entryIndex, lifecycleIndex)
+	}
+	for _, want := range []string{"never runs START", "route only from its returned"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("shared contract missing entry rule clause %q", want)
+		}
+	}
+
+	rendered := 0
+	for _, agent := range catalog.AllAgents() {
+		if !expectedReviewLifecycleRuntime(agent.ID) {
+			continue
+		}
+		rendered++
+		t.Run(string(agent.ID), func(t *testing.T) {
+			runtimeContent := renderSDDOrchestratorAsset(agent.ID)
+			if got := strings.Count(runtimeContent, "## Entry rule"); got != 1 {
+				t.Fatalf("rendered orchestrator contains %d entry rule sections, want exactly one", got)
+			}
+			runtimeEntryIndex := strings.Index(runtimeContent, "## Entry rule")
+			runtimeLifecycleIndex := strings.Index(runtimeContent, "## Atomic lifecycle")
+			if runtimeEntryIndex < 0 || runtimeLifecycleIndex < 0 || runtimeEntryIndex >= runtimeLifecycleIndex {
+				t.Fatalf("rendered entry rule index %d must precede atomic lifecycle index %d", runtimeEntryIndex, runtimeLifecycleIndex)
+			}
+		})
+	}
+	if rendered != 4 {
+		t.Fatalf("entry rule runtime count = %d, want 4", rendered)
+	}
+}
+
 func TestOpenCodeAndClaudeApplyCommandsUseTheAtomicLifecycle(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/sdd-apply.md"} {
+	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/gentle-sdd-apply.md"} {
 		t.Run(path, func(t *testing.T) {
 			raw := assets.MustRead(path)
 			if strings.Count(raw, authorityFirstProcedurePlaceholder) != 1 {
@@ -585,7 +726,7 @@ func TestOpenCodeAndClaudeApplyCommandsUseTheAtomicLifecycle(t *testing.T) {
 }
 
 func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-archive.md", "claude/commands/sdd-archive.md"} {
+	for _, path := range []string{"opencode/commands/sdd-archive.md", "claude/commands/gentle-sdd-archive.md"} {
 		t.Run(path, func(t *testing.T) {
 			content := assets.MustRead(path)
 			for _, required := range []string{

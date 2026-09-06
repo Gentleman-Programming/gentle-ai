@@ -62,8 +62,8 @@ type reviewProviderAdmittedResult struct {
 
 // reviewProviderMaterialize deliberately delegates to the current lens-context
 // assembly. It does not emit a delivery descriptor or mutate review authority.
-func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (request reviewProviderRequest, err error) {
-	authority, err := resolveReviewLensAuthority(ctx, deps, repositoryContext, lens)
+func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, repo, repositoryContext, lens string, requested reviewtransaction.ReviewRepositoryContextBinding) (request reviewProviderRequest, err error) {
+	authority, err := resolveReviewLensAuthority(ctx, deps, repo, repositoryContext, lens, requested)
 	if err != nil {
 		return reviewProviderRequest{}, err
 	}
@@ -148,13 +148,14 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if err != nil {
 		return reviewProviderAdmittedResult{}, fmt.Errorf("canonicalize reviewer result: %w", err)
 	}
-	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
+	candidateCausalIDs, evidenceDerivation, evidenceDerivationReason, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
 		Inspection: result.Inspection, Result: native, CandidateCausalFindingIDs: candidateCausalIDs,
+		EvidenceDerivation: evidenceDerivation, EvidenceDerivationReason: evidenceDerivationReason,
 		RawPayload: raw, CanonicalPayload: canonicalPayload,
 	})
 	if err != nil {

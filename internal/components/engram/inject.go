@@ -381,12 +381,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		files = append(files, mcpPath)
 
 		if adapter.Agent() == model.AgentAntigravity {
-			settingsWrite, settingsErr := ensureJSONFileIfMissing(adapter.SettingsPath(configHomeDir))
+			settingsTarget := adapter.SettingsPath(configHomeDir)
+			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
 				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
 			}
 			changed = changed || settingsWrite.Changed
-			files = append(files, adapter.SettingsPath(configHomeDir))
+			files = append(files, settingsTarget)
 
 			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
 			if pluginErr != nil {
@@ -566,6 +567,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 }
 
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// The plugin and direct MCP entry expose the same Engram tools. When the
+	// plugin is enabled, suppress direct registration without deleting any
+	// existing entry: matching config shape is not proof that gentle-ai owns it.
+	if claudeEngramPluginEnabled(homeDir) {
+		return InjectionResult{}, nil
+	}
+
 	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
 	command := stableEngramCommandForMergedConfig(claude.UserConfigPath(homeDir), model.AgentClaudeCode)
 	legacyManaged := false
@@ -596,6 +604,22 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	result.Changed = true
 	result.Files = append(result.Files, legacyPath)
 	return result, nil
+}
+
+func claudeEngramPluginEnabled(homeDir string) bool {
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false
+	}
+
+	var settings struct {
+		EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return false
+	}
+	return settings.EnabledPlugins["engram@engram"]
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -669,7 +693,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}

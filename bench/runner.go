@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/charmbracelet/x/xpty"
 )
 
 // Sandbox is one journey's isolated world: its own HOME, XDG_*, throwaway git
@@ -37,6 +43,8 @@ type Sandbox struct {
 	// product binary without the bench_fixture tag never reads this
 	// variable at all.
 	BenchCrashAtPhase string
+	// PiReviewRelayContract is injected only by journeys that act as the Pi host.
+	PiReviewRelayContract string
 
 	// Journey state carried between steps.
 	Lineage  string
@@ -95,6 +103,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
+	}
+	if s.PiReviewRelayContract != "" {
+		env = append(env, "GENTLE_PI_REVIEW_RELAY_CONTRACT="+s.PiReviewRelayContract)
 	}
 	// Set last so a journey that poisons the process temp directory overrides
 	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
@@ -206,14 +217,25 @@ func (s *Sandbox) invoke(args []string) Observation {
 	return s.invokeAt(s.Repo, args)
 }
 
+// invokeWithStdin is invoke with an explicit stdin payload, for steps whose
+// product surface (a hook, in particular) reads its input from stdin rather
+// than argv.
+func (s *Sandbox) invokeWithStdin(args []string, stdin string) Observation {
+	return s.invokeAtWithStdin(s.Repo, args, stdin)
+}
+
 func (s *Sandbox) invokeAt(dir string, args []string) Observation {
+	return s.invokeAtWithStdin(dir, args, "")
+}
+
+func (s *Sandbox) invokeAtWithStdin(dir string, args []string, stdin string) Observation {
 	cmd := exec.Command(s.Binary, args...)
 	cmd.Dir = dir
 	cmd.Env = s.env()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Stdin = strings.NewReader("")
+	cmd.Stdin = strings.NewReader(stdin)
 	err := cmd.Run()
 	exitCode := 0
 	var exitErr *exec.ExitError
@@ -231,6 +253,223 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 		StdoutCaptured: true,
 		StderrCaptured: true,
 	}
+}
+
+// ttyTimeout is the inactivity budget for one TTY exchange: how long the
+// exchange may go without receiving a single PTY byte before the child is
+// killed. It is deliberately NOT a whole-exchange deadline. In the CI
+// transition-axis run (#3971) the TUI keeps painting under CPU contention but
+// the whole multi-screen exchange outlives a fixed total budget, so the same
+// journey that passed the core run minutes earlier dies mid-read. Progress
+// resets this timer; a hung TUI that emits nothing still dies after exactly
+// this long.
+const ttyTimeout = 10 * time.Second
+
+// ttyOverallTimeout caps one whole TTY exchange however chatty the child is,
+// so a TUI that paints forever without ever reaching the expected screen
+// still terminates deterministically.
+const ttyOverallTimeout = 2 * time.Minute
+
+const ttyCleanupGrace = 250 * time.Millisecond
+
+var errTTYWaitCleanupTimeout = errors.New("TTY wait cleanup timed out")
+
+func (s *Sandbox) invokeTTY(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	cmd := exec.Command(s.Binary, args...)
+	cmd.Dir, cmd.Env = dir, s.env()
+	pty, err := xpty.NewPty(80, 24)
+	if err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	if err := pty.Start(cmd); err != nil {
+		_ = pty.Close()
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	return runTTY(cmd, pty, args, exchange, xpty.WaitProcess)
+}
+func runTTY(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
+	return runTTYWithTimeout(cmd, terminal, args, exchange, ttyTimeout, wait)
+}
+func awaitTTYResult(result <-chan error) (error, bool) {
+	timer := time.NewTimer(ttyCleanupGrace)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+// runTTYWithTimeout runs one exchange with the given inactivity budget and
+// the default overall cap.
+func runTTYWithTimeout(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, timeout time.Duration, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
+	return runTTYWithDeadlines(cmd, terminal, args, exchange, timeout, ttyOverallTimeout, wait)
+}
+
+// ttyWatchdog expires an exchange on either of two budgets: inactivity —
+// this long without receiving a PTY byte, refreshed by every byte the
+// terminal yields — or overall, a cap on the whole exchange. Both causes
+// unwrap to context.DeadlineExceeded so callers classify them exactly as the
+// old fixed deadline.
+type ttyWatchdog struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	epoch  time.Time
+	last   atomic.Int64 // nanoseconds since epoch of the last PTY byte
+	done   chan struct{}
+	once   sync.Once
+}
+
+func newTTYWatchdog(inactivity, overall time.Duration) *ttyWatchdog {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	watchdog := &ttyWatchdog{ctx: ctx, cancel: cancel, epoch: time.Now(), done: make(chan struct{})}
+	go watchdog.run(inactivity, overall)
+	return watchdog
+}
+
+func (w *ttyWatchdog) run(inactivity, overall time.Duration) {
+	for {
+		elapsed := time.Since(w.epoch)
+		idle := elapsed - time.Duration(w.last.Load())
+		if idle >= inactivity {
+			w.cancel(fmt.Errorf("no PTY output for %s: %w", inactivity, context.DeadlineExceeded))
+			return
+		}
+		if elapsed >= overall {
+			w.cancel(fmt.Errorf("TTY exchange exceeded its overall %s budget: %w", overall, context.DeadlineExceeded))
+			return
+		}
+		select {
+		case <-time.After(min(inactivity-idle, overall-elapsed)):
+		case <-w.done:
+			return
+		}
+	}
+}
+
+func (w *ttyWatchdog) stop() { w.once.Do(func() { close(w.done); w.cancel(nil) }) }
+
+// ttyProgressReader marks every received byte as watchdog progress.
+type ttyProgressReader struct {
+	watchdog *ttyWatchdog
+	reader   io.Reader
+}
+
+func (r *ttyProgressReader) Read(p []byte) (int, error) {
+	read, err := r.reader.Read(p)
+	if read > 0 {
+		r.watchdog.last.Store(int64(time.Since(r.watchdog.epoch)))
+	}
+	return read, err
+}
+
+// runTTYWithDeadlines owns every reader worker it starts. Exchange callbacks are
+// package-local and must return when terminal.Close unblocks their pending I/O.
+func runTTYWithDeadlines(cmd *exec.Cmd, terminal io.ReadWriteCloser, args []string, exchange func(*bufio.Reader, io.WriteCloser) error, inactivity, overall time.Duration, wait func(context.Context, *exec.Cmd) error) (Observation, error) {
+	var closed sync.Once
+	var closeErr error
+	closePTY := func() { closed.Do(func() { closeErr = terminal.Close() }) }
+	defer closePTY()
+	var output bytes.Buffer
+	watchdog := newTTYWatchdog(inactivity, overall)
+	defer watchdog.stop()
+	reader := bufio.NewReader(io.TeeReader(&ttyProgressReader{watchdog: watchdog, reader: terminal}, &output))
+	ctx := watchdog.ctx
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- wait(context.Background(), cmd) }()
+	exchangeResult := make(chan error, 1)
+	go func() { exchangeResult <- exchange(reader, terminal) }()
+	var exchangeErr, waitErr, killErr, timeoutErr, cleanupErr error
+	waitDone, exchangeDone := false, false
+	terminate := func() { killErr = errors.Join(killErr, killProcess(cmd)) }
+	select {
+	case exchangeErr = <-exchangeResult:
+		exchangeDone = true
+	case waitErr = <-waitResult:
+		waitDone = true
+		if errors.Is(waitErr, context.DeadlineExceeded) || errors.Is(waitErr, context.Canceled) {
+			timeoutErr = waitErr
+			terminate()
+		}
+	case <-ctx.Done():
+		timeoutErr = context.Cause(ctx)
+		terminate()
+	}
+	if !exchangeDone {
+		exchangeErr, exchangeDone = awaitTTYResult(exchangeResult)
+		if !exchangeDone {
+			closePTY()
+			exchangeErr = <-exchangeResult
+			exchangeDone = true
+		}
+	}
+	if exchangeErr != nil && timeoutErr == nil {
+		terminate()
+	}
+	var drainResult chan error
+	if exchangeDone {
+		drainResult = make(chan error, 1)
+		go func() { _, err := io.Copy(io.Discard, reader); drainResult <- err }()
+	}
+	if !waitDone {
+		select {
+		case waitErr = <-waitResult:
+			waitDone = true
+		case <-ctx.Done():
+			if timeoutErr == nil {
+				timeoutErr = context.Cause(ctx)
+				terminate()
+			}
+			waitErr, waitDone = awaitTTYResult(waitResult)
+			if !waitDone {
+				cleanupErr = errors.Join(cleanupErr, errTTYWaitCleanupTimeout)
+			}
+		}
+	}
+	var drainErr error
+	if drainResult != nil {
+		var drainDone bool
+		drainErr, drainDone = awaitTTYResult(drainResult)
+		if !drainDone {
+			closePTY()
+			drainErr = <-drainResult
+		}
+	}
+	closePTY()
+	if isBenignTTYDrainError(drainErr) {
+		drainErr = nil
+	}
+	if isBenignTTYCloseError(closeErr) {
+		closeErr = nil
+	}
+	lifecycleErr := errors.Join(waitErr, cleanupErr)
+	stderr, exitCode := "", 0
+	var exitErr *exec.ExitError
+	if errors.As(lifecycleErr, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	} else if lifecycleErr != nil {
+		exitCode = -1
+		stderr = "bench: " + lifecycleErr.Error()
+	}
+	observation := interactiveObservation(args, exitCode, output.String(), stderr)
+	return observation, errors.Join(exchangeErr, killErr, drainErr, closeErr, timeoutErr, lifecycleErr)
+}
+func killProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	err := cmd.Process.Kill()
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
+func isBenignTTYCloseError(err error) bool {
+	return err == nil || errors.Is(err, os.ErrClosed)
+}
+func isBenignTTYDrainError(err error) bool {
+	return err == nil || errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "input/output error")
 }
 
 func (s *Sandbox) invokeInteractive(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
@@ -408,6 +647,11 @@ type Step struct {
 	Skip     func(*Sandbox) string
 	Requires *Capability
 	Args     func(*Sandbox) ([]string, error)
+	// Stdin, when non-empty, is piped to the invocation instead of an empty
+	// reader. It is a literal payload, not a template: a step that needs the
+	// sandbox repo path in its stdin JSON resolves it in Args-adjacent setup
+	// and folds the result in here before the step runs.
+	Stdin string
 	// Composite drives a multi-command sub-flow (a lens loop, a rejected
 	// capture and its recapture). It reports its own invocations.
 	Composite func(*journeyRun) error
@@ -607,6 +851,13 @@ func (r *journeyRun) runInteractive(args []string, modelRun bool, exchange func(
 	return observation, err
 }
 
+func (r *journeyRun) runTTY(args []string, modelRun bool, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	observation, err := r.sandbox.invokeTTY(r.sandbox.Repo, args, exchange)
+	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
+	r.accumulator.records = append(r.accumulator.records, record)
+	return observation, err
+}
+
 func runJourney(binary string, journey Journey) JourneyResult {
 	result := JourneyResult{ID: journey.ID, Title: journey.Title, Source: journey.Source, Status: StatusCompleted}
 
@@ -693,7 +944,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 			break
 		}
 
-		observation := sandbox.invoke(args)
+		observation := sandbox.invokeWithStdin(args, step.Stdin)
 		observation.DeclaredDeadEnd = step.DeadEnd
 		observation.DeclaredByDesign = step.ByDesign
 		record := accumulator.observe(step.Name, observation, sandbox.gitCallsSince(), step.ModelRun)

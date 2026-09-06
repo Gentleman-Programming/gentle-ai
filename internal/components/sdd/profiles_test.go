@@ -251,6 +251,20 @@ func TestDetectProfiles_DefaultOnly(t *testing.T) {
 	}
 }
 
+func TestDetectProfiles_OrphanedManagedPhase(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"agent":{"sdd-apply-fast":{"tools":{"read":true}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := DetectProfiles(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Name != "fast" {
+		t.Fatalf("DetectProfiles() = %#v, want orphaned fast profile", profiles)
+	}
+}
+
 func TestDetectProfiles_MissingFile(t *testing.T) {
 	profiles, err := DetectProfiles("/nonexistent/opencode.json")
 	if err != nil {
@@ -635,7 +649,7 @@ func TestGenerateProfileOverlay_NoJDAssignmentsUsesGlobalJDAgents(t *testing.T) 
 	}
 }
 
-func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
+func TestGenerateProfileOverlayOmitsDeprecatedTools(t *testing.T) {
 	home := t.TempDir()
 
 	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
@@ -649,24 +663,9 @@ func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
 	}
 
 	agentMap := root["agent"].(map[string]any)
-	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
-	toolsWrapper, ok := orch["tools"].(map[string]any)
-	if !ok {
-		t.Fatal("sdd-orchestrator-cheap tools is not an object")
-	}
-	tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-	if !hasSentinel {
-		t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-	}
-
-	for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-		if enabled, _ := tools[required].(bool); !enabled {
-			t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-		}
-	}
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+	for name, raw := range agentMap {
+		if _, exists := raw.(map[string]any)["tools"]; exists {
+			t.Fatalf("profile agent %q emits deprecated tools: %#v", name, raw)
 		}
 	}
 }
@@ -703,7 +702,7 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	}
 }
 
-func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
+func TestDefaultOverlayOmitsDeprecatedTools(t *testing.T) {
 	for _, assetPath := range []string{
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
@@ -715,21 +714,9 @@ func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
 			}
 
 			agentMap := root["agent"].(map[string]any)
-			orch := agentMap["gentle-orchestrator"].(map[string]any)
-			toolsWrapper := orch["tools"].(map[string]any)
-			tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-			if !hasSentinel {
-				t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-			}
-
-			for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-				if enabled, _ := tools[required].(bool); !enabled {
-					t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-				}
-			}
-			for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-				if _, exists := tools[legacyTool]; exists {
-					t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+			for name, raw := range agentMap {
+				if _, exists := raw.(map[string]any)["tools"]; exists {
+					t.Fatalf("%s agent %q emits deprecated tools: %#v", assetPath, name, raw)
 				}
 			}
 		})

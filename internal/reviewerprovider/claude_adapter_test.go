@@ -72,9 +72,44 @@ func TestClaudeAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	}
 }
 
+// Issue #4039: the reviewer transport must launch the resolved client binary
+// directly by argv, never through a shell that could split an unquoted path
+// on its first space. This exercises the real (unmocked) commandContext, with
+// the binary itself placed under a directory whose name contains a space --
+// exactly the shape of a "Program Files" or per-user-profile install path --
+// and asserts it launches and returns output normally.
+func TestClaudeAdapterLaunchesBinaryWhosePathContainsASpace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shebang script; the Windows .cmd/.bat quoting path is covered by windows_batch_cmdline_test.go")
+	}
+	scriptDir := filepath.Join(t.TempDir(), "Program Files", "claude cli")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(scriptDir, "claude")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf 'stub reviewer output'\n"
+	if err := os.WriteFile(binaryPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &ClaudeAdapter{LookPath: func(string) (string, error) { return binaryPath, nil }}
+	raw, err := adapter.Review(context.Background(), NewInvocation([]byte("provider prompt")))
+	if err != nil {
+		t.Fatalf("Review() error = %v, want the space-containing path to launch directly with no shell involved", err)
+	}
+	if string(raw) != "stub reviewer output" {
+		t.Fatalf("Review() = %q, want %q", raw, "stub reviewer output")
+	}
+}
+
 func TestClaudeAdapterHelperProcess(t *testing.T) {
-	if os.Getenv(claudeAdapterHelperEnvironment) != "1" {
+	mode := os.Getenv(claudeAdapterHelperEnvironment)
+	if mode == "" {
 		return
+	}
+	if mode == "stdout-failure" {
+		_, _ = os.Stdout.WriteString("Not logged in · Please run /login\n" + strings.Repeat("second line ", 100))
+		os.Exit(1)
 	}
 	prompt, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -88,4 +123,27 @@ func TestClaudeAdapterHelperProcess(t *testing.T) {
 	}
 	_, _ = os.Stdout.Write([]byte("raw\x00reviewer\xffoutput"))
 	os.Exit(0)
+}
+
+// Issue #3289: a child that prints its reason to stdout (`Not logged in`) and
+// exits non-zero produced `claude reviewer transport failed: exit status 1:`
+// with nothing after the colon, because only stderr was formatted.
+func TestClaudeAdapterFailureNamesStdoutReasonWhenStderrIsEmpty(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the helper process uses POSIX argument handling")
+	}
+	t.Setenv(claudeAdapterHelperEnvironment, "stdout-failure")
+	t.Setenv(claudeAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(claudeAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
+	adapter := &ClaudeAdapter{
+		LookPath: func(string) (string, error) { return "claude", nil },
+		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestClaudeAdapterHelperProcess$", "--"}, arguments...)...)
+		},
+	}
+	raw, err := adapter.Review(context.Background(), NewInvocation([]byte("provider prompt")))
+	if raw != nil || err == nil || !strings.Contains(err.Error(), "claude reviewer transport failed") || !strings.Contains(err.Error(), "Not logged in") ||
+		strings.Contains(err.Error(), "\n") || strings.Contains(err.Error(), "second line") || len(err.Error()) > 700 {
+		t.Fatalf("Review() = %q, %v; want a single-line bounded transport failure naming the stdout reason", raw, err)
+	}
 }

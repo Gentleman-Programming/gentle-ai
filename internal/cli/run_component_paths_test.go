@@ -16,11 +16,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
-func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T) {
+func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{
 		model.AgentClaudeCode,
-		model.AgentOpenCode,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
@@ -32,6 +31,25 @@ func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T
 		p := adapter.SystemPromptFile(home)
 		if !containsPath(paths, p) {
 			t.Fatalf("componentPaths(sdd) missing system prompt path %q\npaths=%v", p, paths)
+		}
+	}
+}
+
+// TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents pins issue
+// #3975: the SDD injector scopes the orchestrator to the gentle-orchestrator
+// agent in the settings file for OpenCode and Kilocode in every mode, so SDD
+// must not require, back up, or verify the AGENTS.md it never writes.
+func TestComponentPathsSDDExcludesSystemPromptForManagedOpenCodeAgents(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode, model.AgentKilocode})
+
+	for _, mode := range []model.SDDModeID{"", model.SDDModeSingle, model.SDDModeMulti} {
+		paths := componentPaths(home, model.Selection{SDDMode: mode}, adapters, model.ComponentSDD)
+		for _, adapter := range adapters {
+			p := adapter.SystemPromptFile(home)
+			if containsPath(paths, p) {
+				t.Fatalf("componentPaths(sdd, mode=%q) lists %q, which the SDD injector never writes for %s\npaths=%v", mode, p, adapter.Agent(), paths)
+			}
 		}
 	}
 }
@@ -202,6 +220,31 @@ func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
 			unwanted := filepath.Join(other, ".pi", "gentle-ai", "persona.json")
 			if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
 				t.Fatalf("workspace-scoped Pi persona config %q was written outside scope; stat err = %v", unwanted, err)
+			}
+		})
+	}
+}
+
+// Issue #3219: a home installed with XDG_CONFIG_HOME keeps the legacy plugin
+// under $XDG_CONFIG_HOME/opencode/plugins, and the ~/.config form stays legacy
+// while XDG is set; the classification depends on the path and XDG alone.
+func TestLegacyOpenCodeBackgroundAgentsPluginUnderXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	for _, tt := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "legacy plugin under XDG opencode config", path: filepath.Join(xdg, "opencode", "plugins", "background-agents.ts"), want: true},
+		{name: "legacy plugin under ~/.config while XDG is set", path: filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"), want: true},
+		{name: "same file under unrelated opencode directory", path: filepath.Join(home, "opencode", "plugins", "background-agents.ts"), want: false},
+		{name: "managed replacement plugin under XDG is not legacy", path: filepath.Join(xdg, "opencode", "plugins", "model-variants.ts"), want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isLegacyOpenCodeBackgroundAgentsPlugin(tt.path); got != tt.want {
+				t.Fatalf("isLegacyOpenCodeBackgroundAgentsPlugin(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}
@@ -921,6 +964,39 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
+// TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt covers issue
+// #4063: Pi reports SupportsSystemPrompt()==false because gentle-pi owns its
+// system prompt, so the routing guidance step must leave Pi's
+// APPEND_SYSTEM.md untouched instead of writing an agent-routing block into a
+// file gentle-ai does not own.
+func TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt(t *testing.T) {
+	home := t.TempDir()
+	promptPath := systemPromptFileFor(t, home, model.AgentPi)
+	existing := "user text before\n" +
+		"\n" +
+		"<!-- gentle-ai:agent-routing -->\n" +
+		"stale routing body\n" +
+		"<!-- /gentle-ai:agent-routing -->\n" +
+		"\n" +
+		"user text after\n"
+	mustWriteFile(t, promptPath, []byte(existing))
+
+	step := agentRoutingGuidanceStep{
+		id:      "agent-guidance:" + string(model.AgentPi),
+		agent:   model.AgentPi,
+		homeDir: home,
+		scope:   ScopeGlobal,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got := readTextFile(t, promptPath)
+	if got != existing {
+		t.Fatalf("agentRoutingGuidanceStep rewrote Pi's system prompt file, want a no-op:\ngot  = %q\nwant = %q", got, existing)
+	}
+}
+
 func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -949,6 +1025,26 @@ func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(
 	claudePrompt := systemPromptFileFor(t, workspace, model.AgentClaudeCode)
 	if !containsPath(paths, claudePrompt) {
 		t.Fatalf("routingGuidancePaths(workspace) lost the workspace-scoped path %q for prompt-file agents\npaths=%v", claudePrompt, paths)
+	}
+}
+
+// TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt covers issue
+// #4063: Pi's APPEND_SYSTEM.md must never be listed as a routing guidance
+// target, because the step that would write it is now a no-op for Pi and
+// declaring the path would only add a backup target nothing ever writes.
+func TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentPi, model.AgentClaudeCode})
+
+	paths := routingGuidancePaths(home, "", ScopeGlobal, adapters)
+
+	piPrompt := systemPromptFileFor(t, home, model.AgentPi)
+	if containsPath(paths, piPrompt) {
+		t.Fatalf("routingGuidancePaths() listed Pi's system prompt %q, a file the step no longer writes\npaths=%v", piPrompt, paths)
+	}
+	claudePrompt := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	if !containsPath(paths, claudePrompt) {
+		t.Fatalf("routingGuidancePaths() lost Claude Code's prompt path %q\npaths=%v", claudePrompt, paths)
 	}
 }
 

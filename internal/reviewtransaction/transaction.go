@@ -116,6 +116,9 @@ type Start struct {
 	RiskLevel            RiskLevel
 	SelectedLenses       []string
 	OriginalChangedLines *int
+	// RuntimeAgent is the validated runtime identity START was bound to, or
+	// empty on the manual/non-agent route. It is frozen with the lineage.
+	RuntimeAgent string
 }
 
 type LensResult struct {
@@ -158,6 +161,18 @@ type FollowUp struct {
 	ProofRefs   []string `json:"proof_refs"`
 }
 
+// Regression names one observed regression backing a failed
+// correction_regression verdict (issue #4214): a targeted validator that
+// reports the check failed without naming what regressed produced no
+// verdict, and admitting it anyway escalated lineages on false alarms.
+// Location, Claim, and ProofRefs are mandatory; only ID may be omitted.
+type Regression struct {
+	ID        string   `json:"id,omitempty"`
+	Location  string   `json:"location"`
+	Claim     string   `json:"claim"`
+	ProofRefs []string `json:"proof_refs"`
+}
+
 type FindingEvidence struct {
 	FindingID string            `json:"finding_id"`
 	Severity  string            `json:"severity,omitempty"`
@@ -170,6 +185,9 @@ type RefuterClaim struct {
 	FindingID        string `json:"finding_id"`
 	SnapshotIdentity string `json:"snapshot_identity"`
 	Proof            string `json:"proof"`
+	// Claim is the finding's own assertion. Without it the refuter has no
+	// proposition to corroborate or refute (issue #3482).
+	Claim string `json:"claim,omitempty"`
 }
 
 type EvidenceRoute struct {

@@ -54,7 +54,7 @@ func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantSubject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, record.State.SelectedLenses[0], 0, "")
+			wantSubject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, frozen, record.State.SelectedLenses[0], 0, "")
 			if err != nil || input.ArtifactSubject == nil || !reflect.DeepEqual(*input.ArtifactSubject, wantSubject) {
 				t.Fatalf("capture binding = %#v, want %#v, err = %v", input, wantSubject, err)
 			}
@@ -83,21 +83,83 @@ func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {
 		status.NextTransition == nil || status.NextTransition.ReasonCode != "reviewer_results_required" {
 		t.Fatalf("explicit frozen untracked status = %#v", status)
 	}
+	// design.md R2 (compact_reviewing scenario): the compact-reviewing
+	// replacement at review_facade.go:917-924 deliberately zeros the frozen
+	// scope's Digest (the #1972 fail-closed recover read), but
+	// EligibleUntrackedInventory is assigned before that replacement runs, so
+	// it still carries the live workspace digest — not the frozen scope's
+	// empty one, and not zeroed by the replacement.
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	_, wantDigest, err := builder.IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantDigest == "" || status.EligibleUntrackedInventory != wantDigest {
+		t.Fatalf("explicit frozen untracked status eligible_untracked_inventory = %q, want independently computed live digest %q", status.EligibleUntrackedInventory, wantDigest)
+	}
+}
+
+func TestExplicitFrozenTerminalStatusRestoresUntrackedScope(t *testing.T) {
+	repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
+	captureFrozenReviewerResults(t, repo, record, len(record.State.SelectedLenses))
+	pending, err := store.Load()
+	if err != nil {
+		t.Fatalf("load approved pending authority: %v", err)
+	}
+	if pending.State.State != reviewtransaction.StateApproved {
+		t.Fatalf("terminal authority state = %q, want approved", pending.State.State)
+	}
+
+	status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+	if status.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		status.Projection.Kind != reviewtransaction.TargetCurrentChanges ||
+		status.Projection.Projection != reviewtransaction.ProjectionWorkspace ||
+		!reflect.DeepEqual(status.Projection.IntendedUntracked, record.State.InitialSnapshot.IntendedUntracked) ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+		status.NextTransition.ReasonCode != "approved_acknowledgement_required" {
+		t.Fatalf("explicit terminal STATUS = %#v", status)
+	}
+	assertApprovedAcknowledgementTransition(t, status.NextTransition.Execute, repo, record.State.LineageID,
+		record.State.InitialSnapshot.Identity, pending.Revision)
+
+	writeUndeclaredWorkspaceFile(t, repo, "frozen-untracked.txt", "changed selected bytes\n", 0o644)
+	changed := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+	live := explicitFrozenReviewingStatus(t, repo, "")
+	if changed.TargetIdentity == record.State.InitialSnapshot.Identity ||
+		changed.TargetIdentity != live.TargetIdentity ||
+		changed.NextTransition == nil || changed.NextTransition.ReasonCode == "approved_acknowledgement_required" {
+		t.Fatalf("changed selected bytes reused terminal scope: changed=%#v live=%#v", changed, live)
+	}
 }
 
 func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t *testing.T) {
-	t.Run("partial canonical slot fails closed", func(t *testing.T) {
+	t.Run("partial canonical record entry fails closed", func(t *testing.T) {
 		repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
 		captureFrozenReviewerResults(t, repo, record, 1)
-		path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, "00-"+record.State.SelectedLenses[0]+".json.sha256")
-		if err := os.Remove(path); err != nil {
+		captured, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if captured.State.CapturePhaseRevision == "" || len(captured.State.AdmittedRoleResults) != 1 {
+			t.Fatalf("captured compact fixture lost its phase-bound record tuple: %#v", captured.State)
+		}
+		captured.State.AdmittedRoleResults[0].ArtifactDigest = ""
+		captured.Revision, err = reviewtransaction.CompactRevisionForState(captured.State)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := json.MarshalIndent(captured, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.StatePath(), append(payload, '\n'), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
 		status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
 		if status.Applicability != reviewtransaction.TargetApplicabilityCorrupted || status.NextTransition == nil ||
 			status.NextTransition.Kind == reviewNextTransitionCollect {
-			t.Fatalf("partial frozen slot status = %#v", status)
+			t.Fatalf("partial frozen record entry status = %#v", status)
 		}
 	})
 
@@ -283,6 +345,38 @@ func createFrozenReviewingStatusRecord(t *testing.T, repo, lineage string, targe
 		t.Fatal(err)
 	}
 	return store, started.Record
+}
+
+// A bound STATUS for a committed-only lineage carries `--base-ref` and
+// `--committed-only`, which bind a base-diff target instead of the default
+// current-changes one. When HEAD moves after START (the correction was
+// committed before its plan was captured), that bound STATUS must resume the
+// named lineage from its frozen selector exactly like the workspace path does,
+// not offer a fresh START that abandons the reviewing lineage.
+func TestExplicitFrozenReviewingBaseDiffStatusResumesAfterCommittedDrift(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetBaseDiff, nil)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD~1"))
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'committed drift'\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qam", "correction committed before its plan")
+
+	var output bytes.Buffer
+	args := []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,
+		"--lineage", record.State.LineageID, "--base-ref", base, "--committed-only"}
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("bound base-diff STATUS after committed drift: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
+		status.Authority.LineageID != record.State.LineageID || status.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" {
+		t.Fatalf("bound base-diff status after committed drift = %#v", status)
+	}
 }
 
 func explicitFrozenReviewingStatus(t *testing.T, repo, lineage string) ReviewTargetStatusResult {

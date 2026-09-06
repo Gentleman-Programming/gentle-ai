@@ -6,7 +6,7 @@
 
 You configured your SDD models once, and now every task -- cheap or expensive, experimental or battle-tested -- runs through the same orchestrator. Profiles fix that: **create named model configurations and switch between them with Tab inside OpenCode.**
 
-Gentle AI supports **two ways** of working with OpenCode profiles. Profiles cover SDD phase agents; Judgment Day agents (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`) are workflow-level slots with independent model assignments.
+Gentle AI™ supports **two ways** of working with OpenCode profiles. Profiles cover SDD phase agents; Judgment Day agents (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`) are workflow-level slots with independent model assignments.
 
 1. **Generated multi-profile mode** -- the classic Gentle AI flow. The base SDD conductor is `gentle-orchestrator`. Each named profile generates its own `sdd-orchestrator-{name}` plus 10 suffixed SDD phase sub-agents in `opencode.json`, and you switch between them with **Tab**.
 2. **External single-active mode** -- for community tools that keep profile files outside `opencode.json` and activate one runtime profile at a time.

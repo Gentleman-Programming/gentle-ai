@@ -28,6 +28,7 @@ type StatusV2Projection struct {
 	RemediationState  remediationStateV2           `json:"remediationState"`
 	ReviewOffer       *ReviewOfferBlock            `json:"reviewOffer,omitempty"`
 	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	Archived          *ArchivedProjection          `json:"archived,omitempty"`
 	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
 	NextRecommended   string                       `json:"nextRecommended"`
 	BlockedReasons    []string                     `json:"blockedReasons"`
@@ -136,6 +137,7 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 		},
 		ReviewOffer:     status.ReviewOffer,
 		Consent:         status.Consent,
+		Archived:        status.Archived,
 		NextRecommended: status.NextRecommended,
 		BlockedReasons:  status.BlockedReasons,
 	}
@@ -203,7 +205,12 @@ func projectRelationshipsV2(value Relationships) relationshipsV2 {
 }
 
 func statusV2ArtifactStore(value ArtifactStore) bool {
-	return value == ArtifactStoreOpenSpec || value == ArtifactStoreEngram || value == ArtifactStoreNone
+	// #3636 asked for hybrid to reach the public document: a workspace that
+	// declares it was reported as openspec, so its file writes were invisible
+	// to a consumer that read the status as pure Engram. This is an additive
+	// v2 enum value; no existing value or field changes.
+	return value == ArtifactStoreOpenSpec || value == ArtifactStoreEngram ||
+		value == ArtifactStoreHybrid || value == ArtifactStoreNone
 }
 
 func statusV2ArtifactState(value ArtifactState) bool {
@@ -215,8 +222,11 @@ func statusV2ApplyState(value ApplyState) bool {
 }
 
 func statusV2NextRecommended(value string) bool {
+	// "archived" is #4002's positive terminal route: the change is closed, no
+	// phase remains, and the archived block carries the location fact. This is
+	// an additive v2 enum value; no existing value or field changes.
 	switch value {
-	case "apply", "verify", "remediate", "archive", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
+	case "apply", "verify", "remediate", "archive", "archived", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
 		return true
 	default:
 		return false

@@ -72,6 +72,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
 		ToolFault:     reviewStopToolFault(false),
 	},
+	"managed_assets_outdated": {
+		Terminal:      false,
+		Justification: "caller-continuable: the stop's own `continuation` field names the exact `gentle-ai sync` command that reconciles the recorded managed-asset digest; re-querying STATUS afterward offers the same candidate's START again — a concrete, flag-driven continuation (#3299, #4170), not a maintainer-only action",
+	},
 	"corrupted_or_unverifiable_authority": {
 		Terminal:      true,
 		Justification: "review repair --preflight already classified this authority unsupported/ambiguous/conflicting/truncated; requires a maintainer to inspect the review authority store directly",
@@ -110,6 +114,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// User-decision: a caller-input-shape mismatch (this exact flag
 		// combination is recovery-only), not an unreachable/unmodeled state.
 		ToolFault: reviewStopToolFault(false),
+	},
+	"unachievable_lens_slot": {
+		Terminal:      false,
+		Justification: "caller-continuable: a host reported that a selected reviewer slot cannot be completed under current conditions (issue #3442); if that report was a mistaken transient failure, `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` retracts it on the SAME lineage and STATUS re-offers the slot -- a concrete, flag-driven continuation, not a maintainer-only action. Only a genuinely deterministic failure has no in-lineage exit, and that case is resolved by starting a new review, exactly like every other stop whose row also names a fresh-candidate exit without being reclassified for it",
 	},
 	"rdd_disabled": {
 		Terminal:      false,

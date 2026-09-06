@@ -25,12 +25,12 @@ const requiredOrchestratorMergeModeClause = "Native Compact Review Orchestration
 func TestBoundedReviewContractLeavesAtomicLifecycleToNativeGo(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
-		"Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation",
+		"Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, targeted validation, and approved closure",
 		"Only candidate-caused severe findings block",
 		"Claude Code, OpenCode, Codex, and Pi use the shared Go provider contract",
 		"Compiled capability is authoritative",
 		"Reviewers inspect only the provider-bound immutable trees",
-		"burns that exact authority and its artifacts",
+		"Only that exact invocation burns authority and artifacts",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("orchestrator contract missing %q", want)
@@ -57,7 +57,7 @@ func TestRenderedReviewRuntimesRequireOneBoundStatusBeforeAmbiguousCaptureReplay
 			rendered := renderBoundedReviewAsset(runtime.agent, runtime.path)
 			for _, clause := range []string{
 				"The final reviewer, refuter, or targeted-validator capture owns closure.",
-				"A malformed, incomplete, or unavailable capture never burns authority: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
+				"A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot.",
 			} {
 				if !strings.Contains(rendered, clause) {
 					t.Fatalf("%s rendered contract is missing %q", runtime.name, clause)
@@ -147,8 +147,14 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 			}
 		}
 	}
-	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); strings.Contains(frontmatter, "Bash") || strings.Contains(frontmatter, "Write") || strings.Contains(frontmatter, "Edit") {
-		t.Errorf("Claude refuter grants an execution or mutation tool: %s", frontmatter)
+	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); !strings.Contains(frontmatter, "tools: []") {
+		t.Errorf("Claude refuter is not tool-free (must match the tool-free fresh reviewer contract): %s", frontmatter)
+	} else {
+		for _, forbidden := range []string{"Bash", "Write", "Edit", "Read", "Grep", "Glob"} {
+			if strings.Contains(frontmatter, forbidden) {
+				t.Errorf("Claude refuter frontmatter grants live-worktree-reaching tool %q: %s", forbidden, frontmatter)
+			}
+		}
 	}
 	for _, path := range []string{
 		"kiro/agents/review-risk.md", "kiro/agents/review-readability.md",
@@ -462,9 +468,26 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// settings hash is recomputed from the combined source.
 	// #3564 replaces the shared SDD status contract with v2, so the embedded
 	// pre-proposal contract now names the sole public status version.
+	// Managed tools are removed only from OpenCode. Kilocode restores its
+	// historical provider shape, including read-only judges and default-deny
+	// sdd-research collection permissions, so the baseline is rederived here.
+	// Merged with main's #3563 causal-failure precedence and #3168 empty
+	// CodeGraph tool-grant changes, so the combined baseline is rederived.
+	// #3814 replaces the dispatcher guard's store-branching prose across every
+	// runtime orchestrator: the native surface resolves the declared store, so
+	// the actor no longer determines or branches on it. Kilo renders through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	// #3696 spells out every required `sdd-attempt settle` flag in the shared
+	// Native Runtime Attempt Authority section and drops `--successor-lineage`,
+	// a flag settle never defined. Kilo renders that shared section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	// #3105 adds the planned-path carve-out to the automatic gate's
+	// no-hallucination clause in every runtime orchestrator, so a design that
+	// names files apply will create is no longer failed by the gate. Kilo
+	// renders the OpenCode orchestrator asset, so the baseline is rederived.
 	// #3499 projects the canonical three-choice session preflight into the
-	// OpenCode-derived Kilocode prompt, so the rendered settings hash is rederived.
-	const want = "dab65e96e67ffbc873076976ce0e4bdf07d450f209fa8d4d7ac6f47052b53da0"
+	// OpenCode-derived Kilocode prompt, so the combined baseline is rederived.
+	const want = "7c499e23051f637c9befdc22c040e8c541137d8d3aadbea93b2f3580573fb66f"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -687,8 +710,73 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3748 adds the public status_continuation execution rule (+339 rendered
 		// characters in each row), so the pins move from 14,657/27,002 to
 		// 14,996/27,341 after deterministic fixture measurement.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_996, maxCharacters: 15_866},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_341, maxCharacters: 30_063},
+		// #2941 replaces the capture-transport sentence's retired
+		// `--result-artifact-file` / `--result-artifact` / `--captured-results`
+		// forms with the real `--input <path|->` flag and the in-process
+		// `--agent` rule (+27 rendered characters per row: 15,813/28,158 ->
+		// 15,840/28,185). Ceilings unchanged; the standard row stays under its
+		// 15,866 budget.
+		// #3894 rewrites the Stay bound step around the START-published
+		// next_transition.execute(review.status) re-entry (+187 rendered
+		// characters in each row): the old sentence told consumers to pass a
+		// revision selector the CLI refuses. Deliberate, not drift.
+		// wantChars then grew by 137 per case (15_676 -> 15_813 / 28_021 -> 28_158)
+		// when #3946 made review acknowledge-approved print its
+		// gentle-ai.review-acknowledged/v1 envelope and the contract told
+		// orchestrators to report the burn from it. Deliberate, not drift.
+		// +42 per case (15_813 -> 15_855 / 28_158 -> 28_200) when #3928 named
+		// the root status `action` field informational: callers route only on
+		// next_transition. Deliberate, not drift; the ceilings are unchanged.
+		// -23 per case (15_855 -> 15_832 / 28_200 -> 28_177) when #2941 replaced the
+		// retired capture flags with `--input` and shortened the sentence so the
+		// standard total stays under its unchanged ceiling. Deliberate, not drift.
+		// +31 per case (15_832 -> 15_863 / 28_177 -> 28_208) when #3972 made the
+		// rdd_disabled continuation name the command that enables
+		// (`--scope global`): the clone form only clears a clone-local off, so
+		// the old row documented a no-op loop. Deliberate, not drift; the
+		// ceilings are unchanged and the standard row stays under 15_866.
+		// +783 per case (15_863 -> 16_646 / 28_208 -> 28_991) when #4051 added
+		// the "## Entry rule" section naming when an orchestrator must enter
+		// the lifecycle: the contract described only how STATUS/START/collect
+		// run once entered, never when to run the preflight, so an
+		// implementation could finish with RDD enabled and never trigger
+		// STATUS. Deliberate, not drift. The ceilings move with it
+		// (15_866 -> 16_649 / 30_063 -> 30_846) to restore the same small
+		// headroom each row already had.
+		// +107 per case (16_646 -> 16_753 / 28_991 -> 29_098) when #3299/#4170
+		// added the managed_assets_outdated row: STATUS now classifies a
+		// stale managed-asset digest before ever offering START, and the
+		// stop names the exact `gentle-ai sync` continuation instead of
+		// leaving the caller to guess it from prose. Deliberate, not drift.
+		// The ceilings move with it (16_649 -> 16_756 / 30_846 -> 30_953) to
+		// restore the same small headroom each row already had.
+		// +322 per case (16_753 -> 17_075 / 29_098 -> 29_420, on top of #3299/#4170) when #4256
+		// extended the reviewer-capture-transport sentence: inspection.status
+		// no longer implies "completed" alone, so the shared contract now
+		// spells out the typed "unavailable"+"reason" alternative and states
+		// that inspection.status/inspection.reason are the only
+		// admission-completeness signal admission reads (free text in
+		// evidence is ignored) -- closing the gap the free-text evidence scan
+		// used to fill. Deliberate, not drift. The standard ceiling moves
+		// with it (16_756 -> 17_078) to restore the same small headroom;
+		// full-4R already had enough headroom (29_420 < 30_953) and is
+		// unchanged.
+		// +187 per case (+187 on top of #3299/#4170 and #4256) when #3442 added
+		// the unachievable_lens_slot stop-reason row: a host can now declare a
+		// selected reviewer slot unachievable, and the shipped contract names
+		// its terminal continuation. Deliberate, not drift; the ceilings move
+		// with it (standard and full-4R ceilings move by the same amount) to restore the same
+		// small headroom each row already had.
+		// +102 per case (+102 more) when the native
+		// review found declaring a slot unachievable was irreversible: the
+		// row was reclassified caller-continuable and now also names the
+		// `--withdraw=true` retraction for a mistaken transient failure,
+		// alongside the existing new-transaction exit for a deterministic
+		// one. Deliberate, not drift; the ceilings move with it
+		// (ceilings move again by the same amount) to restore the same small
+		// headroom each row already had.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 17_364, maxCharacters: 17_367},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_709, maxCharacters: 31_242},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

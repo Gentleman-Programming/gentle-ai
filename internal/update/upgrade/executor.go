@@ -130,12 +130,12 @@ var backupExcludeSubdirs = map[string]bool{
 // modify, not general-purpose backups of conversations, sessions, caches,
 // sockets, package installs, or other runtime state.
 //
-// Agent scope: when state.json exists with a non-empty InstalledAgents list,
-// only those agents' config paths are backed up — this is the canonical source
-// of truth established at install time. Filesystem detection is used only as a
-// fallback for fresh installs (no state.json yet). This prevents snapshot bloat
-// from agent config dirs that the user never actually installed via gentle-ai
-// (issue #354: snapshots could reach ~25 GiB from unmanaged config dirs).
+// Agent scope: persisted installation selection is authoritative, including a
+// deliberately configured empty selection. Filesystem detection is used only for
+// missing or incidental pre-install state; unreadable state contributes no agent
+// paths. This prevents snapshot bloat from agent config dirs that the user never
+// actually installed via gentle-ai (issue #354: snapshots could reach ~25 GiB
+// from unmanaged config dirs).
 func configPathsForBackup(homeDir string, diagnostics ...io.Writer) []string {
 	dw := firstWriter(diagnostics...)
 	reg, err := agents.NewDefaultRegistry()
@@ -144,21 +144,22 @@ func configPathsForBackup(homeDir string, diagnostics ...io.Writer) []string {
 		return managedGlobalBackupPaths(homeDir)
 	}
 
-	// Determine the canonical agent set to back up.
-	// Priority: persisted state.json InstalledAgents > filesystem detection.
+	// Determine the canonical agent set to back up from the shared persisted
+	// selection contract. Only legacy or incidental state may widen to filesystem
+	// detection; unreadable state remains intentionally empty.
 	var managedAgentIDs []model.AgentID
-	if s, stateErr := state.Read(homeDir); stateErr == nil && len(s.InstalledAgents) > 0 {
-		managedAgentIDs = make([]model.AgentID, 0, len(s.InstalledAgents))
-		for _, id := range s.InstalledAgents {
-			managedAgentIDs = append(managedAgentIDs, model.AgentID(id))
-		}
-		writeBackupDiagnostic(dw, "backup: using state.json agent list (%d agents) as backup scope", len(managedAgentIDs))
-	} else {
-		// Fallback: filesystem detection (first-time install or missing state.json).
+	scope := agents.ReadSelectionScope(homeDir)
+	switch scope.Mode {
+	case agents.SelectionScopeConfigured:
+		managedAgentIDs = scope.AgentIDs
+		writeBackupDiagnostic(dw, "backup: using configured state.json agent scope (%d agents)", len(managedAgentIDs))
+	case agents.SelectionScopeFilesystemFallback:
 		for _, installed := range agents.DiscoverInstalled(reg, homeDir) {
 			managedAgentIDs = append(managedAgentIDs, installed.ID)
 		}
-		writeBackupDiagnostic(dw, "backup: state.json unavailable, falling back to filesystem detection (%d agents)", len(managedAgentIDs))
+		writeBackupDiagnostic(dw, "backup: state.json does not define agent scope, falling back to filesystem detection (%d agents)", len(managedAgentIDs))
+	case agents.SelectionScopeUnavailable:
+		writeBackupDiagnostic(dw, "backup: state.json unreadable; skipping agent-specific backup paths")
 	}
 
 	paths := make(map[string]struct{})
@@ -227,9 +228,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		for _, command := range sdd.OpenCodeCommands() {
-			add(filepath.Join(adapter.CommandsDir(homeDir), command.Name+".md"))
-		}
+		add(sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
 	}
 
 	if adapter.SupportsSubAgents() {
@@ -248,8 +247,13 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(theme.VisualThemePaths(homeDir, adapter)...)
 	case model.AgentOpenCode:
 		add(theme.VisualThemePaths(homeDir, adapter)...)
+		// The SDD plugin writer resolves the config directory through the
+		// adapter and owns the plugin list; the snapshot must match it (#3219).
+		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+		for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+			add(filepath.Join(pluginsDir, name))
+		}
 		add(
-			filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)

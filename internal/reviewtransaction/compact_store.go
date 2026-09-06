@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	compactRecordSchema                 = "gentle-ai.review-state-record/v2"
-	CompactEffectClassRepositoryContext = "repository_context"
-	compactEffectClassRequestedTrace    = "requested_trace"
+	compactRecordSchema = "gentle-ai.review-state-record/v2"
+
+	compactMaxAdmittedRoleResults = 6
+	compactNonRoleStateSizeLimit  = 7 << 20
+	compactRecordSizeLimit        = 32 << 20
 )
 
 // Compact store entry artifact names. Every file the compact store writes
@@ -30,8 +32,6 @@ const (
 	compactStateFileName           = "review-state.json"
 	compactReceiptFileName         = "review-receipt.json"
 	compactFinalizeJournalFileName = "finalize-attempt-journal.json"
-	// CompactReviewerResultsDir holds captured reviewer result artifacts.
-	CompactReviewerResultsDir = "reviewer-results"
 )
 const CompactTransportSchema = "gentle-ai.review-transport/v2"
 const LegacyReadOnlyErrorCode = "legacy_v1_read_only"
@@ -130,6 +130,11 @@ var ErrHistoricalCompatReadOnly = errors.New("historical compatibility authority
 var compactRetiredStateFieldPaths = map[string]struct{}{
 	"candidate_artifact_required": {},
 	"zero_edit_escalation":        {},
+	"lens_results":                {},
+	"findings":                    {},
+	"classifications":             {},
+	"outcomes":                    {},
+	"follow_ups":                  {},
 	// risk_source was the persisted record of how a record's risk level had
 	// been decided. Risk is derived from the frozen candidate now, so the
 	// field carries nothing the current schema needs; records written before
@@ -160,10 +165,9 @@ func NewLegacyReadOnlyError(operation, lineageID string) error {
 }
 
 type CompactRecord struct {
-	Schema        string                `json:"schema"`
-	Revision      string                `json:"revision"`
-	State         CompactState          `json:"state"`
-	EffectIntents []CompactEffectIntent `json:"effect_intents,omitempty"`
+	Schema   string       `json:"schema"`
+	Revision string       `json:"revision"`
+	State    CompactState `json:"state"`
 	// HistoricalCompat marks a record loaded through the retired-field
 	// compatibility path; such authority is read-only.
 	HistoricalCompat bool `json:"-"`
@@ -185,14 +189,11 @@ type CompactStore struct {
 	lockPath            string
 	maintenanceLockPath string
 	TracePath           string
-}
-
-type CompactEffectIntent struct {
-	Class           string `json:"class"`
-	Destination     string `json:"destination"`
-	PayloadHash     string `json:"payload_hash"`
-	BindingRevision string `json:"binding_revision"`
-	EventID         string `json:"event_id"`
+	// TraceOutcome, when non-nil, receives the outcome of a requested trace
+	// write a commit on this store performs (#1854). It is a pointer so a
+	// value-receiver commit method can report back through the caller's own
+	// CompactStore value without changing any exported commit signature.
+	TraceOutcome *CompactTraceOutcome
 }
 
 // CompactAtomicStartRequest holds the state prepared by the compact lifecycle
@@ -200,6 +201,9 @@ type CompactEffectIntent struct {
 type CompactAtomicStartRequest struct {
 	State   CompactState
 	Binding CompactAtomicStartBinding
+	// TracePath optionally requests a diagnostic trace entry for this exact
+	// atomic START, mirroring CompactStore.TracePath (#1854).
+	TracePath string
 }
 
 // CompactAtomicStartResult reports whether an exact atomic START created one
@@ -207,6 +211,9 @@ type CompactAtomicStartRequest struct {
 type CompactAtomicStartResult struct {
 	Record   CompactRecord
 	Replayed bool
+	// TraceOutcome is set only when TracePath was requested and this call
+	// actually committed (never on replay, which committed nothing new).
+	TraceOutcome *CompactTraceOutcome
 }
 
 // CompactAtomicStartConflictError reports an immutable field conflict without
@@ -217,7 +224,7 @@ type CompactAtomicStartConflictError struct {
 }
 
 func (err *CompactAtomicStartConflictError) Error() string {
-	return fmt.Sprintf("compact atomic START conflicts with active lineage %q at %s", err.LineageID, err.Field)
+	return fmt.Sprintf("compact atomic START conflicts with active lineage %q on immutable field %q", err.LineageID, err.Field)
 }
 
 // CompactAtomicStartCorruptionError reports an unreadable exact compact
@@ -308,8 +315,8 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if err != nil {
 		return CompactRecord{}, fmt.Errorf("load recovery predecessor: %w", err)
 	}
-	if err := reconcileCompactRepositoryContext(ctx, predecessorStore, predecessor); err != nil {
-		return CompactRecord{}, fmt.Errorf("reconcile recovery predecessor effects: %w", err)
+	if predecessor.HistoricalCompat {
+		return CompactRecord{}, fmt.Errorf("%w: recovery predecessor lineage %q", ErrHistoricalCompatReadOnly, predecessor.State.LineageID)
 	}
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
@@ -364,6 +371,9 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	existing, existingErr := successorStore.Load()
 	if existingErr != nil && !os.IsNotExist(existingErr) {
 		return CompactRecord{}, existingErr
+	}
+	if existingErr == nil && existing.HistoricalCompat {
+		return CompactRecord{}, fmt.Errorf("%w: recovery successor lineage %q", ErrHistoricalCompatReadOnly, existing.State.LineageID)
 	}
 	if request.RecoveredAt.IsZero() && existingErr == nil && existing.State.Recovery != nil {
 		request.RecoveredAt = existing.State.Recovery.RecoveredAt
@@ -1039,48 +1049,6 @@ func compactMaintenanceLockPath(authorityRoot string) string {
 	return filepath.Join(filepath.Dir(authorityRoot), "REVIEW-MAINTENANCE.lock")
 }
 
-// CompactIncidentsDir returns the durable raw-result incident directory for
-// one lineage beside the compact authority root. It validates only the
-// lineage shape and never requires the lineage to hold authority under repo,
-// so incident preservation still works when capture was attempted from a
-// repository that does not own the reviewing lineage.
-func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
-	return compactIncidentsDir(ctx, repo, lineageID, false)
-}
-
-// EnsureCompactIncidentsDir creates the durable raw-result incident directory
-// with the same owner-only safety boundary as compact authority artifacts.
-func EnsureCompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, error) {
-	return compactIncidentsDir(ctx, repo, lineageID, true)
-}
-
-func compactIncidentsDir(ctx context.Context, repo, lineageID string, create bool) (string, error) {
-	if err := validateLineageID(lineageID); err != nil {
-		return "", err
-	}
-	base, _, err := reviewAuthorityRoot(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(base, "incidents", lineageID)
-	if create {
-		if err := ensureCompactIncidentsDir(dir); err != nil {
-			return "", fmt.Errorf("ensure private incident preservation directory: %w", err)
-		}
-	}
-	return dir, nil
-}
-
-func ensureCompactIncidentsDir(dir string) error {
-	if _, err := createPrivateRARDirectory(filepath.Dir(dir)); err != nil {
-		return fmt.Errorf("create private incident root: %w", err)
-	}
-	if _, err := createPrivateRARDirectory(dir); err != nil {
-		return fmt.Errorf("create private incident lineage directory: %w", err)
-	}
-	return nil
-}
-
 func DiscoverCompactStores(ctx context.Context, repo string) ([]CompactStore, error) {
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
@@ -1231,10 +1199,14 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 		}
 		return compactCorrectionTargetBlocked, nil
 	}
-	if compactRecoveryAddsGenesisPath(existing, live) {
-		return compactCorrectionTargetRecover, nil
-	}
-	if pathsAreSubset(live.Paths, existing.GenesisPaths) != nil {
+	// A live scope the bounded correction may not own is either a widening
+	// this lineage can recover into or unrelated work. The boundary is the
+	// same admission CompleteCorrection applies (#3375): staying inside
+	// genesis, or adding only companion test paths, is still this correction.
+	if correctionScopeRefused(live.Paths, existing.GenesisPaths) {
+		if compactRecoveryAddsGenesisPath(existing, live) {
+			return compactCorrectionTargetRecover, nil
+		}
 		return compactCorrectionTargetUnclaimed, nil
 	}
 	if compactLiveTargetMatchesValidatedSnapshot(existing, requested.InitialSnapshot, false) {
@@ -1312,7 +1284,7 @@ func compactCorrectionCandidateMatches(ctx context.Context, repo string, existin
 	if err != nil {
 		return false, err
 	}
-	if fix.CandidateTree != requested.InitialSnapshot.CandidateTree || pathsAreSubset(fix.Paths, existing.GenesisPaths) != nil {
+	if fix.CandidateTree != requested.InitialSnapshot.CandidateTree || correctionScopeRefused(fix.Paths, existing.GenesisPaths) {
 		return false, nil
 	}
 	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(ctx, fix)
@@ -1364,6 +1336,14 @@ func (store CompactStore) CreateOrReplayAtomicStart(ctx context.Context, request
 	state := cloneCompactStateInitialAtomicStart(request.State)
 	binding := cloneCompactAtomicStartBinding(request.Binding)
 	state.InitialAtomicStart = &binding
+	// P0 must bind the frozen worktree identity that atomic START has already
+	// verified. Re-derive after attaching the binding so a provisional
+	// pre-record Pn from NewCompactState can never omit that identity.
+	phase, phaseErr := deriveCompactCapturePhaseRevision(state)
+	if phaseErr != nil {
+		return CompactAtomicStartResult{}, phaseErr
+	}
+	state.CapturePhaseRevision = phase
 	if err := state.Validate(); err != nil {
 		return CompactAtomicStartResult{}, fmt.Errorf("validate compact atomic START: %w", err)
 	}
@@ -1394,11 +1374,14 @@ func (store CompactStore) CreateOrReplayAtomicStart(ctx context.Context, request
 		return CompactAtomicStartResult{}, err
 	}
 
-	payload, err := os.ReadFile(store.StatePath())
+	payload, err := readCompactRecordPayload(store.StatePath())
 	if err == nil {
 		record, parseErr := parseCompactRecord(payload, store.lineageID)
 		if parseErr != nil {
 			return CompactAtomicStartResult{}, &CompactAtomicStartCorruptionError{LineageID: store.lineageID, Cause: parseErr}
+		}
+		if record.HistoricalCompat {
+			return CompactAtomicStartResult{}, fmt.Errorf("%w: atomic START lineage %q", ErrHistoricalCompatReadOnly, record.State.LineageID)
 		}
 		if !compactAtomicStartActive(record.State.State) {
 			return conflict("state")
@@ -1424,7 +1407,19 @@ func (store CompactStore) CreateOrReplayAtomicStart(ctx context.Context, request
 	if err := writeAtomic(store.StatePath(), recordPayload, 0o644); err != nil {
 		return CompactAtomicStartResult{}, err
 	}
-	return CompactAtomicStartResult{Record: record}, nil
+	result := CompactAtomicStartResult{Record: record}
+	// #1854: authority has already committed above; a requested trace that
+	// fails to persist is reported on the returned result, never a
+	// rolled-back commit. The outcome always has a home here (the function's
+	// own return value), so no stderr fallback is needed on this path.
+	if request.TracePath != "" {
+		outcome, _ := recordCompactTrace(request.TracePath, CompactTraceEntry{
+			Operation: "review/start", Revision: record.Revision,
+			State: state.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		result.TraceOutcome = &outcome
+	}
+	return result, nil
 }
 
 func compactAtomicStartActive(state State) bool {
@@ -1482,11 +1477,29 @@ func (store CompactStore) acquireReadMaintenance(ctx context.Context) (*Maintena
 // already hold the required maintenance/store coordination. It is also used by
 // batch reconciliation while its exclusive maintenance lease is held.
 func (store CompactStore) loadCompactRecordLocked() (CompactRecord, error) {
-	payload, err := os.ReadFile(store.StatePath())
+	payload, err := readCompactRecordPayload(store.StatePath())
 	if err != nil {
 		return CompactRecord{}, err
 	}
 	return parseCompactRecord(payload, store.lineageID)
+}
+
+// readCompactRecordPayload refuses after exactly one byte beyond the bounded
+// record limit. Authority reads must never allocate an unbounded JSON payload.
+func readCompactRecordPayload(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	payload, err := io.ReadAll(io.LimitReader(file, compactRecordSizeLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > compactRecordSizeLimit {
+		return nil, errors.New("compact review state record exceeds the 32 MiB limit") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+	}
+	return payload, nil
 }
 
 func (store CompactStore) Replace(expectedRevision, operation string, next CompactState) (string, error) {
@@ -1500,14 +1513,6 @@ func (store CompactStore) ReplaceContext(ctx context.Context, expectedRevision, 
 // replaceContextGuarded commits exactly like ReplaceContext, but runs guard
 // inside the same critical section that publishes the successor, immediately
 // before the state file is written and after the revision CAS has passed.
-//
-// It exists because the revision CAS alone cannot see every relevant change:
-// CaptureReviewerResult publishes its artifact under the reviewer-results
-// directory while holding this same store lock and never bumps the authority
-// revision, so a precondition an operation derived from that directory before
-// taking the lock is stale by the time the CAS succeeds. A guard re-derives
-// such a precondition from the authoritative on-disk state while the lock is
-// held, which makes the check atomic with the commit.
 //
 // The guard runs with the store lock already held and must never acquire it
 // again — acquireStoreLock and acquireLocalStoreLock take an exclusive advisory
@@ -1544,7 +1549,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	defer lock.release()
 
 	var current *CompactRecord
-	payload, err := os.ReadFile(store.StatePath())
+	payload, err := readCompactRecordPayload(store.StatePath())
 	if err == nil {
 		loaded, parseErr := parseCompactRecord(payload, store.lineageID)
 		if parseErr != nil {
@@ -1557,20 +1562,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
-	if current != nil {
-		if err := reconcileCompactRepositoryContext(ctx, store, *current); err != nil {
-			return "", fmt.Errorf("reconcile compact predecessor effects: %w", err)
-		}
-	}
-	var carriedIntents []CompactEffectIntent
-	if current != nil {
-		// Intents are immutable for the lineage lifetime and carried verbatim,
-		// identity included: the committed effect binds the state that created
-		// it, and reconciliation verifies exactly that frozen identity
-		// (issue #1875).
-		carriedIntents = append(carriedIntents, current.EffectIntents...)
-	}
-	record, payload, err := makeCompactRecordWithIntents(next, carriedIntents)
+	record, payload, err := makeCompactRecord(next)
 	if err != nil {
 		return "", err
 	}
@@ -1616,52 +1608,24 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
 		return "", err
 	}
+	// #1854: the transition above already committed. A requested trace that
+	// fails to persist is reported through TraceOutcome as a committed
+	// result, never a reason to roll back or refuse an authority mutation
+	// that genuinely succeeded. TraceOutcome is opt-in (a caller sets it
+	// alongside TracePath), so a caller that sets TracePath without it still
+	// gets the stderr fallback below rather than total silence.
 	if store.TracePath != "" {
-		recordCompactTrace(store.TracePath, CompactTraceEntry{
+		outcome, traceErr := recordCompactTrace(store.TracePath, CompactTraceEntry{
 			Operation: operation, PreviousRevision: currentRevision, Revision: record.Revision,
 			State: next.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
+		if store.TraceOutcome != nil {
+			*store.TraceOutcome = outcome
+		} else if traceErr != nil {
+			compactTraceWarn(operation, store.TracePath, traceErr)
+		}
 	}
 	return record.Revision, nil
-}
-
-// captureReviewerResult revalidates the reviewing binding while holding shared
-// maintenance access and the compact version lock before publishing an artifact.
-func (store CompactStore) captureReviewerResult(expectedRevision, target, lens string, order int, publish func(CompactState) error) error {
-	deadline := time.NewTimer(maintenanceLockTimeout)
-	defer deadline.Stop()
-	var lock *storeLock
-	var err error
-	for {
-		lock, err = acquireStoreLock(store.lockPath)
-		if !errors.Is(err, ErrConcurrentUpdate) {
-			break
-		}
-		select {
-		case <-deadline.C:
-			return &AuthorityLockTimeoutError{Timeout: maintenanceLockTimeout}
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	record, err := store.loadCompactRecordLocked()
-	if err != nil {
-		return err
-	}
-	if record.HistoricalCompat {
-		return NewLegacyReadOnlyError(
-			"review/capture-result",
-			record.State.LineageID,
-		)
-	}
-	state := record.State
-	if record.Revision != expectedRevision || state.State != StateReviewing || state.InitialSnapshot.Identity != target || order < 0 || order >= len(state.SelectedLenses) || state.SelectedLenses[order] != lens {
-		return errors.New("capture binding does not match the current reviewing authority")
-	}
-	return publish(state)
 }
 
 func validateCompactRepositoryEvidence(ctx context.Context, repo string, current *CompactRecord, next CompactState, operation string) error {
@@ -1691,11 +1655,15 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 		}
 	}
 	if operation == "review/complete-review" {
-		for _, finding := range next.Findings {
-			classification := next.Classifications[finding.ID]
+		view, err := next.CompactReviewView()
+		if err != nil {
+			return err
+		}
+		for _, finding := range view.Findings {
+			classification := view.Classifications[finding.ID]
 			switch classification.Causality {
 			case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
-				changed, err := builder.CandidateLocationSupportsCausality(ctx, next.InitialSnapshot, finding.Location, classification.Causality)
+				changed, _, err := builder.CandidateLocationSupportsCausality(ctx, next.InitialSnapshot, finding.Location, classification.Causality)
 				if err != nil || !changed {
 					return errors.New("candidate-causal compact finding is not on a repository-derived changed line")
 				}
@@ -1707,14 +1675,16 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			return errors.New("reviewer result reopen lacks an exact predecessor authority")
 		}
 		reopen := next.ResultReopens[len(next.ResultReopens)-1]
-		request := CompactResultReopenRequest{
-			LineageID:        current.State.LineageID,
-			ExpectedRevision: current.Revision,
-			TargetIdentity:   current.State.InitialSnapshot.Identity,
-			Reason:           reopen.Reason,
-			Actor:            reopen.Actor,
+		lenses, err := compactResultReopenAuditQuarantineLenses(current.State, reopen)
+		if err != nil || len(reopen.QuarantineLenses) == 0 {
+			return errors.New("reviewer result reopen does not carry a canonical quarantine set") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
-		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, reopen.Quarantined, reopen.Retained, reopen.AuthorizedLenses) {
+		request := CompactResultReopenRequest{
+			LineageID: current.State.LineageID, ExpectedRevision: current.Revision,
+			TargetIdentity: current.State.InitialSnapshot.Identity, Reason: reopen.Reason,
+			Actor: reopen.Actor, QuarantineLenses: lenses,
+		}
+		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, lenses, reopen.Removed) {
 			return errors.New("reviewer result reopen does not carry the exact maintainer authorization")
 		}
 	}
@@ -1734,21 +1704,25 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		!snapshotsEqual(previous.InitialSnapshot, next.InitialSnapshot) || !equalStrings(previous.GenesisPaths, next.GenesisPaths) ||
 		previous.PolicyHash != next.PolicyHash || !reflect.DeepEqual(previous.FrozenPolicyContent, next.FrozenPolicyContent) ||
 		previous.RiskLevel != next.RiskLevel || !equalStrings(previous.SelectedLenses, next.SelectedLenses) || previous.OriginalChangedLines != next.OriginalChangedLines ||
-		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy {
-		return fmt.Errorf("%w: compact review scope, tier, policy, and budget are immutable", ErrInvalidSuccessor)
+		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy ||
+		previous.RuntimeAgent != next.RuntimeAgent {
+		return fmt.Errorf("%w: compact review scope, tier, policy, budget, and runtime are immutable", ErrInvalidSuccessor)
 	}
 	switch operation {
 	case "review/invalidate":
-		expected := previous
-		if err := expected.Invalidate(next.InvalidationReason); err != nil || !compactStateEqual(expected, next) {
+		if previous.State != StateReviewing || next.State != StateInvalidated || !compactPristineReviewing(previous) ||
+			strings.TrimSpace(next.InvalidationReason) == "" || previous.CapturePhaseRevision != next.CapturePhaseRevision ||
+			previous.CapturePhaseEpoch != next.CapturePhaseEpoch || len(previous.AdmittedRoleResults) != len(next.AdmittedRoleResults) ||
+			len(previous.TargetedValidatorAttempts) != len(next.TargetedValidatorAttempts) {
 			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-review":
 		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateApproved && next.State != StateEscalated {
 			return fmt.Errorf("%w: invalid compact review completion", ErrInvalidSuccessor)
 		}
-		cleanApproval := next.State == StateApproved && next.EvidenceHash == compactReviewEvidenceHash(next)
-		if !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval {
+		nextView, viewErr := next.CompactReviewView()
+		cleanApproval := viewErr == nil && next.State == StateApproved && next.EvidenceHash == compactReviewEvidenceHash(nextView)
+		if !equalCompactAdmittedReviewAuthority(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval {
 			return fmt.Errorf("%w: compact review completion changed correction or delivery state", ErrInvalidSuccessor)
 		}
 	case "review/begin-fix":
@@ -1758,10 +1732,12 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		if previous.State != StateCorrectionRequired || next.State != StateCorrectionRequired && next.State != StateEscalated || previous.ProposedCorrectionLines != nil || next.ProposedCorrectionLines == nil {
 			return fmt.Errorf("%w: invalid compact correction start", ErrInvalidSuccessor)
 		}
-		expected := previous
-		expected.State = next.State
-		expected.ProposedCorrectionLines = next.ProposedCorrectionLines
-		if !compactStateEqual(expected, next) {
+		if next.CapturePhaseRevision == previous.CapturePhaseRevision || next.CapturePhaseEpoch != previous.CapturePhaseEpoch+1 ||
+			len(next.TargetedValidatorAttempts) != 0 || !equalCompactAdmittedReviewAuthority(previous, next) ||
+			!snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) ||
+			previous.FixDeltaHash != next.FixDeltaHash || previous.ActualCorrectionLines != next.ActualCorrectionLines ||
+			previous.OriginalCriteria != next.OriginalCriteria || previous.CorrectionRegression != next.CorrectionRegression ||
+			!equalStrings(previous.FixFindingIDs, next.FixFindingIDs) || previous.EvidenceHash != next.EvidenceHash {
 			return fmt.Errorf("%w: compact correction start changed unrelated state", ErrInvalidSuccessor)
 		}
 	case "review/complete-fix":
@@ -1774,7 +1750,7 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		if len(previous.CorrectionAttempts) > 0 && !reflect.DeepEqual(previous.CorrectionAttempts, next.CorrectionAttempts[:len(previous.CorrectionAttempts)]) {
 			return fmt.Errorf("%w: compact correction attempt history is immutable", ErrInvalidSuccessor)
 		}
-		if !reflectCompactReviewData(previous, next) || previous.EvidenceHash != next.EvidenceHash {
+		if !equalCompactAdmittedReviewAuthority(previous, next) || !equalStrings(previous.FixFindingIDs, next.FixFindingIDs) || previous.EvidenceHash != next.EvidenceHash {
 			return fmt.Errorf("%w: compact correction changed frozen review evidence", ErrInvalidSuccessor)
 		}
 	case "review/complete-correction-verification":
@@ -1791,31 +1767,13 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		if len(previous.CorrectionAttempts) > 0 && !reflect.DeepEqual(previous.CorrectionAttempts, next.CorrectionAttempts[:len(previous.CorrectionAttempts)]) {
 			return fmt.Errorf("%w: compact correction attempt history is immutable", ErrInvalidSuccessor)
 		}
-		if !reflectCompactReviewData(previous, next) {
+		if !equalCompactAdmittedReviewAuthority(previous, next) {
 			return fmt.Errorf("%w: terminal targeted validation changed frozen review evidence", ErrInvalidSuccessor)
 		}
-	case CompactResultDispositionOperation:
-		// reviewing -> escalated. The disposition may only append its own audit
-		// record and flip the terminal state; freezing every other field here is
-		// what keeps captured lens results, findings, and evidence untouched and
-		// makes it impossible to launder a refused payload into an admitted one.
-		if previous.State != StateReviewing || next.State != StateEscalated {
-			return fmt.Errorf("%w: a reviewer result disposition terminally escalates a reviewing authority only", ErrInvalidSuccessor)
-		}
-		if len(next.ResultDispositions) != len(previous.ResultDispositions)+1 {
-			return fmt.Errorf("%w: a reviewer result disposition records exactly one disposition", ErrInvalidSuccessor)
-		}
-		expected := previous
-		expected.State = StateEscalated
-		expected.ResultDispositions = next.ResultDispositions
-		if !compactStateEqual(expected, next) {
-			return fmt.Errorf("%w: reviewer result disposition changed unrelated state", ErrInvalidSuccessor)
+		if !equalStrings(previous.FixFindingIDs, next.FixFindingIDs) {
+			return fmt.Errorf("%w: terminal targeted validation changed frozen fix findings", ErrInvalidSuccessor)
 		}
 	case CompactResultReopenOperation:
-		// Validating keeps its historical eligibility; correction-required is
-		// additionally eligible only while uncorrected — a completed
-		// correction attempt or actual correction accounting closes this door
-		// for good, because those prove candidate bytes moved under review.
 		reopenablePredecessor := previous.State == StateValidating ||
 			previous.State == StateCorrectionRequired && len(previous.CorrectionAttempts) == 0 && previous.ActualCorrectionLines == nil
 		if !reopenablePredecessor || next.State != StateReviewing ||
@@ -1824,23 +1782,14 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: reviewer result reopen must append one audit record returning an uncorrected authority to reviewing", ErrInvalidSuccessor)
 		}
 		reopen := next.ResultReopens[len(next.ResultReopens)-1]
-		if reopen.PreviousRevision != previousRevision || reopen.TargetIdentity != previous.InitialSnapshot.Identity {
+		lenses, lensesErr := compactResultReopenAuditQuarantineLenses(previous, reopen)
+		if reopen.PreviousRevision != previousRevision || reopen.TargetIdentity != previous.InitialSnapshot.Identity || lensesErr != nil {
 			return fmt.Errorf("%w: reviewer result reopen does not bind the exact predecessor authority", ErrInvalidSuccessor)
 		}
-		expected := previous
-		expected.State = StateReviewing
-		expected.LensResults = []LensResult{}
-		expected.Findings = []Finding{}
-		expected.Classifications = map[string]FindingEvidence{}
-		expected.Outcomes = map[string]EvidenceOutcome{}
-		expected.FixFindingIDs = []string{}
-		expected.FollowUps = []FollowUp{}
-		expected.ProposedCorrectionLines = nil
-		expected.ActualCorrectionLines = nil
-		expected.FixDeltaHash = EmptyFixDeltaHash
-		expected.OriginalCriteria = nil
-		expected.CorrectionRegression = nil
-		expected.EvidenceHash = ""
+		expected, removed, err := reopenCompactAdmittedRoleResults(previous, lenses)
+		if err != nil || !equalCompactResultReopenReferences(compactResultReopenReferences(removed), reopen.Removed) {
+			return fmt.Errorf("%w: reviewer result reopen does not remove the selected lenses and dependent refuter", ErrInvalidSuccessor)
+		}
 		expected.ResultReopens = next.ResultReopens
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: reviewer result reopen changed frozen scope, budget, or unrelated authority", ErrInvalidSuccessor)
@@ -1851,83 +1800,88 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 	return nil
 }
 
-func reflectCompactReviewData(previous, next CompactState) bool {
-	return reflect.DeepEqual(previous.LensResults, next.LensResults) &&
-		reflect.DeepEqual(previous.Findings, next.Findings) &&
-		reflect.DeepEqual(previous.Classifications, next.Classifications) &&
-		reflect.DeepEqual(previous.Outcomes, next.Outcomes) &&
-		equalStrings(previous.FixFindingIDs, next.FixFindingIDs) &&
-		len(previous.FollowUps) <= len(next.FollowUps) && reflect.DeepEqual(previous.FollowUps, next.FollowUps[:len(previous.FollowUps)])
+func equalCompactAdmittedReviewAuthority(previous, next CompactState) bool {
+	// State validation at both store boundaries already derives CompactReviewView.
+	// This successor check protects the canonical owner itself: a lifecycle step
+	// may not add, remove, or rewrite any admitted role value.
+	return equalCompactAdmittedRoleResults(previous.AdmittedRoleResults, next.AdmittedRoleResults)
+}
+
+// equalCompactAdmittedRoleResults treats nil and empty as the same absence of
+// admitted values. Fresh zero-lens records omit the empty JSON field on disk,
+// while an in-memory START state keeps an explicit empty slice; neither form
+// carries review authority and a completion must not distinguish them.
+func equalCompactAdmittedRoleResults(left, right []CompactAdmittedRoleResult) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		leftEntry, rightEntry := left[index], right[index]
+		if leftEntry.Role != rightEntry.Role || leftEntry.Lens != rightEntry.Lens || leftEntry.SelectedOrder != rightEntry.SelectedOrder ||
+			leftEntry.TargetIdentity != rightEntry.TargetIdentity || leftEntry.CapturePhaseRevision != rightEntry.CapturePhaseRevision ||
+			leftEntry.RequestHash != rightEntry.RequestHash || leftEntry.ArtifactDigest != rightEntry.ArtifactDigest || leftEntry.ResultHash != rightEntry.ResultHash {
+			return false
+		}
+		// CompactState.Validate binds each value to ArtifactDigest, so matching
+		// tuple and digest proves identical canonical role bytes without treating
+		// a RawMessage's nil/empty representation as semantic drift.
+	}
+	return true
 }
 
 func makeCompactRecord(state CompactState) (CompactRecord, []byte, error) {
-	return makeCompactRecordWithIntents(state, nil)
-}
-
-func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectIntent) (CompactRecord, []byte, error) {
-	intents = append([]CompactEffectIntent(nil), intents...)
-	for _, intent := range intents {
-		if !validCompactEffectIntentFields(intent) {
-			return CompactRecord{}, nil, errors.New("invalid compact required effect intent") // refusal:by-design operator-knowledge: callers must supply a closed, persistable effect intent
-		}
+	if err := validateCompactRoleResultBounds(state.AdmittedRoleResults); err != nil {
+		return CompactRecord{}, nil, err
 	}
-	sort.Slice(intents, func(i, j int) bool {
-		if intents[i].Class != intents[j].Class {
-			return intents[i].Class < intents[j].Class
-		}
-		if intents[i].Destination != intents[j].Destination {
-			return intents[i].Destination < intents[j].Destination
-		}
-		return intents[i].PayloadHash < intents[j].PayloadHash
-	})
-	for index := 1; index < len(intents); index++ {
-		if intents[index-1].Class == intents[index].Class && intents[index-1].Destination == intents[index].Destination {
-			return CompactRecord{}, nil, errors.New("duplicate compact required effect intent") // refusal:by-design operator-knowledge: callers must supply one immutable intent per class and destination
-		}
+	if err := validateCompactNonRoleStateBounds(state); err != nil {
+		return CompactRecord{}, nil, err
 	}
 	statePayload, err := json.Marshal(state)
 	if err != nil {
 		return CompactRecord{}, nil, err
 	}
-	bindingRevision := compactStateRevision(statePayload)
-	// The record revision is a pure function of state. Every re-deriver in the
-	// tree (CompactRevisionForState for provider role requests and FINALIZE
-	// planning, invalidation-evidence validation, recovery-chain composition)
-	// recomputes it from state alone, so folding intents into it makes a
-	// lineage with intents unverifiable the moment any of them runs — j90's
-	// captured_artifacts_unverifiable regression. Intents ride the record as
-	// carried data instead: BindingRevision freezes the state identity that
-	// created them and EventID must stay derivable from the visible fields.
-	revision := bindingRevision
-	if len(intents) > 0 {
-		for index := range intents {
-			if intents[index].BindingRevision == "" {
-				intents[index].BindingRevision = bindingRevision
-			} else if intents[index].EventID == "" && intents[index].BindingRevision != bindingRevision {
-				// Creation must bind the enclosing state. A carried intent
-				// (EventID already minted) keeps the binding of the state that
-				// created it: reconciliation verifies that frozen identity
-				// against the committed effect, so a rewritten binding lands
-				// on a blocked_conflict marker instead of a silent rebind.
-				return CompactRecord{}, nil, errors.New("invalid compact required effect binding") // refusal:by-design operator-knowledge: caller-supplied binding cannot override the enclosing state identity
-			}
-			eventPayload, _ := json.Marshal([]string{state.LineageID, intents[index].BindingRevision, intents[index].Class, intents[index].Destination, intents[index].PayloadHash})
-			eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
-			wantEventID := "sha256:" + hex.EncodeToString(eventSum[:])
-			if intents[index].EventID == "" {
-				intents[index].EventID = wantEventID
-			} else if intents[index].EventID != wantEventID {
-				// refusal:by-design operator-knowledge: caller-supplied immutable effect identity is inconsistent and cannot be repaired by an operator command
-				return CompactRecord{}, nil, errors.New("invalid compact required effect identity")
-			}
-		}
-	}
-	record := CompactRecord{Schema: compactRecordSchema, Revision: revision, State: state, EffectIntents: intents}
+	record := CompactRecord{Schema: compactRecordSchema, Revision: compactStateRevision(statePayload), State: state}
 	payload, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return CompactRecord{}, nil, err
 	}
-	return record, append(payload, '\n'), nil
+	payload = append(payload, '\n')
+	if err := validateCompactRecordWritePayload(payload); err != nil {
+		return CompactRecord{}, nil, err
+	}
+	return record, payload, nil
+}
+
+func validateCompactRoleResultBounds(values []CompactAdmittedRoleResult) error {
+	if len(values) > compactMaxAdmittedRoleResults {
+		return errors.New("compact review state has more than six admitted role values") // refusal:by-design world-action: a record that exceeds the fixed authority capacity must be reduced before it can be persisted
+	}
+	for _, value := range values {
+		if len(value.Value) > compactReviewerResultSizeLimit {
+			return errors.New("compact admitted role value exceeds the four MiB limit") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
+		}
+	}
+	return nil
+}
+
+func validateCompactNonRoleStateBounds(state CompactState) error {
+	nonRole := cloneCompactStateInitialAtomicStart(state)
+	nonRole.AdmittedRoleResults = nil
+	payload, err := json.Marshal(nonRole)
+	if err != nil {
+		return err
+	}
+	if len(payload) > compactNonRoleStateSizeLimit {
+		return errors.New("compact non-role state exceeds the seven MiB limit") // refusal:by-design world-action: bounded authority metadata must be reduced before it can be persisted
+	}
+	return nil
+}
+
+func validateCompactRecordWritePayload(payload []byte) error {
+	if len(payload) > compactRecordSizeLimit {
+		return errors.New("compact review state record exceeds the 32 MiB limit") // refusal:by-design world-action: the immutable record must be reduced before it can be persisted
+	}
+	return nil
 }
 
 func compactStateRevision(statePayload []byte) string {
@@ -1971,71 +1925,47 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 	if record.Schema != compactRecordSchema || !validSHA256(record.Revision) {
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
-	if err := record.State.Validate(); err != nil {
-		forensic, historical := forensicHistoricalCompactRecord(payload, lineageID)
-		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: historical, PriorSchemaPredecessorLineageID: forensic.PredecessorLineageID}
-	}
-	if err := validateCompactEffectIntents(record); err != nil {
-		return CompactRecord{}, err
+	validateErr := record.State.Validate()
+	staleUnachievableLensAttempts := false
+	if validateErr != nil {
+		// A record whose ONLY semantic problem is a non-empty
+		// UnachievableLensAttempts ledger outside StateReviewing predates the
+		// centralized exit clearing (setCompactStateExit, issue #3442): every
+		// lifecycle mutator now clears it on any exit from StateReviewing, so
+		// this shape can no longer be freshly produced, but an already-stuck
+		// lineage written before that fix must still be able to load. The
+		// drop happens further down, only after the checksum below has
+		// verified this is exactly what was persisted -- never before, which
+		// would let a genuinely corrupted or tampered file masquerade as "just
+		// a legacy ledger".
+		tolerant := record.State
+		tolerant.UnachievableLensAttempts = nil
+		if tolerant.Validate() == nil {
+			staleUnachievableLensAttempts = true
+		} else {
+			forensic, historical := forensicHistoricalCompactRecord(payload, lineageID)
+			return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: validateErr.Error(),
+				OutdatedIdentity: historical, PriorSchemaPredecessorLineageID: forensic.PredecessorLineageID}
+		}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
 	}
 	if !record.HistoricalCompat {
-		want, _, err := makeCompactRecordWithIntents(record.State, append([]CompactEffectIntent(nil), record.EffectIntents...))
+		// Checksummed against the untouched, exactly-as-persisted state
+		// (stale ledger included, if present): this is the authenticity
+		// proof the tolerance above depends on, so it must run before, never
+		// after, the ledger is dropped.
+		want, _, err := makeCompactRecord(record.State)
 		if err != nil || want.Revision != record.Revision {
 			return CompactRecord{}, errors.New("compact review state checksum mismatch")
 		}
 	}
+	if staleUnachievableLensAttempts {
+		compactStaleUnachievableLensAttemptsNote(record.State.LineageID, record.State.State, len(record.State.UnachievableLensAttempts))
+		record.State.UnachievableLensAttempts = nil
+	}
 	return record, nil
-}
-
-func validateCompactEffectIntents(record CompactRecord) error {
-	for index, intent := range record.EffectIntents {
-		if !validCompactEffectIntentFields(intent) {
-			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-			return errors.New("invalid compact required effect intent")
-		}
-		// A persisted intent must arrive with its complete minted identity and
-		// that identity must be self-consistent. Rewrites that keep the event
-		// self-consistent are then caught semantically by reconciliation,
-		// which verifies the frozen binding against the committed effect.
-		if !validSHA256(intent.BindingRevision) || !validSHA256(intent.EventID) {
-			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-			return errors.New("invalid compact required effect identity")
-		}
-		eventPayload, _ := json.Marshal([]string{record.State.LineageID, intent.BindingRevision, intent.Class, intent.Destination, intent.PayloadHash})
-		eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
-		if intent.EventID != "sha256:"+hex.EncodeToString(eventSum[:]) {
-			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-			return errors.New("invalid compact required effect identity")
-		}
-		if index > 0 {
-			previous := record.EffectIntents[index-1]
-			if previous.Class > intent.Class || (previous.Class == intent.Class && previous.Destination >= intent.Destination) {
-				// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-				return errors.New("compact required effect intents must be unique and canonically ordered")
-			}
-		}
-	}
-	if len(record.EffectIntents) == 0 {
-		return nil
-	}
-	want, _, err := makeCompactRecordWithIntents(record.State, append([]CompactEffectIntent(nil), record.EffectIntents...))
-	if err != nil {
-		return fmt.Errorf("invalid compact required effect identity: %w", err)
-	}
-	if want.Revision != record.Revision || !reflect.DeepEqual(want.EffectIntents, record.EffectIntents) {
-		// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
-		return errors.New("invalid compact required effect identity")
-	}
-	return nil
-}
-
-func validCompactEffectIntentFields(intent CompactEffectIntent) bool {
-	return (intent.Class == CompactEffectClassRepositoryContext || intent.Class == compactEffectClassRequestedTrace) &&
-		strings.TrimSpace(intent.Destination) != "" && validSHA256(intent.PayloadHash)
 }
 
 func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {
@@ -2255,47 +2185,141 @@ func deleteRetiredCompactField(fields map[string]json.RawMessage, path []string)
 	return true, nil
 }
 
-// compactTraceWarn reports a lost diagnostic-trace write (issue #1854). A
-// caller that supplies TracePath explicitly asked for that observability; the
-// authority mutation has already committed by the time this runs and must
-// never be rolled back or fail because of it, so this is report-only. It
-// follows the same "WARNING: ..." convention run.go already uses at the CLI
-// boundary for other non-fatal, already-succeeded-but-partially-degraded
-// operations (e.g. "could not add %s to PATH"). It is a package-level var, in
-// keeping with this file's existing test-seam convention (see
-// finalCompactInvalidationHook and similar hooks), so tests can observe the
-// report without capturing real stderr.
+// CompactTraceOutcome reports what happened to one requested, best-effort
+// diagnostic trace entry after its authority mutation already committed
+// (#1854). It is never a reason to fail or roll back the mutation that
+// produced it: Revision and Operation name the exact committed transition, so
+// a caller can represent "committed, trace degraded" as one typed fact
+// instead of a stderr-only warning a machine consumer cannot see.
+type CompactTraceOutcome struct {
+	// Persisted is true once the trace entry is durably appended.
+	Persisted bool
+	// ErrorClass names which phase of the write failed (see the
+	// compactTraceFailure* constants) when Persisted is false; empty when
+	// Persisted is true.
+	ErrorClass string
+	// Revision is the exact authority revision this trace entry describes,
+	// whether or not persistence succeeded.
+	Revision string
+	// Operation is the exact operation this trace entry describes.
+	Operation string
+}
+
+// Identity is a stable, path-free content identity for the exact trace entry
+// this outcome describes (#1854's "event_identity"): a caller who fixes the
+// trace path and wants to confirm they are looking at the same event, rather
+// than a different one, can compare this instead of trusting free-form text.
+func (outcome CompactTraceOutcome) Identity() string {
+	sum := sha256.Sum256([]byte("gentle-ai.compact-trace-entry/v1\n" + outcome.Operation + "\n" + outcome.Revision))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// compactTraceFailure* classifies exactly which phase of a best-effort trace
+// append failed (#1854's "distinguish mkdir/open/write/fsync/close
+// failures"), rather than reducing every failure to one undifferentiated
+// message.
+const (
+	compactTraceFailureMkdir = "mkdir_failed"
+	compactTraceFailureOpen  = "open_failed"
+	compactTraceFailureWrite = "write_failed"
+	compactTraceFailureSync  = "sync_failed"
+	compactTraceFailureClose = "close_failed"
+)
+
+// compactTraceWriteError carries the failed phase alongside the underlying
+// cause, so recordCompactTrace can classify a failure without re-deriving it
+// from an opaque *os.PathError.
+type compactTraceWriteError struct {
+	class string
+	cause error
+}
+
+func (err *compactTraceWriteError) Error() string {
+	return fmt.Sprintf("review trace %s: %v", err.class, err.cause)
+}
+
+func (err *compactTraceWriteError) Unwrap() error { return err.cause }
+
+// compactStaleUnachievableLensAttemptsNote reports a load-time recovery, not
+// a failure: a record written before setCompactStateExit centralized the
+// clearing of UnachievableLensAttempts (issue #3442) can carry declarations
+// left standing after the phase moved on. parseCompactRecord drops them so
+// the lineage loads instead of refusing forever; this note is the one
+// diagnostic trace of that silent-but-lossy repair, following the same
+// package-level test-seam convention as compactTraceWarn below.
+var compactStaleUnachievableLensAttemptsNote = func(lineageID string, state State, dropped int) {
+	fmt.Fprintf(os.Stderr, "NOTE: dropped %d stale unachievable-lens declaration(s) for lineage %s loaded in state %q; declarations apply only while a phase is actively reviewing\n", dropped, lineageID, state)
+}
+
+// compactTraceWarn is the fallback report for a trace write failure on a
+// call path with no projected machine result to carry CompactTraceOutcome
+// (#1854): a native review finding (R4) is exactly this -- TraceOutcome is
+// opt-in per call, and a caller that sets TracePath without also wiring
+// TraceOutcome must still learn about a failure somehow, rather than the
+// mutation succeeding in total silence. Every caller that DOES project a
+// typed result must not also call this, so an operator never sees the same
+// failure reported twice. It follows the same "WARNING: ..." convention
+// run.go already uses at the CLI boundary for other non-fatal,
+// already-succeeded-but-partially-degraded operations (e.g. "could not add
+// %s to PATH"). It is a package-level var, in keeping with this file's
+// existing test-seam convention (see finalCompactInvalidationHook and
+// similar hooks), so tests can observe the report without capturing real
+// stderr.
 var compactTraceWarn = func(operation, path string, err error) {
 	fmt.Fprintf(os.Stderr, "WARNING: review trace for %s was not recorded at %s: %v\n", operation, path, err)
 }
 
-// recordCompactTrace appends a diagnostic trace entry and reports rather than
-// swallows a write failure. The trace is best-effort diagnostics only: it
-// never carries authority, so its failure must never affect an already
-// committed mutation's success/failure outcome.
-func recordCompactTrace(path string, entry CompactTraceEntry) {
-	if err := appendCompactTrace(path, entry); err != nil {
-		compactTraceWarn(entry.Operation, path, err)
+// recordCompactTrace appends a diagnostic trace entry and reports the result
+// as a typed outcome, returning the classifying error alongside it so a
+// caller with no projected result can still warn instead of falling silent
+// (#1854). The trace is best-effort diagnostics only: it never carries
+// authority, and its failure must never affect an already committed
+// mutation's success/failure outcome -- every caller invokes this only after
+// its own commit has already succeeded.
+func recordCompactTrace(path string, entry CompactTraceEntry) (CompactTraceOutcome, error) {
+	outcome := CompactTraceOutcome{Revision: entry.Revision, Operation: entry.Operation}
+	err := appendCompactTrace(path, entry)
+	if err != nil {
+		var writeErr *compactTraceWriteError
+		if errors.As(err, &writeErr) {
+			outcome.ErrorClass = writeErr.class
+		} else {
+			outcome.ErrorClass = "unknown_failed"
+		}
+		return outcome, err
 	}
+	outcome.Persisted = true
+	return outcome, nil
 }
 
+// appendCompactTrace distinguishes mkdir/open/write/fsync/close failures
+// (#1854) and, unlike a bare `defer file.Close()`, surfaces a close-only
+// failure instead of silently discarding it.
 func appendCompactTrace(path string, entry CompactTraceEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return &compactTraceWriteError{class: compactTraceFailureMkdir, cause: err}
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return &compactTraceWriteError{class: compactTraceFailureOpen, cause: err}
 	}
-	defer file.Close()
 	payload, err := json.Marshal(entry)
 	if err != nil {
-		return err
+		_ = file.Close()
+		return &compactTraceWriteError{class: compactTraceFailureWrite, cause: err}
 	}
 	if _, err := file.Write(append(payload, '\n')); err != nil {
-		return err
+		_ = file.Close()
+		return &compactTraceWriteError{class: compactTraceFailureWrite, cause: err}
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return &compactTraceWriteError{class: compactTraceFailureSync, cause: err}
+	}
+	if err := file.Close(); err != nil {
+		return &compactTraceWriteError{class: compactTraceFailureClose, cause: err}
+	}
+	return nil
 }
 
 func (store CompactStore) ExportTransport() (CompactTransport, error) {
@@ -2382,6 +2406,9 @@ func ImportCompactTransport(ctx context.Context, repo string, transport CompactT
 		if predecessorErr != nil {
 			return CompactRecord{}, fmt.Errorf("load imported recovery predecessor: %w", predecessorErr)
 		}
+		if predecessor.HistoricalCompat {
+			return CompactRecord{}, fmt.Errorf("%w: imported recovery predecessor lineage %q", ErrHistoricalCompatReadOnly, predecessor.State.LineageID)
+		}
 		if err := validateCompactRecoveryEdge(predecessor, validated.Record.State); err != nil {
 			return CompactRecord{}, fmt.Errorf("validate imported recovery edge: %w", err)
 		}
@@ -2409,7 +2436,7 @@ func (store CompactStore) installTransportRecordLocked(ctx context.Context, reco
 	if err := validateCompactTransportDelivery(ctx, store.repo, record.State); err != nil {
 		return err
 	}
-	want, payload, err := makeCompactRecordWithIntents(record.State, record.EffectIntents)
+	want, payload, err := makeCompactRecord(record.State)
 	if err != nil || want.Revision != record.Revision {
 		return errors.New("imported compact record checksum changed")
 	}

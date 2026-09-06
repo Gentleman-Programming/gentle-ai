@@ -172,7 +172,11 @@ func unsafeBinPath(value string) string {
 	if value == "" {
 		return "empty bin path"
 	}
-	if filepath.IsAbs(value) || filepath.VolumeName(value) != "" || windowsDrivePath(value) {
+	// A leading slash is an absolute claim in the manifest's slash-relative
+	// vocabulary even where filepath.IsAbs says otherwise: on Windows a
+	// rooted-but-driveless path is not IsAbs, and letting it through would
+	// classify the same manifest differently per platform.
+	if filepath.IsAbs(value) || strings.HasPrefix(value, "/") || filepath.VolumeName(value) != "" || windowsDrivePath(value) {
 		return "absolute bin path"
 	}
 	if strings.ContainsRune(value, '\\') {

@@ -19,11 +19,12 @@ Load this skill whenever you need to:
 ## Critical Rules
 
 1. **Every PR MUST link an approved issue** — `Closes/Fixes/Resolves #<N>` in the PR body, and that issue MUST have `status:approved`. PRs without this are **automatically rejected** by CI.
-2. **Exactly one `type:*` label** — apply exactly ONE type label to the PR. CI will reject PRs with zero or multiple type labels.
-3. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or request/obtain maintainer-applied `size:exception` with rationale documented.
-4. **Automated checks must pass** — see the Automated Checks table below.
-5. **No `Co-Authored-By` trailers** — never add AI attribution to commits.
-6. **No force-push to main/master** — protected branch.
+2. **Ordinary `type:*` categorization** — CI rejects zero or multiple type labels. Route it through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
+3. **Protected policy labels** — Adding or removing `status:approved` or `size:exception` requires verified policy authority from a target-host repository maintainer or repository-authorized approver for the exact target/action, plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`. `size:exception` additionally requires documented over-budget rationale.
+4. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or document the rationale required for a `size:exception` label.
+5. **Automated checks must pass** — see the Automated Checks table below.
+6. **No `Co-Authored-By` trailers** — never add AI attribution to commits.
+7. **No force-push to main/master** — protected branch.
 
 ## Workflow
 
@@ -40,7 +41,8 @@ Load this skill whenever you need to:
 5. Commit using Conventional Commits format
 
 6. Open a PR referencing the issue
-   → Add exactly ONE type:* label
+   → Declare exactly ONE type:* result in the PR body
+   → Use the canonical issue-creation workflow contract before any PR-label mutation
    → Fill in the PR body using the template
 
 7. All automated checks must pass before merge
@@ -130,8 +132,8 @@ cd e2e && ./docker-test.sh
 ## ✅ Contributor Checklist
 
 - [ ] PR is linked to an issue with `status:approved`
-- [ ] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied `size:exception` with rationale documented
-- [ ] I have added the appropriate `type:*` label to this PR
+- [ ] PR stays within 400 changed lines, or the `size:exception` rationale and verified policy authority are documented
+- [ ] API read-back confirms exactly one appropriate `type:*` label on this PR
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] I have updated documentation if necessary
@@ -147,10 +149,10 @@ These checks run on every PR and **all must pass** before merge:
 
 | Check | What It Verifies | How to Fix |
 |-------|-----------------|------------|
-| **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) or has `size:exception` | Split the PR, or request/obtain maintainer-applied `size:exception` and document the rationale |
+| **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) or has `size:exception` | Split the PR, or document the `size:exception` rationale and verify policy authority before its canonical workflow action |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` | Add `Closes #<N>` to the PR body |
-| **Check Issue Has `status:approved`** | Linked issue has been approved by a maintainer | Wait for maintainer to add `status:approved` to the issue |
-| **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Ask a maintainer to add the correct label; remove extras |
+| **Check Issue Has `status:approved`** | Linked issue has the required label | Use the canonical issue-creation workflow contract only when a current direct instruction and target-host capability grant authorize the exact action; otherwise wait |
+| **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Use the canonical issue-creation workflow contract only when a current direct instruction and target-host capability authorize the exact action; otherwise wait |
 | **Unit Tests** | `go test ./...` passes | Fix failing tests before pushing |
 | **Go Format** | `go run ./internal/gofmtcheck` passes | Format malformed Go files before pushing |
 | **E2E Tests** | `cd e2e && ./docker-test.sh` passes | Fix failing E2E scenarios before pushing |
@@ -288,8 +290,8 @@ Fixes Claude Code binary detection failing on Linux when HOME is not set.
 ## ✅ Contributor Checklist
 
 - [x] PR is linked to an issue with \`status:approved\`
-- [x] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied \`size:exception\` with rationale documented
-- [x] I have added the appropriate \`type:*\` label to this PR
+- [x] PR stays within 400 changed lines, or the \`size:exception\` rationale and verified policy authority are documented
+- [x] API read-back confirms exactly one appropriate \`type:*\` label on this PR
 - [x] Unit tests pass (\`go test ./...\`)
 - [x] E2E tests pass (\`cd e2e && ./docker-test.sh\`)
 - [x] I have updated documentation if necessary
@@ -304,10 +306,4 @@ EOF
 ```bash
 gh pr checks --repo Gentleman-Programming/gentle-ai <PR-number>
 gh pr view --repo Gentleman-Programming/gentle-ai <PR-number>
-```
-
-### Add a Label
-
-```bash
-gh pr edit <PR-number> --repo Gentleman-Programming/gentle-ai --add-label "type:bug"
 ```

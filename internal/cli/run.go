@@ -868,6 +868,15 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
+
+	// Pi (and any future agent without a managed system prompt) owns its own
+	// prompt delivery outside gentle-ai, so there is nothing to strip or
+	// inject here: skip the step entirely rather than writing routing
+	// guidance into a file gentle-ai does not own (issue #4063).
+	if !adapter.SupportsSystemPrompt() {
+		return nil
+	}
+
 	targetDir := routingGuidanceDir(s.homeDir, s.workspaceDir, s.scope, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
@@ -878,7 +887,13 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return err
 	}
 
-	injected, err := agentguidance.InjectRouting(targetDir, s.agent)
+	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
+	var injected agentguidance.Result
+	if options.SettingsPath == "" {
+		injected, err = agentguidance.InjectRouting(targetDir, s.agent)
+	} else {
+		injected, err = agentguidance.InjectRoutingWithOptions(targetDir, s.agent, options)
+	}
 	if err != nil {
 		return fmt.Errorf("inject routing guidance for %q: %w", s.agent, err)
 	}
@@ -1459,6 +1474,7 @@ func (s componentApplyStep) Run() error {
 	switch s.component {
 	case model.ComponentEngram:
 		engramCommand := "engram"
+		var installErr error
 		if s.channel.IsBeta() {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
@@ -1473,16 +1489,12 @@ func (s componentApplyStep) Run() error {
 				if err != nil {
 					return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 				}
-				if err := runCommandSequence(commands); err != nil {
-					return err
-				}
-			} else {
+				installErr = runCommandSequence(commands)
+			} else if binaryPath, err := engramDownloadFn(s.profile); err != nil {
 				// Linux / Windows: download the pre-built binary from GitHub Releases.
 				// No Go required — engram ships pre-built binaries.
-				binaryPath, err := engramDownloadFn(s.profile)
-				if err != nil {
-					return fmt.Errorf("download engram binary: %w", err)
-				}
+				installErr = fmt.Errorf("download engram binary: %w", err)
+			} else {
 				// Add the install directory to PATH so subsequent commands
 				// (engram setup, engram.Inject → resolveEngramCommand) can find it.
 				// On Windows this also persists the change to the user registry via PowerShell.
@@ -1492,6 +1504,22 @@ func (s componentApplyStep) Run() error {
 					fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", binDir, err)
 				}
 				engramCommand = binaryPath
+			}
+			if installErr != nil {
+				if s.selection.HasComponent(model.ComponentEngram) {
+					return installErr
+				}
+				// engram was auto-added as an sdd dependency, not requested. Its
+				// failure must not abort the components the user asked for, and
+				// no configuration may point at a binary that does not exist:
+				// report the missing binary as a warning with its own install
+				// command and leave the engram step entirely (#3725).
+				fmt.Fprintf(os.Stderr, "WARNING: engram could not be installed: %v\nInstall it with `%s`.\n", installErr, engramInstallCommand(s.agents))
+				if s.state != nil {
+					s.state.engramVersionResolved = true
+					s.state.engramVersionErr = installErr
+				}
+				return nil
 			}
 		} else if shouldRefreshWindowsEngram(s.profile, installedPath, pathEnvEntries(s.profile)) {
 			binaryPath, err := engramDownloadFn(s.profile)
@@ -1533,7 +1561,7 @@ func (s componentApplyStep) Run() error {
 		// entirely rather than run it unconditionally.
 		willAttemptSetup := false
 		for _, adapter := range adapters {
-			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
+			if installErr == nil && engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				willAttemptSetup = true
 				break
 			}
@@ -1561,7 +1589,7 @@ func (s componentApplyStep) Run() error {
 
 		attemptedSlugs := make(map[string]struct{}, len(adapters))
 		for _, adapter := range adapters {
-			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
+			if willAttemptSetup && engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				slug, _ := engram.SetupAgentSlug(adapter.Agent())
 				if _, seen := attemptedSlugs[slug]; !seen {
 					setupArgs := []string{"setup", slug}
@@ -1618,6 +1646,9 @@ func (s componentApplyStep) Run() error {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
+				if _, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter); err != nil {
+					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+				}
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
@@ -1638,6 +1669,7 @@ func (s componentApplyStep) Run() error {
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:    s.selection.ModelAssignments,
+				OpenCodeSettingsPath:        effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, s.scope, adapter),
 				ClaudeModelAssignments:      s.selection.ClaudeModelAssignments,
 				ClaudePhaseAssignments:      s.selection.ClaudePhaseAssignments,
 				KiroModelAssignments:        s.selection.KiroModelAssignments,
@@ -1989,6 +2021,14 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		if component == model.ComponentPersona {
 			plan := persona.ResourcePlanFor(selection.Persona)
 			for _, adapter := range adapters {
+				if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+					// Persona can merge or clean a managed agent in settings during
+					// install. This is backup-only: ComponentPersona verification
+					// does not promise a settings write for every persona path.
+					if path := adapter.SettingsPath(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona)); path != "" {
+						paths[path] = struct{}{}
+					}
+				}
 				if !adapter.SupportsOutputStyles() {
 					continue
 				}
@@ -2123,8 +2163,21 @@ func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallSc
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		// Mirrors the same skip agentRoutingGuidanceStep.Run() applies: an
+		// agent without a managed system prompt (Pi) gets no routing guidance
+		// write, so it must not be declared as a backup target either.
+		if !adapter.SupportsSystemPrompt() {
+			continue
+		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
-		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
+		options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
+		var routing []string
+		var err error
+		if options.SettingsPath == "" {
+			routing, err = agentguidance.RoutingPaths(targetDir, adapter.Agent())
+		} else {
+			routing, err = agentguidance.RoutingPathsWithOptions(targetDir, adapter.Agent(), options)
+		}
 		if err != nil {
 			// The guidance step resolves the same delivery and fails loudly when
 			// it runs. Declaring a target we could not resolve would only add a
@@ -2189,20 +2242,21 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			}
 		case model.ComponentSDD:
 			// Jinja modular hubs (e.g. Kimi KIMI.md) are appended once below so SDD+Persona
-			// do not duplicate the same system prompt path.
-			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
+			// do not duplicate the same system prompt path. OpenCode-compatible adapters
+			// write the SDD orchestrator to their settings file instead (#3975).
+			if adapter.SupportsSystemPrompt() &&
+				!sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) &&
+				adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
 			if adapter.SupportsSlashCommands() {
-				for _, command := range sdd.OpenCodeCommands() {
-					paths = append(paths, filepath.Join(adapter.CommandsDir(targetDir), command.Name+".md"))
-				}
+				paths = append(paths, sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(targetDir))...)
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if p := adapter.SettingsPath(targetDir); p != "" {
+				if p := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter); p != "" {
 					paths = append(paths, p, opencodedefault.OwnershipPath(p))
 				}
-				paths = append(paths, openCodeSDDPluginPaths(targetDir)...)
+				paths = append(paths, openCodeSDDPluginPaths(adapter, targetDir)...)
 				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.
 				// These files are only written for multi-mode (SDDModeMulti), so we only
@@ -2350,15 +2404,38 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 	return paths
 }
 
+// effectiveOpenCodeSettingsPath selects the one OpenCode settings authority for
+// a component operation. Global sync/install uses the project-over-global
+// resolver; an explicit workspace scope remains workspace-managed.
+func effectiveOpenCodeSettingsPath(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
+	targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+	if adapter.Agent() != model.AgentOpenCode || scope == ScopeWorkspace {
+		return adapter.SettingsPath(targetDir)
+	}
+	return opencodeactivation.EffectiveSettingsPath(homeDir, workspaceDir)
+}
+
+// routingGuidanceOptions carries OpenCode's caller-resolved effective settings
+// authority into the routing-guidance adapter. Routing remains global because
+// OpenCode does not load workspace-scoped orchestrator guidance; other agents
+// retain their existing targetDir-derived routing path.
+func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter) agentguidance.RoutingOptions {
+	if adapter.Agent() != model.AgentOpenCode {
+		return agentguidance.RoutingOptions{}
+	}
+	return agentguidance.RoutingOptions{
+		SettingsPath: effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter),
+	}
+}
+
 func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {
 	return componentInjectionDirScoped(homeDir, workspaceDir, ScopeGlobal, adapter)
 }
 
 // routingGuidanceDir resolves the installation root routing guidance is
-// delivered under. Agents that deliver through the managed orchestrator prompt
-// only ever load the home-level settings document, so a workspace-scoped
-// install must still resolve them against the home directory — a workspace
-// .config tree is a scope those agents never read (issue #1825). Every other
+// delivered under. Orchestrator-prompt adapters retain their home-level adapter
+// root for legacy cleanup and ordinary delivery; OpenCode's effective settings
+// authority is supplied separately through routingGuidanceOptions. Every other
 // agent keeps the ordinary scoped resolution. The guidance step and the backup
 // contract both resolve through here so the snapshot cannot drift from what
 // the injector writes.
@@ -2500,13 +2577,16 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 	return paths
 }
 
-func openCodeSDDPluginPaths(targetDir string) []string {
+func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	// Legacy background-agents is removed during installation and therefore has
 	// an absence check. The retired reviewer plugin is part of the rollback
 	// snapshot but not post-apply verification because migration removes it.
-	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
+	// The plugin writer resolves the config directory through the adapter, so
+	// verification must ask the same resolver (#3219).
+	pluginsDir := filepath.Join(adapter.GlobalConfigDir(targetDir), "plugins")
+	paths := []string{filepath.Join(pluginsDir, "background-agents.ts")}
 	for _, name := range sdd.ManagedOpenCodePluginNames() {
-		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
+		paths = append(paths, filepath.Join(pluginsDir, name))
 	}
 	return paths
 }
@@ -2527,6 +2607,13 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	seenPath := make(map[string]struct{})
 	var uniqueFilePaths []string
 	for _, component := range input.Resolved.OrderedComponents {
+		if component == model.ComponentEngram && !input.Selection.HasComponent(model.ComponentEngram) &&
+			input.State != nil && input.State.engramVersionErr != nil {
+			// An auto-added engram that could not be installed wrote nothing
+			// (#3725); its health check below carries the warning and the
+			// install command, so its files are not required here.
+			continue
+		}
 		for _, path := range componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
 			if path == "" {
 				continue
@@ -2541,10 +2628,10 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 
 	for _, currentPath := range uniqueFilePaths {
 		path := currentPath
-		if isLegacyOpenCodeBackgroundAgentsPlugin(path) {
+		if isRetiredManagedPath(path) {
 			checks = append(checks, verify.Check{
 				ID:          "verify:file:" + path,
-				Description: "legacy OpenCode background agents plugin removed",
+				Description: "retired managed file removed",
 				Run: func(context.Context) error {
 					if _, err := os.Stat(path); err != nil {
 						if os.IsNotExist(err) {
@@ -2552,7 +2639,7 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 						}
 						return err
 					}
-					return fmt.Errorf("legacy OpenCode plugin still exists")
+					return fmt.Errorf("retired managed file still exists; rerun `gentle-ai sync` to finish retiring it")
 				},
 			})
 			continue
@@ -2570,22 +2657,33 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	}
 
 	if hasComponent(input.Resolved.OrderedComponents, model.ComponentEngram) {
-		checks = append(checks, engramHealthChecks(input.State)...)
+		checks = append(checks, engramHealthChecks(input.State, input.Resolved.Agents)...)
 	}
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
 
+// isRetiredManagedPath reports whether path names a managed file that install
+// and sync remove instead of write, so verification checks its absence.
+func isRetiredManagedPath(path string) bool {
+	return isLegacyOpenCodeBackgroundAgentsPlugin(path) || sdd.IsLegacyClaudeCommandPath(path)
+}
+
 func isLegacyOpenCodeBackgroundAgentsPlugin(path string) bool {
 	path = filepath.Clean(path)
 	pluginsDir := filepath.Dir(path)
 	opencodeDir := filepath.Dir(pluginsDir)
-	configDir := filepath.Dir(opencodeDir)
-	return filepath.Base(path) == "background-agents.ts" &&
-		filepath.Base(pluginsDir) == "plugins" &&
-		filepath.Base(opencodeDir) == "opencode" &&
-		filepath.Base(configDir) == ".config"
+	if filepath.Base(path) != "background-agents.ts" || filepath.Base(pluginsDir) != "plugins" || filepath.Base(opencodeDir) != "opencode" {
+		return false
+	}
+	if filepath.Base(filepath.Dir(opencodeDir)) == ".config" {
+		return true
+	}
+	// A home installed with XDG_CONFIG_HOME keeps its OpenCode config under
+	// $XDG_CONFIG_HOME/opencode instead of ~/.config/opencode (#3219).
+	xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	return filepath.IsAbs(xdgConfigHome) && opencodeDir == filepath.Join(filepath.Clean(xdgConfigHome), "opencode")
 }
 
 func hasComponent(components []model.ComponentID, target model.ComponentID) bool {
@@ -2614,7 +2712,7 @@ func containsAgent(agents []model.AgentID, target model.AgentID) bool {
 // not yet resolved) still routes through the verifyEngramVersion seam var
 // rather than calling engram.VerifyVersion() directly, so it stays fakeable
 // in tests.
-func engramHealthChecks(state *runtimeState) []verify.Check {
+func engramHealthChecks(state *runtimeState, agentIDs []model.AgentID) []verify.Check {
 	return []verify.Check{
 		{
 			ID:          "verify:engram:binary",
@@ -2622,7 +2720,7 @@ func engramHealthChecks(state *runtimeState) []verify.Check {
 			Soft:        true,
 			Run: func(context.Context) error {
 				if err := engram.VerifyInstalled(); err != nil {
-					return fmt.Errorf("%w\nIf engram was installed via `go install`, add it to PATH:\n  %s", err, engramPathGuidance(os.Getenv("SHELL")))
+					return fmt.Errorf("%w\nInstall it with `%s`.\nIf engram was installed via `go install`, add it to PATH:\n  %s", err, engramInstallCommand(agentIDs), engramPathGuidance(os.Getenv("SHELL")))
 				}
 				return nil
 			},
@@ -2644,6 +2742,12 @@ func engramHealthChecks(state *runtimeState) []verify.Check {
 			},
 		},
 	}
+}
+
+// engramInstallCommand names the install continuation for a missing engram
+// binary so the warning that reports it is actionable on its own.
+func engramInstallCommand(agentIDs []model.AgentID) string {
+	return fmt.Sprintf("gentle-ai install --agent %s --components engram", joinAgentIDs(agentIDs))
 }
 
 // antigravityCollisionCheck returns a soft verify check that warns the user

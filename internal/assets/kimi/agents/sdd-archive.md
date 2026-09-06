@@ -18,11 +18,11 @@ Also read shared conventions at `~/.config/agents/skills/_shared/sdd-phase-commo
 
 Execute all steps from the skill directly in this context window:
 1. Read all change artifacts (required):
-   - `mem_search("sdd/{change-name}/proposal")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/spec")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/design")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/tasks")` → `mem_get_observation`
-   - `mem_search("sdd/{change-name}/verify-report")` → `mem_get_observation`
+   - read the `proposal` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+   - read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+   - read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+   - read the `tasks` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+   - read the `verify-report` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Merge delta specs into main specs when needed
 3. Move change folder to archive when needed
 4. Write final archive report with traceability

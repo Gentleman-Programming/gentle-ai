@@ -96,6 +96,12 @@ func TestGeneratedOrchestratorInstructionsNameTheExecutingRuntime(t *testing.T) 
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			if expectedReviewLifecycleRuntime(agent.ID) {
+				if agent.ID == model.AgentPi {
+					if !strings.Contains(content, "`gentle_review` with {\"operation\":\"inspect\"}") || strings.Contains(content, "gentle-ai review status") {
+						t.Fatal("Pi orchestrator did not render its facade-only lifecycle")
+					}
+					return
+				}
 				assertReviewInstructionsBindRuntime(t, agent.ID, "orchestrator", content)
 				return
 			}
@@ -128,6 +134,12 @@ func TestAdvertisedRenderedReviewProtocolsBindRuntimeOnce(t *testing.T) {
 		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
+			if agent.ID == model.AgentPi {
+				if strings.Contains(content, "gentle-ai review status") {
+					t.Fatal("Pi rendered raw STATUS")
+				}
+				return
+			}
 			bindings := regexp.MustCompile(`--agent[= ]+[A-Za-z0-9._-]+`).FindAllString(content, -1)
 			if len(bindings) != 1 {
 				t.Fatalf("rendered review protocol carries %d raw runtime bindings, want exactly one: %v", len(bindings), bindings)

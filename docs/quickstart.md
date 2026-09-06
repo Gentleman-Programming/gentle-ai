@@ -6,7 +6,7 @@
 
 - Homebrew installed and available in PATH.
 - `git` available.
-- If Homebrew requires trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once for Gentle AI only.
+- If Homebrew requires trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once for Gentle AI™ only.
   - To install several tools from this tap, use `brew trust gentleman-programming/tap` instead. It trusts all current and future formulas, casks, and external commands published in the tap.
 
 ### Ubuntu/Debian (and derivatives like Linux Mint, Pop!\_OS)
@@ -51,33 +51,23 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Stable channel (`@latest`, currently v2.3.0)
+# Stable channel (`@latest`, currently v2.6.0)
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-
-# Opt-in prerelease (v2.4.0-rc.1)
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
 ```
 
-Both commands use the `/v2` module path. Go requires that suffix for major
+This command uses the `/v2` module path. Go requires that suffix for major
 version 2 and above.
 
 ## Version Policy
 
 Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
 
-The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` explicitly tracks this stable channel. The current opt-in prerelease is [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1). `@main` installs unreleased development changes.
+The current stable release is [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0). `@latest` explicitly tracks this stable channel. No prerelease is ahead of stable. `@main` installs unreleased development changes.
 
 ### Install the stable channel
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-gentle-ai version
-```
-
-### Install the opt-in prerelease
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
 gentle-ai version
 ```
 
@@ -157,9 +147,9 @@ When checks pass, installer reports:
 
 `You're ready. Run 'claude' or 'opencode' and start building.`
 
-If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
+If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
 
-For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `pi-subagents-j0k3r`, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw`.
+For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, and `pi-btw`.
 
 ## Hardening recommendations for users
 

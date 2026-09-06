@@ -28,7 +28,7 @@ func secureOpenLocalStoreLock(path string) (*os.File, error) {
 	}
 	defer unix.Close(parentFD)
 
-	fd, err := unix.Openat(parentFD, filepath.Base(absPath), unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
+	fd, err := secureOpenLocalStoreLockLeaf(parentFD, filepath.Base(absPath), unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, err
 	}

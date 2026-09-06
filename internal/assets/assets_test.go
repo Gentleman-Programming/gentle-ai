@@ -226,17 +226,17 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/output-style-neutral.md",
 		"claude/persona-gentleman.md",
 		"claude/sdd-orchestrator.md",
-		"claude/commands/sdd-apply.md",
-		"claude/commands/sdd-archive.md",
-		"claude/commands/sdd-continue.md",
-		"claude/commands/sdd-explore.md",
-		"claude/commands/sdd-ff.md",
-		"claude/commands/sdd-init.md",
-		"claude/commands/sdd-new.md",
-		"claude/commands/sdd-onboard.md",
-		"claude/commands/sdd-research.md",
-		"claude/commands/sdd-status.md",
-		"claude/commands/sdd-verify.md",
+		"claude/commands/gentle-sdd-apply.md",
+		"claude/commands/gentle-sdd-archive.md",
+		"claude/commands/gentle-sdd-continue.md",
+		"claude/commands/gentle-sdd-explore.md",
+		"claude/commands/gentle-sdd-ff.md",
+		"claude/commands/gentle-sdd-init.md",
+		"claude/commands/gentle-sdd-new.md",
+		"claude/commands/gentle-sdd-onboard.md",
+		"claude/commands/gentle-sdd-research.md",
+		"claude/commands/gentle-sdd-status.md",
+		"claude/commands/gentle-sdd-verify.md",
 		"claude/agents/sdd-init.md",
 		"claude/agents/sdd-onboard.md",
 		"claude/agents/sdd-research.md",
@@ -516,7 +516,7 @@ func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
 func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 	const verifyRoute = "After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`."
 	for _, path := range []string{
-		"claude/commands/sdd-verify.md",
+		"claude/commands/gentle-sdd-verify.md",
 		"opencode/commands/sdd-verify.md",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -528,7 +528,7 @@ func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 
 	const archiveRoute = "Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`."
 	for _, path := range []string{
-		"claude/commands/sdd-archive.md",
+		"claude/commands/gentle-sdd-archive.md",
 		"opencode/commands/sdd-archive.md",
 		"skills/sdd-archive/SKILL.md",
 	} {
@@ -558,7 +558,7 @@ func TestSDDVerifyAdmissionPrecedesPersistence(t *testing.T) {
 	if count := strings.Count(MustRead("skills/sdd-verify/SKILL.md"), "sdd-verify-validate"); count < 2 {
 		t.Fatalf("both sdd-verify model sections require admission, got %d occurrences", count)
 	}
-	for _, path := range []string{"claude/agents/sdd-verify.md", "claude/commands/sdd-verify.md", "cursor/agents/sdd-verify.md", "kimi/agents/sdd-verify.md", "kiro/agents/sdd-verify.md"} {
+	for _, path := range []string{"claude/agents/sdd-verify.md", "claude/commands/gentle-sdd-verify.md", "cursor/agents/sdd-verify.md", "kimi/agents/sdd-verify.md", "kiro/agents/sdd-verify.md"} {
 		content := MustRead(path)
 		if skill, save := strings.Index(content, "sdd-verify/SKILL.md"), strings.LastIndex(content, "mem_save"); skill < 0 || save < 0 || skill > save {
 			t.Fatalf("%s must load the shared verify contract before persistence", path)
@@ -1107,7 +1107,7 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 		"### SDD Entry Routing (MANDATORY)",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"Only launch `sdd-apply` when all are true",
-		"If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not implement",
+		"If any dependency is missing, STOP and propose `/gentle-sdd-new` or `/gentle-sdd-ff`; do not implement",
 		"or `hybrid` when Engram is callable",
 		"Both -> `hybrid`",
 	} {
@@ -1203,7 +1203,7 @@ func TestSDDOrchestratorAssetsDefaultToAutomatic(t *testing.T) {
 func TestSDDFFCommandsHonorInteractiveMode(t *testing.T) {
 	for _, path := range []string{
 		"opencode/commands/sdd-ff.md",
-		"claude/commands/sdd-ff.md",
+		"claude/commands/gentle-sdd-ff.md",
 	} {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
@@ -1874,7 +1874,8 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"schemaVersion: 2",
 		"gentle-ai.sdd-status/v2",
 		"changeName: <change-name-or-null>",
-		"artifactStore: openspec | engram | none",
+		// #3636: hybrid reaches the public v2 document; kept in lockstep with statusV2ArtifactStore.
+		"artifactStore: openspec | engram | hybrid | none",
 		"planningHome:",
 		"mode: repo-local",
 		"path: <absolute path to openspec>",
@@ -1994,13 +1995,10 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 			if !ok || permissions["question"] != "allow" {
 				t.Fatalf("%q gentle-orchestrator must allow question permission", assetPath)
 			}
-			tools, ok := orchestrator["tools"].(map[string]any)
-			if !ok {
-				t.Fatalf("%q gentle-orchestrator missing tools", assetPath)
-			}
-			replacedTools, ok := tools["__replace__"].(map[string]any)
-			if !ok || replacedTools["question"] != true {
-				t.Fatalf("%q gentle-orchestrator must enable question tool", assetPath)
+			for name, raw := range agents {
+				if _, exists := raw.(map[string]any)["tools"]; exists {
+					t.Fatalf("%q agent %q emits deprecated tools", assetPath, name)
+				}
 			}
 
 			for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
@@ -2190,6 +2188,8 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 }
 
 func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
+	const causalFailureDisclosure = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure."
+
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
@@ -2210,14 +2210,19 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 		"gentle-ai sdd-attempt settle",
 		"state: proceed",
 		"opaque `token`",
-		"successor-lineage",
-		"the bound lineage remains its own successor",
 		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
+		// #3696: the settle invocation is spelled out with every flag the CLI
+		// requires; an elided `...` sent orchestrators into a flag-by-flag
+		// refusal loop, and `--successor-lineage` never existed on settle.
+		"--outcome <passed|failed>", "--evidence-revision <sha256>", "--diagnosis \"<proven-diagnosis>\"",
+		"--harness-disposition <reused|invalidated>", "--cleanup-evidence \"<evidence>\"", "--process-evidence \"<evidence>\"",
+		"--outcome interrupted", "omit `--evidence-revision`", "--remediates-evidence-revision <sha256>",
 		"status|begin|finish|reset",
 		"never automatic",
+		causalFailureDisclosure,
 	}
 	for _, path := range paths {
-		content := MustRead(path)
+		content := resolveSharedOrchestratorSections(MustRead(path))
 		if path == "claude/sdd-orchestrator.md" {
 			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
 		}
@@ -2226,6 +2231,22 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			if !strings.Contains(section, want) {
 				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
 			}
+		}
+		if strings.Contains(section, "--successor-lineage") {
+			t.Fatalf("%s names --successor-lineage, which gentle-ai sdd-attempt settle does not define", path)
+		}
+		last := -1
+		for _, label := range []string{
+			"**Primary failure:**",
+			"**Verification consequence:**",
+			"**Attempt settlement:**",
+			"**Secondary governance block:**",
+		} {
+			index := strings.Index(section, label)
+			if index < 0 || index <= last {
+				t.Fatalf("%s must order causal failure disclosure label %q after the preceding label", path, label)
+			}
+			last = index
 		}
 		for _, forbidden := range []string{
 			"gentle-ai.sdd-attempt-ledger/v1",
@@ -2429,7 +2450,7 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"cursor/agents/sdd-archive.md",
 		"kiro/agents/sdd-archive.md",
 		"kimi/agents/sdd-archive.md",
-		"claude/commands/sdd-archive.md",
+		"claude/commands/gentle-sdd-archive.md",
 		"opencode/commands/sdd-archive.md",
 	} {
 		content := MustRead(path)
@@ -2862,4 +2883,65 @@ func isolatedGitEnvironment() []string {
 		}
 	}
 	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull, "GIT_CONFIG_COUNT=0")
+}
+
+// #3516: OpenCode can hand the plugin an empty or filesystem-root cwd, and the
+// Go side refuses `--cwd /`. The plugin has no JS/TS test harness, so this
+// pins the guard in its source: a root or empty cwd never renders as a
+// `--cwd` value; the continuation falls back to the `<repo>` placeholder and
+// the summary says so.
+func TestSDDTaskResultArtifactsPluginGuardsFilesystemRootCwd(t *testing.T) {
+	source, err := Read("opencode/plugins/sdd-task-result-artifacts.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`function isFilesystemRoot`,
+		`function continuationCwd`,
+		`const cwd = continuationCwd(worktree, directory)`,
+		`--cwd <repo> --json`,
+		`replace <repo> with the repository root`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("SDD task plugin missing root-cwd guard %q", want)
+		}
+	}
+	if strings.Contains(source, "const cwd = worktree || directory") {
+		t.Fatal("SDD task plugin still renders whatever cwd OpenCode hands over")
+	}
+}
+
+// #2212: the spec phase writes every capability under the change folder.
+// The shipped skills used to send new capabilities to openspec/specs/, a
+// root the dispatcher never reads, so the actor could follow the skill and
+// still get nextRecommended: spec forever.
+func TestSDDSpecAndProposeNameTheChangeLocalSpecLocation(t *testing.T) {
+	spec := MustRead("skills/sdd-spec/SKILL.md")
+	for _, required := range []string{
+		"This becomes a NEW FULL spec: openspec/changes/{change-name}/specs/<capability-name>/spec.md",
+		"never write to `openspec/specs/` during the spec phase",
+		"sdd-archive promotes it to `openspec/specs/<capability-name>/spec.md`",
+		"create a FULL spec (not a delta) at `openspec/changes/{change-name}/specs/{domain}/spec.md`",
+	} {
+		if !strings.Contains(spec, required) {
+			t.Fatalf("skills/sdd-spec/SKILL.md missing change-local spec location wording %q", required)
+		}
+	}
+	if strings.Contains(spec, "This becomes a NEW full spec: openspec/specs/<capability-name>/spec.md") {
+		t.Fatalf("skills/sdd-spec/SKILL.md still sends new capabilities to the canonical openspec/specs/ root")
+	}
+
+	propose := MustRead("skills/sdd-propose/SKILL.md")
+	required := "gets a full spec at `openspec/changes/{change-name}/specs/<name>/spec.md` during the spec phase and becomes `openspec/specs/<name>/spec.md` at archive"
+	if got := strings.Count(propose, required); got != 2 {
+		t.Fatalf("skills/sdd-propose/SKILL.md contains %d copies of %q, want 2 (template comment and checklist)", got, required)
+	}
+	for _, forbidden := range []string{
+		"Each becomes a new `openspec/specs/<name>/spec.md`",
+		"each will become `openspec/specs/<name>/spec.md`",
+	} {
+		if strings.Contains(propose, forbidden) {
+			t.Fatalf("skills/sdd-propose/SKILL.md still states the spec-phase location as the archive outcome: %q", forbidden)
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -56,10 +57,15 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "8d5e1a8491db1a5a2f6329e8c1d5cd210dd175e0525ff4d51fa914351d2fcf08",
 		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
-		"fixtures/status.fixture.json":       "846377e06df2cae3587c4258ea75fe1ec1b51f08d01f1d498378c3bf13e93921",
-		"schemas/capabilities.schema.json":   "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
-		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "8f4de69091323f22ce6e7c003c344adada92c76ceb4e938347b4d2027bd70f3a",
+		// issue #3922 / #4199 / gentle-pi#543: the native-git reviewer_result
+		// collect input no longer inlines changed_path_manifest -- it is
+		// already committed to by artifact_subject.changed_path_manifest_sha256
+		// -- so this fixture legitimately dropped that array. Deliberate, not
+		// drift.
+		"fixtures/status.fixture.json":     "3fc2539d5bcaa8dc3ed650ba7f5e8915856a3d9f8caf1cfcb1b0354ecacbe0f8",
+		"schemas/capabilities.schema.json": "df1d1d36bfb8b7816d3eb1c44c1350b4a36e27ac321922963add9dd25ed5a1a2",
+		"schemas/consent.schema.json":      "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
+		"schemas/status.schema.json":       "3b257b417270744061dc943a97537e253e36e34de4591b0400e3c38ea3efde80",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -92,7 +98,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// the emitter legitimately publishes once the relay handshake is
 		// declared. Deliberate, not drift.
 		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
-		"schemas/status.schema.json":     "8f4de69091323f22ce6e7c003c344adada92c76ceb4e938347b4d2027bd70f3a",
+		"schemas/status.schema.json":     "3b257b417270744061dc943a97537e253e36e34de4591b0400e3c38ea3efde80",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -123,7 +129,57 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
-		"schemas/status-v5.schema.json": "dd543b0231e412d384f0c955f2d036f9ad17e754ca3c48a2578c9cbb86ce298a",
+		//
+		// issue #3922 / #4199 / gentle-pi#543: the review.capture-result `then`
+		// clause no longer requires changed_path_manifest -- it stays an
+		// allowed property, but the native-git transport no longer needs to
+		// inline it since artifact_subject.changed_path_manifest_sha256 already
+		// commits to it. Deliberate, not drift.
+		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
+		"schemas/status-v5.schema.json": "8f6d05bd4ed64abc765bd7ce9ae8bed0470448cd260fc0a94dc5929b88f42a18",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+// TestReviewProviderArtifactV23StartContractsArePinned pins the artifacts the
+// start/v4 continuation work first published (issue #3894): the start-v4
+// envelope with its provider-issued reviewing STATUS re-entry, and the v2.3
+// capabilities advertisement that names it.
+func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
+		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
+		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
+		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"schemas/capabilities-v2.4.schema.json":            "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
+		"schemas/intended-untracked-selection.schema.json": "6f300c4cc10ab669fa3ef8cc608829df623a453cd5e6629958786e0724430259",
+		"schemas/status-v6.schema.json":                    "0aa731e4d3961d678b4e51a6be0af93f2de82a4a326c3366e2fbe6a3e687236c",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -145,8 +201,14 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/gate-result.schema.json":            "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		"schemas/last-event-closure.schema.json":     "612531204afa5941e4927c38e868c720a4519fe4b9a5a4ffd29f021dc053001d",
+		"schemas/gate-result.schema.json":        "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
+		"schemas/last-event-closure.schema.json": "9059651e39278f6932929392f4dacc3911d65fe3769171e2401b87df55da9030",
+		// issue #3894: start/v4 publishes the reviewing status continuation, so
+		// transition-execution gains the start_status_execution definition it
+		// references. Deliberate, not drift.
+		// issue #3932: start_status_execution carries the opaque
+		// repository-context row, so a foreign process cwd fails closed.
+		"schemas/transition-execution.schema.json":   "3743a16d915f5d95be047af1f0454f342aa4c3eb7bcb0d8991f81ae3b89873c1",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
@@ -159,6 +221,149 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
 		}
 	}
+}
+
+// TestReviewProviderArtifactStatusV7ContractsArePinned pins the schemas issue
+// #4040's fix first published: status/v7, which publishes
+// eligible_untracked_inventory unconditionally at the top level, and
+// capabilities-v2.5, which advertises status/v7 (design decision 5).
+func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		// issue #3928: the root action enum gained "collect" and "execute", the
+		// v7 envelope's projection of a live transaction whose next_transition
+		// is mandatory. Deliberate, not drift.
+		//
+		// issues #3299, #4170: a stale managed-asset digest now fails STATUS's
+		// own preflight, before a START is ever offered, as a typed
+		// managed_assets_outdated "stop" that carries the exact
+		// candidate-preserving `gentle-ai sync` continuation (see
+		// failure.schema.json#/$defs/managed_assets_continuation). Deliberate,
+		// not drift.
+		// issue #3442: next_transition gained a third oneOf branch for the
+		// unachievable_lens_slot stop, carrying one unachievable_lens_slots
+		// entry per declared slot (lens, subject_hash, reason, and the exact
+		// review.capture-unachievable --withdraw=true command), so a
+		// restarted orchestrator that lost the pre-stop collect offer can
+		// still recover the binding its withdraw needs. Deliberate, not drift.
+		"schemas/status-v7.schema.json":         "c165a2309adff3131dd1d19e93408ade5cf45b27f0076304e423ca604e1f436c",
+		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+// TestManagedAssetsContinuationSchemaRuleIsExercised is the RED-first proof
+// for the corroborated review finding on #3299/#4170: failure.schema.json's
+// if/then rule tying `continuation` to `code: managed_assets_outdated` (and
+// forbidding it on every other code), and status-v7.schema.json's dedicated
+// oneOf branch for the same reason code, were published without ever
+// validating a real produced envelope against either rule in either
+// direction. It exercises both published schemas against three shapes each:
+// the real envelope a stale managed-asset digest produces (must pass), the
+// same envelope with `continuation` stripped (must fail the rule), and the
+// same envelope with `continuation` attached to an unrelated code/reason
+// (must fail the rule).
+func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/schema-rule.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	// --- failure.schema.json, exercised against the real START preflight failure ---
+	var startOutput bytes.Buffer
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+	}), &startOutput); err == nil {
+		t.Fatalf("stale managed assets START succeeded: %s", startOutput.String())
+	}
+	failureSchema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
+
+	var failureDoc map[string]any
+	if err := json.Unmarshal(startOutput.Bytes(), &failureDoc); err != nil {
+		t.Fatal(err)
+	}
+	if failureDoc["code"] != "managed_assets_outdated" || failureDoc["continuation"] == nil {
+		t.Fatalf("baseline stale managed assets failure = %#v", failureDoc)
+	}
+
+	// (a) the real envelope validates.
+	validatePublishedReviewSchema(t, failureSchema, startOutput.Bytes())
+
+	// (b) the same envelope with continuation removed must fail: the code
+	// still claims managed_assets_outdated, and the rule requires it.
+	withoutContinuation := decodeJSONObjectCopy(t, startOutput.Bytes())
+	delete(withoutContinuation, "continuation")
+	if err := failureSchema.Validate(withoutContinuation); err == nil {
+		t.Fatal("failure.schema.json accepted a managed_assets_outdated code with no continuation")
+	}
+
+	// (c) the same continuation attached to an unrelated code must fail: the
+	// rule's "else" branch forbids continuation on every other code.
+	unrelatedCode := decodeJSONObjectCopy(t, startOutput.Bytes())
+	unrelatedCode["code"] = "invalid_request"
+	if err := failureSchema.Validate(unrelatedCode); err == nil {
+		t.Fatal("failure.schema.json accepted a continuation on an unrelated failure code")
+	}
+
+	// --- status-v7.schema.json, exercised against the real STATUS stop transition ---
+	var stopOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &stopOutput); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, stopOutput.String())
+	}
+	statusV7Schema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+
+	statusDoc := decodeJSONObjectCopy(t, stopOutput.Bytes())
+	nextTransition, ok := statusDoc["next_transition"].(map[string]any)
+	if !ok || nextTransition["kind"] != "stop" || nextTransition["reason_code"] != "managed_assets_outdated" || nextTransition["continuation"] == nil {
+		t.Fatalf("baseline stale managed assets STATUS next_transition = %#v", statusDoc["next_transition"])
+	}
+
+	// (a) the real envelope validates.
+	validatePublishedReviewSchema(t, statusV7Schema, stopOutput.Bytes())
+
+	// (b) the same stop with continuation removed must fail: nothing else in
+	// the oneOf admits a managed_assets_outdated stop without it.
+	withoutStopContinuation := decodeJSONObjectCopy(t, stopOutput.Bytes())
+	withoutTransition := decodeJSONObjectCopy(t, stopOutput.Bytes())["next_transition"].(map[string]any)
+	delete(withoutTransition, "continuation")
+	withoutStopContinuation["next_transition"] = withoutTransition
+	if err := statusV7Schema.Validate(withoutStopContinuation); err == nil {
+		t.Fatal("status-v7.schema.json accepted a managed_assets_outdated stop with no continuation")
+	}
+
+	// (c) the same continuation attached to an unrelated reason code (still a
+	// stop, e.g. rdd_disabled) must fail both oneOf branches: the generic one
+	// forbids the extra continuation property, and the dedicated one requires
+	// reason_code const managed_assets_outdated.
+	unrelatedReason := decodeJSONObjectCopy(t, stopOutput.Bytes())
+	unrelatedTransition := decodeJSONObjectCopy(t, stopOutput.Bytes())["next_transition"].(map[string]any)
+	unrelatedTransition["reason_code"] = "rdd_disabled"
+	unrelatedReason["next_transition"] = unrelatedTransition
+	if err := statusV7Schema.Validate(unrelatedReason); err == nil {
+		t.Fatal("status-v7.schema.json accepted a continuation attached to an unrelated stop reason code")
+	}
+}
+
+// decodeJSONObjectCopy decodes payload into a fresh map[string]any, so a
+// caller can mutate one field without aliasing any other test's copy of the
+// same bytes.
+func decodeJSONObjectCopy(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
 }
 
 func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
@@ -259,13 +464,20 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	}{
 		{name: "artifact-subject.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/artifact-subject.schema.json"},
 		{name: "admitted-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/admitted-result.schema.json"},
-		{name: "start.schema.json", id: ReviewIntegrationStartSchemaID},
+		{name: "start.schema.json", id: ReviewIntegrationStartSchemaIDV3},
+		{name: "start-v4.schema.json", id: ReviewIntegrationStartSchemaIDV4},
 		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaIDV3},
 		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaIDV4},
 		{name: "status-v5.schema.json", id: ReviewIntegrationStatusSchemaIDV5},
+		{name: "status-v6.schema.json", id: ReviewIntegrationStatusSchemaIDV6},
+		{name: "status-v7.schema.json", id: ReviewIntegrationStatusSchemaIDV7},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
+		{name: "capabilities-v2.3.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV23},
+		{name: "capabilities-v2.4.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV24},
+		{name: "capabilities-v2.5.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV25},
+		{name: "intended-untracked-selection.schema.json", id: reviewIntendedUntrackedSelectionSchema},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
@@ -315,6 +527,21 @@ func TestReviewProviderArtifactV2FixturesValidate(t *testing.T) {
 	}
 	if err := start.Validate(); err != nil {
 		t.Fatalf("v2 START fixture: %v", err)
+	}
+	startV4Payload, err := os.ReadFile(filepath.Join(root, "start-v4.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var startV4 ReviewIntegrationStartResult
+	if err := json.Unmarshal(startV4Payload, &startV4); err != nil {
+		t.Fatal(err)
+	}
+	if err := startV4.Validate(); err != nil {
+		t.Fatalf("v4 START fixture: %v", err)
+	}
+	if startV4.NextTransition == nil || startV4.NextTransition.Execute == nil ||
+		startV4.NextTransition.Execute.Operation != "review.status" {
+		t.Fatalf("v4 START fixture continuation = %#v", startV4.NextTransition)
 	}
 	statusPayload, err := os.ReadFile(filepath.Join(root, "status.fixture.json"))
 	if err != nil {

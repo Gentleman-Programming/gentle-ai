@@ -119,5 +119,5 @@ func (b *battery) runAdvisoryLane() {
 		return
 	}
 	b.pass(advisoryLane, "WARNING + SUGGESTION admitted", "both non-blocking findings closed on the final capture; no correction or validator route opened")
-	b.burnApproved(advisoryLane, "final capture and burned", repo, "claude-code", nil, capture)
+	b.acknowledgeApproved(advisoryLane, "final capture acknowledged and burned", repo, "claude-code", nil, capture)
 }

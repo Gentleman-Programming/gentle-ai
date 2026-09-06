@@ -17,6 +17,40 @@ type runtimeBeginAdmissionResult struct {
 	Snapshot   reviewtransaction.Snapshot
 }
 
+// runtimeRescopeSuccessorIntendedUntracked recovers only the exact selection
+// whose candidate opened a fresh rescope successor. #4195: when the rescope
+// itself declared a fresh selection, THAT is the inventory-validated scope
+// that produced InitialCandidate* and must be inherited; otherwise the
+// successor has no attempt of its own yet, so its predecessor's recorded
+// selection is the sole inventory-validated scope that can reproduce it.
+func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, bool) {
+	if status.Objective == nil || status.ActiveAttempt != nil || status.LastRescope == nil ||
+		status.LastRescope.ObjectiveID != status.Objective.ID || runtimeObjectiveHasRecordedAttempt(status) ||
+		len(status.Attempts) == 0 {
+		return nil, false
+	}
+	if status.LastRescope.IntendedUntracked != nil {
+		return slices.Clone(*status.LastRescope.IntendedUntracked), true
+	}
+	predecessor := status.Attempts[len(status.Attempts)-1]
+	if predecessor.ObjectiveID != status.LastRescope.PreviousObjectiveID ||
+		predecessor.ObjectiveGeneration != status.LastRescope.PreviousGeneration ||
+		predecessor.Outcome == AttemptRunning {
+		return nil, false
+	}
+	return slices.Clone(predecessor.IntendedUntracked), true
+}
+
+func runtimeRescopeSuccessorRequest(status RuntimeStatus, request BeginAttemptRequest, inherit bool) BeginAttemptRequest {
+	if !inherit {
+		return request
+	}
+	if intended, ok := runtimeRescopeSuccessorIntendedUntracked(status); ok {
+		request.IntendedUntracked = intended
+	}
+	return request
+}
+
 // runtimeBeginAdmission is the ONE evaluator of every precondition Begin must
 // satisfy before it can record an attempt, ledger-side and repository-side
 // alike. It mutates nothing: it reads the replayed status the caller hands it
@@ -39,7 +73,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
 	if status.ActiveAttempt != nil {
-		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		return runtimeBeginAdmissionResult{}, store.runtimeAttemptActiveRefusal(*status.ActiveAttempt)
 	}
 	// A passed objective terminates its own scope, not the change. When the
 	// request names a distinct work unit, the ordinary continuation is the
@@ -72,7 +106,18 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 			return runtimeBeginAdmissionResult{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 		}
-		snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, last.IntendedUntracked)
+		// #3842: the terminal capture replays the RECORDED selection, which
+		// the user may have legitimately committed since the last settle, so
+		// reconcile it against the current index first — a committed path then
+		// replays as zero drift or as ordinary candidate drift, never as a
+		// capture failure. The request-vs-recorded comparison below
+		// deliberately stays against the recorded list: what the caller must
+		// re-request is the scope the ledger holds, exactly as acquired.
+		var intended []string
+		intended, err = runtimeReplayedIntendedUntracked(ctx, store.Repo, last.IntendedUntracked)
+		if err == nil {
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
+		}
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
@@ -144,17 +189,22 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 	// attempt or an exhausted budget does not make the chain owe less, and a
 	// surface that goes quiet under those states would disagree with acquire
 	// exactly when the operator is looking hardest.
-	status.SettleObligation = runtimeSettleObligation(status)
+	status.SettleObligation, status.SuppressedObligation = runtimeSettleObligation(status)
 
+	inheritIntendedUntracked := request.IntendedUntracked == nil
 	normalized, err := normalizeBeginAttemptRequest(request)
 	if err != nil {
 		status.BlockedReason = CompactBlockInvalidContinuation
 		status.BlockedExit = err.Error()
 		return status, nil
 	}
+	normalized = runtimeRescopeSuccessorRequest(status, normalized, inheritIntendedUntracked)
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
-	}); terminal && result.State == CompactStateBlocked {
+	}); terminal && result.State != CompactStateProceed {
+		// A complete verdict has no block reason, but its exit (the successor
+		// acquire, #3884) rides BlockedExit rather than a new field, so the
+		// read-only surface names the same continuation acquire does.
 		status.BlockedReason, status.BlockedExit = result.Reason, result.Exit
 		// An exhausted budget is a decision, so it asks instead of ending the
 		// conversation. The grant is the reset the ledger already admits at

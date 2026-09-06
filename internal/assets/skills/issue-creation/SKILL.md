@@ -4,35 +4,41 @@ description: "Trigger: issue creation, bug reports, feature requests, or issue a
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.3"
+  version: "1.4"
 ---
 
 # Issue Creation
 
 ## Activation Contract
 
-Use this skill when drafting, creating, commenting on, triaging, or approving a GitHub issue. Repository policy and its selected YAML Issue Form remain authoritative.
+Use this skill for drafting, creating, commenting on, triaging, or approving GitHub issues. Repository policy and selected YAML Issue Form are authoritative.
 
 ## Hard Rules
 
-- Prefer the fast path: reuse verified current-session facts while they remain current; discover only missing or stale facts.
+- Reuse verified current-session facts; discover only missing or stale facts.
 - Before any needed target policy read or write, resolve the exact target as `[HOST/]OWNER/REPO`. Never assume the current repository.
 - YAML Issue Forms are the single format authority. Never use Markdown, a blank body, an alternate publisher, or a browser route as a fallback.
 - Complete one open-and-closed duplicate search before a write. Reuse that result while it remains current.
-- Never invent required facts, selections, first-person affirmations, labels, approval, or policy. Ask for the smallest missing fact.
-- Use only labels declared by the selected form, discovered to exist, and permitted for the actor. Never add `status:approved`.
-- Keep the final issue or comment body and all body-bearing candidate and read-back data in private temporary files outside repositories. Do not print the contents of any protected file.
+- Never invent facts, selections, affirmations, labels, approval, or policy; ask for the smallest missing fact.
+- Create-time labels are limited to labels declared by the selected form, discovered to exist, and permitted for the actor.
+- Before ANY post-publication workflow mutation, read `references/delegated-workflow-actions.md` completely and follow it. It is normative, not optional background.
+- Require current direct human instruction: exact `HOST`, `REPO=OWNER/REPO`, issue/PR number/action.
+- Protected policy labels are `status:approved`, `size:exception`, and any repository-defined gate-override/authorization label. For `status:approved`, require target-host evidence binding the direct instructing principal to approval authority as a repository maintainer or repository-authorized approver.
+- Adding or removing a protected label requires current direct target-host-verified maintainer/authorized-approver instruction for exact add/remove plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`; `TRIAGE` never suffices. `size:exception` also needs a documented rationale; unknown gate labels stop. Verify target-host capability; for ordinary generic actions only, `TRIAGE` permits only GitHub-granted existing-label and issue/PR close/reopen actions—not push/merge/label creation/deletion/administration.
+- Reject inferred/model-authored authority; atomic `status:approved`, exactly one attempt/readback; fail closed.
+- Keep all body-bearing data in private temporary files outside repositories. Do not print the contents of any protected file.
 - Make one create or comment attempt with no blind retry. Classify it exactly `confirmed | no_write | unknown`; `unknown` stops every later mutation and retry.
 
 ## Decision Gates
 
 | Path | Use when | Action |
 | --- | --- | --- |
-| Fast path | The current session has the exact target and form, reviewed answers and title, current labels and policy, and a completed classifiable duplicate search | Reuse them and enter the common publication flow. |
-| Minimal discovery | Any required fact is missing, stale, ambiguous, or belongs to another target | Resolve the target first, then fetch only the missing facts and stop if any remain unknown. |
-| Conforming equivalent | A relevant candidate, read from the target host, covers the same behavior and its body satisfies the selected form's controls and required answers | Comment there instead of creating a duplicate. |
+| Fast path | The current session has the exact target and form, reviewed answers and title, current labels and policy, and a completed classifiable duplicate search | Reuse them. |
+| Minimal discovery | Any required fact is missing, stale, ambiguous, or belongs to another target | Resolve target, fetch only missing facts, and stop if any are unknown. |
+| Conforming equivalent | A candidate read from the target host covers behavior and satisfies selected-form controls and required answers | Comment there instead of creating a duplicate. |
 | Nonconforming concrete issue | A relevant candidate, read from the target host, covers the behavior but its body lacks required form information | Request that its author repair it in place; never auto-rewrite or approve it. |
 | Question or triage | Policy routes questions to enabled Discussions, contact links, or review gates | Follow that route; otherwise request the smallest missing decision. |
+| Post-publication workflow mutation | A current direct human instruction names one exact issue or PR action and exact target | Follow the delegated workflow action path; otherwise stop without writing. |
 
 ## Execution Steps
 
@@ -52,7 +58,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
    | `checkboxes` | Visible label, each option, and individually required status |
 
    Treat `dropdown.attributes.multiple: true` as multi-select; otherwise treat it as single-select. Preserve labels, emojis, option text, and values. Stop on malformed, unsupported, missing, or ambiguous required structure.
-3. Create an owner-only temporary directory and `DISCOVERY_FILE`, `BODY_FILE`, plus `READBACK_FILE` in it (`0700`/`0600`, or strict Windows ACL equivalents), and install cleanup before writing body-bearing data. Clean up all three files on every stop, signal, failure, `confirmed`, `no_write`, and `unknown` path.
+3. Create an owner-only temporary directory and `DISCOVERY_FILE`, `BODY_FILE`, `READBACK_FILE`, `PRE_READ_FILE`, plus `POST_READ_FILE` in it (`0700`/`0600`, or strict Windows ACL equivalents), and install cleanup before writing body-bearing data. Clean up all five files on every stop, signal, failure, `confirmed`, `no_write`, and `unknown` path.
 4. Complete one duplicate search covering open and closed issues, unless a matching current-session result is still valid:
 
    ```bash
@@ -92,7 +98,7 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 8. Capture the returned target-host issue or comment identity and read it back from that host into `READBACK_FILE`. Redirect stdout from both body-bearing read-back commands:
 
    ```bash
-   gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,labels >"$READBACK_FILE"
+   gh issue view "$NUMBER" --repo "$TARGET" --json number,url,title,body,state,labels >"$READBACK_FILE"
    gh api --hostname "$HOST" "repos/$REPO/issues/comments/$COMMENT_ID" >"$READBACK_FILE"
    ```
 
@@ -104,4 +110,4 @@ Use this skill when drafting, creating, commenting on, triaging, or approving a 
 
 ## Output Contract
 
-Return the exact target, selected YAML form, duplicate decision, mutation kind, stable identity and read-back labels when confirmed, and exactly one of `confirmed | no_write | unknown`. When stopping before mutation, name the missing fact and state that no write occurred.
+Return the exact target, selected YAML form when creating, duplicate decision when applicable, direct instruction and capability verification for a workflow action, mutation kind, stable identity and read-back labels/state when confirmed, and exactly one of `confirmed | no_write | unknown`. When stopping before mutation, name the missing fact and state that no write occurred.

@@ -56,6 +56,11 @@
 ./internal/reviewtransaction TestAcquireLocalStoreLockRejectsNonRegularUnixObject              # non-regular-object errnos differ on Darwin
 ./internal/reviewtransaction TestBusyStoreLockProbePreservesExistingUnixInodeAndMetadata       # inode identity of a live lock under Darwin stat semantics
 
+# --- #4276: local store lock leaf first-create ENOENT -------------------------
+./internal/reviewtransaction TestSecureOpenLocalStoreLockLeafRetriesENOENT
+./internal/reviewtransaction TestSecureOpenLocalStoreLockLeafConcurrentFirstCreate
+./internal/reviewtransaction TestSecureOpenLocalStoreLockLeafConcurrentPersistentENOENT
+
 # --- #1804: reviewer-result publication on macOS ExFAT ------------------------
 # These are //go:build darwin — no CI lane has EVER executed them. On ExFAT the
 # exclusive-rename primitive is missing (ENOTSUP) and publication falls back to
