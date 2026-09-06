@@ -997,12 +997,27 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 					return nil, fmt.Errorf("validate preserved OpenCode background policy: %w", err)
 				}
 			}
-			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent, renderOptions)
+			prompt := renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent, renderOptions)
+			if strings.Count(prompt, "### SDD Entry Routing (MANDATORY)") == 1 && strings.Count(prompt, sddSessionPreflightInit) == 1 {
+				prompt, err = projectSDDSessionPreflight(filemerge.InjectMarkdownSection(prompt, "sdd-session-preflight-migration", ""), "### SDD Entry Routing (MANDATORY)")
+				if err != nil {
+					return nil, fmt.Errorf("project preserved OpenCode session preflight: %w", err)
+				}
+			}
+			orchestratorMap["prompt"] = prompt
 		} else {
-			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
+			orchestratorPrompt, err := composeOpenCodeOrchestratorPrompt(agent, renderOptions)
+			if err != nil {
+				return nil, err
+			}
+			orchestratorMap["prompt"] = orchestratorPrompt
 		}
 	} else {
-		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
+		orchestratorPrompt, err := composeOpenCodeOrchestratorPrompt(agent, renderOptions)
+		if err != nil {
+			return nil, err
+		}
+		orchestratorMap["prompt"] = orchestratorPrompt
 	}
 
 	// Carry the organic routing guidance across the wholesale prompt assignment
