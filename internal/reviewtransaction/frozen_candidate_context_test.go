@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -516,6 +517,98 @@ func TestPreparedCandidateInspectorReusesOneSetupForFourReads(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("cleanup calls = %d, want 1", calls)
 	}
+}
+
+// TestPreparedCandidateInspectorMemoizesRepeatedIdenticalInspection pins the
+// fix for issues #3733/#3871: STATUS's lens-context budget probe
+// (reviewLensContextBudgetProbe in internal/cli) reuses one
+// PreparedCandidateInspector across every selected lens and re-renders the
+// complete candidate -- two discovery reads plus one patch read per changed
+// path -- once per lens. Against the same immutable base/candidate trees,
+// every repeat of an identical (operation, pathIndex, side) request is
+// guaranteed to return byte-identical output, so serving it from an
+// in-inspector cache instead of re-invoking Git turns what was an
+// O(lenses x paths) subprocess cost -- scaling with candidate size and,
+// unconditionally, with every poll while captures remain incomplete -- back
+// into the O(paths) cost one full pass over the candidate always required.
+func TestPreparedCandidateInspectorMemoizesRepeatedIdenticalInspection(t *testing.T) {
+	requireSnapshotGit(t)
+	repo, snapshot := preparedCandidateSnapshot(t)
+	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(t.Context(), snapshot)
+	if err != nil {
+		t.Fatalf("PrepareCandidateInspector() error = %v", err)
+	}
+	t.Cleanup(func() { _ = inspector.Close() })
+
+	original := gitCommandContext
+	children := 0
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		children++
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	// Simulate the budget probe's per-lens loop: the same four reads are
+	// requested four times over, as reviewLensContextBlock does once per
+	// selected lens against the one shared inspector.
+	var lastNameStatus, lastPatch0 []byte
+	for lens := 0; lens < 4; lens++ {
+		nameStatus, err := inspector.Inspect(t.Context(), "name-status", -1, "")
+		if err != nil {
+			t.Fatalf("Inspect(name-status) lens %d error = %v", lens, err)
+		}
+		patch0, err := inspector.Inspect(t.Context(), "patch", 0, "")
+		if err != nil {
+			t.Fatalf("Inspect(patch, 0) lens %d error = %v", lens, err)
+		}
+		if lens == 0 {
+			lastNameStatus, lastPatch0 = nameStatus, patch0
+			continue
+		}
+		if !bytes.Equal(nameStatus, lastNameStatus) {
+			t.Fatalf("lens %d name-status diverged from lens 0", lens)
+		}
+		if !bytes.Equal(patch0, lastPatch0) {
+			t.Fatalf("lens %d patch(0) diverged from lens 0", lens)
+		}
+	}
+	if children != 2 {
+		t.Fatalf("Git children across four repeated (name-status, patch 0) rounds = %d, want 2 (one per distinct read, memoized thereafter)", children)
+	}
+
+	// A genuinely distinct read (a different path index) still reaches Git.
+	if _, err := inspector.Inspect(t.Context(), "patch", 1, ""); err != nil {
+		t.Fatalf("Inspect(patch, 1) error = %v", err)
+	}
+	if children != 3 {
+		t.Fatalf("Git children after one distinct extra read = %d, want 3", children)
+	}
+
+	// Cached payloads are private: mutating a returned slice must not leak
+	// into the next caller, and concurrent lenses sharing one inspector must
+	// not race on the cache.
+	first, err := inspector.Inspect(t.Context(), "patch", 1, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, 1) error = %v", err)
+	}
+	pristine := bytes.Clone(first)
+	for i := range first {
+		first[i] = 'X'
+	}
+	if again, err := inspector.Inspect(t.Context(), "patch", 1, ""); err != nil || !bytes.Equal(again, pristine) {
+		t.Fatalf("Inspect(patch, 1) after caller mutation = %q, %v; want pristine payload", again, err)
+	}
+	var wg sync.WaitGroup
+	for lens := 0; lens < 8; lens++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := inspector.Inspect(t.Context(), "patch", lens%2, ""); err != nil {
+				t.Errorf("concurrent Inspect error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // renamedManifestFixture builds a staged candidate with one pure file move
