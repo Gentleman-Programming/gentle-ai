@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -518,6 +519,98 @@ func TestPreparedCandidateInspectorReusesOneSetupForFourReads(t *testing.T) {
 	}
 }
 
+// TestPreparedCandidateInspectorMemoizesRepeatedIdenticalInspection pins the
+// fix for issues #3733/#3871: STATUS's lens-context budget probe
+// (reviewLensContextBudgetProbe in internal/cli) reuses one
+// PreparedCandidateInspector across every selected lens and re-renders the
+// complete candidate -- two discovery reads plus one patch read per changed
+// path -- once per lens. Against the same immutable base/candidate trees,
+// every repeat of an identical (operation, pathIndex, side) request is
+// guaranteed to return byte-identical output, so serving it from an
+// in-inspector cache instead of re-invoking Git turns what was an
+// O(lenses x paths) subprocess cost -- scaling with candidate size and,
+// unconditionally, with every poll while captures remain incomplete -- back
+// into the O(paths) cost one full pass over the candidate always required.
+func TestPreparedCandidateInspectorMemoizesRepeatedIdenticalInspection(t *testing.T) {
+	requireSnapshotGit(t)
+	repo, snapshot := preparedCandidateSnapshot(t)
+	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(t.Context(), snapshot)
+	if err != nil {
+		t.Fatalf("PrepareCandidateInspector() error = %v", err)
+	}
+	t.Cleanup(func() { _ = inspector.Close() })
+
+	original := gitCommandContext
+	children := 0
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		children++
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+
+	// Simulate the budget probe's per-lens loop: the same four reads are
+	// requested four times over, as reviewLensContextBlock does once per
+	// selected lens against the one shared inspector.
+	var lastNameStatus, lastPatch0 []byte
+	for lens := 0; lens < 4; lens++ {
+		nameStatus, err := inspector.Inspect(t.Context(), "name-status", -1, "")
+		if err != nil {
+			t.Fatalf("Inspect(name-status) lens %d error = %v", lens, err)
+		}
+		patch0, err := inspector.Inspect(t.Context(), "patch", 0, "")
+		if err != nil {
+			t.Fatalf("Inspect(patch, 0) lens %d error = %v", lens, err)
+		}
+		if lens == 0 {
+			lastNameStatus, lastPatch0 = nameStatus, patch0
+			continue
+		}
+		if !bytes.Equal(nameStatus, lastNameStatus) {
+			t.Fatalf("lens %d name-status diverged from lens 0", lens)
+		}
+		if !bytes.Equal(patch0, lastPatch0) {
+			t.Fatalf("lens %d patch(0) diverged from lens 0", lens)
+		}
+	}
+	if children != 2 {
+		t.Fatalf("Git children across four repeated (name-status, patch 0) rounds = %d, want 2 (one per distinct read, memoized thereafter)", children)
+	}
+
+	// A genuinely distinct read (a different path index) still reaches Git.
+	if _, err := inspector.Inspect(t.Context(), "patch", 1, ""); err != nil {
+		t.Fatalf("Inspect(patch, 1) error = %v", err)
+	}
+	if children != 3 {
+		t.Fatalf("Git children after one distinct extra read = %d, want 3", children)
+	}
+
+	// Cached payloads are private: mutating a returned slice must not leak
+	// into the next caller, and concurrent lenses sharing one inspector must
+	// not race on the cache.
+	first, err := inspector.Inspect(t.Context(), "patch", 1, "")
+	if err != nil {
+		t.Fatalf("Inspect(patch, 1) error = %v", err)
+	}
+	pristine := bytes.Clone(first)
+	for i := range first {
+		first[i] = 'X'
+	}
+	if again, err := inspector.Inspect(t.Context(), "patch", 1, ""); err != nil || !bytes.Equal(again, pristine) {
+		t.Fatalf("Inspect(patch, 1) after caller mutation = %q, %v; want pristine payload", again, err)
+	}
+	var wg sync.WaitGroup
+	for lens := 0; lens < 8; lens++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := inspector.Inspect(t.Context(), "patch", lens%2, ""); err != nil {
+				t.Errorf("concurrent Inspect error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 // renamedManifestFixture builds a staged candidate with one pure file move
 // (a git-detected rename pair) alongside one unrelated add and one unrelated
 // delete of unrelated content (never a rename pair with anything), and
@@ -749,6 +842,89 @@ func frozenCandidateGitDiff(t *testing.T, repo string, frozen FrozenCandidateCon
 		t.Fatalf("isolated git path-scoped diff %q: %v\n%s", logicalPath, err, output)
 	}
 	return output
+}
+
+// installShowObjectFormatRejectingGitShim puts a `git` shim first on PATH
+// that reproduces #3541: it rejects only `rev-parse --show-object-format`,
+// the exact way git < 2.38 does — printing the unrecognized flag back
+// verbatim on stdout with exit 0 — and delegates every other invocation to
+// the real git.
+func installShowObjectFormatRejectingGitShim(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH shim requires a POSIX shell")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is unavailable")
+	}
+	shimDir := t.TempDir()
+	shim := "#!/bin/sh\n" +
+		"for arg in \"$@\"; do\n" +
+		"  if [ \"$arg\" = \"--show-object-format\" ]; then\n" +
+		"    printf '%s\\n' \"$arg\"\n" +
+		"    exit 0\n" +
+		"  fi\n" +
+		"done\n" +
+		"exec \"$GENTLE_AI_TEST_REAL_GIT\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// resetGitObjectFormatCapabilityCache isolates #3541's process-wide cache
+// between tests: without this, whichever test runs first would decide the
+// cached capability for every test that runs after it in the same process.
+func resetGitObjectFormatCapabilityCache(t *testing.T) {
+	t.Helper()
+	gitShowObjectFormatMu.Lock()
+	previous := gitShowObjectFormatUnsupported
+	gitShowObjectFormatUnsupported = false
+	gitShowObjectFormatMu.Unlock()
+	t.Cleanup(func() {
+		gitShowObjectFormatMu.Lock()
+		gitShowObjectFormatUnsupported = previous
+		gitShowObjectFormatMu.Unlock()
+	})
+}
+
+// TestGitObjectFormatDegradesOnPreShowObjectFormatGit reproduces #3541: on
+// git < 2.38, `rev-parse --show-object-format` is unrecognized and git
+// echoes it back verbatim with exit 0 instead of failing, which previously
+// made gitObjectFormat misread the echoed flag as the object format and
+// reject every repository as "unsupported Git object format". It must
+// instead degrade to reading extensions.objectformat directly, and it must
+// do so only once per process (the second call below runs with the shim
+// still installed, proving the cached decision skips the failing probe
+// rather than re-discovering it).
+func TestGitObjectFormatDegradesOnPreShowObjectFormatGit(t *testing.T) {
+	requireSnapshotGit(t)
+	resetGitObjectFormatCapabilityCache(t)
+	repo := initSnapshotRepo(t)
+	installShowObjectFormatRejectingGitShim(t)
+
+	format, err := gitObjectFormat(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("gitObjectFormat with a pre-2.38 git = %v, want the extensions.objectformat fallback", err)
+	}
+	if format != "sha1" {
+		t.Fatalf("gitObjectFormat = %q, want sha1 for a repository with no extensions.objectformat override", format)
+	}
+	gitShowObjectFormatMu.Lock()
+	cached := gitShowObjectFormatUnsupported
+	gitShowObjectFormatMu.Unlock()
+	if !cached {
+		t.Fatal("gitObjectFormat did not cache the unsupported --show-object-format capability")
+	}
+
+	// The cached decision must be reused: a second call must not re-probe
+	// --show-object-format and must still succeed via the fallback.
+	format, err = gitObjectFormat(context.Background(), repo)
+	if err != nil || format != "sha1" {
+		t.Fatalf("cached gitObjectFormat = %q, err=%v, want sha1 with no error", format, err)
+	}
 }
 
 func frozenCandidatePorcelainGitDiff(t *testing.T, repo string, frozen FrozenCandidateContext, logicalPath string) []byte {

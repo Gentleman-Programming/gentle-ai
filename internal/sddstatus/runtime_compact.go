@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -70,6 +71,12 @@ type CompactAttemptResult struct {
 	// the token is real. Empty whenever the chain holds nothing, because a
 	// field that is always populated is noise.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// SuppressedObligation names a chain failure that was NOT disclosed as
+	// SettleObligation because the ledger's own recorded reset/rescope
+	// predecessor does not link it to this attempt's objective lineage
+	// (#4024). A caller must never read an empty SettleObligation as proof
+	// the chain holds nothing; this field says so observably when it does.
+	SuppressedObligation *SuppressedObligation `json:"suppressed_obligation,omitempty"`
 	// MaxChangedLines and MaxChangedLinesSource report an applied DEFAULT
 	// runtime line budget on the proceed answer itself (#2589): before this,
 	// an omitted --max-changed-lines was charged silently, and a caller
@@ -133,6 +140,15 @@ type CompactSettleRequest struct {
 	ProcessEvidence    string
 
 	RemediatesEvidenceRevision string
+
+	// RemediationEvidence is an optional strict gentle-ai.remediation-
+	// evidence/v1 JSON object (#2896). When present, Settle derives the
+	// canonical successful EvidenceRevision from it instead of requiring the
+	// caller to invent one: before this, a passing remediation settle had no
+	// provider-owned value to put in --evidence-revision, only the caller's
+	// own unverifiable evidence. An explicit EvidenceRevision alongside this
+	// field must equal the derived value.
+	RemediationEvidence string
 
 	// The settle-time untracked declaration, forwarded verbatim to Finish.
 	// Nil means the caller declared nothing.
@@ -273,7 +289,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		Request: begin, PresentedToken: request.Token,
 	}); terminal {
 		if result.State == CompactStateProceed {
-			result.SettleObligation = runtimeSettleObligation(replay.Status)
+			result.SettleObligation, result.SuppressedObligation = runtimeSettleObligation(replay.Status)
 			result = compactAcquireBudgetResult(result, replay.Status.Objective)
 		}
 		return result, nil
@@ -300,11 +316,13 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if err != nil {
 		return store.compactMutationFailure(err, false, begin), nil
 	}
+	// Derived from the PRE-mutation chain: the obligation this attempt
+	// inherits (or observably suppresses) is the one that existed when it was
+	// opened.
+	obligation, suppressed := runtimeSettleObligation(replay.Status)
 	return compactAcquireBudgetResult(CompactAttemptResult{
 		State: CompactStateProceed, Token: started.Revision,
-		// Derived from the PRE-mutation chain: the obligation this attempt
-		// inherits is the one that existed when it was opened.
-		SettleObligation: runtimeSettleObligation(replay.Status),
+		SettleObligation: obligation, SuppressedObligation: suppressed,
 	}, started.Objective), nil
 }
 
@@ -327,6 +345,19 @@ func compactAcquireBudgetResult(result CompactAttemptResult, objective *RuntimeO
 // transition. Its only remediation authority is the immutable SDD failed-
 // evidence chain; review bindings and successors do not participate.
 func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleRequest) (CompactAttemptResult, error) {
+	// Deriving before anything else (#2896) means a replayed settle (the
+	// request-id branch just below) sees the exact same EvidenceRevision the
+	// original call derived, since both start from the same admitted bytes.
+	if request.RemediationEvidence != "" {
+		derived, deriveErr := DeriveRemediationEvidenceRevision(request.RemediationEvidence, request.RemediatesEvidenceRevision)
+		if deriveErr != nil {
+			return CompactAttemptResult{}, deriveErr
+		}
+		if request.EvidenceRevision != "" && request.EvidenceRevision != derived {
+			return CompactAttemptResult{}, fmt.Errorf("--evidence-revision %s does not match the revision derived from --remediation-evidence (%s); rerun `gentle-ai sdd-attempt settle` omitting --evidence-revision, or with exactly the derived value", request.EvidenceRevision, derived)
+		}
+		request.EvidenceRevision = derived
+	}
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
@@ -373,7 +404,8 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		ProcessEvidence: request.ProcessEvidence, IntendedUntracked: request.IntendedUntracked,
 		ExpectedUntrackedInventory: request.ExpectedUntrackedInventory,
 	}
-	failedEvidence, hasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
+	chainFailedAttempt, hasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
+	failedEvidence := chainFailedAttempt.EvidenceRevision
 	if request.RemediatesEvidenceRevision != "" && !hasFailedEvidence {
 		return compactBlockedWithExit(CompactBlockInvalidContinuation,
 			"the attempt chain holds no unremediated failed evidence, so --remediates-evidence-revision "+request.RemediatesEvidenceRevision+
@@ -384,11 +416,12 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 			"the chain's unremediated failed evidence is "+failedEvidence+", not "+request.RemediatesEvidenceRevision+
 				"; run "+compactStatusCommand+" to read the chain, then rerun this settle with --remediates-evidence-revision "+failedEvidence), nil
 	}
-	if request.Outcome == AttemptPassed && hasFailedEvidence && request.RemediatesEvidenceRevision == "" {
-		return compactBlockedWithExit(CompactBlockInvalidContinuation,
-			"this passed settle was refused: "+runtimeSettleObligation(status)+" Run "+compactStatusCommand+
-				" to read the chain, then rerun this settle with that flag."), nil
-	}
+	// The force-without-declaration demand (#4024: scoped to the settling
+	// objective's own lineage) is Finish's ONE gate (ErrRuntimeSettleObligationUnmet),
+	// never re-derived here: a second, independently-evaluated copy is exactly
+	// how compact Settle and Finish drifted apart before this fix (R3/R4).
+	// compactMutationFailure below classifies that sentinel the same way for
+	// every caller.
 	finish.RemediatesEvidenceRevision = request.RemediatesEvidenceRevision
 	if _, err := store.Finish(ctx, finish); err != nil {
 		return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
@@ -594,6 +627,15 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		reason = CompactBlockWorktreeMismatch
 	case errors.Is(err, ErrRuntimeHandoffDestination), errors.Is(err, ErrRuntimeHandoffAlreadyPerformed):
 		reason = CompactBlockInvalidContinuation
+	// ErrRuntimeSettleObligationUnmet is Finish's ONE force-without-
+	// declaration gate (#4024 R3/R4): compact Settle used to re-derive this
+	// refusal independently, with its own nil-guard and its own
+	// compactBlockedWithExit call, and the two could drift. Classifying the
+	// sentinel here instead means Settle and the raw `finish` CLI command
+	// reach byte-identical Detail/Exit text from the one place it is
+	// produced (runtimeSettleObligation, wrapped in Finish).
+	case errors.Is(err, ErrRuntimeSettleObligationUnmet):
+		reason = CompactBlockInvalidContinuation
 	}
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
 }
@@ -696,8 +738,8 @@ func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 }
 
 // runtimeSettleObligation is the ONE derivation of "what will this attempt's
-// passing settle already owe". Acquire and the read-only admission surface
-// both call it; neither computes it alongside the other. That is #2114's
+// passing settle already owe". Acquire, Finish, and the read-only admission
+// surface all call it; none computes it alongside the other. That is #2114's
 // lesson applied before the fact — two derivations of one truth drift, and the
 // surface that speaks earliest is the one that ends up lying.
 //
@@ -705,16 +747,26 @@ func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 // (runtimeChainFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
 // promise something the settle will not demand, or stay silent about
 // something it will.
-func runtimeSettleObligation(status RuntimeStatus) string {
+//
+// The result is scoped to the CURRENT ledger state's objective lineage
+// (runtimeFailedAttemptInObjectiveLineage, #4024): a reset or rescope that
+// opens a causally independent objective is never told, or forced, to carry a
+// failure it cannot truthfully repair. When lineage suppresses a real chain
+// failure, that fact is returned observably rather than silently -- a caller
+// must never see empty and assume the chain holds nothing.
+func runtimeSettleObligation(status RuntimeStatus) (string, *SuppressedObligation) {
 	failed, ok := runtimeChainFailedAttempt(status.Attempts)
 	if !ok || failed.EvidenceRevision == "" {
-		return ""
+		return "", nil
+	}
+	if inLineage, reason := runtimeFailedAttemptInObjectiveLineage(status, failed); !inLineage {
+		return "", &SuppressedObligation{EvidenceRevision: failed.EvidenceRevision, ObjectiveID: failed.ObjectiveID, Reason: reason}
 	}
 	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
 		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
 		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches the state that failed. " +
 		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
-		"binding — only a passing settlement that names it does."
+		"binding — only a passing settlement that names it does.", nil
 }
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {

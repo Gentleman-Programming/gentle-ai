@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -232,7 +233,14 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 		// issue #3928: the root action enum gained "collect" and "execute", the
 		// v7 envelope's projection of a live transaction whose next_transition
 		// is mandatory. Deliberate, not drift.
-		"schemas/status-v7.schema.json":         "8d4196b744464f2a85779c38b79fca50c54672c2e943950824fdb5905262823a",
+		//
+		// issues #3299, #4170: a stale managed-asset digest now fails STATUS's
+		// own preflight, before a START is ever offered, as a typed
+		// managed_assets_outdated "stop" that carries the exact
+		// candidate-preserving `gentle-ai sync` continuation (see
+		// failure.schema.json#/$defs/managed_assets_continuation). Deliberate,
+		// not drift.
+		"schemas/status-v7.schema.json":         "f0f48d1309e028ea4d43e433c684f470761c0828d6f40eb1c44e8a0ad0fe2da4",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {
@@ -245,6 +253,111 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
 		}
 	}
+}
+
+// TestManagedAssetsContinuationSchemaRuleIsExercised is the RED-first proof
+// for the corroborated review finding on #3299/#4170: failure.schema.json's
+// if/then rule tying `continuation` to `code: managed_assets_outdated` (and
+// forbidding it on every other code), and status-v7.schema.json's dedicated
+// oneOf branch for the same reason code, were published without ever
+// validating a real produced envelope against either rule in either
+// direction. It exercises both published schemas against three shapes each:
+// the real envelope a stale managed-asset digest produces (must pass), the
+// same envelope with `continuation` stripped (must fail the rule), and the
+// same envelope with `continuation` attached to an unrelated code/reason
+// (must fail the rule).
+func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/schema-rule.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	// --- failure.schema.json, exercised against the real START preflight failure ---
+	var startOutput bytes.Buffer
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+	}), &startOutput); err == nil {
+		t.Fatalf("stale managed assets START succeeded: %s", startOutput.String())
+	}
+	failureSchema := compileWholePublishedReviewSchema(t, "v2", "failure.schema.json")
+
+	var failureDoc map[string]any
+	if err := json.Unmarshal(startOutput.Bytes(), &failureDoc); err != nil {
+		t.Fatal(err)
+	}
+	if failureDoc["code"] != "managed_assets_outdated" || failureDoc["continuation"] == nil {
+		t.Fatalf("baseline stale managed assets failure = %#v", failureDoc)
+	}
+
+	// (a) the real envelope validates.
+	validatePublishedReviewSchema(t, failureSchema, startOutput.Bytes())
+
+	// (b) the same envelope with continuation removed must fail: the code
+	// still claims managed_assets_outdated, and the rule requires it.
+	withoutContinuation := decodeJSONObjectCopy(t, startOutput.Bytes())
+	delete(withoutContinuation, "continuation")
+	if err := failureSchema.Validate(withoutContinuation); err == nil {
+		t.Fatal("failure.schema.json accepted a managed_assets_outdated code with no continuation")
+	}
+
+	// (c) the same continuation attached to an unrelated code must fail: the
+	// rule's "else" branch forbids continuation on every other code.
+	unrelatedCode := decodeJSONObjectCopy(t, startOutput.Bytes())
+	unrelatedCode["code"] = "invalid_request"
+	if err := failureSchema.Validate(unrelatedCode); err == nil {
+		t.Fatal("failure.schema.json accepted a continuation on an unrelated failure code")
+	}
+
+	// --- status-v7.schema.json, exercised against the real STATUS stop transition ---
+	var stopOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &stopOutput); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, stopOutput.String())
+	}
+	statusV7Schema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+
+	statusDoc := decodeJSONObjectCopy(t, stopOutput.Bytes())
+	nextTransition, ok := statusDoc["next_transition"].(map[string]any)
+	if !ok || nextTransition["kind"] != "stop" || nextTransition["reason_code"] != "managed_assets_outdated" || nextTransition["continuation"] == nil {
+		t.Fatalf("baseline stale managed assets STATUS next_transition = %#v", statusDoc["next_transition"])
+	}
+
+	// (a) the real envelope validates.
+	validatePublishedReviewSchema(t, statusV7Schema, stopOutput.Bytes())
+
+	// (b) the same stop with continuation removed must fail: nothing else in
+	// the oneOf admits a managed_assets_outdated stop without it.
+	withoutStopContinuation := decodeJSONObjectCopy(t, stopOutput.Bytes())
+	withoutTransition := decodeJSONObjectCopy(t, stopOutput.Bytes())["next_transition"].(map[string]any)
+	delete(withoutTransition, "continuation")
+	withoutStopContinuation["next_transition"] = withoutTransition
+	if err := statusV7Schema.Validate(withoutStopContinuation); err == nil {
+		t.Fatal("status-v7.schema.json accepted a managed_assets_outdated stop with no continuation")
+	}
+
+	// (c) the same continuation attached to an unrelated reason code (still a
+	// stop, e.g. rdd_disabled) must fail both oneOf branches: the generic one
+	// forbids the extra continuation property, and the dedicated one requires
+	// reason_code const managed_assets_outdated.
+	unrelatedReason := decodeJSONObjectCopy(t, stopOutput.Bytes())
+	unrelatedTransition := decodeJSONObjectCopy(t, stopOutput.Bytes())["next_transition"].(map[string]any)
+	unrelatedTransition["reason_code"] = "rdd_disabled"
+	unrelatedReason["next_transition"] = unrelatedTransition
+	if err := statusV7Schema.Validate(unrelatedReason); err == nil {
+		t.Fatal("status-v7.schema.json accepted a continuation attached to an unrelated stop reason code")
+	}
+}
+
+// decodeJSONObjectCopy decodes payload into a fresh map[string]any, so a
+// caller can mutate one field without aliasing any other test's copy of the
+// same bytes.
+func decodeJSONObjectCopy(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
 }
 
 func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {

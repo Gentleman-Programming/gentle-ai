@@ -224,20 +224,29 @@ func createPrivateRARDirectory(path string) (bool, error) {
 	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return false, err
 	}
+	if validateErr := repairAndValidatePrivateRARDirectory(path); validateErr != nil {
+		// The just-created directory deliberately stays on disk. Removing it
+		// made the refusal name a path that no longer existed, so the repair
+		// this product prints could not run at all and the operator had no way
+		// out. Nothing is trusted by leaving it: every reader revalidates, and
+		// the next attempt takes the already-exists branch and refuses again.
+		return false, validateErr
+	}
+	return created, nil
+}
+
+// repairAndValidatePrivateRARDirectory validates path as an owner-only RAR
+// directory and, on failure, applies the same handle-based DACL repair
+// createPrivateRARDirectory has always used before giving up. #3416: this is
+// now the one helper both the just-created path and
+// ensureRARDirectoryChain's pre-existing-directory branch call, so repair is
+// reachable whether the private directory was just created or already
+// existed. Not gated on whether this call created the directory:
+// CreateDirectory answers every later attempt with ERROR_ALREADY_EXISTS, so
+// that gate would make recovery from an interrupted run once-only.
+func repairAndValidatePrivateRARDirectory(path string) error {
 	validateErr := validatePrivateRARDirectory(path)
 	if validateErr != nil {
-		// Same shape as the POSIX path: a directory at this path can
-		// still fail its own owner-only validation when the filesystem or the
-		// process token did not honour the descriptor handed to
-		// CreateDirectory. Apply the owner-only, protected DACL explicitly and
-		// revalidate before giving up. This is precisely the repair the CLI
-		// prints, so anything it cannot fix here the operator still cannot fix
-		// there, and the refusal below stays truthful.
-		//
-		// Do NOT gate this on `created`: CreateDirectory answers every later
-		// attempt with ERROR_ALREADY_EXISTS, so that gate makes recovery from
-		// an interrupted run once-only. The handle-verified object decides
-		// instead: an empty directory this process's own principals own.
 		if repairErr := rarPrivateDirectoryRepair(path, 0o700); repairErr == nil {
 			validateErr = validatePrivateRARDirectory(path)
 		} else {
@@ -254,15 +263,7 @@ func createPrivateRARDirectory(path string) (bool, error) {
 			)
 		}
 	}
-	if validateErr != nil {
-		// The just-created directory deliberately stays on disk. Removing it
-		// made the refusal name a path that no longer existed, so the repair
-		// this product prints could not run at all and the operator had no way
-		// out. Nothing is trusted by leaving it: every reader revalidates, and
-		// the next attempt takes the already-exists branch and refuses again.
-		return false, validateErr
-	}
-	return created, nil
+	return validateErr
 }
 
 func createPrivateRARFile(path string) (*os.File, error) {
@@ -741,34 +742,62 @@ func ownerOnlyRARWindowsAccessMask(mask windows.ACCESS_MASK) bool {
 // Windows filesystem classifier — injectable for testing.
 // ---------------------------------------------------------------------------------------------------------------------
 
-var rarWindowsAuthorityFilesystemClassifier = windowsRARAuthorityFilesystemTypeDefault
+// rarWindowsAuthorityFilesystemClassifier probes the volume that hosts path
+// and reports the three raw facts classifyWindowsAuthorityFilesystem decides
+// from: the filesystem name (never a volume label), the resolved volume
+// root's drive type (never the arbitrary directory under validation), and
+// GetVolumeInformationW's own error. Injectable for tests.
+var rarWindowsAuthorityFilesystemClassifier = probeWindowsAuthorityFilesystem
 
-var rarWindowsACLCapableFilesystems = map[string]struct{}{"NTFS": {}, "ReFS": {}}
-
-var rarWindowsUnsupportedFilesystems = map[string]struct{}{"exFAT": {}, "FAT32": {}}
-
-func windowsRARAuthorityFilesystemTypeDefault(path string) string {
+// windowsAuthorityVolumeRoot resolves the root of the volume that hosts path.
+// #4048: production called GetVolumeInformationW directly on the Git common
+// directory -- a directory, never a volume root -- which Win32 requires a
+// trailing-backslash root path for and fails with ERROR_INVALID_NAME
+// otherwise. filepath.VolumeName handles an ordinary "C:\..." path cheaply;
+// GetVolumePathName resolves the general case, including a directory mounted
+// on a different volume than its parent.
+func windowsAuthorityVolumeRoot(path string) (string, error) {
+	if drive := filepath.VolumeName(path); len(drive) == 2 && drive[1] == ':' {
+		return drive + `\`, nil
+	}
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	var volSerial, maxCompLen, fsFlags uint32
-	var fsName [windows.MAX_PATH]uint16
-	err = windows.GetVolumeInformation(name, &fsName[0], uint32(len(fsName))*2, &volSerial, &maxCompLen, &fsFlags, nil, 0)
-	if err != nil {
-		return ""
+	var buffer [windows.MAX_PATH + 1]uint16
+	if err := windows.GetVolumePathName(name, &buffer[0], uint32(len(buffer))); err != nil {
+		return "", err
 	}
-	for i, c := range fsName {
-		if c == 0 {
-			return windows.UTF16ToString(fsName[:i])
-		}
-	}
-	return windows.UTF16ToString(fsName[:])
+	return windows.UTF16ToString(buffer[:]), nil
 }
 
-func isWindowsAuthorityFilesystemSupported(fstype string) bool {
-	_, ok := rarWindowsACLCapableFilesystems[fstype]
-	return ok
+// probeWindowsAuthorityFilesystem resolves path's volume root and reports its
+// drive type and filesystem name. #4048 identified three defects in the call
+// this replaces: it queried the directory under validation instead of a
+// volume root; it read the volume *label* buffer as the filesystem name,
+// when the name is a distinct, later parameter production never supplied;
+// and that mismatched buffer's declared size was double the documented
+// TCHAR-unit maximum. Fixed here: both Win32 calls run against the resolved
+// root, and the filesystem name is requested through its own buffer.
+func probeWindowsAuthorityFilesystem(path string) (fstype string, driveType uint32, err error) {
+	root, err := windowsAuthorityVolumeRoot(path)
+	if err != nil {
+		return "", 0, err
+	}
+	rootName, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return "", 0, err
+	}
+	driveType = windows.GetDriveType(rootName)
+	var volSerial, maxCompLen, fsFlags uint32
+	var fsNameBuffer [windows.MAX_PATH + 1]uint16
+	if err := windows.GetVolumeInformation(
+		rootName, nil, 0, &volSerial, &maxCompLen, &fsFlags,
+		&fsNameBuffer[0], uint32(len(fsNameBuffer)),
+	); err != nil {
+		return "", driveType, err
+	}
+	return windows.UTF16ToString(fsNameBuffer[:]), driveType, nil
 }
 
 func isUNCPath(path string) bool {
@@ -801,14 +830,23 @@ func (e errUnsupportedWindowsFilesystemType) Is(target error) bool {
 
 type errUnknownWindowsFilesystemType struct {
 	path     string
+	reason   string
 	innerErr error
 }
 
 func (e errUnknownWindowsFilesystemType) Error() string {
-	return fmt.Sprintf(
-		"RAR authority parent %q is on an unknown or remote filesystem; cannot assume NTFS semantics; check the path and rerun",
+	message := fmt.Sprintf(
+		"RAR authority parent %q is on an unknown filesystem; cannot assume NTFS semantics; check the path and rerun",
 		e.path,
 	)
+	if e.reason != "" {
+		// #4048: the reason names the exact fact that could not be proven
+		// safe -- a failed probe, a non-fixed drive type, or an unrecognized
+		// filesystem name -- instead of the fixed, undifferentiated "unknown
+		// or remote" text every refusal used to share.
+		message += " (" + e.reason + ")"
+	}
+	return message
 }
 func (e errUnknownWindowsFilesystemType) Unwrap() error { return e.innerErr }
 func (e errUnknownWindowsFilesystemType) Is(target error) bool {
@@ -829,17 +867,19 @@ func formatWindowsRARAuthorityRefusal(path string) error {
 	if isUNCPath(path) {
 		return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
 	}
-	fstype := rarWindowsAuthorityFilesystemClassifier(path)
-	if isWindowsAuthorityFilesystemSupported(fstype) {
+	fstype, driveType, probeErr := rarWindowsAuthorityFilesystemClassifier(path)
+	class, reason := classifyWindowsAuthorityFilesystem(fstype, driveType, probeErr)
+	switch class {
+	case windowsAuthorityFilesystemSupported:
 		return fmt.Errorf(
 			"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
 			path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
 		)
-	}
-	if _, unsupported := rarWindowsUnsupportedFilesystems[fstype]; unsupported {
+	case windowsAuthorityFilesystemUnsupported:
 		return errUnsupportedWindowsFilesystemType{path: path, fstype: fstype, innerErr: errUnsafeRARAuthorityPath}
+	default:
+		return errUnknownWindowsFilesystemType{path: path, reason: reason, innerErr: errUnsafeRARAuthorityPath}
 	}
-	return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
 }
 
 func formatRARAuthorityRefusal(path string) error { return formatWindowsRARAuthorityRefusal(path) }

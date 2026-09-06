@@ -1039,7 +1039,7 @@ func (state CompactState) CompactReviewView() (CompactReviewView, error) {
 				envelope.Subject.LineageID != state.LineageID || envelope.Subject.AuthorityRevision != entry.CapturePhaseRevision ||
 				envelope.Subject.TargetIdentity != entry.TargetIdentity || envelope.Subject.Lens != entry.Lens ||
 				envelope.Subject.SelectedOrder != entry.SelectedOrder || envelope.Subject.CorrectionTargetIdentity != "" ||
-				envelope.Admission.Validate(envelope.Subject) != nil {
+				envelope.Admission.Validate(envelope.Subject, append(append([]byte(nil), envelope.Result...), '\n')) != nil {
 				return CompactReviewView{}, invalidCompactReviewView("lens envelope does not bind its active tuple")
 			}
 			var provider compactProviderReviewerResult

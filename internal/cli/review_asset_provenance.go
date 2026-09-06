@@ -26,6 +26,59 @@ func managedAssetDigest() (string, error) {
 	return digest, nil
 }
 
+// managedAssetProvenance is the raw digest comparison behind
+// authorizeManagedReviewerAssets, exposed separately so a stale refusal can
+// name which recorded asset is stale (#3299, #4170) without duplicating the
+// comparison. diagnosed is false in exactly the shapes
+// authorizeManagedReviewerAssets already treats as "nothing to refuse": no
+// resolvable home directory, no persisted state, or no recorded digest.
+type managedAssetProvenance struct {
+	installedDigest string
+	expectedDigest  string
+	diagnosed       bool
+}
+
+// stale reports the same "recorded digest disagrees" condition
+// authorizeManagedReviewerAssets has always refused on. An expected digest
+// this binary could not derive counts as disagreeing too, exactly as the
+// original inline check treated a digest error: there is nothing to compare
+// against, so the recorded one cannot be vouched for.
+func (p managedAssetProvenance) stale() bool {
+	return p.diagnosed && (p.expectedDigest == "" || p.installedDigest != p.expectedDigest)
+}
+
+// staleAssetIdentities names the one asset identity known to be stale: the
+// recorded digest that no longer matches this binary's embedded assets. It
+// returns nil when nothing is stale, or when the stale installed digest
+// itself is unknown.
+func (p managedAssetProvenance) staleAssetIdentities() []string {
+	if !p.stale() || p.installedDigest == "" {
+		return nil
+	}
+	return []string{p.installedDigest}
+}
+
+// checkManagedReviewerAssets resolves the installed/expected digest pair
+// authorizeManagedReviewerAssets compares. Callers that must explain *which*
+// asset is stale -- a STATUS preflight or a START refusal's sync continuation
+// -- use this directly instead of re-deriving the comparison from an error
+// string.
+func checkManagedReviewerAssets() managedAssetProvenance {
+	homeDir, err := osUserHomeDir()
+	if err != nil {
+		return managedAssetProvenance{}
+	}
+	persisted, err := state.Read(homeDir)
+	if err != nil || persisted.ManagedAssetDigest == "" {
+		return managedAssetProvenance{}
+	}
+	digest, digestErr := managedAssetDigest()
+	if digestErr != nil {
+		return managedAssetProvenance{installedDigest: persisted.ManagedAssetDigest, diagnosed: true}
+	}
+	return managedAssetProvenance{installedDigest: persisted.ManagedAssetDigest, expectedDigest: digest, diagnosed: true}
+}
+
 // authorizeManagedReviewerAssets refuses review work when installed managed
 // assets were written by a different set of embedded assets than this binary
 // carries.
@@ -36,16 +89,7 @@ func managedAssetDigest() (string, error) {
 // could tell the caller to repair. Refusing that shape would block every user
 // who never ran `gentle-ai install` from reviewing at all.
 func authorizeManagedReviewerAssets() error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return nil
-	}
-	persisted, err := state.Read(homeDir)
-	if err != nil || persisted.ManagedAssetDigest == "" {
-		return nil
-	}
-	digest, digestErr := managedAssetDigest()
-	if digestErr != nil || persisted.ManagedAssetDigest != digest {
+	if checkManagedReviewerAssets().stale() {
 		return errors.New(managedAssetProvenanceRefusal)
 	}
 	return nil

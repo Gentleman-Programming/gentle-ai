@@ -899,6 +899,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
 		hydratedIntendedScope := false
+		// pendingApprovedTerminalTarget carries the exact frozen target kind
+		// and base ref an approved-pending lineage resumed below, so a
+		// selectorless refresh can rebuild the same committed-range
+		// projection instead of silently defaulting to current-changes
+		// (gentle-pi#569).
+		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
@@ -912,14 +918,38 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				record, loadErr := store.LoadContext(ctx)
 				if loadErr == nil {
 					// Only an approved compact authority that still owns its
-					// acknowledgement can resume its immutable terminal target. Every
-					// other occupied lineage must derive live scope so correction and
-					// recovery detect new untracked artifacts and target changes.
-					if _, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(record); pending {
+					// acknowledgement can resume its immutable terminal target. A
+					// correction-required authority that already froze a non-empty
+					// intended-untracked SELECTION resumes it too, but only while the
+					// live workspace's eligible untracked population is still exactly
+					// that declared set: the exact bound STATUS continuation
+					// `review.capture-correction-plan` itself returns carries no
+					// untracked-scope flags, so demanding a fresh declaration on that
+					// plain re-entry dead-ended the correction lineage and bound the
+					// resulting collect input to a different (live, declaration-less)
+					// target identity than the one the authority is bound to (issue
+					// #3849). A frozen EXCLUDE declaration (empty selection) is left
+					// alone here -- it is indistinguishable on its own from "nothing
+					// was ever declared", and a brand new untracked artifact appearing
+					// mid-correction must still force a fresh declaration exactly as
+					// before (design intent: "detect new untracked artifacts").
+					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
+					resumeCorrectionUntracked := false
+					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
+						if inventoryErr != nil {
+							return reviewPreflightError(inventoryErr)
+						}
+						resumeCorrectionUntracked = reviewSameUntrackedPaths(inventory, declaredUntracked)
+					}
+					if pendingApproval || resumeCorrectionUntracked {
 						intendedScope = reviewIntendedUntrackedScope{
-							Intended: append([]string{}, record.State.InitialSnapshot.IntendedUntracked...), Declared: true,
+							Intended: append([]string{}, declaredUntracked...), Declared: true,
 						}
 						hydratedIntendedScope = true
+						terminal := record.State.CurrentSnapshot
+						pendingApprovedTerminalTarget = &terminal
 					}
 				} else if reviewtransaction.IsCompactAuthorityOperationalFailure(loadErr) {
 					return fmt.Errorf("load explicit review lineage: %w", loadErr)
@@ -941,6 +971,22 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if selectedBaseTree != "" {
 				target.BaseRef = selectedBaseTree
 			}
+		}
+		// Issue gentle-pi#569: a caller-authorized committed-range approval
+		// (base-diff, committed-only) must survive a selectorless STATUS
+		// refresh performed only to reach `review.acknowledge-approved`. The
+		// caller supplied no --base-ref/--committed-only/--workspace-overlay
+		// of its own, so nothing above already claimed this target; without
+		// this, the default current-changes target above projects an empty
+		// diff on the clean approved worktree and the acknowledgement
+		// continuation is never offered. The subsequent status assessment
+		// re-derives the live snapshot from this exact target and compares
+		// its identity against the frozen one, so a worktree that actually
+		// drifted since approval still fails closed instead of being forced
+		// current.
+		if pendingApprovedTerminalTarget != nil && selectedBaseRef == "" && !*workspaceOverlay &&
+			pendingApprovedTerminalTarget.Kind == reviewtransaction.TargetBaseDiff {
+			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, pendingApprovedTerminalTarget.BaseTree
 		}
 		target.IntendedUntracked = intendedScope.Intended
 		var prePR *reviewtransaction.PrePRRequest
@@ -2037,7 +2083,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// point where the kill switch can stop a start and consent can name the real
 	// reason. Nothing has been persisted yet, so refusing here leaves no
 	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated); err != nil {
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been
@@ -2601,7 +2647,7 @@ func prepareCompactReviewerResults(state reviewtransaction.CompactState, results
 			switch finding.CausalDisposition {
 			case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
 				if len(repository) == 1 {
-					changed, err := (reviewtransaction.SnapshotBuilder{Repo: repository[0].repo}).CandidateLocationSupportsCausality(repository[0].ctx, state.InitialSnapshot, finding.Location, finding.CausalDisposition)
+					changed, _, err := (reviewtransaction.SnapshotBuilder{Repo: repository[0].repo}).CandidateLocationSupportsCausality(repository[0].ctx, state.InitialSnapshot, finding.Location, finding.CausalDisposition)
 					if err != nil {
 						return reviewtransaction.CompactReviewInput{}, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
 					}

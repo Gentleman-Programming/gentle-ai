@@ -39,28 +39,45 @@ func reviewReviewerResultSlotOccupiedFailure() error {
 }
 
 type reviewResultArtifact struct {
-	Schema            string                                      `json:"schema"`
-	Capability        string                                      `json:"capability"`
-	Path              string                                      `json:"path,omitempty"`
-	Reference         string                                      `json:"reference,omitempty"`
-	SHA256            string                                      `json:"sha256"`
-	LineageID         string                                      `json:"lineage_id"`
-	TargetIdentity    string                                      `json:"target_identity"`
-	Lens              string                                      `json:"lens"`
-	SelectedOrder     int                                         `json:"selected_order"`
-	SubjectHash       string                                      `json:"subject_hash"`
-	AdmissionDecision reviewtransaction.ArtifactAdmissionDecision `json:"admission_decision"`
+	Schema                   string                                               `json:"schema"`
+	Capability               string                                               `json:"capability"`
+	Path                     string                                               `json:"path,omitempty"`
+	Reference                string                                               `json:"reference,omitempty"`
+	SHA256                   string                                               `json:"sha256"`
+	LineageID                string                                               `json:"lineage_id"`
+	TargetIdentity           string                                               `json:"target_identity"`
+	Lens                     string                                               `json:"lens"`
+	SelectedOrder            int                                                  `json:"selected_order"`
+	SubjectHash              string                                               `json:"subject_hash"`
+	AdmissionDecision        reviewtransaction.ArtifactAdmissionDecision          `json:"admission_decision"`
+	DowngradedCausalFindings []reviewtransaction.ArtifactAdmissionCausalDowngrade `json:"downgraded_causal_findings,omitempty"`
+	Note                     string                                               `json:"note,omitempty"`
 }
 
 type reviewResultDryRun struct {
-	Schema            string                                      `json:"schema"`
-	Operation         string                                      `json:"operation"`
-	Validation        string                                      `json:"validation"`
-	LineageID         string                                      `json:"lineage_id"`
-	Lens              string                                      `json:"lens"`
-	SelectedOrder     int                                         `json:"selected_order"`
-	SubjectHash       string                                      `json:"subject_hash"`
-	AdmissionDecision reviewtransaction.ArtifactAdmissionDecision `json:"admission_decision,omitempty"`
+	Schema                   string                                               `json:"schema"`
+	Operation                string                                               `json:"operation"`
+	Validation               string                                               `json:"validation"`
+	LineageID                string                                               `json:"lineage_id"`
+	Lens                     string                                               `json:"lens"`
+	SelectedOrder            int                                                  `json:"selected_order"`
+	SubjectHash              string                                               `json:"subject_hash"`
+	AdmissionDecision        reviewtransaction.ArtifactAdmissionDecision          `json:"admission_decision,omitempty"`
+	DowngradedCausalFindings []reviewtransaction.ArtifactAdmissionCausalDowngrade `json:"downgraded_causal_findings,omitempty"`
+	Note                     string                                               `json:"note,omitempty"`
+}
+
+// reviewFullyDegradedCausalAdmissionNote flags the one degenerate shape a bare
+// non-empty DowngradedCausalFindings list does not make obvious on its own: a
+// capture where every self-claimed candidate-causal finding was unverified,
+// so CandidateCausalFindingIDs is empty and the artifact still admitted with
+// zero verified causal findings. Anything short of "all" leaves at least one
+// verified ID, which is itself visible.
+func reviewFullyDegradedCausalAdmissionNote(admission reviewtransaction.ArtifactAdmission) string {
+	if len(admission.DowngradedCausalFindings) == 0 || len(admission.CandidateCausalFindingIDs) != 0 {
+		return ""
+	}
+	return "all self-claimed causal findings were unverified"
 }
 
 // admittedReviewerResult is the durable provider-owned envelope. Historical
@@ -344,7 +361,8 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return encodeReviewJSON(stdout, reviewResultDryRun{
 			Schema: reviewResultDryRunSchema, Operation: "review/capture-result", Validation: "accepted",
 			LineageID: state.LineageID, Lens: *lens, SelectedOrder: *order, SubjectHash: subject.SubjectHash,
-			AdmissionDecision: admitted.Admission.Decision,
+			AdmissionDecision: admitted.Admission.Decision, DowngradedCausalFindings: admitted.Admission.DowngradedCausalFindings,
+			Note: reviewFullyDegradedCausalAdmissionNote(admitted.Admission),
 		})
 	}
 	captured, err := store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
@@ -377,6 +395,8 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		SHA256: captured.Slot.Digest, LineageID: state.LineageID,
 		TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
 		SubjectHash: captured.Subject.SubjectHash, AdmissionDecision: captured.Admission.Decision,
+		DowngradedCausalFindings: captured.Admission.DowngradedCausalFindings,
+		Note:                     reviewFullyDegradedCausalAdmissionNote(captured.Admission),
 	}
 	artifact.Reference = reviewResultReference(artifact)
 	return encodeReviewJSON(stdout, artifact)
@@ -512,14 +532,14 @@ func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected 
 	if envelope.Schema != wantSchema || !reflect.DeepEqual(envelope.Subject, expected) {
 		return facadeReviewerResult{}, errors.New("captured reviewer result does not contain the exact provider-owned subject")
 	}
-	if err := envelope.Admission.Validate(expected); err != nil {
-		return facadeReviewerResult{}, err
-	}
 	canonical, err := json.Marshal(envelope.Result)
 	if err != nil {
 		return facadeReviewerResult{}, err
 	}
 	canonical = append(canonical, '\n')
+	if err := envelope.Admission.Validate(expected, canonical); err != nil {
+		return facadeReviewerResult{}, err
+	}
 	native := envelope.Result.nativeLensResult()
 	native.Lens = expected.Lens
 	result, revalidated, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
@@ -535,21 +555,38 @@ func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected 
 	return envelope.Result, nil
 }
 
-func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapshot reviewtransaction.Snapshot, result reviewtransaction.LensResult) ([]string, error) {
+// verifiedCandidateCausalFindingIDs returns the self-claimed candidate-causal
+// finding IDs the repository actually proves, plus whether that proof's
+// evidence derivation was complete for every one of them. A degraded
+// derivation (CandidateLocationSupportsCausality could not resolve a
+// dependable per-line signal -- binary content, or an untraceable rename) is
+// reported rather than silently treated as "not caused": AdmitArtifact uses
+// it to refuse downgrading an unverified finding when the reason it looks
+// unverified might be a missing signal rather than a real absence of
+// causality.
+func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapshot reviewtransaction.Snapshot, result reviewtransaction.LensResult) ([]string, reviewtransaction.EvidenceDerivationStatus, string, error) {
 	ids := make([]string, 0)
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	derivation := reviewtransaction.EvidenceDerivationComplete
+	degradedReason := ""
 	for _, finding := range result.Findings {
 		if !facadeSevere(finding.Severity) {
 			continue
 		}
 		switch finding.CausalDisposition {
 		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
-			changed, err := builder.CandidateLocationSupportsCausality(ctx, snapshot, finding.Location, finding.CausalDisposition)
+			changed, degraded, err := builder.CandidateLocationSupportsCausality(ctx, snapshot, finding.Location, finding.CausalDisposition)
 			if err != nil {
 				if errors.Is(err, reviewtransaction.ErrInvalidFindingLocation) {
-					return nil, reviewtransaction.NewArtifactLocationAdmissionError(finding.ID, finding.Location, err)
+					return nil, "", "", reviewtransaction.NewArtifactLocationAdmissionError(finding.ID, finding.Location, err)
 				}
-				return nil, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
+				return nil, "", "", fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
+			}
+			if degraded {
+				derivation = reviewtransaction.EvidenceDerivationDegraded
+				if degradedReason == "" {
+					degradedReason = fmt.Sprintf("repository-derived changed-line evidence for finding %q could not be resolved (binary content or an untraceable path change)", finding.ID)
+				}
 			}
 			if changed {
 				ids = append(ids, finding.ID)
@@ -557,7 +594,7 @@ func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapsho
 		}
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return ids, derivation, degradedReason, nil
 }
 
 func decodeFacadeJSONBytes(payload []byte, value any) error {

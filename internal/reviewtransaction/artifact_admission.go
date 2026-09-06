@@ -56,18 +56,48 @@ type ArtifactInspection struct {
 	Reason string                   `json:"reason,omitempty"`
 }
 
+// ArtifactAdmissionCausalDowngrade names one severe finding whose self-claimed
+// candidate-causal disposition (introduced/behavior-activated/worsened) could
+// not be proven by repository-derived changed-line evidence. Admission
+// downgrades exactly this finding to CausalUnknown -- the same disposition
+// CompactReviewView's replay already assigns an unverified claim -- and
+// admits the rest of the artifact, instead of rejecting the whole result for
+// one borderline finding.
+type ArtifactAdmissionCausalDowngrade struct {
+	FindingID string `json:"finding_id"`
+	Reason    string `json:"reason"`
+}
+
 // ArtifactAdmission records the provider's decision and exact raw/canonical
 // payload identities. Only completed records are reviewer results.
 type ArtifactAdmission struct {
-	Schema                    string                    `json:"schema"`
-	Decision                  ArtifactAdmissionDecision `json:"decision"`
-	SubjectHash               string                    `json:"subject_hash"`
-	RawSHA256                 string                    `json:"raw_sha256"`
-	CanonicalSHA256           string                    `json:"canonical_sha256"`
-	ResultHash                string                    `json:"result_hash,omitempty"`
-	CandidateCausalFindingIDs []string                  `json:"candidate_causal_finding_ids"`
-	Diagnostic                string                    `json:"diagnostic,omitempty"`
+	Schema                    string                             `json:"schema"`
+	Decision                  ArtifactAdmissionDecision          `json:"decision"`
+	SubjectHash               string                             `json:"subject_hash"`
+	RawSHA256                 string                             `json:"raw_sha256"`
+	CanonicalSHA256           string                             `json:"canonical_sha256"`
+	ResultHash                string                             `json:"result_hash,omitempty"`
+	CandidateCausalFindingIDs []string                           `json:"candidate_causal_finding_ids"`
+	DowngradedCausalFindings  []ArtifactAdmissionCausalDowngrade `json:"downgraded_causal_findings,omitempty"`
+	Diagnostic                string                             `json:"diagnostic,omitempty"`
 }
+
+// EvidenceDerivationStatus reports whether CandidateCausalFindingIDs was
+// computed from a complete repository-derived changed-line signal for every
+// self-claimed candidate-causal finding it covers, or whether that derivation
+// degraded for at least one of them (binary content, an untraceable rename,
+// or another condition the changed-line derivation could not resolve). A
+// request that never sets this field defaults to EvidenceDerivationComplete,
+// matching every caller that replays an already-admitted result rather than
+// freshly deriving evidence -- the degraded case can only have been produced
+// by a fresh derivation that already gated it before the replay was ever
+// persisted.
+type EvidenceDerivationStatus string
+
+const (
+	EvidenceDerivationComplete EvidenceDerivationStatus = "complete"
+	EvidenceDerivationDegraded EvidenceDerivationStatus = "degraded"
+)
 
 type ArtifactAdmissionRequest struct {
 	ExpectedSubject   ArtifactSubject
@@ -79,8 +109,17 @@ type ArtifactAdmissionRequest struct {
 	// causality the provider verified against repository-derived changed-line
 	// evidence before admission.
 	CandidateCausalFindingIDs []string
-	RawPayload                []byte
-	CanonicalPayload          []byte
+	// EvidenceDerivation and EvidenceDerivationReason report the quality of
+	// the changed-line derivation behind CandidateCausalFindingIDs. When
+	// EvidenceDerivationDegraded, AdmitArtifact refuses to downgrade any
+	// unverified self-claimed finding to CausalUnknown -- a degraded
+	// derivation cannot distinguish "proven not caused by the candidate" from
+	// "no dependable signal could be derived", and downgrading on that
+	// ambiguity would silently neutralize a real blocker.
+	EvidenceDerivation       EvidenceDerivationStatus
+	EvidenceDerivationReason string
+	RawPayload               []byte
+	CanonicalPayload         []byte
 }
 
 // ArtifactAdmissionError exposes the stable native decision without requiring
@@ -248,7 +287,15 @@ func NewArtifactLocationAdmissionError(findingID, location string, cause error) 
 	}
 }
 
-func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
+// Validate checks admission is a self-consistent completed binding for
+// subject. canonicalPayload is the exact bytes the caller stores or intends
+// to store as the admitted result's envelope Result (see
+// CanonicalReviewerResultPayload) -- it is only compared against
+// CanonicalSHA256 when DowngradedCausalFindings is non-empty, since that is
+// the one case where CanonicalSHA256 is derived from a rewritten (not
+// caller-submitted) canonical form and a caller-local re-serialization could
+// silently drift from what AdmitArtifact actually hashed.
+func (admission ArtifactAdmission) Validate(subject ArtifactSubject, canonicalPayload []byte) error {
 	if admission.Schema != ArtifactAdmissionSchema || admission.Decision != ArtifactAdmissionCompleted ||
 		admission.SubjectHash != subject.SubjectHash || !validSHA256(admission.RawSHA256) ||
 		!validSHA256(admission.CanonicalSHA256) || !validSHA256(admission.ResultHash) ||
@@ -263,6 +310,20 @@ func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
 		if !artifactFindingID.MatchString(id) {
 			return errors.New("artifact admission candidate-causal finding ID is invalid")
 		}
+	}
+	downgradedIDs := make([]string, len(admission.DowngradedCausalFindings))
+	for index, downgrade := range admission.DowngradedCausalFindings {
+		if !artifactFindingID.MatchString(downgrade.FindingID) || downgrade.Reason != "unverified_location" || stringIndex(ids, downgrade.FindingID) >= 0 {
+			return errors.New("artifact admission downgraded causal finding is invalid") // refusal:by-design world-action: only AdmitArtifact constructs this record, so a malformed entry is a provider code defect no operator command can repair
+		}
+		downgradedIDs[index] = downgrade.FindingID
+	}
+	canonicalDowngradedIDs, err := canonicalStrings(downgradedIDs, "downgraded causal finding id")
+	if err != nil || !equalStrings(canonicalDowngradedIDs, downgradedIDs) {
+		return errors.New("artifact admission downgraded causal finding IDs are not canonical") // refusal:by-design world-action: only AdmitArtifact constructs this record, so non-canonical IDs are a provider code defect no operator command can repair
+	}
+	if len(admission.DowngradedCausalFindings) > 0 && admission.CanonicalSHA256 != payloadSHA256(canonicalPayload) {
+		return errors.New("artifact admission canonical digest does not match the downgraded canonical payload") // refusal:by-design world-action: only AdmitArtifact and its exact stored bytes can satisfy this; a mismatch requires storage inspection, not an operator command
 	}
 	return ValidateArtifactSubject(subject)
 }
@@ -489,26 +550,111 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	// the same candidate-causal findings in a different order or with
 	// non-canonical formatting must still admit, since admission persists the
 	// canonical form below rather than the caller's raw bytes.
-	if !equalStrings(verifiedIDs, wantCandidateCausalIDs) {
-		var findingID, location string
-		for _, finding := range canonical.Findings {
-			if stringIndex(wantCandidateCausalIDs, finding.ID) >= 0 && stringIndex(verifiedIDs, finding.ID) < 0 {
-				findingID, location = finding.ID, finding.Location
-				break
-			}
+	//
+	// verifiedIDs is only ever computed (review_artifact.go's
+	// verifiedCandidateCausalFindingIDs) from findings that already self-claim
+	// candidate causality, so it can never legitimately name an ID outside
+	// wantCandidateCausalIDs. A caller that names one anyway disagrees with the
+	// canonical findings about which findings even exist -- a structural
+	// defect distinct from an unproven claim on a real finding -- and still
+	// rejects the whole artifact.
+	for _, id := range verifiedIDs {
+		if stringIndex(wantCandidateCausalIDs, id) < 0 {
+			return failFinding(ArtifactAdmissionOutOfScope,
+				"verified candidate-causal finding IDs are not a subset of the reviewer's self-claimed candidate-causal findings",
+				findingAdmissionDiagnostic("candidate_causality_unclaimed_id", id, "", "id_not_self_claimed_by_finding"), nil)
+		}
+	}
+	// A self-claimed candidate-causal finding the caller could not verify
+	// against repository-derived changed-line evidence is downgraded to
+	// CausalUnknown here -- the disposition CompactReviewView's replay already
+	// assigns an unverified claim (compact.go) -- rather than rejecting the
+	// whole artifact for one borderline finding (#1757, #2782). The finding
+	// still admits with every other finding; its outcome becomes the
+	// non-blocking inconclusive follow-up path; and it can never become a
+	// correction target, since ValidateCorrectionPlanRequest only accepts a
+	// CausalIntroduced, CausalBehaviorActivated, or CausalWorsened
+	// disposition.
+	downgraded := make([]ArtifactAdmissionCausalDowngrade, 0, len(wantCandidateCausalIDs))
+	downgradedIDs := make(map[string]bool, len(wantCandidateCausalIDs))
+	for _, id := range wantCandidateCausalIDs {
+		if stringIndex(verifiedIDs, id) < 0 {
+			downgraded = append(downgraded, ArtifactAdmissionCausalDowngrade{FindingID: id, Reason: "unverified_location"})
+			downgradedIDs[id] = true
+		}
+	}
+	if len(downgraded) > 0 && request.EvidenceDerivation == EvidenceDerivationDegraded {
+		// A degraded changed-line derivation cannot tell "this finding is
+		// proven not caused by the candidate" from "no dependable signal could
+		// be derived at all" (binary content, an untraceable rename, or
+		// another gap named in the reason). Downgrading on that ambiguity
+		// would silently neutralize a real blocker the exact same way the
+		// old whole-artifact hard-reject did for a genuinely unproven claim --
+		// so this keeps the whole-artifact rejection instead of downgrading.
+		reason := strings.TrimSpace(request.EvidenceDerivationReason)
+		if reason == "" {
+			reason = "repository-derived changed-line evidence could not be fully resolved for this candidate"
 		}
 		return failFinding(ArtifactAdmissionOutOfScope,
-			"candidate-causal findings are not proven by repository-derived changed-line evidence",
-			findingAdmissionDiagnostic("candidate_causality_unproven", findingID, location, "line_not_changed_by_candidate"), nil)
+			"candidate-causal findings cannot be downgraded because their changed-line evidence derivation is degraded: "+reason+"; "+artifactRecaptureContinuation,
+			findingAdmissionDiagnostic("candidate_causality_evidence_degraded", downgraded[0].FindingID, "", "evidence_derivation_degraded"), nil)
+	}
+	if len(downgraded) > 0 {
+		// canonical.Findings is a freshly built slice of value copies (see
+		// canonicalLensResult), so rewriting a disposition here never aliases
+		// the caller's original request.Result.Findings. The rewrite happens
+		// before canonical.ResultHash and CanonicalSHA256 are (re)derived, so
+		// the hashes -- and every persisted artifact keyed off them -- reflect
+		// the downgraded disposition instead of the reviewer's unproven
+		// self-claim.
+		for index := range canonical.Findings {
+			if downgradedIDs[canonical.Findings[index].ID] {
+				canonical.Findings[index].CausalDisposition = CausalUnknown
+			}
+		}
+		canonical.ResultHash = LensResultHash(canonical)
+		canonicalPayload, payloadErr := CanonicalReviewerResultPayload(request.EchoedSubjectHash, request.Inspection, canonical)
+		if payloadErr != nil {
+			return fail(ArtifactAdmissionIncomplete, payloadErr.Error())
+		}
+		admission.CanonicalSHA256 = payloadSHA256(canonicalPayload)
 	}
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash
 	admission.CandidateCausalFindingIDs = verifiedIDs
+	if len(downgraded) > 0 {
+		admission.DowngradedCausalFindings = downgraded
+	}
 	return canonical, admission, nil
 }
 
 func payloadSHA256(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// CanonicalReviewerResultPayload deterministically serializes one admitted
+// reviewer result into the exact envelope-payload bytes (including the
+// trailing newline) whose SHA-256 becomes an ArtifactAdmission's
+// CanonicalSHA256. AdmitArtifact calls this to derive CanonicalSHA256 from
+// the findings it actually admits -- including any it just rewrote to
+// CausalUnknown -- and every consumer that needs to persist or re-verify that
+// same payload (the compact store's capture path, Validate's own
+// re-derivation) calls this identical function, so the bytes a constructor
+// hashes and the bytes a caller persists can never independently drift.
+func CanonicalReviewerResultPayload(subjectHash string, inspection ArtifactInspection, result LensResult) ([]byte, error) {
+	paths, err := canonicalPaths(inspection.Paths)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(compactProviderReviewerResult{
+		SubjectHash: subjectHash,
+		Inspection:  ArtifactInspection{Status: inspection.Status, Paths: paths},
+		Lens:        result.Lens, Findings: result.Findings, Evidence: result.Evidence,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(payload, '\n'), nil
 }
 
 // ExtractBoundedSingleJSONObject accepts transport prose around exactly one
