@@ -114,6 +114,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDTaskResult(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
+		case "telemetry":
+			return cli.RunTelemetry(args[1:], stdout)
 		case "review":
 			// The kill switch must stay reachable even when review authority
 			// itself is disabled, so it is dispatched ahead of the facade.
@@ -493,7 +495,13 @@ func runSkillRegistryList(args []string, stdout io.Writer) error {
 func runUpdate(ctx context.Context, currentVersion string, profile system.PlatformProfile, stdout io.Writer) error {
 	results := updateCheckAll(ctx, currentVersion, profile)
 	_, _ = fmt.Fprint(stdout, update.RenderCLI(results))
-	return updateCheckError(results)
+	if err := updateCheckError(results); err != nil {
+		return err
+	}
+	if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+		cli.TelemetryTrigger(homeDir)
+	}
+	return nil
 }
 
 // runUpgrade handles the `gentle-ai upgrade [--dry-run] [tool...]` command.

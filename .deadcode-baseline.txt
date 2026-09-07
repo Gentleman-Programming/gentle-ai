@@ -233,6 +233,10 @@ internal/system/install_deps.go	installCommandsCurl
 internal/system/install_deps.go	installCommandsGit
 internal/system/install_deps.go	installCommandsGo
 internal/system/install_deps.go	installCommandsNode
+internal/telemetry/recording_spawn.go	NewRecordingSpawner
+internal/telemetry/recording_spawn.go	RecordingSpawner.Calls
+internal/telemetry/recording_spawn.go	RecordingSpawner.Reset
+internal/telemetry/recording_spawn.go	RecordingSpawner.Spawn
 internal/tui/model.go	setOSExecutableForTest
 internal/tui/model.go	setOSGetwdForTest
 internal/tui/model.go	setOSRemoveForTest

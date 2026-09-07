@@ -583,6 +583,33 @@ Every install, sync and upgrade automatically snapshots your config files. Backu
 
 <div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
+## Telemetry
+
+We count how many installs are active and which features (agents, components, receipt-driven development) are actually used, so we know what is worth maintaining. Nothing else.
+
+What is sent, per event:
+
+- a random install id (a UUID generated locally; it identifies the installation, not a person or a machine)
+- the `gentle-ai` version
+- OS and CPU architecture
+- the list of agents and components you selected
+- whether receipt-driven development is on
+- on heartbeats only, a handful of counters: `syncs`, SDD phase runs, and reviews approved / corrected / escalated
+
+One `install` event is sent per installation, and at most one `heartbeat` per day — triggered by `install`, `update`, `sync`, finishing a native review, or finishing an SDD phase, whichever comes first.
+
+What is never sent: repository names, file paths, code, diffs, prompts, reviewer output, usernames, hostnames, e-mail addresses, or IP addresses (the collector does not store the sender's address either).
+
+See the exact payload before anything leaves your machine with `gentle-ai telemetry preview --json`. The first run only prints a notice and sends nothing; the first real event goes out starting from the next run.
+
+Turn it off with `gentle-ai telemetry disable`, or `DO_NOT_TRACK` set to anything but `0` / `GENTLE_AI_TELEMETRY=0`. `CI=true` disables it automatically. `gentle-ai telemetry status` shows the deciding source.
+
+It goes to a collector we run ourselves, whose source is in this repository (`cmd/gentle-telemetry`). Raw events are kept for 90 days, then only aggregated counts remain. Full contract and schema: **[Telemetry](docs/telemetry.md)**.
+
+<div align="right"><a href="#top">Back to top</a></div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
 ## Reference
 
 <details>
@@ -808,6 +835,7 @@ Run `gentle-ai help` for the complete surface, including SDD orchestration and r
 | Refresh or troubleshoot an installation | [Usage](docs/usage.md), [Backup & Rollback](docs/rollback.md), and [Platforms](docs/platforms.md) |
 | Extend or contribute to Gentle AI | [Codebase Guide](docs/CODEBASE-GUIDE.md), [Components, Skills & Presets](docs/components.md), [Skill Registry](docs/skill-registry.md), and [Architecture & Development](docs/architecture.md) |
 | Understand how agent behavior is tested | [Testing Agents Deterministically](docs/testing-agents-deterministically.md) |
+| Understand or opt out of usage telemetry | [Telemetry](docs/telemetry.md) |
 
 <div align="right"><a href="#top">Back to top</a></div>
 

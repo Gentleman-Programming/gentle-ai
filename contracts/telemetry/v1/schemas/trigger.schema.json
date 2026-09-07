@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/telemetry/v1/schemas/trigger.schema.json",
+  "title": "gentle-ai.telemetry-trigger/v1",
+  "description": "Answer to `gentle-ai telemetry trigger`: the exhaustive classification of what the opportunistic check just did. Always exits 0; never carries an error.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "decision", "source"],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.telemetry-trigger/v1"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["enrolled", "sent_install", "sent_heartbeat", "rate_limited", "backoff", "disabled"]
+    },
+    "source": {
+      "type": "string",
+      "enum": ["DO_NOT_TRACK", "GENTLE_AI_TELEMETRY", "CI", "state", "default"]
+    }
+  }
+}

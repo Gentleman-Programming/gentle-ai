@@ -36,6 +36,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
@@ -1896,6 +1897,8 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, err
 	}
 	result.DryRun = false
+	_ = telemetry.IncrementSyncs(homeDir)
+	TelemetryTrigger(homeDir)
 	return result, nil
 }
 

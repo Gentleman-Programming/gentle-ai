@@ -2199,6 +2199,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			if err != nil {
 				return fmt.Errorf("commit zero-lens review acknowledgement: %w", err)
 			}
+			telemetryRecordReviewOutcome("approved")
 			legacyResult := reviewFacadeStartResultFor("closed", false, state)
 			legacyResult.Acknowledgement = reviewApprovedAcknowledgementTransition(root, acknowledgement)
 			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)

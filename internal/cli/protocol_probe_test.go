@@ -12,7 +12,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
 )
+
+// telemetryTestSpawnRecorder is the RecordingSpawner installed as
+// telemetry.DefaultSpawn for this whole test binary (see TestMain). Tests
+// that need to observe whether a trigger actually attempted a send —
+// without ever starting a real process or reaching the network — read
+// telemetryTestSpawnRecorder.Calls() rather than injecting their own Deps.Spawn,
+// since production call sites like TelemetryTrigger never expose that seam.
+var telemetryTestSpawnRecorder *telemetry.RecordingSpawner
 
 // TestMain overrides verifyEngramVersion and probeEngramProtocolFlag with
 // hermetic fakes for the whole internal/cli test binary, so pre-existing
@@ -73,6 +82,25 @@ func TestMain(m *testing.M) {
 	qwen.LookPathOverride = agentPresent
 	kilocode.LookPathOverride = agentPresent
 	openclaw.LookPathOverride = agentPresent
+
+	// Telemetry hermeticity for the whole binary: countless tests in this
+	// package exercise install/sync/review-outcome code paths that now call
+	// telemetry.Opportunistic or increment a counter, without any of them
+	// intending to test telemetry itself. Two defaults close that gap
+	// without touching the many tests that already sandbox HOME themselves
+	// (t.Setenv save/restores against whatever this TestMain set, never
+	// against the developer's real environment):
+	//   - DO_NOT_TRACK=1 makes telemetry.Decide refuse before any state file
+	//     is read or written, for every test that does not explicitly
+	//     re-enable it for its own scope.
+	//   - DefaultSpawn is a RecordingSpawner: even a test that does
+	//     re-enable telemetry can never start a real process or reach the
+	//     network merely by calling Opportunistic with no injected Spawn.
+	if err := os.Setenv("DO_NOT_TRACK", "1"); err != nil {
+		panic(err)
+	}
+	telemetryTestSpawnRecorder = telemetry.NewRecordingSpawner()
+	telemetry.DefaultSpawn = telemetryTestSpawnRecorder.Spawn
 
 	code := m.Run()
 	_ = os.RemoveAll(testHome)

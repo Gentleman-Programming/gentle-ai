@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/telemetry/v1/schemas/event.schema.json",
+  "title": "gentle-ai.telemetry-event/v1",
+  "description": "Anonymous usage event POSTed to the telemetry collector. Carries only fixed enums, a random install identifier, and counts; never a path, hostname, username, prompt, diff, or IP address. Every string property is closed (enum, const, or pattern) so a free-text field can never be added silently.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "event",
+    "install_id",
+    "sent_at",
+    "version",
+    "os",
+    "arch",
+    "agents",
+    "components",
+    "rdd_enabled"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.telemetry-event/v1"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["install", "heartbeat"]
+    },
+    "install_id": {
+      "type": "string",
+      "description": "UUID v4, generated once per installation and stored in the gentle-ai state directory.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sent_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "version": {
+      "type": "string",
+      "description": "gentle-ai's numeric release version, or 0.0.0-dev for a source/untagged build. Never an arbitrary string.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.+-]{1,64})?$"
+    },
+    "os": {
+      "type": "string",
+      "enum": ["darwin", "linux", "windows"]
+    },
+    "arch": {
+      "type": "string",
+      "enum": ["amd64", "arm64", "386", "arm"]
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "claude-code", "opencode", "kilocode", "gemini-cli", "cursor",
+          "vscode-copilot", "codex", "antigravity", "windsurf", "kimi",
+          "qwen-code", "kiro-ide", "openclaw", "pi", "trae-ide", "hermes"
+        ]
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "engram", "sdd", "skills", "context7", "persona",
+          "permissions", "gga", "theme", "claude-theme", "opencode-gentle-logo"
+        ]
+      }
+    },
+    "rdd_enabled": {
+      "type": "boolean"
+    },
+    "counters": {
+      "description": "Present only on a heartbeat event. Values are since the previous successful send and reset after a 2xx response.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "syncs",
+        "sdd_phase_runs",
+        "reviews_approved",
+        "reviews_correction",
+        "reviews_escalated"
+      ],
+      "properties": {
+        "syncs": { "type": "integer", "minimum": 0 },
+        "sdd_phase_runs": { "type": "integer", "minimum": 0 },
+        "reviews_approved": { "type": "integer", "minimum": 0 },
+        "reviews_correction": { "type": "integer", "minimum": 0 },
+        "reviews_escalated": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -137,8 +137,10 @@ func closeCorrectionOnCapturedValidator(
 	case reviewtransaction.StateApproved:
 		result.Action = reviewApprovedLastEventAcknowledgementAction
 		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
+		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateEscalated:
 		result.Action = "the targeted validator rejected the correction; maintainer action is informational"
+		telemetryRecordReviewOutcome("escalated")
 	default:
 		return nil, fmt.Errorf("targeted validator capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection
 	}
@@ -279,14 +281,17 @@ func closeReviewOnLastCapturedLens(
 		result.Action = reviewApprovedLastEventAcknowledgementAction
 		result.AdvisoryFindings = reviewtransaction.AdvisoryFindingSetFor(state)
 		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
+		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateCorrectionRequired:
 		result.Action = "candidate-caused severe findings require one bounded correction"
 		result.StatusContinuation = reviewCorrectionStatusContinuation(repo, state, revision, runtime)
 		if result.StatusContinuation == nil {
 			return nil, fmt.Errorf("correction-required review has unsupported initial target kind %q", state.InitialSnapshot.Kind) // refusal:by-design human-authority: only a recognized frozen selector may reopen correction planning
 		}
+		telemetryRecordReviewOutcome("correction")
 	case reviewtransaction.StateEscalated:
 		result.Action = "review completed with inconclusive severe findings; maintainer action is informational"
+		telemetryRecordReviewOutcome("escalated")
 	default:
 		return nil, fmt.Errorf("last reviewer capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection
 	}

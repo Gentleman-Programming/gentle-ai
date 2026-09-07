@@ -269,6 +269,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			ExpectedRevision: *expected, RequestID: *requestID, Roots: roots, Reason: *reason, Actor: *actor,
 		})
 	}
+	if err == nil && (operation == "finish" || operation == "settle") {
+		telemetryRecordSDDPhaseRun()
+	}
 	if err != nil {
 		return fmt.Errorf("sdd-attempt %s: %w", operation, err)
 	}
