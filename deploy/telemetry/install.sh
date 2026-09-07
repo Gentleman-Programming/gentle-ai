@@ -230,6 +230,14 @@ set_ini_kv() {
 	mv "${file}.tmp" "${file}"
 }
 
+grafana_cli() {
+	if command -v grafana >/dev/null 2>&1; then
+		grafana cli --homepath /usr/share/grafana "$@"
+	else
+		grafana-cli --homepath /usr/share/grafana "$@"
+	fi
+}
+
 install_grafana() {
 	if ! command -v grafana-server >/dev/null 2>&1; then
 		printf 'installing Grafana OSS from the official rpm.grafana.com repository\n'
@@ -247,8 +255,12 @@ EOF
 		dnf install -y grafana
 	fi
 
-	if ! grafana-cli plugins ls 2>/dev/null | grep -q frser-sqlite-datasource; then
-		grafana-cli plugins install frser-sqlite-datasource
+	# The packaged CLI needs the homepath to find its config defaults when
+	# run outside /usr/share/grafana; without it, plugin commands abort with
+	# "Could not find config defaults". Newer packages ship `grafana cli`,
+	# older ones only `grafana-cli`.
+	if ! grafana_cli plugins ls 2>/dev/null | grep -q frser-sqlite-datasource; then
+		grafana_cli plugins install frser-sqlite-datasource
 	fi
 
 	mkdir -p "${GRAFANA_PROVISIONING_DIR}/datasources" "${GRAFANA_PROVISIONING_DIR}/dashboards" "${GRAFANA_DASHBOARD_DIR}"
@@ -258,6 +270,8 @@ EOF
 
 	# Served at /grafana/ behind Apache (deploy/telemetry/apache/telemetry-vhost.conf.tmpl),
 	# on the same domain, so no separate port is exposed publicly.
+	# Apache proxies /grafana/ to loopback; never expose port 3000 itself.
+	set_ini_kv "${GRAFANA_INI}" server http_addr 127.0.0.1
 	set_ini_kv "${GRAFANA_INI}" server root_url "%(protocol)s://%(domain)s/grafana/"
 	set_ini_kv "${GRAFANA_INI}" server serve_from_sub_path true
 	# frser-sqlite-datasource v3+ requires this to open a local filesystem
@@ -274,7 +288,7 @@ EOF
 	# request. Grafana only seeds [security] admin_user/admin_password
 	# into its own database on that very first startup — on a re-run
 	# against an already-initialized Grafana, this does not rotate the
-	# live password; use `grafana-cli admin reset-admin-password` for that.
+	# live password; use `grafana cli --homepath /usr/share/grafana admin reset-admin-password` for that.
 	if [[ ! -f "${GRAFANA_ADMIN_PASSWORD_FILE}" ]]; then
 		umask 0177
 		openssl rand -base64 24 >"${GRAFANA_ADMIN_PASSWORD_FILE}"
@@ -318,6 +332,9 @@ mkdir -p /var/log/gentle-telemetry
 if [[ -n "${DOMAIN}" ]]; then
 	sed "s/__DOMAIN__/${DOMAIN}/g" "${SCRIPT_DIR}/apache/telemetry-vhost.conf.tmpl" >"${RENDERED_VHOST}"
 	chmod 0600 "${RENDERED_VHOST}"
+	# The :80 block's DocumentRoot and Certbot's --webroot both need this
+	# directory to exist before httpd is reloaded with the block appended.
+	install -d -m 0755 /var/www/gentle-telemetry-acme
 	printf 'rendered the vhost template for %s to %s\n' "${DOMAIN}" "${RENDERED_VHOST}"
 	print_domain="${DOMAIN}"
 else

@@ -447,7 +447,7 @@ The script prints that file's path once. Read it with
 `https://telemetry.example.com/grafana/` as `gentle`. Grafana only seeds
 `admin_user`/`admin_password` into its own database on that very first
 startup — on a re-run against an already-initialized Grafana, rotate the
-live password instead with `grafana-cli admin reset-admin-password
+live password instead with `grafana cli --homepath /usr/share/grafana admin reset-admin-password
 <new-password>` on the VPS (and update `/etc/grafana/admin-password` to
 match, so the two stay in sync). To change it via the UI later:
 **Administration → Users → gentle**.
