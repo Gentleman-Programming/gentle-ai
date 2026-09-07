@@ -1586,20 +1586,6 @@ func replacePreservedPromptSection(prompt string, start, end int, replacement st
 	return b.String()
 }
 
-func containsOpenCodeOrchestratorLanguageLeak(prompt string) bool {
-	for _, leak := range []string{
-		"elegí",
-		"Respondé",
-		"¿Querés ajustar algo o continuamos?",
-		"If the current language is Spanish, use the Spanish localized shape below verbatim",
-	} {
-		if strings.Contains(prompt, leak) {
-			return true
-		}
-	}
-	return false
-}
-
 func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
 	if strings.TrimSpace(settingsPath) == "" || strings.TrimSpace(agentKey) == "" {
 		return "", nil
