@@ -3,6 +3,8 @@ package sdd
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 const (
@@ -13,6 +15,40 @@ const (
 	legacySDDSessionPreflightEnd    = "<!-- /gentle-ai:sdd-session-preflight-migration -->"
 	sddSessionPreflightBody         = "### SDD Session Preflight (HARD GATE)\n\nBefore every SDD command or natural-language SDD request, run this preflight before the SDD init guard; cache choices for the session.\n\nUse the `question` tool only when available and all three groups (Pace, Artifacts, and PR strategy) are exactly representable; otherwise use the lossless blocking fallback and STOP.\nAsk Pace, Artifacts, and PR strategy in ONE `question` tool call; no sequential wizard and no three separate calls.\nMatch labels and descriptions to the conversation language and persona; do not expose canonical/internal codes.\n\n1. **Pace**: Interactive or Automatic.\n2. **Artifacts**: OpenSpec, Engram, or Both (user-facing Both maps only to internal `hybrid`).\n3. **PR strategy**: Ask me, Single PR, or Auto.\n\nReview policy is fixed at 400 changed lines per PR; above 400, split the PR or require maintainer-approved `size:exception`; NEVER ask it as a fourth group or selectable budget.\n\nCanonical mappings:\n- Interactive -> `interactive`\n- Automatic -> `auto`\n- OpenSpec -> `openspec`\n- Engram -> `engram`\n- Both -> `hybrid`\n- Ask me -> `ask-on-risk`\n- Single PR -> `single-pr`\n- Auto -> `auto-chain`"
 )
+
+// The native workflow consumes installed authority, never a second policy body.
+const windsurfSessionPreflightReference = "Read `~/.codeium/windsurf/memories/global_rules.md` before any SDD-owned mutation. Follow its SDD Session Preflight, then its native dispatcher and init guards for `/sdd-new`. If that installed authority is missing, malformed, or cannot resolve the session, STOP; do not initialize, infer defaults, or recreate policy in this workflow."
+const windsurfSessionPreflightPlaceholder = "{{GENTLE_AI_SDD_SESSION_PREFLIGHT_AUTHORITY}}"
+
+func renderWindsurfSessionPreflightEntry(content string) (string, error) {
+	if _, err := sddSessionPreflightNewline(content); err != nil {
+		return "", err
+	}
+	if strings.Count(content, windsurfSessionPreflightPlaceholder) != 1 {
+		return "", fmt.Errorf("Windsurf sdd-new requires exactly one installed-authority reference")
+	}
+	normalized, err := normalizeSDDSessionPreflightLineEndings(content)
+	if err != nil {
+		return "", err
+	}
+	const shell = "---\ndescription: Start a change through the installed SDD authority in Windsurf\n---\n\n# /sdd-new\n\n"
+	if normalized != shell+windsurfSessionPreflightPlaceholder+"\n" {
+		return "", fmt.Errorf("Windsurf sdd-new must remain a thin authority consumer")
+	}
+	return strings.Replace(content, windsurfSessionPreflightPlaceholder, windsurfSessionPreflightReference, 1), nil
+}
+
+func validateRenderedSessionPreflight(content string, agent model.AgentID) error {
+	switch {
+	case usesFallbackSessionPreflight(agent):
+		return validateSDDSessionPreflightProjection(content, "### Native SDD Dispatcher Guard", "")
+	case agent == model.AgentClaudeCode:
+		return validateSDDSessionPreflightProjection(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+	case agent == model.AgentOpenCode || agent == model.AgentKilocode:
+		return validateSDDSessionPreflightProjection(content, "### SDD Entry Routing (MANDATORY)")
+	}
+	return nil
+}
 
 func sddSessionPreflightBlock() string {
 	return sddSessionPreflightBlockWithTool("question")
@@ -115,6 +151,9 @@ func validateSDDSessionPreflightProjection(rendered, preInitAnchor string, nativ
 	tool := "question"
 	if len(nativeTool) > 0 {
 		tool = nativeTool[0]
+	}
+	if _, err := sddSessionPreflightNewline(rendered); err != nil {
+		return err
 	}
 	anchor, err := sddSessionPreflightAnchorIndex(rendered, preInitAnchor)
 	if err != nil {

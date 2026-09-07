@@ -408,6 +408,47 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
+	// Validate every selected session-contract carrier before the first SDD
+	// mutation, including bootstrap directories, commands, plugins and skills.
+	prompt, lazyWorkflow, workflows, err := prepareSessionPreflight(homeDir, adapter, opts)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	var preparedOverlay []byte
+	profileOverlays := make(map[string][]byte)
+	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) && settingsPath != "" {
+		content, err := assets.Read(overlayAssetPath(sddMode))
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		preparedOverlay, err = inlineOpenCodeSDDPrompts([]byte(content), homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.orchestratorPolicyRenderOptions(), opts.CodeGraphGuidanceMarkdown)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if adapter.Agent() == model.AgentKilocode {
+			preparedOverlay, err = stripOpenCodeNativeFallbackAgents(preparedOverlay)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+		}
+		for _, profile := range opts.Profiles {
+			if profile.Name == "" || profile.Name == "default" {
+				continue
+			}
+			overlay, err := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown, opts.orchestratorPolicyRenderOptions())
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			if err := validateSessionPreflightOverlay(overlay, "sdd-orchestrator-"+profile.Name, false); err != nil {
+				return InjectionResult{}, err
+			}
+			profileOverlays[profile.Name] = overlay
+		}
+		if err := validateSessionPreflightOverlay(preparedOverlay, "gentle-orchestrator", opts.PreserveOpenCodeOrchestratorPrompt); err != nil {
+			return InjectionResult{}, err
+		}
+	}
+
 	files := make([]string, 0)
 	changed := false
 
@@ -418,7 +459,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
-			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, opts.orchestratorPolicyRenderOptions())
+			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, prompt)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -431,7 +472,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// custom persona, the SDD content must still be injected. We append the
 			// SDD orchestrator section to the existing system prompt file so it is
 			// always present regardless of persona choice.
-			result, err := injectFileAppend(homeDir, adapter, opts)
+			result, err := injectFileAppend(homeDir, adapter, prompt)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -449,7 +490,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// Write the SDD orchestrator as a standalone Jinja include module.
 			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
 			configDir := adapter.GlobalConfigDir(homeDir)
-			content := renderSDDOrchestratorAsset(adapter.Agent(), opts.orchestratorPolicyRenderOptions())
+			content := prompt
 			modulePath := filepath.Join(configDir, "sdd-orchestrator.md")
 			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
 			if err != nil {
@@ -557,23 +598,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	var mergedSettingsBytes []byte
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		if settingsPath != "" {
-			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
-			if err != nil {
-				return InjectionResult{}, fmt.Errorf("read SDD overlay asset: %w", err)
-			}
-
 			// Inject model assignments into the overlay before merging.
 			// Models are ONLY written when the user explicitly chose them via
 			// the TUI model picker (multi-mode). The overlay JSON itself must
 			// NOT contain model fields — otherwise the deep merge overwrites
 			// whatever the user already has in opencode.json.
-			overlayBytes := []byte(overlayContent)
-			if adapter.Agent() == model.AgentKilocode {
-				overlayBytes, err = stripOpenCodeNativeFallbackAgents(overlayBytes)
-				if err != nil {
-					return InjectionResult{}, fmt.Errorf("strip OpenCode-only fallback agents: %w", err)
-				}
-			}
+			overlayBytes := preparedOverlay
 			// For multi-mode, write shared prompt files before inlining references.
 			if sddMode == model.SDDModeMulti {
 				// Build phase → capability map from model assignments.
@@ -597,10 +627,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				changed = changed || promptsChanged
 			}
 
-			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.orchestratorPolicyRenderOptions(), opts.CodeGraphGuidanceMarkdown)
-			if err != nil {
-				return InjectionResult{}, fmt.Errorf("inline OpenCode SDD prompts: %w", err)
-			}
 			assignments := opts.OpenCodeModelAssignments
 			if sddMode != model.SDDModeMulti {
 				assignments = nil
@@ -671,10 +697,8 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					}
 					changed = changed || cleanupResult.Changed
 				}
-				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown, opts.orchestratorPolicyRenderOptions())
-				if profileErr != nil {
-					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
-				}
+				profileOverlay := profileOverlays[profile.Name]
+				var profileErr error
 				if adapter.Agent() == model.AgentKilocode {
 					profileOverlay, profileErr = restoreKilocodeManagedAgentToolsInOverlay(profileOverlay)
 					if profileErr != nil {
@@ -716,7 +740,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// workflow procedure is installed as a lazy shared skill document and read
 	// only when an SDD command or SDD/Judgment-Day delegation needs it.
 	if adapter.Agent() == model.AgentClaudeCode {
-		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter)
+		workflowResult, workflowErr := writeClaudeLazySDDWorkflow(homeDir, adapter, lazyWorkflow)
 		if workflowErr != nil {
 			return InjectionResult{}, workflowErr
 		}
@@ -743,10 +767,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				if entry.IsDir() {
 					continue
 				}
-				content, readErr := assets.Read(embedDir + "/" + entry.Name())
-				if readErr != nil {
-					return InjectionResult{}, fmt.Errorf("read embedded workflow %q: %w", entry.Name(), readErr)
-				}
+				content := workflows[entry.Name()]
 				path := filepath.Join(workflowsDir, entry.Name())
 				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 				if err != nil {
@@ -938,6 +959,95 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func renderClaudeSessionPreflight() (string, error) {
+	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
+	return projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+}
+
+// Preparation is read-only. A template composer panic must not escape after a
+// partial install; surface it as an injection error before any SDD-owned writes.
+func prepareSessionPreflight(homeDir string, adapter agents.Adapter, opts InjectOptions) (prompt, lazy string, workflows map[string]string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("render SDD session preflight: %v", recovered)
+		}
+	}()
+	prompt, err = renderSessionPreflightPrompt(adapter, opts)
+	if err != nil {
+		return
+	}
+	if adapter.Agent() == model.AgentClaudeCode && adapter.SkillsDir(homeDir) != "" {
+		lazy, err = renderClaudeSessionPreflight()
+		if err != nil {
+			return
+		}
+		if err = validateRenderedSessionPreflight(lazy, adapter.Agent()); err != nil {
+			return
+		}
+	}
+	if wi, ok := adapter.(workflowInjector); ok && wi.SupportsWorkflows() {
+		if _, found := findProjectRoot(opts.WorkspaceDir); found {
+			var entries []fs.DirEntry
+			entries, err = fs.ReadDir(assets.FS, wi.EmbeddedWorkflowsDir())
+			if err != nil {
+				return
+			}
+			workflows = make(map[string]string)
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				var content string
+				content, err = assets.Read(wi.EmbeddedWorkflowsDir() + "/" + entry.Name())
+				if err != nil {
+					return
+				}
+				if adapter.Agent() == model.AgentWindsurf && entry.Name() == "sdd-new.md" {
+					content, err = renderWindsurfSessionPreflightEntry(content)
+					if err != nil {
+						return
+					}
+				}
+				workflows[entry.Name()] = content
+			}
+			if adapter.Agent() == model.AgentWindsurf && workflows["sdd-new.md"] == "" {
+				err = fmt.Errorf("Windsurf sdd-new authority consumer is missing")
+			}
+		}
+	}
+	return
+}
+
+func validateSessionPreflightOverlay(content []byte, key string, preserved bool) error {
+	var overlay struct {
+		Agent map[string]struct{ Prompt string }
+	}
+	if err := json.Unmarshal(content, &overlay); err != nil {
+		return err
+	}
+	prompt := overlay.Agent[key].Prompt
+	if !preserved {
+		return validateRenderedSessionPreflight(prompt, model.AgentOpenCode)
+	}
+	// External prompts may have no managed init anchor. Only their owned block
+	// is migrated; unmarked external instructions remain outside SDD ownership.
+	open, end, err := sddSessionPreflightMarkerRange(prompt)
+	if err != nil {
+		return err
+	}
+	if open < 0 {
+		return fmt.Errorf("preserved session preflight is missing")
+	}
+	actual, err := normalizeSDDSessionPreflightLineEndings(prompt[open:end])
+	if err != nil {
+		return err
+	}
+	if actual != sddSessionPreflightBlock() {
+		return fmt.Errorf("preserved session preflight is not canonical")
+	}
+	return nil
 }
 
 func readPreservedOpenCodeOrchestratorPrompt(settingsPath string) (string, error) {
@@ -2550,7 +2660,7 @@ func hasSDDOrchestrator(content string) bool {
 	return false
 }
 
-func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+func injectFileAppend(homeDir string, adapter agents.Adapter, content string) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
 
 	existing, err := readFileOrEmpty(promptPath)
@@ -2566,9 +2676,22 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 		existing = steeringFrontmatter
 	}
 
-	// Use agent-specific SDD orchestrator content when available; fall back to generic.
-	content := renderSDDOrchestratorAsset(adapter.Agent(), opts.orchestratorPolicyRenderOptions())
+	// If there is a bare (un-marked) legacy orchestrator block, strip it first
+	// so InjectMarkdownSection can re-inject the current canonical content.
+	if hasLegacyBareOrchestrator(existing) {
+		existing = stripBareOrchestratorForFilePrompt(existing)
+	}
 
+	updated := filemerge.InjectMarkdownSection(existing, "sdd-orchestrator", content)
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+func renderSessionPreflightPrompt(adapter agents.Adapter, opts InjectOptions) (string, error) {
+	content := renderSDDOrchestratorAsset(adapter.Agent(), opts.orchestratorPolicyRenderOptions())
 	// Codex-only: substitute {{CODEX_PHASE_EFFORTS}} with a rendered per-phase
 	// effort table. Only fires when the adapter implements codexModelResolver.
 	// All other FileReplace adapters (Gemini, Cursor, etc.) are unaffected.
@@ -2589,24 +2712,16 @@ func injectFileAppend(homeDir string, adapter agents.Adapter, opts InjectOptions
 		content = strings.ReplaceAll(content, "{{CODEX_PHASE_EFFORTS}}", rendered)
 		// Post-check: fail loudly if any placeholder token remains unresolved.
 		if strings.Contains(content, "{{") {
-			return InjectionResult{}, fmt.Errorf("inject(codex): unresolved placeholder token '{{' remains in AGENTS.md content after substitution")
+			return "", fmt.Errorf("inject(codex): unresolved placeholder token '{{' remains in AGENTS.md content after substitution")
 		}
 	}
 
-	// If there is a bare (un-marked) legacy orchestrator block, strip it first
-	// so InjectMarkdownSection can re-inject the current canonical content.
-	if hasLegacyBareOrchestrator(existing) {
-		existing = stripBareOrchestratorForFilePrompt(existing)
+	if usesFallbackSessionPreflight(adapter.Agent()) {
+		if err := validateRenderedSessionPreflight(content, adapter.Agent()); err != nil {
+			return "", err
+		}
 	}
-
-	updated := filemerge.InjectMarkdownSection(existing, "sdd-orchestrator", content)
-
-	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
-	if err != nil {
-		return InjectionResult{}, err
-	}
-
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+	return content, nil
 }
 
 func hasLegacyBareOrchestrator(content string) bool {
@@ -2844,9 +2959,8 @@ func stripBareOrchestratorSection(content string) string {
 	return result
 }
 
-func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, renderOptions OrchestratorRenderOptions) (InjectionResult, error) {
+func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment, content string) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
-	content := renderSDDOrchestratorAsset(adapter.Agent(), renderOptions)
 	if adapter.Agent() == model.AgentClaudeCode {
 		var err error
 		content, err = injectClaudePhaseAssignments(content, legacyAssignments, phaseAssignments)
@@ -2880,7 +2994,7 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, legacyAssign
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
 }
 
-func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, prepared ...string) (InjectionResult, error) {
 	if adapter.Agent() != model.AgentClaudeCode {
 		return InjectionResult{}, nil
 	}
@@ -2889,10 +3003,15 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter) (Injecti
 		return InjectionResult{}, nil
 	}
 
-	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	content, err := projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
-	if err != nil {
-		return InjectionResult{}, fmt.Errorf("project Claude session preflight: %w", err)
+	var content string
+	if len(prepared) > 0 {
+		content = prepared[0]
+	} else {
+		var err error
+		content, err = renderClaudeSessionPreflight()
+		if err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	path := filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md")

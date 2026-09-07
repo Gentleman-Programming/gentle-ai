@@ -1,9 +1,11 @@
 package sdd
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -33,6 +35,61 @@ func assertFallbackSessionPreflight(t *testing.T, got string) {
 	init := got[strings.Index(got, "### SDD Init Guard (MANDATORY)"):strings.Index(got, "### Execution Mode")]
 	if !strings.Contains(init, "In `openspec` mode") || !strings.Contains(init, "without calling Engram") || !strings.Contains(init, "openspec/config.yaml") {
 		t.Error("OpenSpec init lookup must not require Engram")
+	}
+}
+
+func TestSessionPreflightActualProjectionInventory(t *testing.T) {
+	paths, err := fs.Glob(assets.FS, "*/sdd-orchestrator.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := map[string]bool{}
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf, model.AgentOpenCode, model.AgentKilocode, model.AgentClaudeCode} {
+		t.Run(string(agent), func(t *testing.T) {
+			// OpenCode/Kilo share a template. Claude's full projection is lazy;
+			// its always-on bootstrap and Windsurf's native entry are consumers.
+			covered[sddOrchestratorAsset(agent)] = true
+			content, err := composeOpenCodeOrchestratorPrompt(agent)
+			if agent == model.AgentClaudeCode {
+				content, err = renderClaudeSessionPreflight()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			open, end, err := sddSessionPreflightMarkerRange(content)
+			if err != nil || open < 0 {
+				t.Fatalf("missing projection: %v", err)
+			}
+			block := content[open:end]
+			for name, invalid := range map[string]string{
+				"missing":         strings.Replace(content, block, "", 1),
+				"duplicate":       block + "\n" + content,
+				"orphan":          strings.Replace(content, sddSessionPreflightEnd, "", 1),
+				"reversed":        strings.Replace(content, block, sddSessionPreflightEnd+"\n"+sddSessionPreflightMarker, 1),
+				"misplaced":       strings.Replace(content, block, "", 1) + "\n" + block,
+				"stale":           strings.Replace(content, "Both -> `hybrid`", "Both -> `both`", 1),
+				"wrong transport": strings.Replace(content, block, sddSessionPreflightBlockWithTool("wrong-tool"), 1),
+				"mixed endings":   content + "\r\n",
+				"bare CR":         content + "\r",
+			} {
+				if err := validateRenderedSessionPreflight(invalid, agent); err == nil {
+					t.Errorf("accepted %s", name)
+				}
+			}
+			for _, valid := range []string{content, strings.ReplaceAll(content, "\n", "\r\n")} {
+				if err := validateRenderedSessionPreflight(valid, agent); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	if len(paths) != len(covered) {
+		t.Fatalf("actual templates %v; covered %v", paths, covered)
+	}
+	for _, path := range paths {
+		if !covered[path] {
+			t.Errorf("uncovered template %s", path)
+		}
 	}
 }
 

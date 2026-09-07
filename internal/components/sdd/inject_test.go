@@ -36,6 +36,85 @@ func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
+// Exercise the production optional workflow adapter boundary, not a renderer bypass.
+type invalidSessionPreflightWorkflowAdapter struct{ agents.Adapter }
+
+func (a invalidSessionPreflightWorkflowAdapter) SupportsWorkflows() bool { return true }
+func (a invalidSessionPreflightWorkflowAdapter) WorkflowsDir(root string) string {
+	return filepath.Join(root, ".windsurf", "workflows")
+}
+func (a invalidSessionPreflightWorkflowAdapter) EmbeddedWorkflowsDir() string {
+	if a.Agent() == model.AgentWindsurf {
+		return "opencode/commands" // Real assets, but not a native authority consumer.
+	}
+	return "missing-session-preflight-workflows"
+}
+
+type invalidRenderedSessionPreflightAdapter struct {
+	invalidSessionPreflightWorkflowAdapter
+}
+
+func (a invalidRenderedSessionPreflightAdapter) RenderCodexPhaseEfforts(map[string]model.CodexEffort, map[string]string) string {
+	return sddSessionPreflightBlockWithTool("") // A second block introduced during rendering.
+}
+
+func TestInjectSessionPreflightFailurePrecedesAllSDDWrites(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentWindsurf, model.AgentClaudeCode, model.AgentKimi, model.AgentOpenCode, model.AgentKilocode, model.AgentCodex} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", agent, existing), func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+				workspace := t.TempDir()
+				if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				var adapter agents.Adapter = invalidSessionPreflightWorkflowAdapter{mustAdapter(t, agent)}
+				if agent == model.AgentCodex {
+					adapter = invalidRenderedSessionPreflightAdapter{adapter.(invalidSessionPreflightWorkflowAdapter)}
+				}
+				if existing {
+					path := adapter.SystemPromptFile(home)
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte("pre-existing sentinel\n"), 0o640); err != nil {
+						t.Fatal(err)
+					}
+				}
+				snapshot := func(root string) map[string]string {
+					files := map[string]string{}
+					err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						files[path] = info.Mode().String()
+						if !info.IsDir() {
+							data, err := os.ReadFile(path)
+							if err != nil {
+								return err
+							}
+							files[path] += string(data)
+						}
+						return nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return files
+				}
+				beforeHome, beforeWorkspace := snapshot(home), snapshot(workspace)
+				_, err := Inject(home, adapter, model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace, StrictTDD: true, Profiles: []model.Profile{{Name: "focused"}}})
+				if err == nil {
+					t.Fatal("invalid selected workflow source accepted")
+				}
+				if !reflect.DeepEqual(beforeHome, snapshot(home)) || !reflect.DeepEqual(beforeWorkspace, snapshot(workspace)) {
+					t.Fatal("invalid session preflight input mutated SDD files or directories")
+				}
+			})
+		}
+	}
+}
+
 func mockNoPackageManager(t *testing.T) {
 	t.Helper()
 }
@@ -5376,7 +5455,15 @@ func TestInjectWindsurf_WorkflowContentMatchesAsset(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	want := assets.MustRead("windsurf/workflows/sdd-new.md")
+	want, err := renderWindsurfSessionPreflightEntry(assets.MustRead("windsurf/workflows/sdd-new.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"~/.codeium/windsurf/memories/global_rules.md", "SDD Session Preflight", "before any SDD-owned mutation", "STOP"} {
+		if !strings.Contains(string(got), required) {
+			t.Errorf("installed authority consumer missing %q", required)
+		}
+	}
 	if string(got) != want {
 		t.Fatalf("workflow file content mismatch:\ngot len=%d, want len=%d", len(got), len(want))
 	}
