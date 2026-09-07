@@ -826,7 +826,9 @@ func buildAppCandidateBinary(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		binary += ".exe"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// A cold build of the whole binary on a shared CI runner can exceed
+	// 30s; the cap only guards against a hung toolchain, not build speed.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
 	if output, err := command.CombinedOutput(); err != nil {
