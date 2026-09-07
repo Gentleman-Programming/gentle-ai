@@ -1,0 +1,32 @@
+[Unit]
+Description=Nightly backup of the gentle-telemetry SQLite database
+Documentation=https://github.com/Gentleman-Programming/gentle-ai/blob/main/docs/telemetry-collector.md
+# Only makes sense once the collector has created its database.
+Requisite=gentle-telemetry.service
+
+[Service]
+Type=oneshot
+
+# Configure GENTLE_TELEMETRY_BACKUP_REMOTE (an rclone remote:path, e.g.
+# "b2:my-bucket/gentle-telemetry") in this file. It is not created by
+# install.sh: create it before enabling the timer.
+EnvironmentFile=/etc/gentle-telemetry/backup.env
+
+# The backup logic lives in a standalone script, not inline here: systemd
+# expands "$VAR"/"${VAR}" in ExecStart using its OWN environment before
+# the shell ever runs, which would silently mangle a script's local
+# variables (e.g. $ts/$snapshot) written as if this were a normal shell
+# line. A single command with no arguments has nothing of that shape for
+# systemd to misinterpret.
+ExecStart=/usr/local/bin/gentle-telemetry-backup
+
+# Runs as root: it needs read access to the collector's DynamicUser-owned
+# StateDirectory, which a second, differently-allocated DynamicUser would
+# not have.
+User=root
+Group=root
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gentle-telemetry
+ProtectHome=read-only
+NoNewPrivileges=yes

@@ -1,0 +1,56 @@
+[Unit]
+Description=gentle-telemetry collector
+Documentation=https://github.com/Gentleman-Programming/gentle-ai/blob/main/docs/telemetry-collector.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gentle-telemetry \
+	--listen 127.0.0.1:18181 \
+	--db /var/lib/gentle-telemetry/events.sqlite \
+	--retention-days 90 \
+	--rate-limit-per-minute 60
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+
+# DynamicUser allocates a private, non-persistent uid/gid for this unit and
+# owns StateDirectory (/var/lib/gentle-telemetry) accordingly; nothing here
+# needs a real system user.
+DynamicUser=yes
+StateDirectory=gentle-telemetry
+StateDirectoryMode=0700
+
+# Hands the root-owned 0600 token to the DynamicUser sandbox read-only at
+# $CREDENTIALS_DIRECTORY/summary-token, without granting broader access.
+LoadCredential=summary-token:/etc/gentle-telemetry/summary.token
+
+# Hardening. The service only needs to: listen on a loopback TCP port, read
+# the summary token file, and read/write its SQLite database and WAL files
+# under StateDirectory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

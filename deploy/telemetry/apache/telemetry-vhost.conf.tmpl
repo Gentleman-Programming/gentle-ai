@@ -1,0 +1,81 @@
+# Apache vhost template for the gentle-telemetry subdomain, for a server
+# where subdomains are explicit <VirtualHost> blocks appended to
+# /etc/apache2/conf.d/includes/post_virtualhost_global.conf — NOT cPanel
+# accounts, so an EasyApache "userdata" include is never loaded for them.
+# This mirrors the existing pattern used on the reference server for
+# engram.condetuti.com: a :80 block that lets the ACME challenge through
+# and redirects everything else to HTTPS, and a :443 block with the
+# Let's Encrypt certificate and the proxied paths.
+#
+# install.sh --domain renders this file (substituting __DOMAIN__) to
+# /root/telemetry-vhost.conf.rendered and prints, but never runs, the
+# commands to append each block to post_virtualhost_global.conf in the
+# right order relative to issuing the certificate — see
+# docs/telemetry-collector.md.
+#
+# I could not read the live post_virtualhost_global.conf directly (no
+# SSH/file access to the VPS from here); this mirrors the shape described
+# for engram.condetuti.com's blocks as given, plus the DocumentRoot/Alias
+# a webroot ACME challenge needs to actually be servable — confirm that
+# path matches how the existing vhosts on that box serve
+# /.well-known/acme-challenge/ before relying on it, and adjust the
+# DocumentRoot/Alias below (and the operator commands install.sh prints)
+# if not.
+
+# --- BEGIN :80 VHOST ---
+<VirtualHost *:80>
+	ServerName __DOMAIN__
+
+	DocumentRoot /var/www/gentle-telemetry-acme
+	Alias /.well-known/acme-challenge/ /var/www/gentle-telemetry-acme/.well-known/acme-challenge/
+	<Directory /var/www/gentle-telemetry-acme>
+		Require all granted
+	</Directory>
+
+	RewriteEngine On
+	RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+	RewriteRule ^(.*)$ https://%{HTTP_HOST}$1 [R=301,L]
+</VirtualHost>
+# --- END :80 VHOST ---
+
+# --- BEGIN :443 VHOST ---
+<VirtualHost *:443>
+	ServerName __DOMAIN__
+
+	SSLEngine on
+	SSLCertificateFile /etc/letsencrypt/live/__DOMAIN__/fullchain.pem
+	SSLCertificateKeyFile /etc/letsencrypt/live/__DOMAIN__/privkey.pem
+
+	ProxyPreserveHost On
+	ProxyPass /.well-known/acme-challenge/ !
+
+	# gentle-telemetry trusts X-Forwarded-For only from loopback (its
+	# default --trusted-proxy-cidr 127.0.0.0/8,::1/128). Apache is the
+	# one process connecting to it, so assert the real client address
+	# here rather than letting a caller set its own and have it believed.
+	# %{REMOTE_ADDR}e is mod_headers' environment-variable format; there
+	# is no "s" format specifier, so a literal "%{REMOTE_ADDR}s" would
+	# not be substituted at all and would silently defeat this guarantee.
+	RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}e"
+
+	ProxyPass /v1/ http://127.0.0.1:18181/v1/
+	ProxyPassReverse /v1/ http://127.0.0.1:18181/v1/
+
+	ProxyPass /healthz http://127.0.0.1:18181/healthz
+	ProxyPassReverse /healthz http://127.0.0.1:18181/healthz
+
+	ProxyPass /grafana/ http://127.0.0.1:3000/grafana/
+	ProxyPassReverse /grafana/ http://127.0.0.1:3000/grafana/
+
+	# The collector never stores the caller's IP address (see
+	# internal/telemetrycollector). This vhost's own CustomLog directive
+	# replaces the main server's default access log for every request it
+	# handles — Apache does not additionally write a second, default-
+	# format log entry alongside it — so this one IP-free format is the
+	# only thing that ever gets logged here, for every path (/v1/,
+	# /healthz, /grafana/), not /v1/ alone. Every request IS logged; it
+	# just never carries the client address.
+	LogFormat "%t \"%r\" %>s %b" gentle_telemetry_no_ip
+	CustomLog "/var/log/gentle-telemetry/apache-access.log" gentle_telemetry_no_ip
+</VirtualHost>
+# --- END :443 VHOST ---

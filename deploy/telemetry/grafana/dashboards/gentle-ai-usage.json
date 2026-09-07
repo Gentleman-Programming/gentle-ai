@@ -1,0 +1,159 @@
+{
+  "uid": "gentle-ai-usage",
+  "title": "Gentle AI — Usage",
+  "tags": ["gentle-ai", "telemetry"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-90d", "to": "now" },
+  "refresh": "1h",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Unique installs per month (12 months)",
+      "description": "Distinct install ids active in each of the last 12 calendar months, from rollups_daily.active_install. Matches GET /v1/summary's installs_per_month.",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT substr(day,1,7) AS month, COUNT(DISTINCT key) AS unique_installs FROM rollups_daily WHERE metric = 'active_install' GROUP BY month ORDER BY month DESC LIMIT 12"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Weekly active installs (12 weeks)",
+      "description": "Distinct install ids active per week, from rollups_daily.active_install. Uses SQLite's strftime('%W') (Monday-based week-of-year); this can disagree with the API's ISO week numbering right at a year boundary, so treat this as a trend view rather than a byte-for-byte match to /v1/summary.",
+      "type": "barchart",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT strftime('%Y-W%W', day) AS week, COUNT(DISTINCT key) AS active_installs FROM rollups_daily WHERE metric = 'active_install' GROUP BY week ORDER BY week DESC LIMIT 12"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Agent distribution (trailing 30 days)",
+      "description": "Install-days per agent over the trailing 30 rolled-up days: an install active on 10 different days contributes 10, once per day it reported that agent. Not distinct installs. Matches GET /v1/summary's agent_distribution.",
+      "type": "piechart",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT key AS agent, SUM(value) AS install_days FROM rollups_daily WHERE metric = 'agent' AND day >= date('now', '-30 day') GROUP BY key ORDER BY install_days DESC"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Component distribution (trailing 30 days)",
+      "description": "Install-days per component over the trailing 30 rolled-up days, same install-days semantics as agent distribution. Matches GET /v1/summary's component_distribution.",
+      "type": "piechart",
+      "gridPos": { "x": 8, "y": 8, "w": 8, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT key AS component, SUM(value) AS install_days FROM rollups_daily WHERE metric = 'component' AND day >= date('now', '-30 day') GROUP BY key ORDER BY install_days DESC"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "title": "RDD enabled ratio (trailing 30 days)",
+      "description": "Share of install-days over the trailing 30 rolled-up days reporting rdd_enabled=true. Matches GET /v1/summary's rdd_enabled_ratio.",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT SUM(CASE WHEN key = 'true' THEN value ELSE 0 END) * 1.0 / NULLIF(SUM(value), 0) AS rdd_enabled_ratio FROM rollups_daily WHERE metric = 'rdd_enabled' AND day >= date('now', '-30 day')"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Version distribution (trailing 30 days)",
+      "description": "Install-days per reported version over the trailing 30 rolled-up days. A useful proxy for upgrade lag. Matches GET /v1/summary's version_distribution.",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT key AS version, SUM(value) AS install_days FROM rollups_daily WHERE metric = 'version' AND day >= date('now', '-30 day') GROUP BY key ORDER BY install_days DESC"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "title": "Events per day",
+      "description": "Raw event volume (install + heartbeat), bounded by --retention-days: older raw rows are purged, so this panel only ever shows the retention window, unlike the rollup-backed panels above which cover full history.",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "time series",
+          "timeColumns": ["day"],
+          "queryText": "SELECT date(received_at / 1000000000, 'unixepoch') AS day, COUNT(*) AS events FROM events GROUP BY day ORDER BY day ASC"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "title": "npm downloads per day (gentle-pi, gentle-engram)",
+      "description": "Daily download counts from the npm registry's public API (api.npmjs.org) — a public count, not telemetry from any gentle-ai install. Matches GET /v1/summary's downloads.npm.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "time series",
+          "timeColumns": ["day"],
+          "queryText": "SELECT day, key AS package, value AS downloads FROM rollups_daily WHERE metric = 'npm_downloads_day' ORDER BY day ASC"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "title": "gentle-ai release downloads (cumulative per tag)",
+      "description": "Cumulative GitHub release asset download counts per tag, from the public GitHub API (api.github.com) — a public count, not telemetry from any gentle-ai install. Each bar is the latest known total for that tag, not a per-day delta. Matches GET /v1/summary's downloads.github.",
+      "type": "bargauge",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT r.key AS tag, r.value AS total_downloads FROM rollups_daily r INNER JOIN (SELECT key, MAX(day) AS max_day FROM rollups_daily WHERE metric = 'github_release_downloads_total' GROUP BY key) latest ON latest.key = r.key AND latest.max_day = r.day WHERE r.metric = 'github_release_downloads_total' ORDER BY total_downloads DESC"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

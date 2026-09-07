@@ -1,0 +1,26 @@
+# Grafana datasource provisioning for the gentle-telemetry SQLite database.
+# Installed by deploy/telemetry/install.sh --with-grafana. Requires the
+# frser-sqlite-datasource plugin (installed by the same script via
+# `grafana-cli plugins install frser-sqlite-datasource`) and, since that
+# plugin's v3, `allow_local_mode = true` under [plugin.frser-sqlite-datasource]
+# in /etc/grafana/grafana.ini (also written by install.sh) so it may open a
+# path on the local filesystem instead of only a bundled/uploaded file.
+#
+# The uid below is fixed rather than left to auto-generate, so the
+# provisioned dashboard JSON in ../dashboards/gentle-ai-usage.json can
+# reference it directly without a manual re-link after install.
+apiVersion: 1
+
+datasources:
+  - name: gentle-telemetry
+    uid: gentle-telemetry-sqlite
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: false
+    jsonData:
+      path: /var/lib/gentle-telemetry/events.sqlite
+      # Grafana's own process only needs read access to this file; see
+      # docs/telemetry-collector.md#grafana-dashboards for how install.sh
+      # grants it (group membership or a POSIX ACL) without ever adding
+      # Grafana to a role that could write to the collector's database.

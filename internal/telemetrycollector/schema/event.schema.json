@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gentle-ai.dev/telemetry/v1/event.schema.json",
+  "title": "gentle-ai.telemetry-event/v1",
+  "description": "Anonymous telemetry event sent by a gentle-ai install to the self-hosted collector. No paths, repository names, usernames, hostnames, prompts, diffs, or IP addresses are ever present in this payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "event",
+    "install_id",
+    "sent_at",
+    "version",
+    "os",
+    "arch",
+    "agents",
+    "components",
+    "rdd_enabled"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": ["gentle-ai.telemetry-event/v1"]
+    },
+    "event": {
+      "type": "string",
+      "enum": ["install", "heartbeat"]
+    },
+    "install_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "sent_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.+-]{1,64})?$"
+    },
+    "os": {
+      "type": "string",
+      "enum": ["darwin", "linux", "windows"]
+    },
+    "arch": {
+      "type": "string",
+      "enum": ["386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm"]
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["antigravity", "claude-code", "codex", "cursor", "gemini-cli", "hermes", "kilocode", "kimi", "kiro-ide", "openclaw", "opencode", "pi", "qwen-code", "vscode-copilot", "windsurf"]
+      },
+      "maxItems": 15
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["persona", "sdd", "engram", "context7", "gga", "skills", "permissions", "theme", "claude-theme", "opencode-gentle-logo"]
+      },
+      "maxItems": 10
+    },
+    "rdd_enabled": {
+      "type": "boolean"
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "syncs",
+        "sdd_phase_runs",
+        "reviews_approved",
+        "reviews_correction",
+        "reviews_escalated"
+      ],
+      "properties": {
+        "syncs": { "type": "integer", "minimum": 0 },
+        "sdd_phase_runs": { "type": "integer", "minimum": 0 },
+        "reviews_approved": { "type": "integer", "minimum": 0 },
+        "reviews_correction": { "type": "integer", "minimum": 0 },
+        "reviews_escalated": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "if": {
+    "properties": { "event": { "const": "install" } }
+  },
+  "then": {
+    "not": { "required": ["counters"] }
+  }
+}
