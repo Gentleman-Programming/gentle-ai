@@ -17,10 +17,9 @@ import (
 
 // SDD delivery strategy has a producer and a consumer. The producer is the
 // session-preflight label->canonical mapping; the consumer is every phase skill
-// and orchestrator branch that reads `delivery_strategy`. In the Claude and
-// OpenCode orchestrators both halves live in the same document about a hundred
-// lines apart. Preserved OpenCode prompts receive the same canonical block from
-// the marker-owned session-preflight migration.
+// and orchestrator branch that reads `delivery_strategy`. Claude and OpenCode
+// receive the same canonical producer at render time; raw assets are templates.
+// Preserved OpenCode prompts receive it through marker-owned migration.
 //
 // Nothing asserted the halves agreed, so the preflight emitted `ask-always`,
 // `single-pr-default`, `force-chained`, and `auto-forecast` into a consumer
@@ -32,8 +31,8 @@ import (
 // Both halves below are derived from shipped artifacts, never from a list
 // restated here: the domain from the phase skills that declare it as their
 // input contract, the producer from the preflight UI label list plus the
-// mapping block in the same document, and the producer sites from walking the
-// embedded assets tree. A renamed label, a fifth canonical value, or a typo on
+// mapping block in the installed document. Walking the embedded assets rejects
+// a second producer. A renamed label, a fifth canonical value, or a typo on
 // either side fails here instead of drifting silently.
 
 // deliveryDomainDeclaration matches a phase skill's declared input domain for
@@ -43,12 +42,8 @@ import (
 var deliveryDomainDeclaration = regexp.MustCompile("`(ask-on-risk(?: \\| [a-z][a-z0-9-]*)+)`")
 
 // preflightPRGroupLabels matches the user-facing PR option list the preflight
-// renders, e.g. "3. PRs: Ask me, Single PR, Auto."
-var preflightPRGroupLabels = regexp.MustCompile(`(?m)^\s*3\. PRs: (.+?)\.[ \t]*\r?$`)
-
-// preflightStrategyChoiceDeclaration matches the preflight requirement line that
-// names the canonical values the chained-PR question collects.
-var preflightStrategyChoiceDeclaration = regexp.MustCompile(`(?m)^\s*3\. \*\*Chained PR strategy\*\*[^:]*: (.+?)[ \t]*\r?$`)
+// renders, e.g. "3. **PR strategy**: Ask me, Single PR, or Auto."
+var preflightPRGroupLabels = regexp.MustCompile(`(?m)^\s*3\. \*\*PR strategy\*\*: (.+?)\.[ \t]*\r?$`)
 
 var backtickSpan = regexp.MustCompile("`([^`]+)`")
 
@@ -116,30 +111,40 @@ func splitDeclaredDomain(declaration string) []string {
 	return values
 }
 
-// preflightMappingSources returns every shipped asset that carries the
-// label->canonical preflight mapping, discovered by walking the embedded tree so
-// a new runtime that grows a preflight is covered without editing this guard.
+// preflightMappingSources reads the actual installed Claude authority and rejects
+// any raw asset that reintroduces a separately authored mapping producer.
 func preflightMappingSources(t *testing.T) map[string]string {
 	t.Helper()
 
-	sources := map[string]string{}
-	err := fs.WalkDir(assets.FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+	home := t.TempDir()
+	if _, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if err := validateSDDSessionPreflightProjection(content, testSDDSessionPreflightEntryAnchor, "AskUserQuestion"); err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{"installed Claude": content}
+	err = fs.WalkDir(assets.FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".md") {
 			return walkErr
 		}
 		content := assets.MustRead(path)
-		if strings.Contains(content, "Map answers to canonical values") {
-			sources[path] = content
+		for _, producer := range []string{"Map answers to canonical values", "Canonical mappings:", "Ask me ->", sddSessionPreflightMarker} {
+			if strings.Contains(content, producer) {
+				t.Errorf("raw asset %s owns a second preflight producer: %q", path, producer)
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk embedded assets: %v", err)
 	}
-	if len(sources) == 0 {
-		t.Fatal("no shipped asset carries a preflight label->canonical mapping; the guard has lost its subject")
-	}
-
 	return sources
 }
 
@@ -164,12 +169,12 @@ func mappedCanonicalValue(mapping, label string) (string, bool) {
 func canonicalMappingBlock(t *testing.T, path, content string) string {
 	t.Helper()
 
-	start := strings.Index(content, "Map answers to canonical values")
+	start := strings.Index(content, "Canonical mappings:")
 	if start < 0 {
 		t.Fatalf("%s lost its canonical mapping block", path)
 	}
 	block := content[start:]
-	if end := strings.Index(block, "Hard gate rules:"); end >= 0 {
+	if end := strings.Index(block, sddSessionPreflightEnd); end >= 0 {
 		block = block[:end]
 	}
 	return block
@@ -190,7 +195,7 @@ func TestSDDPreflightDeliveryStrategyMappingStaysInsideConsumerDomain(t *testing
 
 		mapping := canonicalMappingBlock(t, path, content)
 		for _, rawLabel := range strings.Split(labelMatch[1], ",") {
-			label := strings.TrimSpace(rawLabel)
+			label := strings.TrimPrefix(strings.TrimSpace(rawLabel), "or ")
 			if label == "" {
 				continue
 			}
@@ -224,13 +229,16 @@ func TestSDDPreflightStrategyChoicesStayInsideConsumerDomain(t *testing.T) {
 
 	checked := 0
 	for path, content := range preflightMappingSources(t) {
-		match := preflightStrategyChoiceDeclaration.FindStringSubmatch(content)
-		if match == nil {
-			continue
+		mapping := canonicalMappingBlock(t, path, content)
+		// Inspect every emitted mapping, including one accidentally added outside
+		// the declared UI choices. Pace/artifact mappings are not PR strategies.
+		start := strings.Index(mapping, "- Ask me ->")
+		if start < 0 {
+			t.Fatalf("%s missing PR strategy mappings", path)
 		}
 		checked++
 
-		for _, span := range backtickSpan.FindAllStringSubmatch(match[1], -1) {
+		for _, span := range backtickSpan.FindAllStringSubmatch(mapping[start:], -1) {
 			for _, value := range splitDeclaredDomain(span[1]) {
 				if !canonicalValueShape.MatchString(value) {
 					continue
@@ -395,7 +403,7 @@ func TestSDDPreflightNoLongerOffersRetiredChainedPRLabel(t *testing.T) {
 		}
 
 		for _, rawLabel := range strings.Split(labelMatch[1], ",") {
-			if strings.TrimSpace(rawLabel) != retired {
+			if strings.TrimPrefix(strings.TrimSpace(rawLabel), "or ") != retired {
 				continue
 			}
 			t.Errorf(

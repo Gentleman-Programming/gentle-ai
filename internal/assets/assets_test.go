@@ -1083,33 +1083,12 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("claude/sdd-orchestrator-workflow.md")
 
 	for _, required := range []string{
-		"### SDD Session Preflight (HARD GATE)",
-		"Before executing ANY SDD command or natural-language SDD request",
-		"**Execution mode**",
-		"**Artifact store**",
-		"**Chained PR strategy**",
-		"**Review budget**",
-		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
-		"Use the built-in `AskUserQuestion` tool for SDD Session Preflight",
-		"only when it is available in the current interactive runtime and all four groups are exactly representable",
-		"follow the Lossless Blocking Prompts fallback in the orchestrator rule and STOP",
-		"When the native route is representable, ask all four preflight groups in one single `AskUserQuestion` tool call",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `AskUserQuestion` tool calls",
-		"Match the user's current language and active persona",
-		"Do NOT show option codes",
-		"Do NOT show canonical values",
-		"map the selected human labels to canonical values internally",
-		"1. Pace: Interactive, Automatic.",
-		"2. Artifacts: OpenSpec, Engram, Both.",
-		"3. PRs: Ask me, Single PR, Auto.",
-		"4. Review: 400 lines, 800 lines, Other.",
+		"Session preflight is projected here by the installer from the shared canonical authority",
+		"### SDD Init Guard (MANDATORY)",
 		"### SDD Entry Routing (MANDATORY)",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"Only launch `sdd-apply` when all are true",
 		"If any dependency is missing, STOP and propose `/gentle-sdd-new` or `/gentle-sdd-ff`; do not implement",
-		"or `hybrid` when Engram is callable",
-		"Both -> `hybrid`",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("claude/sdd-orchestrator-workflow.md missing required preflight wording %q", required)
@@ -1117,8 +1096,10 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"`question` tool",
-		"groups as tabs",
+		"`question` tool", "AskUserQuestion", "groups as tabs",
+		"### SDD Session Preflight (HARD GATE)",
+		"gentle-ai:sdd-session-preflight", "Required preflight choices:",
+		"1. Pace:", "Both ->", "800 lines", "Other", "all four",
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("claude/sdd-orchestrator-workflow.md must use Claude Code's AskUserQuestion mechanics, not OpenCode wording %q", forbidden)
@@ -1143,11 +1124,10 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 		}
 	}
 
-	preflight := strings.Index(content, "### SDD Session Preflight (HARD GATE)")
-	routing := strings.Index(content, "### SDD Entry Routing (MANDATORY)")
-	initGuard := strings.Index(content, "### SDD Init Guard (MANDATORY)")
-	if !(preflight < routing && routing < initGuard) {
-		t.Fatalf("claude/sdd-orchestrator-workflow.md section order must be preflight (%d) < entry routing (%d) < init guard (%d)", preflight, routing, initGuard)
+	routing := "### SDD Entry Routing (MANDATORY)"
+	initGuard := "### SDD Init Guard (MANDATORY)"
+	if strings.Count(content, routing) != 1 || strings.Count(content, initGuard) != 1 || strings.Index(content, routing) >= strings.Index(content, initGuard) {
+		t.Fatal("Claude projection template requires unique routing then init anchors")
 	}
 }
 
@@ -1203,7 +1183,6 @@ func TestSDDOrchestratorAssetsDefaultToAutomatic(t *testing.T) {
 func TestSDDFFCommandsHonorInteractiveMode(t *testing.T) {
 	for _, path := range []string{
 		"opencode/commands/sdd-ff.md",
-		"claude/commands/gentle-sdd-ff.md",
 	} {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)

@@ -15,7 +15,13 @@ const (
 )
 
 func sddSessionPreflightBlock() string {
-	return sddSessionPreflightMarker + "\n" + sddSessionPreflightBody + "\n" + sddSessionPreflightEnd
+	return sddSessionPreflightBlockWithTool("question")
+}
+
+// Only native interaction vocabulary varies; all runtimes share one policy body.
+func sddSessionPreflightBlockWithTool(tool string) string {
+	body := strings.ReplaceAll(sddSessionPreflightBody, "`question`", "`"+tool+"`")
+	return sddSessionPreflightMarker + "\n" + body + "\n" + sddSessionPreflightEnd
 }
 
 // migratePreservedSDDSessionPreflight is the only migration path for a
@@ -70,6 +76,10 @@ func migratePreservedSDDSessionPreflight(rendered string) (string, error) {
 }
 
 func projectSDDSessionPreflight(rendered, preInitAnchor string) (string, error) {
+	return projectSDDSessionPreflightWithTool(rendered, preInitAnchor, "question")
+}
+
+func projectSDDSessionPreflightWithTool(rendered, preInitAnchor, tool string) (string, error) {
 	anchor, err := sddSessionPreflightAnchorIndex(rendered, preInitAnchor)
 	if err != nil {
 		return "", err
@@ -85,18 +95,22 @@ func projectSDDSessionPreflight(rendered, preInitAnchor string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	block := strings.ReplaceAll(sddSessionPreflightBlock(), "\n", newline)
+	block := strings.ReplaceAll(sddSessionPreflightBlockWithTool(tool), "\n", newline)
 	if open >= 0 {
 		rendered = rendered[:open] + block + rendered[closeEnd:]
 	} else {
 		rendered = rendered[:anchor] + block + newline + rendered[anchor:]
 	}
-	if err := validateSDDSessionPreflightProjection(rendered, preInitAnchor); err != nil {
+	if err := validateSDDSessionPreflightProjection(rendered, preInitAnchor, tool); err != nil {
 		return "", fmt.Errorf("validate projected SDD session preflight: %w", err)
 	}
 	return rendered, nil
 }
-func validateSDDSessionPreflightProjection(rendered, preInitAnchor string) error {
+func validateSDDSessionPreflightProjection(rendered, preInitAnchor string, nativeTool ...string) error {
+	tool := "question"
+	if len(nativeTool) > 0 {
+		tool = nativeTool[0]
+	}
 	anchor, err := sddSessionPreflightAnchorIndex(rendered, preInitAnchor)
 	if err != nil {
 		return err
@@ -125,7 +139,7 @@ func validateSDDSessionPreflightProjection(rendered, preInitAnchor string) error
 	if strings.Contains(actual, "Both -> `both`") {
 		return fmt.Errorf("legacy SDD session preflight mapping Both -> both is rejected")
 	}
-	if actual != sddSessionPreflightBlock() {
+	if actual != sddSessionPreflightBlockWithTool(tool) {
 		return fmt.Errorf("sdd session preflight block is not exact canonical content")
 	}
 	return nil

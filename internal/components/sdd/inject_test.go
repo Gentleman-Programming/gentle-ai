@@ -302,6 +302,33 @@ func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
 	}
 }
 
+func TestClaudeLazyPreflightCanonicalInstall(t *testing.T) {
+	home := t.TempDir()
+	if _, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	want := strings.ReplaceAll(sddSessionPreflightBlock(), "`question`", "`AskUserQuestion`")
+	if strings.Count(content, want) != 1 || strings.Count(content, sddSessionPreflightMarker) != 1 {
+		t.Fatal("installed Claude workflow must contain exactly one Claude-native canonical block")
+	}
+	if strings.Index(content, sddSessionPreflightEnd) > strings.Index(content, testSDDSessionPreflightEntryAnchor) {
+		t.Fatal("preflight must precede entry routing")
+	}
+	for _, forbidden := range []string{"all four", "800 lines", "Other", "numeric budget", "`question`"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("installed workflow retains %q", forbidden)
+		}
+	}
+	if result, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil || result.Changed {
+		t.Fatalf("second install = %+v, %v; want unchanged", result, err)
+	}
+}
+
 func TestInjectClaudePreservesExistingSections(t *testing.T) {
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
@@ -492,7 +519,16 @@ func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T)
 	}
 
 	const stale = "Gentle AI only configures models for Agent tool calls to phase sub-agents."
-	const want = "The Claude Code session model is controlled by Claude Code; Gentle AI's always-on Model Assignments policy resolves every Agent tool call, including generic/organic delegation through `default`."
+	prompt, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Every Claude Agent tool call MUST include `model`", "organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment"} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("always-on model authority missing %q", want)
+		}
+	}
+	const want = "Delegate this intent and arguments to that authoritative lazy workflow"
 	for _, name := range []string{"gentle-sdd-new.md", "gentle-sdd-ff.md", "gentle-sdd-continue.md"} {
 		t.Run(name, func(t *testing.T) {
 			content, err := os.ReadFile(filepath.Join(home, ".claude", "commands", name))
@@ -500,11 +536,11 @@ func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T)
 				t.Fatalf("ReadFile(%s) error = %v", name, err)
 			}
 			text := string(content)
-			if strings.Contains(text, stale) {
-				t.Fatalf("installed command retains phase-only model wording %q", stale)
+			if strings.Contains(text, stale) || strings.Contains(text, "Model Assignments") || strings.Contains(text, "STATUS CONTRACT:") {
+				t.Fatal("installed thin command owns model/status policy")
 			}
 			if !strings.Contains(text, want) {
-				t.Fatalf("installed command missing always-on model wording %q", want)
+				t.Fatalf("installed command missing policy delegation %q", want)
 			}
 		})
 	}

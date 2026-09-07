@@ -2890,6 +2890,10 @@ func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter) (Injecti
 	}
 
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
+	content, err := projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("project Claude session preflight: %w", err)
+	}
 
 	path := filepath.Join(skillDir, "_shared", "sdd-orchestrator-workflow.md")
 	writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
