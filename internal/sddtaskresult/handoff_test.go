@@ -6,9 +6,35 @@ import (
 	"testing"
 )
 
-// The handoff must stay byte-compatible with what the OpenCode transport
-// already emits, because consumers are told to preserve it unchanged and run
-// its continuation exactly once.
+// Without change identity, the handoff stays byte-compatible with OpenCode.
+// Consumers preserve it unchanged and follow its continuation exactly once,
+// executing only supplied commands.
+
+const wantUnscopedContinuation = "Return to the active SDD coordinator and inspect only its retained structured status for the selected change and artifact store. If that status is unavailable, report this terminal failure and ask the user to select the change and artifact store. Do not infer either, run unscoped status discovery, retry, or launch another phase."
+
+func TestHandoffWithoutChangeRetainsCoordinatorIdentity(t *testing.T) {
+	for _, cwd := range []string{"", "/", `C:\`, "/re'po"} {
+		t.Run(cwd, func(t *testing.T) {
+			for _, class := range []Class{ClassEmpty, ClassMalformed} {
+				for _, handoff := range []string{
+					Handoff(class, "sdd-apply", cwd, "", ""),
+					DispatchLatched("sdd-verify", "sdd-apply", class.FailureCode(), cwd, ""),
+				} {
+					var decoded map[string]any
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(handoff, HandoffPrefix)), &decoded); err != nil {
+						t.Fatal(err)
+					}
+					if decoded["continuation"] != wantUnscopedContinuation {
+						t.Errorf("continuation = %#v, want non-command coordinator guidance", decoded["continuation"])
+					}
+					if decoded["status"] != "blocked" || decoded["schemaName"] != handoffSchema {
+						t.Errorf("lost terminal v1 contract: %s", handoff)
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestHandoffCarriesThePrefixAndSchema(t *testing.T) {
 	handoff := Handoff(ClassEmpty, "sdd-apply", "/repo", "", "")
@@ -24,7 +50,7 @@ func TestHandoffCarriesThePrefixAndSchema(t *testing.T) {
 		"status":       "blocked",
 		"code":         "sdd_task_result_empty",
 		"phase":        "sdd-apply",
-		"continuation": "gentle-ai sdd-status --cwd '/repo' --json",
+		"continuation": wantUnscopedContinuation,
 	} {
 		if decoded[field] != want {
 			t.Errorf("handoff %s = %#v, want %#v", field, decoded[field], want)
@@ -40,11 +66,11 @@ func TestHandoffQuotesACwdContainingASingleQuote(t *testing.T) {
 	// would compare against JSON escaping rather than the command a consumer
 	// actually runs.
 	var decoded map[string]any
-	handoff := Handoff(ClassMalformed, "sdd-verify", "/re'po", "", "")
+	handoff := Handoff(ClassMalformed, "sdd-verify", "/re'po", "feat'x", "")
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(handoff, "GENTLE_AI_SDD_FAILURE ")), &decoded); err != nil {
 		t.Fatalf("handoff payload is not JSON: %v", err)
 	}
-	const want = `gentle-ai sdd-status --cwd '/re'\''po' --json`
+	const want = `gentle-ai sdd-status 'feat'\''x' --cwd '/re'\''po' --json`
 	if decoded["continuation"] != want {
 		t.Errorf("continuation = %#v, want %q", decoded["continuation"], want)
 	}
@@ -91,7 +117,7 @@ func TestHandoffIsEmptyForAnAdmittedResult(t *testing.T) {
 // select-change, so a handoff that knows the change must name it.
 func TestHandoffContinuationNamesTheChangeWhenKnown(t *testing.T) {
 	for _, tt := range []struct{ change, want string }{
-		{change: "", want: "gentle-ai sdd-status --cwd '/repo' --json"},
+		{change: "", want: wantUnscopedContinuation},
 		{change: "feat-x", want: "gentle-ai sdd-status 'feat-x' --cwd '/repo' --json"},
 	} {
 		var decoded map[string]any

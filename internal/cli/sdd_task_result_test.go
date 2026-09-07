@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,44 @@ func TestSDDTaskResultRendersTheDispatchLatch(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("latched handoff missing %s: %q", want, err.Error())
 		}
+	}
+}
+
+func TestSDDTaskResultContinuationPreservesIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		args        []string
+	}{
+		{name: "empty"},
+		{name: "malformed", input: "<task>broken</task>"},
+		{name: "latched", args: []string{"--latched-phase", "sdd-apply", "--latched-code", "sdd_task_result_empty"}},
+		{name: "explicit change", args: []string{"--change", "feat'x"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--phase", "sdd-verify", "--cwd", "/re'po", "--input", "-"}, tc.args...)
+			_, err := runTaskResult(t, tc.input, args...)
+			if err == nil {
+				t.Fatal("terminal failure was admitted")
+			}
+			var payload struct{ Continuation string }
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(err.Error(), "GENTLE_AI_SDD_FAILURE ")), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "explicit change" {
+				if payload.Continuation != `gentle-ai sdd-status 'feat'\''x' --cwd '/re'\''po' --json` {
+					t.Fatalf("explicit-change compatibility lost: %q", payload.Continuation)
+				}
+				return
+			}
+			for _, want := range []string{"retained structured status", "selected change and artifact store", "ask the user to select", "Do not infer either"} {
+				if !strings.Contains(payload.Continuation, want) {
+					t.Errorf("continuation missing %q: %q", want, payload.Continuation)
+				}
+			}
+			if strings.Contains(payload.Continuation, "gentle-ai ") {
+				t.Errorf("identity-free continuation offers a command: %q", payload.Continuation)
+			}
+		})
 	}
 }
 

@@ -2864,29 +2864,30 @@ func isolatedGitEnvironment() []string {
 	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull, "GIT_CONFIG_COUNT=0")
 }
 
-// #3516: OpenCode can hand the plugin an empty or filesystem-root cwd, and the
-// Go side refuses `--cwd /`. The plugin has no JS/TS test harness, so this
-// pins the guard in its source: a root or empty cwd never renders as a
-// `--cwd` value; the continuation falls back to the `<repo>` placeholder and
-// the summary says so.
-func TestSDDTaskResultArtifactsPluginGuardsFilesystemRootCwd(t *testing.T) {
-	source, err := Read("opencode/plugins/sdd-task-result-artifacts.ts")
-	if err != nil {
-		t.Fatal(err)
+// #2855: cwd alone cannot identify the selected change and artifact store.
+// Initial and latched failures must offer guidance, never a guessed command
+// (including the old root/empty-cwd placeholder from #3516).
+func TestSDDTaskResultArtifactsPluginUsesCoordinatorGuidanceWithoutIdentity(t *testing.T) {
+	source := MustRead("opencode/plugins/sdd-task-result-artifacts.ts")
+	if got := strings.Count(source, "continuation: SDD_TASK_CONTINUATION_GUIDANCE"); got != 2 {
+		t.Fatalf("initial and latched failures must share safe guidance; got %d uses", got)
 	}
-	for _, want := range []string{
-		`function isFilesystemRoot`,
-		`function continuationCwd`,
-		`const cwd = continuationCwd(worktree, directory)`,
-		`--cwd <repo> --json`,
-		`replace <repo> with the repository root`,
-	} {
-		if !strings.Contains(source, want) {
-			t.Fatalf("SDD task plugin missing root-cwd guard %q", want)
+	for _, forbidden := range []string{"gentle-ai sdd-status", "<repo>", "replace <repo>"} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("SDD task plugin retains an identity-free command or placeholder: %q", forbidden)
 		}
 	}
-	if strings.Contains(source, "const cwd = worktree || directory") {
-		t.Fatal("SDD task plugin still renders whatever cwd OpenCode hands over")
+	for _, path := range []string{"opencode/sdd-orchestrator.md", "skills/_shared/sdd-phase-common.md"} {
+		consumer := MustRead(path)
+		for _, want := range []string{
+			"follow its `continuation` exactly once",
+			"execute it only when supplied as a command",
+			"Never turn guidance into a guessed command",
+		} {
+			if !strings.Contains(consumer, want) {
+				t.Errorf("%s missing safe continuation consumption: %q", path, want)
+			}
+		}
 	}
 }
 

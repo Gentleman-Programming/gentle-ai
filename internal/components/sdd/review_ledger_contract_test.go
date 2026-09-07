@@ -499,7 +499,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// RDD disable, or a START/STATUS refusal fall back to the risk-gated tier
 	// table exactly like RDD off. Kilo renders that section through the
 	// OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "130994280552d21a9f9e15e50ab8e82a9408dc0564588850c932b9ef13554b36"
+	// #2855 replaces identity-free task-failure commands with coordinator
+	// guidance. Kilocode embeds the changed OpenCode consumer wording.
+	const want = "d4942d1415835c3208ddeda190790cba93528ab1d691da3092996adc6247bd20"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
