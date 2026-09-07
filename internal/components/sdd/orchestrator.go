@@ -73,7 +73,11 @@ func substituteSharedOrchestratorSections(content string) string {
 // bounded-review and runtime-identity substitutions.
 func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRenderOptions) string {
 	path := sddOrchestratorAsset(agent)
-	content := substituteSharedOrchestratorSections(assets.MustRead(path))
+	content := assets.MustRead(path)
+	if usesFallbackSessionPreflight(agent) {
+		content = composeFallbackSessionPreflight(content, agent)
+	}
+	content = substituteSharedOrchestratorSections(content)
 	var renderOptions OrchestratorRenderOptions
 	if len(options) > 0 {
 		renderOptions = options[0]
@@ -84,6 +88,74 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 	content = replacePiClosedSingleSelectRoute(content, agent)
 	content = renderBoundedReviewAssetBodyFromContent(agent, path, content)
 	return bindRuntimeAgentIdentity(content, agent)
+}
+
+// Generic is also consumed by Pi, OpenClaw, and Trae. Select by identity,
+// not asset path, so this cohort cannot change deferred runtime prompts.
+func usesFallbackSessionPreflight(agent model.AgentID) bool {
+	return agent == model.AgentVSCodeCopilot || agent == model.AgentCursor || agent == model.AgentGeminiCLI
+}
+
+// Replace only owned session-choice producers before composing shared sections.
+// Historical assets remain intact for runtimes outside the migrated cohort.
+func composeFallbackSessionPreflight(content string, agent model.AgentID) string {
+	// Validate cardinality before removing any range: a duplicate nested in an
+	// earlier range must not disappear before its own validation runs.
+	for _, heading := range []string{"### Artifact Store Policy", "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy"} {
+		if _, err := sddSessionPreflightAnchorIndex(content, heading); err != nil {
+			panic(fmt.Sprintf("sdd: fallback source %s: %v", heading, err))
+		}
+	}
+	for _, section := range []struct{ start, end, body string }{
+		{"### Artifact Store Policy", "### Commands", "Use the artifact store resolved by SDD Session Preflight; never detect or default a separate choice."},
+		{"### Artifact Store Mode", "### Delivery Strategy", "Pass the preflight artifact choice as `artifact_store.mode` to every sub-agent launch."},
+		{"### Delivery Strategy", "### Chain Strategy", "Pass the preflight PR strategy as `delivery_strategy` to `sdd-tasks` and `sdd-apply`. `exception-ok` is never a preflight choice; it requires explicit maintainer-approved `size:exception`."},
+	} {
+		start := strings.Index(content, section.start+"\n")
+		end := strings.Index(content, section.end+"\n")
+		if start < 0 || end <= start {
+			panic("sdd: missing fallback session policy section: " + section.start)
+		}
+		content = content[:start] + section.start + "\n\n" + section.body + "\n\n" + content[end:]
+	}
+	// Keep runtime-specific execution semantics and phase approval rules.
+	for _, bounds := range [][2]string{
+		{"When the user invokes `/sdd-new`", "- **Automatic**"},
+		{"If the user doesn't specify, default to **Automatic**.", "In **Interactive** mode, between phases:"},
+	} {
+		start := strings.Index(content, bounds[0])
+		end := strings.Index(content, bounds[1])
+		if strings.Count(content, bounds[0]) != 1 || strings.Count(content, bounds[1]) != 1 || end <= start {
+			panic("sdd: missing or ambiguous fallback execution choice producer")
+		}
+		content = content[:start] + "Use the execution mode cached by SDD Session Preflight.\n\n" + content[end:]
+	}
+	for _, replacement := range []struct {
+		agent    model.AgentID
+		old, new string
+	}{
+		{model.AgentCursor, "**Interactive** is the default behavior", "**Interactive** uses the preflight choice"},
+		{model.AgentVSCodeCopilot, "Artifact store: default `engram` when available.", "Artifact store: use the SDD Session Preflight choice."},
+	} {
+		want := 0
+		if agent == replacement.agent {
+			want = 1
+		}
+		if strings.Count(content, replacement.old) != want {
+			panic("sdd: missing or ambiguous fallback source clause: " + replacement.old)
+		}
+		content = strings.Replace(content, replacement.old, replacement.new, want)
+	}
+	const legacyInitLookup = "1. Search Engram: `mem_search(query: \"sdd-init/{project}\", project: \"{project}\")`\n2. If found → init was done, proceed normally\n3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command"
+	if strings.Count(content, legacyInitLookup) != 1 {
+		panic("sdd: missing or ambiguous fallback init lookup")
+	}
+	content = strings.Replace(content, legacyInitLookup, "1. Use the artifact store resolved by SDD Session Preflight. In `openspec` mode, check project context and testing capabilities in `openspec/config.yaml` without calling Engram. In `engram` mode, search `sdd-init/{project}` in Engram. In `hybrid` mode, check both stores.\n2. If the selected store contains initialized project context and testing capabilities, proceed normally; a directory alone is not initialization evidence.\n3. If initialization is missing, delegate to `sdd-init` with the cached `artifact_store.mode`, then proceed. If a selected backend is unavailable, STOP and report it; never silently change the user's artifact choice.", 1)
+	projected, err := projectSDDSessionPreflightWithTool(content, "### Native SDD Dispatcher Guard", "")
+	if err != nil {
+		panic(err)
+	}
+	return projected
 }
 
 const genericFallbackOnlyNativeRoute = "- Native route: This variant has no classified native question UI for this contract; always use the plain chat or terminal fallback below. When the closed domain of a single-select envelope is unrepresentable here, fall through to the Fallback clause below."

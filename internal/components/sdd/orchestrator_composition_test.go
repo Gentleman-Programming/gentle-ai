@@ -18,8 +18,8 @@ const testGenericFallbackOnlyNativeRoute = "- Native route: This variant has no 
 const testPiClosedSingleSelectNativeRoute = "- Native route: For every strictly closed single-select envelope, use ask_user_choice only when the interactive Pi TUI can represent its complete one-question 2-4 ordered-option domain. Pass each user-facing label and description with the envelope-owned canonical option token as value. The selector returns exactly one value; map it to the exact envelope-owned choice once, then select any envelope-owned continuation or invocation once where present. It has no custom/free-text or multi-select path. If the native TUI is unavailable or the envelope is not exactly representable, use the complete chat fallback. ask_user_question is the external open/free-text questionnaire and must not be used for a closed domain; open/free-text questionnaires may use ask_user_question when exactly representable. For gentle-ai.review-integration.consent/v3, the chosen continuation is still the exact captured provider-owned choice invocation, used once without synthesis."
 
 // TestCanonicalCompositionAddsOnlyItsKnownSteps proves that composition is
-// bounded-review rendering plus the shared-section substitution plus the Pi
-// route, and nothing else. It deliberately no longer claims to preserve
+// bounded-review rendering plus shared-section substitution, cohort preflight,
+// and the Pi route. Non-cohort runtimes retain their historical composition. It deliberately no longer claims to preserve
 // historical bytes: #3817 moved five section bodies into a shared asset, so
 // this test's expected side must apply the same substitution, which means it
 // cannot detect a substitution defect. Byte preservation across that move is
@@ -32,7 +32,12 @@ func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 			// #3817 adds shared-section substitution to the composition. The
 			// invariant is unchanged in spirit: composition is bounded review
 			// plus the shared sections plus the Pi route, and nothing else.
-			content := substituteSharedOrchestratorSections(assets.MustRead(path))
+			content := assets.MustRead(path)
+			if agent.ID == model.AgentVSCodeCopilot || agent.ID == model.AgentCursor || agent.ID == model.AgentGeminiCLI {
+				assertFallbackSessionPreflight(t, composeOrchestratorPrompt(agent.ID))
+				return
+			}
+			content = substituteSharedOrchestratorSections(content)
 			if agent.ID == model.AgentPi {
 				content = strings.Replace(content, testGenericFallbackOnlyNativeRoute, testPiClosedSingleSelectNativeRoute, 1)
 			}
@@ -42,6 +47,41 @@ func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 				t.Fatalf("canonical composition changed %s orchestrator bytes", agent.ID)
 			}
 		})
+	}
+}
+
+func TestFallbackSessionPreflightRejectsAmbiguousSource(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+		source := assets.MustRead(sddOrchestratorAsset(agent))
+		for _, heading := range []string{"### Artifact Store Policy", "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy"} {
+			t.Run(string(agent)+"/duplicate/"+heading, func(t *testing.T) {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("ambiguous source did not fail closed")
+					}
+				}()
+				composeFallbackSessionPreflight(source+"\n"+heading+"\n", agent)
+			})
+		}
+	}
+	for _, tc := range []struct {
+		agent  model.AgentID
+		clause string
+	}{
+		{model.AgentCursor, "**Interactive** is the default behavior"},
+		{model.AgentVSCodeCopilot, "Artifact store: default `engram` when available."},
+	} {
+		for _, mutation := range []string{"drifted default", tc.clause + "\n" + tc.clause} {
+			t.Run(string(tc.agent)+"/"+mutation, func(t *testing.T) {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("drifted or duplicate replacement clause did not fail closed")
+					}
+				}()
+				source := assets.MustRead(sddOrchestratorAsset(tc.agent))
+				composeFallbackSessionPreflight(strings.Replace(source, tc.clause, mutation, 1), tc.agent)
+			})
+		}
 	}
 }
 

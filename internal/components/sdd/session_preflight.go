@@ -18,9 +18,14 @@ func sddSessionPreflightBlock() string {
 	return sddSessionPreflightBlockWithTool("question")
 }
 
-// Only native interaction vocabulary varies; all runtimes share one policy body.
+// Only interaction transport varies; all runtimes share one policy body.
 func sddSessionPreflightBlockWithTool(tool string) string {
 	body := strings.ReplaceAll(sddSessionPreflightBody, "`question`", "`"+tool+"`")
+	if tool == "" {
+		start := strings.Index(sddSessionPreflightBody, "Use the `question` tool")
+		end := strings.Index(sddSessionPreflightBody, "Match labels")
+		body = sddSessionPreflightBody[:start] + "This runtime has no classified native question UI. Present ONE complete blocking prompt in plain chat or terminal with all three groups below, in order, and explain that their answers are required before init. Each group is single-select; its listed labels are the complete allowed-answer domain. Include every label and description, the fixed review policy, and this answer syntax: `Pace: <label>; Artifacts: <label>; PR strategy: <label>`. Then STOP; never default, infer, or launch dependent work. Validate all three answers under the Lossless Blocking Prompts contract before caching their canonical mappings.\n\n" + sddSessionPreflightBody[end:]
+	}
 	return sddSessionPreflightMarker + "\n" + body + "\n" + sddSessionPreflightEnd
 }
 

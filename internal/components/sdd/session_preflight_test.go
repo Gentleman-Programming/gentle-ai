@@ -10,6 +10,90 @@ import (
 const testSDDSessionPreflightInitAnchor = "### SDD Init Guard (MANDATORY)"
 const testSDDSessionPreflightEntryAnchor = "### SDD Entry Routing (MANDATORY)"
 
+func assertFallbackSessionPreflight(t *testing.T, got string) {
+	t.Helper()
+	open, close := "<!-- gentle-ai:sdd-session-preflight -->", "<!-- /gentle-ai:sdd-session-preflight -->"
+	if strings.Count(got, open) != 1 || strings.Count(got, close) != 1 {
+		t.Fatal("installed prompt requires exactly one bounded preflight")
+	}
+	start, end := strings.Index(got, open), strings.Index(got, close)
+	if end <= start || end >= strings.Index(got, "### SDD Init Guard (MANDATORY)") {
+		t.Fatal("complete preflight must precede init")
+	}
+	for _, want := range []string{"Interactive or Automatic", "OpenSpec, Engram, or Both", "Ask me, Single PR, or Auto", "Both -> `hybrid`", "fixed at 400", "NEVER ask it as a fourth group", "plain chat or terminal", "STOP", "Pace: <label>; Artifacts: <label>; PR strategy: <label>"} {
+		if !strings.Contains(got[start:end], want) {
+			t.Errorf("preflight missing %q", want)
+		}
+	}
+	for _, stale := range []string{"`question`", "AskUserQuestion", "ALSO ASK", "ASK which execution mode", "default to **Automatic**", "default when available", "default `engram`", "ask once for and cache delivery strategy", "**Interactive** is the default behavior"} {
+		if strings.Contains(got, stale) {
+			t.Errorf("contradictory installed producer %q", stale)
+		}
+	}
+	init := got[strings.Index(got, "### SDD Init Guard (MANDATORY)"):strings.Index(got, "### Execution Mode")]
+	if !strings.Contains(init, "In `openspec` mode") || !strings.Contains(init, "without calling Engram") || !strings.Contains(init, "openspec/config.yaml") {
+		t.Error("OpenSpec init lookup must not require Engram")
+	}
+}
+
+func TestFallbackSessionPreflightCohort(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+		t.Run(string(agent), func(t *testing.T) {
+			got := composeOrchestratorPrompt(agent)
+			for _, marker := range []string{sddSessionPreflightMarker, sddSessionPreflightEnd} {
+				if strings.Count(got, marker) != 1 {
+					t.Fatalf("expected exactly one %s", marker)
+				}
+			}
+			end := strings.Index(got, sddSessionPreflightEnd)
+			if end > strings.Index(got, testSDDSessionPreflightInitAnchor) {
+				t.Fatal("preflight follows init")
+			}
+			block := got[strings.Index(got, sddSessionPreflightMarker):end]
+			for _, want := range []string{"Interactive or Automatic", "OpenSpec, Engram, or Both", "Ask me, Single PR, or Auto", "Both -> `hybrid`", "Interactive -> `interactive`", "Automatic -> `auto`", "OpenSpec -> `openspec`", "Engram -> `engram`", "Ask me -> `ask-on-risk`", "Single PR -> `single-pr`", "Auto -> `auto-chain`", "fixed at 400", "NEVER ask it as a fourth group", "plain chat or terminal", "STOP", "Pace: <label>; Artifacts: <label>; PR strategy: <label>"} {
+				if !strings.Contains(block, want) {
+					t.Errorf("preflight missing %q", want)
+				}
+			}
+			for _, stale := range []string{"`question`", "AskUserQuestion", "ALSO ASK", "ASK which execution mode", "default to **Automatic**", "default when available", "default `engram`", "ask once for and cache delivery strategy", "**Interactive** is the default behavior"} {
+				if strings.Contains(got, stale) {
+					t.Errorf("stale producer or native vocabulary %q", stale)
+				}
+			}
+		})
+	}
+}
+
+func TestFallbackSessionPreflightProjectionBoundaries(t *testing.T) {
+	anchor := testSDDSessionPreflightInitAnchor
+	template := "prefix\n" + anchor + "\nsuffix"
+	got, err := projectSDDSessionPreflightWithTool(template, anchor, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, content string
+		valid         bool
+	}{
+		{"canonical", got, true},
+		{"CRLF", strings.ReplaceAll(got, "\n", "\r\n"), true},
+		{"missing", template, false},
+		{"duplicate", sddSessionPreflightBlockWithTool("") + "\n" + got, false},
+		{"after init", template + "\n" + sddSessionPreflightBlockWithTool(""), false},
+		{"native transport", strings.Replace(got, sddSessionPreflightBlockWithTool(""), sddSessionPreflightBlock(), 1), false},
+		{"wrong mapping", strings.ReplaceAll(got, "Both -> `hybrid`", "Both -> `both`"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateSDDSessionPreflightProjection(tc.content, anchor, ""); (err == nil) != tc.valid {
+				t.Fatalf("validation = %v; valid = %v", err, tc.valid)
+			}
+		})
+	}
+	if again, err := projectSDDSessionPreflightWithTool(got, anchor, ""); err != nil || again != got {
+		t.Fatalf("projection not idempotent: %v", err)
+	}
+}
+
 func TestClaudeSessionPreflightProjectionStructure(t *testing.T) {
 	const tool = "AskUserQuestion"
 	anchor := testSDDSessionPreflightEntryAnchor

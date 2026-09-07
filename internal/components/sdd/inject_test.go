@@ -40,6 +40,34 @@ func mockNoPackageManager(t *testing.T) {
 	t.Helper()
 }
 
+func TestInjectFallbackSessionPreflight(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+			adapter := mustAdapter(t, agent)
+			if _, err := Inject(home, adapter, ""); err != nil {
+				t.Fatal(err)
+			}
+			path := adapter.SystemPromptFile(home)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFallbackSessionPreflight(t, string(before))
+			if result, err := Inject(home, adapter, ""); err != nil || result.Changed {
+				t.Fatalf("repeat install = %+v, %v; want unchanged", result, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("repeat install changed prompt bytes: %v", err)
+			}
+			assertFallbackSessionPreflight(t, string(after))
+		})
+	}
+}
+
 func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 	tests := []struct {
 		agent model.AgentID
