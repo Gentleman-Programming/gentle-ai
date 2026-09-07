@@ -50,6 +50,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j29-cherry-pick-in-progress":                                               reviewOptedIn,
 	"j30-kill-switch-flipped-mid-review":                                        reviewOptedIn,
 	"j3043-opencode-managed-background-activation":                              reviewUntouched,
+	"j3565-skill-registry-dot-cwd":                                              reviewUntouched,
 	"j117-doctor-dangling-managed-config":                                       reviewUntouched,
 	"j118-doctor-dangling-config-ancestor":                                      reviewUntouched,
 	"j31-nonsense-mode-value":                                                   reviewUntouched,
