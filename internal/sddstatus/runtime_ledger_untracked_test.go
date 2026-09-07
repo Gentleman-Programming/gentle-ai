@@ -522,3 +522,99 @@ func TestRuntimeFinishRefusesADeclarationAgainstAStaleInventory(t *testing.T) {
 		t.Fatalf("stale declaration mutated authority: status=%#v err=%v", status, err)
 	}
 }
+
+// TestRuntimeFinishSettlesAFortyPathBornDuringSelection is #4029: settle
+// refused any born-during declaration over 32 paths, deadlocking a work unit
+// whose honest accounting needed more (a change touching 40 new files was
+// enough). A 40-path selection must settle cleanly under the raised cap while
+// the digest/inventory binding stays exact.
+func TestRuntimeFinishSettlesAFortyPathBornDuringSelection(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-forty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "forty-begin", WorkUnit: "born during", EvidenceGoal: "a large work unit borns many untracked files",
+		MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 40
+	selection := make([]string, count)
+	for index := range selection {
+		name := fmt.Sprintf("born-%02d.txt", index)
+		if err := os.WriteFile(filepath.Join(repo, name), []byte("line\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		selection[index] = name
+	}
+	digest := currentUntrackedInventoryDigest(t, repo)
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "forty-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "forty born-during files settle cleanly",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: digest,
+	})
+	if err != nil {
+		t.Fatalf("a %d-path selection was refused: %v", count, err)
+	}
+	if !finished.Complete || finished.ActiveAttempt != nil {
+		t.Fatalf("forty-path settle = %#v", finished)
+	}
+	last := finished.Attempts[len(finished.Attempts)-1]
+	if len(last.IntendedUntracked) != count || last.ChangedLines != count {
+		t.Fatalf("forty-path settle did not record the full selection: %#v", last)
+	}
+}
+
+// TestRuntimeFinishRefusesOverCapWithACompletableRoute pins #4029's other
+// half: whichever cap is chosen, exceeding it must name a route the caller
+// can actually complete, not just the number it rejected. Tracked and staged
+// changes are always captured uncapped, so `git add` on the excess paths is
+// that route regardless of how large the cap is.
+func TestRuntimeFinishRefusesOverCapWithACompletableRoute(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "born-during-over-cap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "over-cap-begin", WorkUnit: "born during", EvidenceGoal: "more born-during files than the cap allows",
+		MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := make([]string, maximumRuntimeIntendedUntracked+1)
+	for index := range selection {
+		name := fmt.Sprintf("over-%03d.txt", index)
+		if err := os.WriteFile(filepath.Join(repo, name), []byte("line\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		selection[index] = name
+	}
+	digest := currentUntrackedInventoryDigest(t, repo)
+	_, err = store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "over-cap-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "over-cap selection must name a completable route",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+		IntendedUntracked: &selection, ExpectedUntrackedInventory: digest,
+	})
+	if err == nil {
+		t.Fatal("a selection over the cap settled instead of being refused")
+	}
+	for _, want := range []string{
+		fmt.Sprintf("at most %d paths", maximumRuntimeIntendedUntracked),
+		"git add", "sdd-attempt settle", "sdd-attempt finish",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("cap refusal does not name a completable route (%q):\n%v", want, err)
+		}
+	}
+	status, err := store.Status()
+	if err != nil || status.Revision != started.Revision || status.ActiveAttempt == nil {
+		t.Fatalf("over-cap refusal mutated authority: status=%#v err=%v", status, err)
+	}
+}

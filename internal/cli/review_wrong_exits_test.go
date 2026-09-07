@@ -146,3 +146,62 @@ func TestNegotiatedStatusWithUnknownLineageFailsClosedFromForeignRepository(t *t
 		t.Fatalf("owning-repository continuation authority = %#v, want lineage %q reviewing", status.Authority, started.LineageID)
 	}
 }
+
+// TestNegotiatedStatusWithOccupiedLineageFailsClosedFromSiblingWorktree is
+// issue #4023: a linked worktree shares its owning repository's git common
+// dir, so ExactReviewLineageOccupied (scoped to that shared authority store)
+// reports the lineage occupied from the sibling too. Before this fix, that let
+// the #3932 foreign-repository guard pass, and the bound STATUS continuation
+// then silently froze a fresh target from the sibling's own working tree
+// instead of failing closed. An explicitly named lineage must only be
+// evaluated from the exact worktree that froze it.
+func TestNegotiatedStatusWithOccupiedLineageFailsClosedFromSiblingWorktree(t *testing.T) {
+	reviewEnabledHome(t)
+	owner := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, owner, "candidate.go", "package candidate\n\nfunc Candidate() int { return 7 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, owner, "continuation-sibling-worktree")
+	execution := startStatusContinuationExecution(t, started, []ReviewTransitionArgument{
+		{Name: "projection", Value: string(reviewtransaction.ProjectionWorkspace)},
+	})
+	if binding := execution.Arguments[3]; binding.Name != "repository-context" || started.RepositoryContext == nil || binding.Value != started.RepositoryContext.Handle {
+		t.Fatalf("START continuation binding row = %#v, want the published repository context handle", execution.Arguments)
+	}
+	fields := strings.Fields(execution.Command)
+
+	sibling := canonicalReviewCLITempDir(t)
+	runReviewCLIGit(t, owner, "worktree", "add", sibling, "-b", "sibling-branch")
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(sibling); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(previous) }()
+	var siblingOutput bytes.Buffer
+	err = RunReview(fields[2:], &siblingOutput)
+	if err == nil {
+		t.Fatalf("continuation from a sibling worktree succeeded instead of failing closed:\n%s", siblingOutput.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, siblingOutput.Bytes())
+	if failure.Operation != "review.status" || failure.Code != reviewIntegrationInvalidRequestCode || failure.NextAction != "correct_request" ||
+		!strings.Contains(failure.Cause, started.LineageID) || !strings.Contains(failure.Cause, "worktree") {
+		t.Fatalf("sibling-worktree continuation failure = %#v, want invalid_request naming the lineage and the worktree mismatch", failure)
+	}
+	if strings.Contains(failure.Cause, sibling) || strings.Contains(failure.Cause, owner) {
+		t.Fatalf("sibling-worktree continuation cause leaked an absolute worktree path: %q", failure.Cause)
+	}
+
+	if err := os.Chdir(owner); err != nil {
+		t.Fatal(err)
+	}
+	var ownerOutput bytes.Buffer
+	if err := RunReview(fields[2:], &ownerOutput); err != nil {
+		t.Fatalf("continuation from the original worktree: %v\n%s", err, ownerOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, ownerOutput.Bytes(), &status)
+	if status.Authority == nil || status.Authority.LineageID != started.LineageID || status.Authority.State != reviewtransaction.StateReviewing {
+		t.Fatalf("original-worktree continuation authority = %#v, want lineage %q reviewing", status.Authority, started.LineageID)
+	}
+}

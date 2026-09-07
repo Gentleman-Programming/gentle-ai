@@ -446,6 +446,9 @@ func catFileBatchRecordBytes(oid string, size int64) int64 {
 // Extensions only nominate a candidate; an interpreter directive, runtime MDX
 // syntax, or bytes that are not decodable text all withdraw the nomination.
 func isPassiveDocumentContent(logicalPath string, content []byte) bool {
+	if isPassiveImageExtension(logicalPath) {
+		return hasPassiveImageSignature(content)
+	}
 	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
 		return false
 	}
@@ -572,6 +575,17 @@ func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]tr
 	return blobs, nil
 }
 
+// processBoundaryPattern is the case-insensitive extended regular expression
+// the frozen-tree scan hands to git grep. A bare spawn word (`subprocess`,
+// `child_process`, `execute_process`, `exec` as in `os/exec` or `exec "$@"`)
+// counts only when it is not a member of another value: `db.Exec(`,
+// `stmt.Exec(`, and `/re/.exec(` are database statements and regular
+// expressions, not process boundaries (#2542). Spawn calls that only exist in
+// member form are named explicitly instead.
+const processBoundaryPattern = `(^#!)` +
+	`|((^|[^[:alnum:]_.])(subprocess|child_process|execute_process|exec)([^[:alnum:]_]|$))` +
+	`|(getRuntime\(\)\.exec\(|ProcessBuilder|os\.system\(|os\.exec[lv]p?e?\(|posix_spawn|proc_open\(|shell_exec\(|passthru\(|popen\(|Process\.Start\()`
+
 func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
@@ -608,7 +622,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		// same bounded pass looks for either inside the frozen bytes.
 		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
-			`(^#!)|((^|[^[:alnum:]_])(subprocess|execute_process|exec)([^[:alnum:]_]|$))`, tree, "--",
+			processBoundaryPattern, tree, "--",
 		}
 		prefixLength := gitArgvPrefixLength(repo, fixedArgs...)
 		for _, batch := range batchLiteralPathspecs(treePaths, prefixLength) {
@@ -881,12 +895,194 @@ func asciiLower(value string) string {
 	}, value)
 }
 
+// ChangedLines charges only the authored change, not the accounting shape a
+// path-keyed diff stat has to use. A pure rename/move keeps snapshot identity
+// and the manifest exactly as DiffStats already reports them -- one deleted
+// entry at the old path, one added entry at the new path -- but counting each
+// entry's full text as authored would charge a relocation as a full delete
+// plus a full insert. This asks git's own rename heuristic for the change
+// actually authored inside the moved file and charges that instead (#4107).
 func (builder SnapshotBuilder) ChangedLines(ctx context.Context, snapshot Snapshot) (int, error) {
 	stats, err := builder.DiffStats(ctx, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	return CountChangedLines(stats)
+	total, err := CountChangedLines(stats)
+	if err != nil {
+		return 0, err
+	}
+	// Rename-aware sizing is advisory, never load-bearing: a charge this
+	// attempt's budget depends on must not hard-fail because a second,
+	// independent diff invocation for sizing alone failed. Any error here
+	// falls back to the conservative no-rename total (zero savings) rather
+	// than refusing the charge outright.
+	if savings, savingsErr := builder.renameAwareSavings(ctx, snapshot, stats); savingsErr == nil {
+		total -= savings
+	}
+	return total, nil
+}
+
+// renameAwareSavings detects renames within the snapshot's base/candidate
+// boundary using git's own similarity heuristic (`-M`) and, for every
+// deleted/added path pair CountChangedLines charged as a full deletion plus a
+// full insertion, returns how many of those lines git's rename-aware diff
+// says were never actually touched. It reads an independent diff purely to
+// size an already-frozen pair; snapshot paths, the manifest, and candidate
+// identity are untouched.
+func (builder SnapshotBuilder) renameAwareSavings(ctx context.Context, snapshot Snapshot, stats []DiffStat) (int, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return 0, err
+	}
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	pairs, degraded := frozenRenamePairs(ctx, repo, isolation, snapshot.BaseTree, snapshot.CandidateTree)
+	if degraded {
+		// This call's own pairing lookup failed: fall back to no rename
+		// credit here, the same rule PrepareCandidateInspector applies to
+		// ITS OWN independent lookup (--no-renames reads) on
+		// FrozenCandidateContext.RenamePairingDegraded. Both consumers
+		// share the fallback RULE, not this one invocation's result: a
+		// concurrent or later PrepareCandidateInspector call runs its own
+		// git invocation and is not informed by this failure (#4107/#3208).
+		return 0, nil
+	}
+	statsByPath := make(map[string]DiffStat, len(stats))
+	for _, stat := range stats {
+		statsByPath[stat.Path] = stat
+	}
+	savings := 0
+	seen := make(map[string]struct{}, len(pairs))
+	for path, info := range pairs {
+		if _, done := seen[path]; done {
+			continue
+		}
+		seen[path] = struct{}{}
+		seen[info.partner] = struct{}{}
+		first, ok := statsByPath[path]
+		if !ok {
+			continue
+		}
+		second, ok := statsByPath[info.partner]
+		if !ok {
+			continue
+		}
+		var oldStat, newStat DiffStat
+		switch {
+		case first.Additions == 0 && first.Deletions > 0 && second.Deletions == 0 && second.Additions > 0:
+			oldStat, newStat = first, second
+		case second.Additions == 0 && second.Deletions > 0 && first.Deletions == 0 && first.Additions > 0:
+			oldStat, newStat = second, first
+		default:
+			// Not the clean delete/add shape a no-rename diff charges for a
+			// pure move; leave the pairing's contribution as-is.
+			continue
+		}
+		if oldStat.Binary || oldStat.ModeOnly || newStat.Binary || newStat.ModeOnly ||
+			isGeneratedGoldenPath(oldStat.Path) || isGeneratedGoldenPath(newStat.Path) {
+			continue
+		}
+		overcounted := oldStat.Deletions + newStat.Additions
+		actual := info.additions + info.deletions
+		if overcounted > actual {
+			savings += overcounted - actual
+		}
+	}
+	return savings, nil
+}
+
+// renamePairInfo is one git-detected rename pairing between a base and
+// candidate tree, together with the actual line-level change git's own diff
+// reports for it -- independent of whatever a no-rename diff charges the two
+// endpoints separately.
+type renamePairInfo struct {
+	partner              string
+	additions, deletions int
+}
+
+// frozenRenamePairs is the single canonical rename-pairing DERIVATION for one
+// frozen base/candidate tree boundary: ChangedLines' rename-aware sizing and
+// PrepareCandidateInspector's rename-aware patch reads both call exactly this
+// function rather than each hand-rolling its own git invocation, so the two
+// can never disagree on LOGIC -- same flags, same parsing, same degradation
+// rule. It does NOT share a computed RESULT across those two call sites:
+// each caller runs its own independent git subprocess against the same
+// immutable trees, ordinarily at different times for different purposes
+// (charging a budget at settle vs. building reviewer context at review time).
+// On the ordinary path both invocations return identical pairings, because
+// the derivation is a pure function of two immutable tree SHAs, but a
+// transient failure hitting only one of the two invocations means that one
+// instance's result (or degraded flag) is not guaranteed to match the
+// other's for that occurrence (#4107/#3208). It never returns an error --
+// a lookup failure degrades that ONE invocation to an empty pairing with
+// degraded=true, the fallback its own caller then applies consistently for
+// itself (no rename credit for ChangedLines, --no-renames reads for the
+// inspector), never a partial or crashing failure within one call.
+func frozenRenamePairs(ctx context.Context, repo string, isolation []string, baseTree, candidateTree string) (pairs map[string]renamePairInfo, degraded bool) {
+	detected, err := detectRenamePairs(ctx, repo, isolation, baseTree, candidateTree)
+	if err != nil {
+		return nil, true
+	}
+	return detected, false
+}
+
+// detectRenamePairs asks git's own similarity heuristic (`-M`) which deleted
+// and added paths between base and candidate are the same file relocated, and
+// returns the pairing keyed by both sides so a caller can look it up from
+// either endpoint. It never mutates the snapshot's path set or manifest: it
+// only reads one independent diff to characterize pairs that set already
+// contains.
+func detectRenamePairs(ctx context.Context, repo string, isolation []string, baseTree, candidateTree string) (map[string]renamePairInfo, error) {
+	output, err := runGitIsolated(ctx, repo, isolation, nil, "diff", "--numstat", "-M", "-z",
+		"--no-ext-diff", "--no-textconv", "--ignore-submodules=none", baseTree, candidateTree, "--")
+	if err != nil {
+		return nil, err
+	}
+	pairs := make(map[string]renamePairInfo)
+	records := bytes.Split(output, []byte{0})
+	for index := 0; index < len(records); index++ {
+		record := records[index]
+		if len(record) == 0 {
+			continue
+		}
+		fields := bytes.SplitN(record, []byte{'\t'}, 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected rename-aware diff stat %q", record) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		if len(fields[2]) != 0 {
+			// An ordinary (non-rename) numstat record; nothing to pair.
+			continue
+		}
+		if index+2 >= len(records) {
+			return nil, fmt.Errorf("truncated rename-aware diff stat %q", record) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		oldPath, err := normalizeLogicalPath(string(records[index+1]))
+		if err != nil {
+			return nil, err
+		}
+		newPath, err := normalizeLogicalPath(string(records[index+2]))
+		if err != nil {
+			return nil, err
+		}
+		index += 2
+		var additions, deletions int
+		if !bytes.Equal(fields[0], []byte{'-'}) {
+			additions, err = strconv.Atoi(string(fields[0]))
+			if err != nil {
+				return nil, fmt.Errorf("parse rename additions for %q: %w", newPath, err)
+			}
+			deletions, err = strconv.Atoi(string(fields[1]))
+			if err != nil {
+				return nil, fmt.Errorf("parse rename deletions for %q: %w", newPath, err)
+			}
+		}
+		pairs[oldPath] = renamePairInfo{partner: newPath, additions: additions, deletions: deletions}
+		pairs[newPath] = renamePairInfo{partner: oldPath, additions: additions, deletions: deletions}
+	}
+	return pairs, nil
 }
 
 func isRegularNonExecutableGitMode(mode string) bool {
@@ -977,11 +1173,39 @@ func isPassiveContentCandidatePath(logicalPath string) bool {
 	return true
 }
 
+// isPassiveImageExtension names the binary image formats a reviewer can never
+// read as prose or execute: their bytes carry no authored behavior, so a
+// binary blob under one of them stays passive instead of failing closed into a
+// lens that could not inspect it anyway (#4185).
+func isPassiveImageExtension(logicalPath string) bool {
+	switch strings.ToLower(path.Ext(logicalPath)) {
+	case ".png", ".jpg", ".jpeg", ".gif":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasPassiveImageSignature requires the bytes to open with the PNG, JPEG, or
+// GIF signature: an image extension alone never admits a blob as passive.
+func hasPassiveImageSignature(content []byte) bool {
+	for _, magic := range [][]byte{[]byte("\x89PNG\r\n\x1a\n"), {0xff, 0xd8, 0xff}, []byte("GIF87a"), []byte("GIF89a")} {
+		if bytes.HasPrefix(content, magic) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPassiveContentCandidateStat adds the mode half of the tier-0 nomination: a
-// binary blob, a symlink, a gitlink, a mode-only entry, or an executable bit
-// cannot be reviewed as prose whatever its extension claims.
+// symlink, a gitlink, a mode-only entry, or an executable bit cannot be
+// reviewed as prose whatever its extension claims, and a binary blob only
+// qualifies under a passive image extension.
 func isPassiveContentCandidateStat(stat DiffStat) bool {
-	if stat.Binary || stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
+	if stat.Binary && !isPassiveImageExtension(stat.Path) {
+		return false
+	}
+	if stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
 		return false
 	}
 	return isRegularNonExecutableGitMode(stat.OldMode) && isRegularNonExecutableGitMode(stat.NewMode)

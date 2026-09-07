@@ -4,9 +4,23 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+// issue3766UpdateCooldownFixture seeds the sandbox HOME's state.json with a
+// current last_update_check, mirroring issue3561DanglingAncestorFixture: a
+// fresh sandbox HOME has no update cooldown, so when upstream is newer the
+// launch update check pops an "Update Available" modal that covers the menu
+// the TTY exchange waits for (#3971's second manifestation). No state.json
+// exists at this point, so only the cooldown is seeded and the journey keeps
+// running against a not-installed state.
+func issue3766UpdateCooldownFixture(sandbox *Sandbox) error {
+	statePath := filepath.Join(sandbox.Home, ".gentle-ai", "state.json")
+	state := fmt.Sprintf(`{"last_update_check":%q}`, time.Now().UTC().Format(time.RFC3339Nano))
+	return sandbox.write(statePath, state)
+}
 
 // issue3766Journeys drives #3766's switch under a real PTY. The sandbox supplies
 // an isolated HOME, so this proof cannot read or change a user's global config.
@@ -18,6 +32,7 @@ func issue3766Journeys() []Journey {
 		Source: "#3766: the switch screen must expose resolved state and never touch a real user config",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
+			{Name: "fixture: update-check cooldown in the sandbox HOME", Fixture: issue3766UpdateCooldownFixture},
 			{Name: "Receipt-Driven Development toggles globally in the TUI", Composite: func(run *journeyRun) error {
 				observation, err := run.runTTY(nil, false, reviewModeTTYExchange)
 				if err != nil {

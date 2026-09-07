@@ -66,8 +66,12 @@ func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) 
 		t.Fatalf("large-candidate STATUS produced no reviewer input: %#v", result.NextTransition)
 	}
 	for _, input := range result.NextTransition.Collect.Inputs {
+		// issue #3922 / #4199 / gentle-pi#543: the native-git collect input no
+		// longer inlines the manifest -- artifact_subject.changed_path_manifest_sha256
+		// already commits to it -- so its absence here is expected, not lost
+		// context.
 		if input.BaseTree != start.BaseTree || input.CandidateTree != start.CandidateTree ||
-			input.ChangedPathManifest == nil || input.ArtifactSubject == nil {
+			input.ChangedPathManifest != nil || input.ArtifactSubject == nil {
 			t.Fatalf("collect input lost native Git context: %#v", input)
 		}
 	}

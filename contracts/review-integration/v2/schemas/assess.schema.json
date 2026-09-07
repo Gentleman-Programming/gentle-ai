@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/assess.schema.json",
+  "title": "Gentle AI read-only review candidate risk assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "risk", "reasons", "changed_paths", "changed_lines", "candidate"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-assessment/v1"},
+    "risk": {"enum": ["passive", "medium", "high"]},
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "changed_paths": {"type": "integer", "minimum": 0},
+    "changed_lines": {"type": "integer", "minimum": 0},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["current-changes", "base-diff"]},
+        "base_ref": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

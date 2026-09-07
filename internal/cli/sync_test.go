@@ -4143,6 +4143,115 @@ func TestBuildSyncSelectionSDDProfileStrategyForwarded(t *testing.T) {
 	}
 }
 
+// ─── Issue #3430: persisted component selection must not drop explicit SDD
+// profile/model-assignment work ───────────────────────────────────────────
+
+// TestRunSyncProfilePersistsWhenSDDComponentMissingFromState reproduces
+// https://github.com/Gentleman-Programming/gentle-ai/issues/3430: a machine
+// that installed without the SDD component (state.json's persisted
+// Components list omits "sdd") never gets its OpenCode SDD profile written
+// by `gentle-ai sync --profile ...`, even though the sync reports success.
+//
+// RestorePersistedSelection replaces selection.Components wholesale with the
+// persisted list, dropping ComponentSDD, so the componentSyncStep that writes
+// profiles into opencode.json never runs — but the sync still exits 0.
+func TestRunSyncProfilePersistsWhenSDDComponentMissingFromState(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"$schema":"https://opencode.ai/config.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Persisted state shape from an install that never selected the SDD
+	// component — the normal shape for anyone who installed without it.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentEngram},
+		SDDMode:             model.SDDModeSingle,
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "opencode", "--profile", "demo:anthropic/claude-sonnet-4-5"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	if !result.Selection.HasComponent(model.ComponentSDD) {
+		t.Fatalf("Selection.Components = %v, want ComponentSDD present because a profile was explicitly requested", result.Selection.Components)
+	}
+
+	settingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", settingsPath, err)
+	}
+	if !bytes.Contains(settingsData, []byte("sdd-orchestrator-demo")) {
+		t.Fatalf("opencode.json missing profile agent key %q for the explicitly requested profile; sync silently dropped the write. Got: %s", "sdd-orchestrator-demo", settingsData)
+	}
+}
+
+// TestRunSyncPlainSyncHonoursPersistedComponentsWithoutProfile verifies that a
+// plain sync (no --profile / --profile-phase flags) still honours a persisted
+// component selection that omits "sdd" — the fix for #3430 must only re-add
+// ComponentSDD when the caller explicitly asked for profile or model
+// assignment work, not on every sync.
+func TestRunSyncPlainSyncHonoursPersistedComponentsWithoutProfile(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentEngram},
+		SDDMode:             model.SDDModeSingle,
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	result, err := RunSync([]string{"--agents", "opencode"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	if result.Selection.HasComponent(model.ComponentSDD) {
+		t.Fatalf("Selection.Components = %v, want ComponentSDD absent — a plain sync with no explicit profile/model-assignment request must honour the persisted component list", result.Selection.Components)
+	}
+}
+
 // ─── Persist model assignments across sync runs ─────────────────────────────
 
 // TestRunSyncLoadsPersistedModelAssignments verifies that when state.json

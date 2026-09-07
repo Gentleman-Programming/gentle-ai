@@ -148,13 +148,14 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if err != nil {
 		return reviewProviderAdmittedResult{}, fmt.Errorf("canonicalize reviewer result: %w", err)
 	}
-	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
+	candidateCausalIDs, evidenceDerivation, evidenceDerivationReason, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
 		Inspection: result.Inspection, Result: native, CandidateCausalFindingIDs: candidateCausalIDs,
+		EvidenceDerivation: evidenceDerivation, EvidenceDerivationReason: evidenceDerivationReason,
 		RawPayload: raw, CanonicalPayload: canonicalPayload,
 	})
 	if err != nil {

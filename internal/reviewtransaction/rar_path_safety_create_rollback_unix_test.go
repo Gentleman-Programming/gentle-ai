@@ -167,6 +167,76 @@ func TestCreatePrivateRARDirectoryNeverRepairsADirectoryHoldingState(t *testing.
 	}
 }
 
+// TestEnsureRARDirectoryChainRepairsAPreExistingPrivateDirectory proves #3416:
+// when the private tier of the RAR authority chain already exists (an older
+// release, an interrupted run, or an operator's own `mkdir`), the walk must
+// route it through the same repair helper createPrivateRARDirectory uses for
+// a freshly created directory, not refuse it outright the first time
+// validation fails. Before the fix, ensureRARDirectoryChain's existing-entry
+// branch (os.Lstat succeeds, so the create branch is skipped entirely) fell
+// straight through to validatePrivateRARDirectory and returned its error
+// unrepaired -- exactly the "documented repair is ineffective" symptom the
+// issue reports after a successful out-of-band chmod/chown that a later
+// process restart could not see.
+func TestEnsureRARDirectoryChainRepairsAPreExistingPrivateDirectory(t *testing.T) {
+	commonDir := resolvedTempDir(t)
+	privateParent := filepath.Join(commonDir, "gentle-ai", "review-transactions", rarAuthorityDirectory)
+	root := filepath.Join(privateParent, rarAuthorityVersion)
+	// The parent is pre-created already owner-only, exactly as a prior,
+	// successful run of this same chain would leave it -- an intermediate
+	// private directory that already holds a child is never repairable
+	// in-place (repair only ever tightens an EMPTY directory; see
+	// TestCreatePrivateRARDirectoryNeverRepairsADirectoryHoldingState), so
+	// widening it here would test a scenario this design deliberately never
+	// promises to fix. What #3416 reports, and what this test exercises, is
+	// the empty leaf: an older release or an interrupted run left it
+	// world- and group-readable instead of owner-only, but still owned by
+	// this process and holding nothing.
+	if err := os.MkdirAll(privateParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureRARRepositoryRoot(commonDir, root, true); err != nil {
+		t.Fatalf("ensureRARRepositoryRoot over a pre-existing wrong-mode authority directory = %v, want it repaired instead of refused", err)
+	}
+	info, statErr := os.Lstat(root)
+	if statErr != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("pre-existing private directory %q = %v (%v), want it repaired to 0700", root, info, statErr)
+	}
+	if err := validatePrivateRARDirectory(root); err != nil {
+		t.Fatalf("validate repaired authority directory: %v", err)
+	}
+}
+
+// TestEnsureRARDirectoryChainStillRefusesAnUnrepairablePreExistingDirectory
+// pins the other half: a pre-existing private directory whose mode chmod(2)
+// cannot fix (breakRARPrivateDirectoryChmod) must still be refused, not
+// silently accepted, so the repair route added for #3416 never widens into a
+// trust bypass.
+func TestEnsureRARDirectoryChainStillRefusesAnUnrepairablePreExistingDirectory(t *testing.T) {
+	commonDir := resolvedTempDir(t)
+	privateParent := filepath.Join(commonDir, "gentle-ai", "review-transactions", rarAuthorityDirectory)
+	root := filepath.Join(privateParent, rarAuthorityVersion)
+	if err := os.MkdirAll(privateParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	breakRARPrivateDirectoryChmod(t)
+
+	if err := ensureRARRepositoryRoot(commonDir, root, true); err == nil {
+		t.Fatal("ensureRARRepositoryRoot accepted a pre-existing directory chmod(2) cannot repair")
+	}
+	info, statErr := os.Lstat(root)
+	if statErr != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("unrepairable directory = %v (%v), want it left untouched at 0755", info, statErr)
+	}
+}
+
 func resolvedTempDir(t *testing.T) string {
 	t.Helper()
 	// The private-path walk opens every ancestor with O_NOFOLLOW, so a

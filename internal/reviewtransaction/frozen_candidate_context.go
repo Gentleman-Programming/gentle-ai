@@ -1,15 +1,19 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -91,7 +95,22 @@ type FrozenCandidateContext struct {
 	CandidateTree       string
 	LegacyCandidateDiff *FrozenCandidateDiff
 	ChangedPathManifest []ChangedPathManifestEntry
-	repositoryRoot      string
+	// RenamePairs is the rename pairing frozenRenamePairs computed once
+	// during THIS inspector's own preparation (#4107/#3208): it is exactly
+	// what this same inspector's rename-aware patch reads used, so a
+	// reviewer or context builder inspecting this frozen candidate sees the
+	// pairing its own patches were built from. It is not synchronized with
+	// any other caller's separate invocation of the same derivation (for
+	// example ChangedLines' rename-aware sizing, computed independently,
+	// ordinarily at a different time for a different purpose) -- on the
+	// ordinary path both agree because the derivation is deterministic over
+	// the same immutable trees, but each has its own failure mode.
+	RenamePairs map[string]renamePairInfo
+	// RenamePairingDegraded is true when the rename pairing lookup itself
+	// failed for this boundary; RenamePairs is then empty and every rename
+	// pair fell back to the conservative --no-renames read.
+	RenamePairingDegraded bool
+	repositoryRoot        string
 }
 
 type PreparedCandidateInspector struct {
@@ -100,6 +119,30 @@ type PreparedCandidateInspector struct {
 	attributesFile string
 	cleanup        func() error
 	closed         bool
+	// renamePartners maps one manifest path to the other side of a
+	// git-detected rename pair (#3208). The manifest itself stays
+	// rename-disabled -- Status is never "R" -- so this is used only to size
+	// the per-path "patch" read: a moved file's two manifest entries would
+	// otherwise each materialize the entire file (a full delete, a full
+	// insert) instead of the small change git's own diff reports for it.
+	renamePartners map[string]string
+	// inspectionCache memoizes each successful Inspect result by operation,
+	// path index, and side. base_tree/candidate_tree are immutable for the
+	// lifetime of one inspector, so a repeated identical read always returns
+	// byte-identical output. STATUS's lens-context budget probe
+	// (reviewLensContextBudgetProbe, issues #3733/#3871) reuses one inspector
+	// across every selected lens and re-renders the complete candidate --
+	// two discovery reads plus one patch read per changed path -- once per
+	// lens, turning a bounded read-only STATUS into an O(lenses x paths)
+	// subprocess cost that scales with candidate size. Serving a repeated
+	// call from this cache instead of re-invoking Git collapses that back to
+	// O(paths), the cost one full pass over the candidate always required.
+	// Entries are private to the cache: Inspect returns a copy so a caller
+	// that mutates its slice cannot corrupt a later lens's view, and
+	// inspectionMu guards the map because one inspector is shared across
+	// lenses that may run concurrently.
+	inspectionCache map[string][]byte
+	inspectionMu    sync.Mutex
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -212,19 +255,57 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 		}
 		manifest = append(manifest, entry)
 	}
+	// Rename pairing is computed exactly once for THIS inspector's own
+	// preparation, via the single canonical derivation (frozenRenamePairs)
+	// ChangedLines' rename-aware sizing also calls -- so the two can never
+	// disagree on the pairing LOGIC, though each still runs its own git
+	// invocation and does not observe the other's result (#4107/#3208). A
+	// failed lookup here degrades this inspector's own pairing to empty --
+	// recorded observably as RenamePairingDegraded so a reviewer/context
+	// builder can see it -- with every path in THIS inspector falling back
+	// to the plain --no-renames read, rather than aborting preparation.
+	renamePairs, renameDegraded := frozenRenamePairs(ctx, repo, isolation, snapshot.BaseTree, snapshot.CandidateTree)
+	renamePartners := renamePartnersFromManifest(renamePairs, manifest)
 	return &PreparedCandidateInspector{
 		frozen: FrozenCandidateContext{
 			BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
 			ChangedPathManifest: manifest, repositoryRoot: repo,
+			RenamePairs: renamePairs, RenamePairingDegraded: renameDegraded,
 		},
 		isolation: isolation, attributesFile: attributesFile, cleanup: cleanup,
+		renamePartners: renamePartners,
 	}, nil
+}
+
+// renamePartnersFromManifest narrows an already-computed rename pairing (see
+// frozenRenamePairs) to the pairs this exact manifest recognizes as a clean
+// delete/add pair (issue #3208's counterpart to #4107): it performs no Git
+// invocation of its own, and the manifest's paths and rename-disabled Status
+// enum are never touched.
+func renamePartnersFromManifest(pairs map[string]renamePairInfo, manifest []ChangedPathManifestEntry) map[string]string {
+	statusByPath := make(map[string]CandidatePathStatus, len(manifest))
+	for _, entry := range manifest {
+		statusByPath[entry.Path] = entry.Status
+	}
+	partners := make(map[string]string, len(pairs))
+	for path, info := range pairs {
+		if statusByPath[path] != CandidatePathDeleted || statusByPath[info.partner] != CandidatePathAdded {
+			continue
+		}
+		partners[path] = info.partner
+		partners[info.partner] = path
+	}
+	return partners
 }
 
 // FrozenCandidateContext returns a copy that cannot mutate later inspection scope.
 func (inspector *PreparedCandidateInspector) FrozenCandidateContext() FrozenCandidateContext {
 	frozen := inspector.frozen
 	frozen.ChangedPathManifest = append(frozen.ChangedPathManifest[:0:0], frozen.ChangedPathManifest...)
+	// RenamePairs is a map: the struct copy above shares it with
+	// inspector.frozen unless cloned here, which would let a caller mutating
+	// the returned value corrupt this inspector's own recorded pairing.
+	frozen.RenamePairs = maps.Clone(frozen.RenamePairs)
 	return frozen
 }
 
@@ -244,6 +325,14 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		}
 	} else if side != "" {
 		return nil, errors.New("candidate inspection side is valid only for object content") // refusal:by-design operator-knowledge: reaching this means provider code bypassed the validated native CLI contract
+	}
+
+	cacheKey := operation + "\x00" + strconv.Itoa(pathIndex) + "\x00" + side
+	inspector.inspectionMu.Lock()
+	cached, hit := inspector.inspectionCache[cacheKey]
+	inspector.inspectionMu.Unlock()
+	if hit {
+		return bytes.Clone(cached), nil
 	}
 
 	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + inspector.attributesFile, "-c", "diff.external="}
@@ -274,8 +363,18 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		// preserved by the isolation this inspector already installs: an empty
 		// attributes file plus GIT_ATTR_NOSYSTEM, so neither the repository's
 		// .gitattributes nor the machine's can move the classification.
-		path := ":(literal)" + frozen.ChangedPathManifest[pathIndex].Path
-		args = append(common, "diff", "--patch", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--", path)
+		entryPath := frozen.ChangedPathManifest[pathIndex].Path
+		renameFlag, paths := "--no-renames", []string{":(literal)" + entryPath}
+		// A git-detected rename charges this read as one small change-inside
+		// -the-moved-file patch instead of a full delete or full insert, so a
+		// candidate dominated by pure moves stays inside the reviewer context
+		// byte budget (#3208). Both manifest entries in the pair render the
+		// same rename patch; each is still tagged with its own path above.
+		if partner, ok := inspector.renamePartners[entryPath]; ok {
+			renameFlag, paths = "-M", []string{":(literal)" + entryPath, ":(literal)" + partner}
+		}
+		args = append(common, "diff", "--patch", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", renameFlag, "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none", frozen.BaseTree, frozen.CandidateTree, "--")
+		args = append(args, paths...)
 	case "object":
 		tree := frozen.CandidateTree
 		if side == "base" {
@@ -285,7 +384,17 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 	default:
 		return nil, fmt.Errorf("unknown candidate inspection operation %q", operation) // refusal:by-design operator-knowledge: the native CLI validates the closed operation enum before calling this boundary
 	}
-	return runGitLimited(ctx, frozen.repositoryRoot, inspector.isolation, nil, MaxFrozenCandidateDiffBytes, args...)
+	payload, err := runGitLimited(ctx, frozen.repositoryRoot, inspector.isolation, nil, MaxFrozenCandidateDiffBytes, args...)
+	if err != nil {
+		return nil, err
+	}
+	inspector.inspectionMu.Lock()
+	if inspector.inspectionCache == nil {
+		inspector.inspectionCache = make(map[string][]byte, len(frozen.ChangedPathManifest))
+	}
+	inspector.inspectionCache[cacheKey] = bytes.Clone(payload)
+	inspector.inspectionMu.Unlock()
+	return payload, nil
 }
 
 func (inspector *PreparedCandidateInspector) Close() error {
@@ -315,6 +424,71 @@ func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Sn
 	return payload, inspectErr
 }
 
+// gitShowObjectFormatUnsupported caches, for the rest of this process,
+// whether the installed git predates 2.38's `rev-parse --show-object-format`
+// (#3541): that git echoes the unrecognized flag back instead of failing,
+// which would otherwise be misread as the object format on every call.
+var (
+	gitShowObjectFormatMu          sync.Mutex
+	gitShowObjectFormatUnsupported bool
+)
+
+// gitObjectFormat determines a repository's object hash algorithm across the
+// git version gap #3541 reports. git >= 2.38 answers directly. Older git
+// echoes the unrecognized flag back verbatim (the same "unsupported option
+// echo" shape canonicalGitDirectory already guards against for
+// --path-format=absolute), recognized here by its leading "--", and degrades
+// to the fallback below, caching the negative result.
+func gitObjectFormat(ctx context.Context, repo string) (string, error) {
+	gitShowObjectFormatMu.Lock()
+	unsupported := gitShowObjectFormatUnsupported
+	gitShowObjectFormatMu.Unlock()
+	if !unsupported {
+		output, err := runGit(ctx, repo, nil, nil, "rev-parse", "--show-object-format")
+		if err != nil {
+			return "", err
+		}
+		format := strings.TrimSpace(string(output))
+		switch {
+		case format == "sha1" || format == "sha256":
+			return format, nil
+		case strings.HasPrefix(format, "--"):
+			gitShowObjectFormatMu.Lock()
+			gitShowObjectFormatUnsupported = true
+			gitShowObjectFormatMu.Unlock()
+		default:
+			return "", fmt.Errorf("unsupported Git object format %q", format)
+		}
+	}
+	return legacyGitObjectFormat(ctx, repo)
+}
+
+// legacyGitObjectFormat determines the object format for git < 2.38, which
+// has no --show-object-format flag. A SHA-256 repository predates that flag
+// too (git init --object-format=sha256, supported since git 2.29) and
+// records its choice in extensions.objectformat; every other repository is
+// sha1, the only format that existed before that extension did.
+func legacyGitObjectFormat(ctx context.Context, repo string) (string, error) {
+	output, err := runGit(ctx, repo, nil, nil, "config", "--get", "extensions.objectformat")
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+			// `git config --get` exits 1 when the key is unset; on git that
+			// predates extensions.objectformat entirely, unset IS sha1.
+			return "sha1", nil
+		}
+		return "", err
+	}
+	format := strings.ToLower(strings.TrimSpace(string(output)))
+	if format == "" {
+		format = "sha1"
+	}
+	if format != "sha1" && format != "sha256" {
+		return "", fmt.Errorf("unsupported Git object format %q", format)
+	}
+	return format, nil
+}
+
 func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func() error, error) {
 	isolation, _, cleanup, err := isolatedImmutableTreeGitWithAttributesFile(ctx, repo)
 	return isolation, cleanup, err
@@ -325,13 +499,9 @@ func isolatedImmutableTreeGitWithAttributesFile(ctx context.Context, repo string
 	if err != nil {
 		return nil, "", func() error { return nil }, err
 	}
-	objectFormatOutput, err := runGit(ctx, identity.RepositoryRoot, nil, nil, "rev-parse", "--show-object-format")
+	objectFormat, err := gitObjectFormat(ctx, identity.RepositoryRoot)
 	if err != nil {
 		return nil, "", func() error { return nil }, err
-	}
-	objectFormat := strings.TrimSpace(string(objectFormatOutput))
-	if objectFormat != "sha1" && objectFormat != "sha256" {
-		return nil, "", func() error { return nil }, fmt.Errorf("unsupported Git object format %q", objectFormat)
 	}
 	// The repository Git directory is the reliable writable location when a
 	// sandboxed caller does not expose an accessible process temp directory.

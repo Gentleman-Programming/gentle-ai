@@ -35,9 +35,13 @@ func (g Graph) DependenciesOf(component model.ComponentID) []model.ComponentID {
 
 func MVPGraph() Graph {
 	return NewGraph(map[model.ComponentID][]model.ComponentID{
-		model.ComponentEngram:             nil,
-		model.ComponentSDD:                {model.ComponentEngram},
-		model.ComponentSkills:             {model.ComponentSDD},
+		model.ComponentEngram: nil,
+		model.ComponentSDD:    {model.ComponentEngram},
+		// Skills has no hard dependency on SDD: standalone skill files (e.g.
+		// go-testing, judgment-day) install fine without it. The SDD-authored
+		// skills (sdd-*) are written by the SDD component itself — see
+		// internal/components/skills.IsSDDSkill and internal/components/sdd.
+		model.ComponentSkills:             nil,
 		model.ComponentContext7:           nil,
 		model.ComponentPersona:            nil,
 		model.ComponentPermission:         nil,

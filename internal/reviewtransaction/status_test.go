@@ -322,6 +322,54 @@ func TestInventoryAuthorityReportsRecoveredEscalatedSuccessorAndSupersededPredec
 	}
 }
 
+func TestInventoryAuthorityForLineageScopesEntriesAndRejectsUnknownOrMalformedSelectors(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state1 := newCompactTestState(t, repo, "lineage-alpha")
+	store1, err := CompactAuthoritativeStore(context.Background(), repo, state1.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store1.Replace("", "review/start", state1); err != nil {
+		t.Fatal(err)
+	}
+
+	state2 := newCompactTestState(t, repo, "lineage-beta")
+	store2, err := CompactAuthoritativeStore(context.Background(), repo, state2.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store2.Replace("", "review/start", state2); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Existing valid lineage returns exactly 1 entry with matching state
+	report, err := InventoryAuthorityForLineage(context.Background(), repo, "lineage-alpha")
+	if err != nil {
+		t.Fatalf("unexpected error for existing lineage: %v", err)
+	}
+	if len(report.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(report.Entries))
+	}
+	if report.Entries[0].LineageID != "lineage-alpha" {
+		t.Fatalf("expected lineage-alpha, got %q", report.Entries[0].LineageID)
+	}
+	if report.Status != AuthorityStatusActive {
+		t.Fatalf("expected status %q, got %q", AuthorityStatusActive, report.Status)
+	}
+
+	// 2. Unknown well-formed lineage returns error
+	_, err = InventoryAuthorityForLineage(context.Background(), repo, "lineage-nonexistent")
+	if err == nil || !strings.Contains(err.Error(), "contains no entries for lineage \"lineage-nonexistent\"") {
+		t.Fatalf("expected no entries error, got %v", err)
+	}
+
+	// 3. Malformed lineage returns validation error
+	_, err = InventoryAuthorityForLineage(context.Background(), repo, "invalid/lineage")
+	if err == nil || !strings.Contains(err.Error(), "canonical lowercase kebab-case identifier") {
+		t.Fatalf("expected invalid lineage error, got %v", err)
+	}
+}
+
 func authorityBytes(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	files := map[string][]byte{}

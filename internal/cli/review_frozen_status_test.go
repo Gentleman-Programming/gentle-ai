@@ -347,6 +347,38 @@ func createFrozenReviewingStatusRecord(t *testing.T, repo, lineage string, targe
 	return store, started.Record
 }
 
+// A bound STATUS for a committed-only lineage carries `--base-ref` and
+// `--committed-only`, which bind a base-diff target instead of the default
+// current-changes one. When HEAD moves after START (the correction was
+// committed before its plan was captured), that bound STATUS must resume the
+// named lineage from its frozen selector exactly like the workspace path does,
+// not offer a fresh START that abandons the reviewing lineage.
+func TestExplicitFrozenReviewingBaseDiffStatusResumesAfterCommittedDrift(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetBaseDiff, nil)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD~1"))
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'committed drift'\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qam", "correction committed before its plan")
+
+	var output bytes.Buffer
+	args := []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,
+		"--lineage", record.State.LineageID, "--base-ref", base, "--committed-only"}
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("bound base-diff STATUS after committed drift: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
+		status.Authority.LineageID != record.State.LineageID || status.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" {
+		t.Fatalf("bound base-diff status after committed drift = %#v", status)
+	}
+}
+
 func explicitFrozenReviewingStatus(t *testing.T, repo, lineage string) ReviewTargetStatusResult {
 	t.Helper()
 	var output bytes.Buffer

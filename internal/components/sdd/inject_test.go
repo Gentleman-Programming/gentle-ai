@@ -40,6 +40,34 @@ func mockNoPackageManager(t *testing.T) {
 	t.Helper()
 }
 
+func TestInjectFallbackSessionPreflight(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+			adapter := mustAdapter(t, agent)
+			if _, err := Inject(home, adapter, ""); err != nil {
+				t.Fatal(err)
+			}
+			path := adapter.SystemPromptFile(home)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFallbackSessionPreflight(t, string(before))
+			if result, err := Inject(home, adapter, ""); err != nil || result.Changed {
+				t.Fatalf("repeat install = %+v, %v; want unchanged", result, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("repeat install changed prompt bytes: %v", err)
+			}
+			assertFallbackSessionPreflight(t, string(after))
+		})
+	}
+}
+
 func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 	tests := []struct {
 		agent model.AgentID
@@ -302,6 +330,33 @@ func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
 	}
 }
 
+func TestClaudeLazyPreflightCanonicalInstall(t *testing.T) {
+	home := t.TempDir()
+	if _, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	want := strings.ReplaceAll(sddSessionPreflightBlock(), "`question`", "`AskUserQuestion`")
+	if strings.Count(content, want) != 1 || strings.Count(content, sddSessionPreflightMarker) != 1 {
+		t.Fatal("installed Claude workflow must contain exactly one Claude-native canonical block")
+	}
+	if strings.Index(content, sddSessionPreflightEnd) > strings.Index(content, testSDDSessionPreflightEntryAnchor) {
+		t.Fatal("preflight must precede entry routing")
+	}
+	for _, forbidden := range []string{"all four", "800 lines", "Other", "numeric budget", "`question`"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("installed workflow retains %q", forbidden)
+		}
+	}
+	if result, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil || result.Changed {
+		t.Fatalf("second install = %+v, %v; want unchanged", result, err)
+	}
+}
+
 func TestInjectClaudePreservesExistingSections(t *testing.T) {
 	home := t.TempDir()
 	claudeDir := filepath.Join(home, ".claude")
@@ -492,7 +547,16 @@ func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T)
 	}
 
 	const stale = "Gentle AI only configures models for Agent tool calls to phase sub-agents."
-	const want = "The Claude Code session model is controlled by Claude Code; Gentle AI's always-on Model Assignments policy resolves every Agent tool call, including generic/organic delegation through `default`."
+	prompt, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Every Claude Agent tool call MUST include `model`", "organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment"} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("always-on model authority missing %q", want)
+		}
+	}
+	const want = "Delegate this intent and arguments to that authoritative lazy workflow"
 	for _, name := range []string{"gentle-sdd-new.md", "gentle-sdd-ff.md", "gentle-sdd-continue.md"} {
 		t.Run(name, func(t *testing.T) {
 			content, err := os.ReadFile(filepath.Join(home, ".claude", "commands", name))
@@ -500,11 +564,11 @@ func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T)
 				t.Fatalf("ReadFile(%s) error = %v", name, err)
 			}
 			text := string(content)
-			if strings.Contains(text, stale) {
-				t.Fatalf("installed command retains phase-only model wording %q", stale)
+			if strings.Contains(text, stale) || strings.Contains(text, "Model Assignments") || strings.Contains(text, "STATUS CONTRACT:") {
+				t.Fatal("installed thin command owns model/status policy")
 			}
 			if !strings.Contains(text, want) {
-				t.Fatalf("installed command missing always-on model wording %q", want)
+				t.Fatalf("installed command missing policy delegation %q", want)
 			}
 		})
 	}
@@ -661,7 +725,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 			for _, wanted := range []string{
 				"Gentle AI",
 				"Read the configured models from `opencode.json`",
-				"Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable",
+				"Use the `question` tool only when available and all three groups",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
 				"### Research and Pre-Proposal Gate (MANDATORY)",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
@@ -755,6 +819,134 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	}
 }
 
+func TestInjectOpenCodeAndKilocodeRejectMalformedPreservedPreflightBeforeAnyWrite(t *testing.T) {
+	adapters := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{name: "opencode", adapter: opencodeAdapter()},
+		{name: "kilocode", adapter: kilocodeAdapter()},
+	}
+	markers := []struct {
+		name, prompt string
+	}{
+		{name: "duplicate canonical", prompt: sddSessionPreflightMarker + "\n" + sddSessionPreflightEnd + "\n" + sddSessionPreflightMarker + "\n" + sddSessionPreflightEnd},
+		{name: "reversed canonical", prompt: sddSessionPreflightEnd + "\n" + sddSessionPreflightMarker},
+		{name: "duplicate legacy", prompt: legacySDDSessionPreflightMarker + "\n" + legacySDDSessionPreflightEnd + "\n" + legacySDDSessionPreflightMarker + "\n" + legacySDDSessionPreflightEnd},
+		{name: "reversed legacy", prompt: legacySDDSessionPreflightEnd + "\n" + legacySDDSessionPreflightMarker},
+		{name: "canonical and legacy", prompt: sddSessionPreflightMarker + "\n" + sddSessionPreflightEnd + "\n" + legacySDDSessionPreflightMarker + "\n" + legacySDDSessionPreflightEnd},
+	}
+	for _, adapterCase := range adapters {
+		for _, markerCase := range markers {
+			t.Run(adapterCase.name+"/"+markerCase.name, func(t *testing.T) {
+				home := t.TempDir()
+				settingsPath := adapterCase.adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				beforeSettings := []byte(`{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(markerCase.prompt) + `}}}`)
+				if err := os.WriteFile(settingsPath, beforeSettings, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				commandPath := filepath.Join(adapterCase.adapter.CommandsDir(home), "sdd-init.md")
+				beforeCommand := []byte("external sentinel must remain untouched\n")
+				if err := os.MkdirAll(filepath.Dir(commandPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(commandPath, beforeCommand, 0o644); err != nil {
+					t.Fatal(err)
+				}
+
+				if _, err := Inject(home, adapterCase.adapter, model.SDDModeMulti, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err == nil {
+					t.Fatal("Inject() accepted malformed preserved preflight markers")
+				}
+				for path, before := range map[string][]byte{settingsPath: beforeSettings, commandPath: beforeCommand} {
+					after, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(after, before) {
+						t.Fatalf("Inject() wrote %q before rejecting malformed markers: after=%q err=%v", path, after, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestInjectOpenCodeAndKilocodePreservedExternalPreflightUsesCanonicalOwnedBlock(t *testing.T) {
+	adapters := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{name: "opencode", adapter: opencodeAdapter()},
+		{name: "kilocode", adapter: kilocodeAdapter()},
+	}
+	for _, adapterCase := range adapters {
+		for _, lineEnding := range []struct {
+			name, value string
+		}{{name: "lf", value: "\n"}, {name: "crlf", value: "\r\n"}} {
+			for _, promptCase := range []struct {
+				name, prompt string
+			}{
+				{name: "unmarked", prompt: "CUSTOM_SENTINEL_A" + lineEnding.value + "CUSTOM_SENTINEL_B"},
+				{name: "legacy-owned-markers", prompt: "CUSTOM_SENTINEL_A" + lineEnding.value + "<!-- gentle-ai:sdd-session-preflight-migration -->" + lineEnding.value + "### SDD Session Preflight (HARD GATE)" + lineEnding.value + "Both -> `both`" + lineEnding.value + "<!-- /gentle-ai:sdd-session-preflight-migration -->" + lineEnding.value + "CUSTOM_SENTINEL_B"},
+			} {
+				t.Run(adapterCase.name+"/"+lineEnding.name+"/"+promptCase.name, func(t *testing.T) {
+					home := t.TempDir()
+					settingsPath := adapterCase.adapter.SettingsPath(home)
+					if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					seed := `{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(promptCase.prompt) + `}}}`
+					if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+						t.Fatal(err)
+					}
+
+					opts := InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}
+					if _, err := Inject(home, adapterCase.adapter, model.SDDModeMulti, opts); err != nil {
+						t.Fatalf("first Inject() error = %v", err)
+					}
+					first := readGentleOrchestratorPrompt(t, settingsPath)
+					if strings.Contains(promptCase.prompt, legacySDDSessionPreflightMarker) {
+						legacyStart := strings.Index(promptCase.prompt, legacySDDSessionPreflightMarker)
+						legacyEnd := strings.Index(promptCase.prompt, legacySDDSessionPreflightEnd) + len(legacySDDSessionPreflightEnd)
+						open, closeEnd, rangeErr := sddSessionPreflightMarkerRange(first)
+						if rangeErr != nil {
+							t.Fatalf("canonical preflight markers are malformed: %v", rangeErr)
+						}
+						if first[:open] != promptCase.prompt[:legacyStart] || !strings.HasPrefix(first[closeEnd:], promptCase.prompt[legacyEnd:]) {
+							t.Fatalf("legacy migration changed user-owned prefix or suffix:\n got: %q\nwant prefix: %q\nwant suffix: %q", first, promptCase.prompt[:legacyStart], promptCase.prompt[legacyEnd:])
+						}
+					} else if !strings.HasPrefix(first, promptCase.prompt+lineEnding.value+lineEnding.value) {
+						t.Fatalf("unmarked migration changed user-owned prompt bytes:\n got: %q\nwant prefix: %q", first, promptCase.prompt+lineEnding.value+lineEnding.value)
+					}
+					for _, marker := range []string{sddSessionPreflightMarker, sddSessionPreflightEnd} {
+						if got := strings.Count(first, marker); got != 1 {
+							t.Fatalf("canonical marker %q count = %d, want 1: %q", marker, got, first)
+						}
+					}
+					open, closeEnd, err := sddSessionPreflightMarkerRange(first)
+					if err != nil {
+						t.Fatalf("canonical preflight marker range: %v", err)
+					}
+					canonical, err := normalizeSDDSessionPreflightLineEndings(first[open:closeEnd])
+					if err != nil || canonical != sddSessionPreflightBlock() {
+						t.Fatalf("preserved prompt did not emit the exact canonical block: %q, err=%v", canonical, err)
+					}
+					if lineEnding.value == "\r\n" && strings.Contains(strings.ReplaceAll(first, "\r\n", ""), "\n") {
+						t.Fatalf("preserved CRLF prompt has mixed line endings: %q", first)
+					}
+
+					if _, err := Inject(home, adapterCase.adapter, model.SDDModeMulti, opts); err != nil {
+						t.Fatalf("second Inject() error = %v", err)
+					}
+					if second := readGentleOrchestratorPrompt(t, settingsPath); second != first {
+						t.Fatalf("second sync changed preserved prompt\nfirst:  %q\nsecond: %q", first, second)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -810,27 +1002,11 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Bind this to the dedicated `gentle-orchestrator` agent only.",
 		"agent.gentle-orchestrator.model",
 		"### SDD Session Preflight (HARD GATE)",
-		"Use the `question` tool for SDD Session Preflight",
-		"Ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `question` tool calls",
-		"Match the user's current language and active persona",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values or other internal values",
-		"map the selected human labels to canonical values internally",
-		"pause after each delegated phase returns",
-		"ask before launching the next phase via the `question` tool",
-		"present the proceed/adjust/stop options through a single `question` tool call",
-		"approve only the immediate next phase",
+		"all three groups (Pace, Artifacts, and PR strategy)",
+		"3. **PR strategy**: Ask me, Single PR, or Auto.",
+		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
 		"confirmed pre-proposal handoff",
-		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
 		"fully mandatory",
 		"Bounded read rule",
@@ -1319,27 +1495,11 @@ Map answers to canonical values: A1/Interactive -> interactive.
 	for _, wanted := range []string{
 		"# Custom prompt",
 		"### SDD Session Preflight (HARD GATE)",
-		"openspec/config.yaml",
-		"Use the `question` tool for SDD Session Preflight",
-		"Ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Match the user's current language and active persona",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values or other internal values",
-		"map the selected human labels to canonical values internally",
-		"pause after each delegated phase returns",
-		"ask before launching the next phase via the `question` tool",
-		"present the proceed/adjust/stop options through a single `question` tool call",
-		"approve only the immediate next phase",
+		"all three groups (Pace, Artifacts, and PR strategy)",
+		"3. **PR strategy**: Ask me, Single PR, or Auto.",
+		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
 		"confirmed pre-proposal handoff",
-		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated partial prompt content %q", wanted)
@@ -1429,23 +1589,10 @@ Hard gate rules:
 	}
 	for _, wanted := range []string{
 		"# Custom prompt",
-		"Use the `question` tool for SDD Session Preflight",
-		"Ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `question` tool calls",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values or other internal values",
-		"map the selected human labels to canonical values internally",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"for Spanish neutral fallback frame it as",
-		"ask before launching the next phase via the `question` tool",
-		"present the proceed/adjust/stop options through a single `question` tool call",
-		"approve only the immediate next phase",
+		"### SDD Session Preflight (HARD GATE)",
+		"all three groups (Pace, Artifacts, and PR strategy)",
+		"3. **PR strategy**: Ask me, Single PR, or Auto.",
+		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
 		"confirmed pre-proposal handoff",
 	} {

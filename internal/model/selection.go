@@ -53,6 +53,35 @@ func (s Selection) HasComponent(component ComponentID) bool {
 	return false
 }
 
+// EnsureComponent appends component to s.Components when it is not already
+// present. Used to re-enable a component that a persisted selection would
+// otherwise drop, once the caller has explicitly requested work that only
+// that component's sync stage can perform.
+func (s *Selection) EnsureComponent(component ComponentID) {
+	if s.HasComponent(component) {
+		return
+	}
+	s.Components = append(s.Components, component)
+}
+
+// CarriesSDDWork reports whether the caller explicitly asked for OpenCode SDD
+// profile or per-agent model assignment work: named profiles to write, or a
+// model assignment override (including a non-nil empty map, which means
+// "reset to defaults" and still requires a write).
+//
+// This is the shared rule used by both the CLI (RestorePersistedSelection)
+// and the TUI (applyOverrides) sync entry points: a persisted component
+// selection that omits "sdd" must not silently swallow that explicit
+// request. See https://github.com/Gentleman-Programming/gentle-ai/issues/3430 —
+// both entry points restore Components from state.json, dropping ComponentSDD
+// whenever the persisted selection predates that component being chosen; the
+// componentSyncStep that writes profiles/model assignments into
+// ~/.config/opencode/opencode.json then never runs, yet the sync still
+// reports success.
+func CarriesSDDWork(profiles []Profile, modelAssignments map[string]ModelAssignment) bool {
+	return len(profiles) > 0 || modelAssignments != nil
+}
+
 // SyncOverrides holds optional overrides applied to the sync selection.
 // Used when the TUI "Configure Models" flow needs to persist model assignments
 // without re-running the full install pipeline.

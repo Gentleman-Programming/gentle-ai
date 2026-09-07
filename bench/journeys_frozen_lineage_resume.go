@@ -99,7 +99,7 @@ func requireFrozenReviewerBinding(status statusEnvelope, document map[string]jso
 	}
 	input := status.NextTransition.Collect.Inputs[0]
 	if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" || input.ArtifactSubject.SubjectHash == "" ||
-		len(input.ChangedPathManifest) != 2 || status.argument("lineage") != lineage || status.argument("target") != status.TargetIdentity ||
+		len(status.paths()) != 2 || status.argument("lineage") != lineage || status.argument("target") != status.TargetIdentity ||
 		status.argument("expected-revision") != status.Authority.Revision || status.argument("lens") == "" || status.argument("order") != "0" || status.argument("repository-context") == "" {
 		return fmt.Errorf("frozen reviewer collect binding = %+v", input)
 	}

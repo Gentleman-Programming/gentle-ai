@@ -72,6 +72,36 @@ func TestClaudeAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	}
 }
 
+// Issue #4039: the reviewer transport must launch the resolved client binary
+// directly by argv, never through a shell that could split an unquoted path
+// on its first space. This exercises the real (unmocked) commandContext, with
+// the binary itself placed under a directory whose name contains a space --
+// exactly the shape of a "Program Files" or per-user-profile install path --
+// and asserts it launches and returns output normally.
+func TestClaudeAdapterLaunchesBinaryWhosePathContainsASpace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shebang script; the Windows .cmd/.bat quoting path is covered by windows_batch_cmdline_test.go")
+	}
+	scriptDir := filepath.Join(t.TempDir(), "Program Files", "claude cli")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(scriptDir, "claude")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf 'stub reviewer output'\n"
+	if err := os.WriteFile(binaryPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &ClaudeAdapter{LookPath: func(string) (string, error) { return binaryPath, nil }}
+	raw, err := adapter.Review(context.Background(), NewInvocation([]byte("provider prompt")))
+	if err != nil {
+		t.Fatalf("Review() error = %v, want the space-containing path to launch directly with no shell involved", err)
+	}
+	if string(raw) != "stub reviewer output" {
+		t.Fatalf("Review() = %q, want %q", raw, "stub reviewer output")
+	}
+}
+
 func TestClaudeAdapterHelperProcess(t *testing.T) {
 	mode := os.Getenv(claudeAdapterHelperEnvironment)
 	if mode == "" {

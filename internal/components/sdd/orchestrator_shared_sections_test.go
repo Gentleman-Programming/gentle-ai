@@ -28,6 +28,17 @@ var sharedOrchestratorSectionNames = []string{
 	"Language Domain Contract",
 	"Dependency Graph",
 	"Recovery Rule",
+	// #4296: the RDD-aware, risk-gated delegated-verification rule. Every
+	// runtime that names a concrete delegation mechanism in its own
+	// Delegation Rules body (claude, codex, opencode, cursor, gemini,
+	// antigravity, generic, hermes, kimi, kiro, qwen) carries the full form
+	// under "Delegated Verification Gate (MANDATORY)". Windsurf ("Windsurf
+	// has no subagents" in its own Delegation Rules body) is the only
+	// runtime with no delegation mechanism, so it carries the reduced form
+	// under its own distinct heading, "Delegated Verification Gate (Reduced
+	// Form)".
+	"Delegated Verification Gate (MANDATORY)",
+	"Delegated Verification Gate (Reduced Form)",
 }
 
 // TestSharedOrchestratorSectionsHaveOneSource pins that each shared section
@@ -74,6 +85,7 @@ func TestEveryRuntimeRendersTheSharedSections(t *testing.T) {
 	for _, agent := range []model.AgentID{
 		model.AgentOpenCode, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode,
 		model.AgentHermes, model.AgentKimi, model.AgentWindsurf, model.AgentCodex,
+		model.AgentClaudeCode, model.AgentKiroIDE, model.AgentAntigravity, model.AgentVSCodeCopilot,
 	} {
 		rendered := renderSDDOrchestratorAsset(agent)
 		for _, name := range sharedOrchestratorSectionNames {
@@ -95,7 +107,7 @@ func TestNoRawSharedSectionPlaceholderSurvivesRendering(t *testing.T) {
 	for _, agent := range []model.AgentID{
 		model.AgentOpenCode, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode,
 		model.AgentHermes, model.AgentKimi, model.AgentWindsurf, model.AgentCodex,
-		model.AgentKiroIDE, model.AgentAntigravity, model.AgentClaudeCode,
+		model.AgentKiroIDE, model.AgentAntigravity, model.AgentClaudeCode, model.AgentVSCodeCopilot,
 	} {
 		if rendered := renderSDDOrchestratorAsset(agent); strings.Contains(rendered, "{{GENTLE_AI_SDD_SECTION:") {
 			t.Errorf("%s kept a raw shared-section placeholder", agent)

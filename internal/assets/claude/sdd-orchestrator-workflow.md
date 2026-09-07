@@ -36,57 +36,7 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, inv
 - Route only by structured `nextRecommended`, dependency states, and `blockedReasons`; never infer from free text.
 - If blocked, stop and report the blocker. Do not proceed to apply, archive, or terminal work.
 
-### SDD Session Preflight (HARD GATE)
-
-Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit `SDD Session Preflight` decision block.
-
-This applies to `/gentle-sdd-new`, `/gentle-sdd-ff`, `/gentle-sdd-continue`, `/gentle-sdd-explore`, `/gentle-sdd-status`, `/gentle-sdd-apply`, `/gentle-sdd-verify`, `/gentle-sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
-
-Required preflight choices:
-
-1. **Execution mode**: `interactive` or `auto`.
-2. **Artifact store**: `openspec`, `engram`, or `hybrid` when Engram is callable. If Engram is unavailable, offer only file/inline-safe choices.
-3. **Chained PR strategy**: the canonical `delivery_strategy` — `ask-on-risk`, `auto-chain`, `single-pr`, or `exception-ok`. The preflight menu offers the first three; `exception-ok` is reachable only when the user explicitly accepts `size:exception`.
-4. **Review budget**: maximum changed lines before stopping for reviewer-burden approval.
-
-User-facing preflight question format:
-
-Use the built-in `AskUserQuestion` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable. While that native route is usable, do NOT render a duplicate plain-chat menu. If the tool is unavailable, denied, the runtime is noninteractive, or the prompt is unrepresentable, follow the Lossless Blocking Prompts fallback in the orchestrator rule and STOP.
-
-When the native route is representable, ask all four preflight groups in one single `AskUserQuestion` tool call so Claude Code can render the groups as one interactive prompt. Do NOT run this as a sequential wizard. Do NOT issue four separate `AskUserQuestion` tool calls.
-
-The single `AskUserQuestion` tool call must contain these four localized groups in this order:
-
-1. Pace: Interactive, Automatic.
-2. Artifacts: OpenSpec, Engram, Both.
-3. PRs: Ask me, Single PR, Auto.
-4. Review: 400 lines, 800 lines, Other.
-
-Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
-
-Do NOT show option codes in the interactive UI. Do NOT show canonical values or other internal values in the interactive UI labels or descriptions.
-
-After the single grouped `AskUserQuestion` tool call returns, map the selected human labels to canonical values internally. Do not reveal the canonical values in the UI.
-
-If Other is selected for review budget, ask one follow-up question for the numeric budget.
-
-Only after all four preflight choices are collected, summarize them as the `SDD Session Preflight` decision block and continue with the SDD init guard/requested phase.
-
-Map answers to canonical values:
-
-- Pace: Interactive -> `interactive`; Automatic -> `auto`.
-- Artifacts: OpenSpec -> `openspec`; Engram -> `engram`; Both -> `hybrid`.
-- PRs: Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`.
-- Review: 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number.
-
-The PR canonical values are exactly the `delivery_strategy` domain `sdd-tasks` and `sdd-apply` accept; never emit a value outside it. The preflight offers no separate chained option because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it `Auto` already resolves to `auto-chain` without asking again.
-
-Hard gate rules:
-
-- `openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight.
-- If the session has no preflight block, ask the single grouped `AskUserQuestion` preflight above. Do not run init, delegate phases, edit files, or apply tasks until all four choices are collected.
-- Cache the choices for this session and include them in later phase prompts.
-- If the user explicitly provided all four choices in the current conversation, summarize them as the session preflight block and continue.
+<!-- Session preflight is projected here by the installer from the shared canonical authority. -->
 
 ### SDD Entry Routing (MANDATORY)
 
@@ -160,7 +110,7 @@ Pass the artifact store mode to every SDD phase agent.
 
 ### Delivery Strategy
 
-On the first SDD chain request in a session, ask once for delivery strategy and cache it:
+Use the delivery strategy cached by SDD Session Preflight; do not ask a separate strategy question:
 
 - `ask-on-risk` — default; ask only when the tasks forecast detects review-budget risk.
 - `auto-chain` — automatically split into chained/stacked PR slices when needed.

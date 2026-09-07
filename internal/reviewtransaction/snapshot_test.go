@@ -336,6 +336,62 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 	}
 }
 
+// installLargeStderrGitAddShim puts a `git` shim first on PATH that
+// reproduces #3993's byte-cap bound: `git add -u -- .` emits more than 64
+// KiB of incidental warning output (the shape thousands of tracked paths
+// triggering CRLF or embedded-repository warnings produce) and still exits
+// 0, exactly like a real large `git add -u` would. Every other invocation
+// delegates to the real git so the rest of buildCurrentChanges works
+// normally.
+func installLargeStderrGitAddShim(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH shim requires a POSIX shell")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is unavailable")
+	}
+	shimDir := t.TempDir()
+	shim := "#!/bin/sh\n" +
+		"prev=\"\"\n" +
+		"for arg in \"$@\"; do\n" +
+		"  if [ \"$prev\" = \"add\" ] && [ \"$arg\" = \"-u\" ]; then\n" +
+		"    i=0\n" +
+		"    while [ $i -lt 2000 ]; do\n" +
+		"      printf 'warning: adding embedded git repository or CRLF notice for path %d\\n' \"$i\" >&2\n" +
+		"      i=$((i + 1))\n" +
+		"    done\n" +
+		"    exit 0\n" +
+		"  fi\n" +
+		"  prev=\"$arg\"\n" +
+		"done\n" +
+		"exec \"$GENTLE_AI_TEST_REAL_GIT\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestBuildCurrentChangesToleratesLargeStagingOutput reproduces #3993: a
+// repository whose tracked paths make `git add -u -- .` emit more than the
+// shared 64 KiB stderr capture buffer must not fail candidate capture on
+// that account. Before the fix, the staging step used the same overflow-
+// rejecting capture as every other Git call, so this exact shape returned
+// "output exceeds deterministic 65536-byte limit" before an attempt token
+// was ever issued.
+func TestBuildCurrentChangesToleratesLargeStagingOutput(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed\n")
+	installLargeStderrGitAddShim(t)
+
+	if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}); err != nil {
+		t.Fatalf("Build() with a staging step producing >64 KiB of output error = %v, want tolerated", err)
+	}
+}
+
 // TestSnapshotIdentityIsRepresentationInvariant is the headline proof for
 // issue #2659 (root 21 of #2471): a declared intended-untracked path and the
 // exact same path staged into the index instead are two REPRESENTATIONS of
@@ -1121,6 +1177,159 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 	if snapshot.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "--no-replace-objects", "rev-parse", originalCommit+"^{tree}")) {
 		t.Fatalf("CandidateTree = %q, want the original commit tree", snapshot.CandidateTree)
+	}
+}
+
+// TestSnapshotBuilderExactRevisionRejectsActiveLocalGraft reproduces #1719:
+// a repository-local .git/info/grafts entry lets the same full commit ID
+// resolve to a different parent, base tree, and changed-path set while the
+// candidate tree stays identical. Unlike a replacement object
+// (TestSnapshotBuilderExactRevisionIgnoresReplacementObjects), Git's graft
+// mechanism is not disabled by --no-replace-objects, so exact-revision
+// derivation must detect and refuse it explicitly instead of silently
+// freezing a snapshot over rewritten ancestry.
+func TestSnapshotBuilderExactRevisionRejectsActiveLocalGraft(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	parentCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "second\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "second")
+	targetCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	target := Target{Kind: TargetExactRevision, Revision: targetCommit}
+
+	baseline, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build(baseline, no graft) error = %v", err)
+	}
+
+	// Build an alternate history from the same original parent so the graft
+	// has a real, different tree to substitute.
+	gitSnapshot(t, repo, "checkout", "--detach", parentCommit)
+	writeSnapshotFile(t, repo, "other.txt", "alternate\n")
+	gitSnapshot(t, repo, "add", "--", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "alternate")
+	alternateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", targetCommit)
+
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo, commonDir)
+	}
+	graftDir := filepath.Join(commonDir, "info")
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", graftDir, err)
+	}
+	graftPath := filepath.Join(graftDir, "grafts")
+	graftLine := targetCommit + " " + alternateCommit + "\n"
+	if err := os.WriteFile(graftPath, []byte(graftLine), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", graftPath, err)
+	}
+
+	// Sanity-check the graft actually rewrites what plain Git reports, the
+	// same way the issue's reproduction confirms it before exercising the
+	// product.
+	graftedParents := strings.Fields(gitSnapshot(t, repo, "-c", "advice.graftFileDeprecated=false", "rev-list", "--parents", "-n", "1", targetCommit))
+	if len(graftedParents) != 2 || graftedParents[1] != alternateCommit {
+		t.Fatalf("graft fixture did not rewrite ancestry: rev-list --parents = %v", graftedParents)
+	}
+
+	_, err = (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	var graftErr *LocalGraftActiveError
+	if !errors.As(err, &graftErr) {
+		t.Fatalf("Build() with active graft error = %v, want *LocalGraftActiveError", err)
+	}
+	if !strings.Contains(err.Error(), graftPath) {
+		t.Fatalf("error %q does not name the graft file %q", err.Error(), graftPath)
+	}
+	if !strings.Contains(err.Error(), "rm "+graftPath) {
+		t.Fatalf("error %q does not name a runnable resolution", err.Error())
+	}
+
+	if err := os.Remove(graftPath); err != nil {
+		t.Fatalf("Remove(%s): %v", graftPath, err)
+	}
+	recovered, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build() after removing graft error = %v", err)
+	}
+	if recovered.Identity != baseline.Identity {
+		t.Fatalf("Identity after removing graft = %q, want the ungrafted identity %q", recovered.Identity, baseline.Identity)
+	}
+}
+
+// TestSnapshotBuilderExactRevisionRejectsActiveLocalGraftFromLinkedWorktree
+// proves the graft check resolves the repository's actual COMMON Git
+// directory rather than the per-worktree one: info/grafts lives in the
+// common directory and is shared by every worktree, so a graft written
+// through the main checkout must still be caught when the snapshot is built
+// from a linked worktree.
+func TestSnapshotBuilderExactRevisionRejectsActiveLocalGraftFromLinkedWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	parentCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "second\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "second")
+	targetCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	gitSnapshot(t, repo, "checkout", "--detach", parentCommit)
+	writeSnapshotFile(t, repo, "other.txt", "alternate\n")
+	gitSnapshot(t, repo, "add", "--", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "alternate")
+	alternateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", targetCommit)
+
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo, commonDir)
+	}
+	graftDir := filepath.Join(commonDir, "info")
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", graftDir, err)
+	}
+	graftPath := filepath.Join(graftDir, "grafts")
+	if err := os.WriteFile(graftPath, []byte(targetCommit+" "+alternateCommit+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", graftPath, err)
+	}
+
+	worktree := canonicalTempDir(t)
+	if err := os.RemoveAll(worktree); err != nil {
+		t.Fatalf("RemoveAll(%s): %v", worktree, err)
+	}
+	gitSnapshot(t, repo, "worktree", "add", "--detach", worktree, targetCommit)
+
+	target := Target{Kind: TargetExactRevision, Revision: targetCommit}
+	_, err := (SnapshotBuilder{Repo: worktree}).Build(context.Background(), target)
+	var graftErr *LocalGraftActiveError
+	if !errors.As(err, &graftErr) {
+		t.Fatalf("Build() from linked worktree with active graft error = %v, want *LocalGraftActiveError", err)
+	}
+}
+
+func TestActiveGraftFileContentIgnoresCommentsAndBlankLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "empty", content: "", want: false},
+		{name: "blank lines only", content: "\n\n \n", want: false},
+		{name: "comment only", content: "# no grafts configured\n"},
+		{name: "comment and blank mixed", content: "# note\n\n"},
+		{name: "one entry", content: strings.Repeat("a", 40) + " " + strings.Repeat("b", 40) + "\n", want: true},
+		{name: "entry after comment", content: "# note\n" + strings.Repeat("a", 40) + "\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := activeGraftFileContent([]byte(tt.content)); got != tt.want {
+				t.Fatalf("activeGraftFileContent(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1957,4 +2166,60 @@ func gitSnapshot(t *testing.T, repo string, args ...string) string {
 func gitSnapshotSucceeds(repo string, args ...string) bool {
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 	return cmd.Run() == nil
+}
+
+func TestCandidateLocationCausalityAnchorsBinaryMarkerToItsOwnLine(t *testing.T) {
+	t.Parallel()
+
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "notes.txt", "one\ntwo\n")
+	writeSnapshotFile(t, repo, "blob.bin", "\x00\x01\x02")
+	gitSnapshot(t, repo, "add", "--", "notes.txt", "blob.bin")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	// The text change quotes git's marker phrase inside an ordinary added line.
+	writeSnapshotFile(t, repo, "notes.txt", "one\nBinary files a/x and b/y differ\ntwo\n")
+	writeSnapshotFile(t, repo, "blob.bin", "\x00\x01\x03")
+	gitSnapshot(t, repo, "add", "--", "notes.txt", "blob.bin")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+
+	supported, degraded, err := builder.CandidateLocationSupportsCausality(t.Context(), snapshot, "notes.txt:2", CausalIntroduced)
+	if err != nil || !supported || degraded {
+		t.Fatalf("quoted marker inside a text hunk: supported=%v degraded=%v err=%v; want verified by hunk", supported, degraded, err)
+	}
+	supported, degraded, err = builder.CandidateLocationSupportsCausality(t.Context(), snapshot, "blob.bin:1", CausalIntroduced)
+	if err != nil || supported || !degraded {
+		t.Fatalf("real binary diff: supported=%v degraded=%v err=%v; want unsupported and degraded", supported, degraded, err)
+	}
+}
+
+func TestStagingCommandTimeoutIsBoundedByFloorAndCeiling(t *testing.T) {
+	t.Parallel()
+
+	floor := StagingCommandTimeoutFloor
+	perPath := StagingCommandTimeoutPerTrackedPath
+	ceiling := StagingCommandTimeoutCeiling
+	if ceiling <= floor {
+		t.Fatalf("ceiling %s must exceed floor %s", ceiling, floor)
+	}
+	if got := stagingCommandTimeout(0); got != floor {
+		t.Fatalf("zero tracked paths: got %s, want floor %s", got, floor)
+	}
+	small := int(floor/perPath) / 2
+	if got := stagingCommandTimeout(small); got != floor {
+		t.Fatalf("%d tracked paths: got %s, want floor %s", small, got, floor)
+	}
+	mid := int(floor/perPath) * 2
+	if got, want := stagingCommandTimeout(mid), time.Duration(mid)*perPath; got != want {
+		t.Fatalf("%d tracked paths: got %s, want proportional %s", mid, got, want)
+	}
+	huge := int(ceiling/perPath) * 100
+	if got := stagingCommandTimeout(huge); got != ceiling {
+		t.Fatalf("%d tracked paths: got %s, want ceiling %s", huge, got, ceiling)
+	}
 }

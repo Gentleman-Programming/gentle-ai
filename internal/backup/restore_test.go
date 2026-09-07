@@ -45,7 +45,10 @@ func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 	manifest := Manifest{
 		Entries: []ManifestEntry{
 			{OriginalPath: originalPath, SnapshotPath: snapshotPath, Existed: true, Mode: 0o600},
-			{OriginalPath: removedPath, Existed: false},
+			// Kind="" (legacy unknown) with Existed=false now preserves by default.
+			// Set Kind=regular explicitly to test the deletion semantics for
+			// explicit regular-file removals.
+			{OriginalPath: removedPath, Existed: false, Kind: PathKindRegularFile},
 		},
 	}
 
@@ -311,6 +314,9 @@ func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 
 	// Add an entry that was NOT in the original snapshot (Existed=false).
 	// This simulates a file created AFTER backup — restore should remove it.
+	// Legacy manifests without Kind default to "safe" (preserve). Set
+	// Kind=regular explicitly to test the deletion semantics for explicit
+	// regular-file removals.
 	createdFile := filepath.Join(home, "config", "extra.json")
 	if err := os.WriteFile(createdFile, []byte("should be removed\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() created file error = %v", err)
@@ -318,6 +324,7 @@ func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 	manifest.Entries = append(manifest.Entries, ManifestEntry{
 		OriginalPath: createdFile,
 		Existed:      false,
+		Kind:         PathKindRegularFile,
 	})
 
 	service := RestoreService{}
@@ -371,6 +378,8 @@ func TestRestoreScope_WorkspaceRootRestoresAndRemovesWithoutError(t *testing.T) 
 
 	// entry B: did not exist at snapshot time, under the workspace root —
 	// restore must remove it (mirrors the engram MCP config scenario from #2451).
+	// Kind=regular opts into the deletion semantics; Kind="" (legacy unknown)
+	// is preserved by default under the #2021 path-kind classification.
 	createdPath := filepath.Join(workspace, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(createdPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -383,7 +392,7 @@ func TestRestoreScope_WorkspaceRootRestoresAndRemovesWithoutError(t *testing.T) 
 		RootDir: filepath.Join(home, "backup"),
 		Entries: []ManifestEntry{
 			{OriginalPath: originalPath, SnapshotPath: snapshotPath, Existed: true, Mode: 0o600},
-			{OriginalPath: createdPath, Existed: false},
+			{OriginalPath: createdPath, Existed: false, Kind: PathKindRegularFile},
 		},
 	}
 
@@ -577,4 +586,252 @@ func TestRestoreScope_RefusalNamesTheValidatedRoots(t *testing.T) {
 			t.Fatalf("Restore() error = %v, want it to name both validated roots %q and %q", err, home, workspace)
 		}
 	})
+}
+
+// TestIsPathUnderRoot_FailsClosedOnAncestorSymlink pins decode2's
+// 2026-08-18 review concern: a leaf path that does not exist yet but
+// has an in-root ancestor symlink to outside must refuse. The pre-fix
+// implementation only EvalSymlinks'd the leaf (which fails when the
+// leaf is missing) and accepted the textual prefix; the new walk-up-
+// to-the-deepest-existing-ancestor logic catches the escape:
+//
+//	/r/foo -> /etc               (symlink in ancestor chain)
+//	/r/foo/bar/newfile.json      (target leaf; does not exist yet)
+//
+// Writing /r/foo/bar/newfile.json would land in /etc/bar/newfile.json.
+// isPathUnderRoot must return false so the restore refuses.
+func TestIsPathUnderRoot_FailsClosedOnAncestorSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	foo := filepath.Join(root, "foo")
+	if err := os.Symlink(outside, foo); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	// The leaf path does NOT exist; the ancestor /r/foo IS a symlink to
+	// outside the root.
+	leafUnderEscape := filepath.Join(foo, "subdir", "newfile.json")
+	if _, err := os.Lstat(leafUnderEscape); !os.IsNotExist(err) {
+		t.Fatalf("precondition: leaf %q must not exist yet, got err=%v", leafUnderEscape, err)
+	}
+
+	if isPathUnderRoot(leafUnderEscape, root) {
+		t.Errorf("isPathUnderRoot(%q, %q) = true; want false (ancestor %q is a symlink to outside %q)",
+			leafUnderEscape, root, foo, outside)
+	}
+
+	// Sanity: a non-escaping path under root still passes.
+	if !isPathUnderRoot(filepath.Join(root, "bar", "newfile.json"), root) {
+		t.Errorf("isPathUnderRoot on a plain in-root path returned false; want true")
+	}
+}
+
+// TestRestoreSymlinkCollisionDetectsTypeMismatch pins decode2's
+// 2026-08-18 review of PR #2021: when a manifest entry declares a
+// symlink-directory but the on-disk node is a regular file (or vice
+// versa), the restore must refuse rather than silently accept what
+// the disk happens to hold. A tampered manifest cannot lie about
+// the node type and get the restore to clobber it.
+func TestRestoreSymlinkCollisionDetectsTypeMismatch(t *testing.T) {
+	home := t.TempDir()
+	linkPath := filepath.Join(home, "link_dir")
+	if err := os.WriteFile(linkPath, []byte("regular file, not a symlink"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	manifest := Manifest{
+		Entries: []ManifestEntry{
+			{
+				OriginalPath: linkPath, Existed: true,
+				Kind: PathKindSymlinkDirectory, LinkTarget: "../somewhere_safe",
+			},
+		},
+	}
+
+	service := RestoreService{Roots: []string{home}}
+	err := service.Restore(manifest)
+	if err == nil {
+		t.Fatalf("Restore() expected error for symlink entry with regular-file on-disk node, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink-directory") || !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("Restore() error %q must call out the type mismatch", err)
+	}
+
+	// The on-disk regular file must be untouched.
+	body, readErr := os.ReadFile(linkPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() on-disk regular file error = %v", readErr)
+	}
+	if string(body) != "regular file, not a symlink" {
+		t.Fatalf("on-disk regular file was modified: %q", string(body))
+	}
+}
+
+// TestRestoreSymlinkCollisionDetectsTargetMismatch pins decode2's
+// 2026-08-18 review of PR #2021: when the manifest declares one
+// LinkTarget but the on-disk symlink already points at something
+// else, the restore refuses rather than redirects. Redirecting an
+// already-existing symlink could silently move a real symlink (e.g.
+// one pointed at a real codepath by an admin) to a manifest-claimed
+// target that diverges from reality.
+func TestRestoreSymlinkCollisionDetectsTargetMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	home := t.TempDir()
+
+	// On-disk symlink points at an in-home target; manifest claims
+	// a different target. The collision must fail closed.
+	onDiskDir := filepath.Join(home, "on_disk_target")
+	if err := os.MkdirAll(onDiskDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	linkPath := filepath.Join(home, "link_dir")
+	if err := os.Symlink("on_disk_target", linkPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	manifest := Manifest{
+		Entries: []ManifestEntry{
+			{
+				OriginalPath: linkPath, Existed: true,
+				Kind: PathKindSymlinkDirectory, LinkTarget: "../somewhere_else",
+			},
+		},
+	}
+
+	service := RestoreService{Roots: []string{home}}
+	err := service.Restore(manifest)
+	if err == nil {
+		t.Fatalf("Restore() expected error for symlink entry whose recorded target disagrees with on-disk symlink")
+	}
+	if !strings.Contains(err.Error(), "redirect") || !strings.Contains(err.Error(), "../somewhere_else") {
+		t.Fatalf("Restore() error %q must call out the redirect hazard", err)
+	}
+
+	// On-disk symlink must still point at on_disk_target (we did not rewrite it).
+	got, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink() after Restore() error = %v", err)
+	}
+	if got != "on_disk_target" {
+		t.Fatalf("on-disk symlink target = %q, want %q (restore must not have redirected it)", got, "on_disk_target")
+	}
+}
+
+// TestRestoreCompressedMixedEntries pins decode2's 2026-08-18 review
+// of PR #2021: the restore path for compressed (tar.gz) backups must
+// correctly handle a mix of entry kinds in one archive. Concretely:
+// one regular-file entry, one directory entry, one symlink-directory
+// entry whose on-disk node already exists (preserved), and one
+// !Existed regular-file entry (must be removed after restore). All
+// four entry kinds coexist in one compressed backup; the restore path
+// must process each correctly without losing the per-entry semantics
+// (no cross-entry contamination, every entry's OriginalPath is
+// restored).
+func TestRestoreCompressedMixedEntries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	home := t.TempDir()
+	// Override the home-root resolver so RestoreService accepts our
+	// t.TempDir() tree as a legitimate target.
+	origUserHomeDirFn := UserHomeDirFn
+	t.Cleanup(func() { UserHomeDirFn = origUserHomeDirFn })
+	UserHomeDirFn = func() (string, error) { return home, nil }
+
+	// Source tree to snapshot:
+	//   <home>/source/.config/app.json     (regular file, Existed=true)
+	//   <home>/source/.config/sub/        (directory, Existed=true)
+	//   <home>/source/.config/link_to_sub  (symlink-directory to ./sub, Existed=true)
+	srcDir := filepath.Join(home, "source")
+	if err := os.MkdirAll(filepath.Join(srcDir, ".config", "sub"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.config/sub) error = %v", err)
+	}
+	appJSON := filepath.Join(srcDir, ".config", "app.json")
+	if err := os.WriteFile(appJSON, []byte("original app.json\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(app.json) error = %v", err)
+	}
+	linkToSub := filepath.Join(srcDir, ".config", "link_to_sub")
+	if err := os.Symlink("sub", linkToSub); err != nil {
+		t.Fatalf("Symlink(link_to_sub) error = %v", err)
+	}
+
+	// Snapshot creates a compressed archive under <home>/backup-mixed-entries/.
+	snapshotter := Snapshotter{now: func() time.Time { return time.Now() }}
+	manifest, err := snapshotter.Create(filepath.Join(home, "backup-mixed-entries"),
+		[]string{appJSON, filepath.Join(srcDir, ".config", "sub"), linkToSub})
+	if err != nil {
+		t.Fatalf("Snapshotter.Create() error = %v", err)
+	}
+	if !manifest.Compressed {
+		t.Fatalf("manifest.Compressed = false, want true (Snapshotter.Create with three files)")
+	}
+
+	// Add a !Existed entry so the restore removes it from disk.
+	createdBySync := filepath.Join(home, "restore_root", "created_by_sync")
+	if err := os.MkdirAll(filepath.Dir(createdBySync), 0o755); err != nil {
+		t.Fatalf("MkdirAll(restore_root) error = %v", err)
+	}
+	if err := os.WriteFile(createdBySync, []byte("created-by-sync content\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(created_by_sync) error = %v", err)
+	}
+	manifest.Entries = append(manifest.Entries, ManifestEntry{
+		OriginalPath: createdBySync,
+		SnapshotPath: "files/created_by_sync",
+		Existed:      false,
+		Mode:         0o644,
+		Kind:         PathKindRegularFile,
+	})
+
+	// Restore via the production service.
+	service := RestoreService{}
+	if err := service.Restore(manifest); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	// 1. Regular file restored with original content.
+	gotApp, err := os.ReadFile(appJSON)
+	if err != nil {
+		t.Fatalf("ReadFile(app.json) error = %v", err)
+	}
+	if string(gotApp) != "original app.json\n" {
+		t.Errorf(".config/app.json = %q, want %q", string(gotApp), "original app.json\n")
+	}
+
+	// 2. Directory entry created/preserved.
+	subInfo, err := os.Stat(filepath.Join(srcDir, ".config", "sub"))
+	if err != nil {
+		t.Fatalf("Stat(.config/sub) error = %v", err)
+	}
+	if !subInfo.IsDir() {
+		t.Errorf(".config/sub is %s, want directory", subInfo.Mode())
+	}
+
+	// 3. Symlink-directory was preserved as a symlink (because it was
+	// Existed=true in the snapshot). The decode2 review addressed the
+	// collision-detection branch, which is not exercised here -- an
+	// Existed=true symlink that already exists on disk with a matching
+	// LinkTarget stays put.
+	linkInfo, err := os.Lstat(linkToSub)
+	if err != nil {
+		t.Fatalf("Lstat(.config/link_to_sub) error = %v", err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Errorf(".config/link_to_sub is %s, want symlink", linkInfo.Mode())
+	}
+	if tgt, _ := os.Readlink(linkToSub); tgt != "sub" {
+		t.Errorf(".config/link_to_sub target = %q, want %q", tgt, "sub")
+	}
+
+	// 4. !Existed entry removed from disk.
+	if _, statErr := os.Lstat(createdBySync); !os.IsNotExist(statErr) {
+		t.Errorf("created_by_sync should have been removed by !Existed branch, but stat err = %v", statErr)
+	}
 }

@@ -251,6 +251,13 @@ func TestAssessAuthorityRepairStopsLockedAndTruncatedInventory(t *testing.T) {
 		if err != nil || assessment.Status != AuthorityRepairTruncated || assessment.Candidate != nil {
 			t.Fatalf("truncated assessment = %#v, %v", assessment, err)
 		}
+		// issue #3371: even a truncation that trips deep inside per-lineage
+		// reading (not the raw directory listing) must say so and how far it
+		// got, not leave Counts looking like a healthy, nothing-to-repair
+		// store.
+		if !assessment.Truncated || assessment.TruncationCap != authorityRepairMaxLineages || assessment.TruncationScanned < 1 {
+			t.Fatalf("truncated assessment scan bound = %#v", assessment)
+		}
 	})
 
 	t.Run("too many unexpected entries", func(t *testing.T) {
@@ -263,6 +270,9 @@ func TestAssessAuthorityRepairStopsLockedAndTruncatedInventory(t *testing.T) {
 		if err := os.MkdirAll(versionRoot, 0o700); err != nil {
 			t.Fatal(err)
 		}
+		// authorityRepairMaxLineages+1 = 257 entries: past the 256-lineage
+		// cap from issue #3371 ("gentle-ai review repair --preflight is
+		// blind past 256 lineages").
 		for index := 0; index <= authorityRepairMaxLineages; index++ {
 			path := filepath.Join(versionRoot, fmt.Sprintf("unexpected-%03d.json", index))
 			if err := os.WriteFile(path, []byte("residue\n"), 0o600); err != nil {
@@ -272,6 +282,18 @@ func TestAssessAuthorityRepairStopsLockedAndTruncatedInventory(t *testing.T) {
 		assessment, err := AssessAuthorityRepair(context.Background(), repo)
 		if err != nil || assessment.Status != AuthorityRepairTruncated || assessment.Candidate != nil {
 			t.Fatalf("entry-bound assessment = %#v, %v", assessment, err)
+		}
+		// issue #3371's exact reported shape: hitting the cap at the raw
+		// directory listing, before a single entry is classified, must never
+		// report all-zero counts as if the store were healthy. It must say
+		// truncated=true with the cap (256) and how many entries it actually
+		// saw (257, the exact bound-plus-one ReadDir returned).
+		if assessment.Counts != (AuthorityRepairCounts{}) {
+			t.Fatalf("truncated assessment reported non-zero classified counts = %#v", assessment.Counts)
+		}
+		if !assessment.Truncated || assessment.TruncationCap != authorityRepairMaxLineages || assessment.TruncationScanned != authorityRepairMaxLineages+1 {
+			t.Fatalf("entry-bound assessment scan bound = %#v, want truncated=true cap=%d scanned=%d",
+				assessment, authorityRepairMaxLineages, authorityRepairMaxLineages+1)
 		}
 	})
 }

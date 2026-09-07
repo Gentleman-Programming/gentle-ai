@@ -267,3 +267,4 @@ If zero issues found, report: "**Assertion quality**: ✅ All assertions verify 
 - Test layer distribution is informational — SUGGESTION level only
 - DO NOT fix issues — only report. The orchestrator decides.
 - If coverage/quality tools are not available, say so cleanly and move on — never flag missing tools as failures
+- Apply any `rules.verify` from `openspec/config.yaml`

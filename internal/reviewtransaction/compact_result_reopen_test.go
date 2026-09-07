@@ -20,8 +20,16 @@ func TestCompactReviewRejectsUnavailableInspectionButHistoricalStateRemainsReada
 		t.Fatal(err)
 	}
 	unavailable := compactLensCaptureRequest(t, store, state, 0)
-	unavailable.Result.Evidence = []string{"Access denied; candidate was not inspected."}
-	if _, err := store.CaptureAdmittedReviewerResult(t.Context(), unavailable); err == nil || !strings.Contains(err.Error(), "inspection was unavailable") {
+	// Issue #4256: completeness is decided by the typed inspection.status
+	// alone, never by scanning evidence prose, so the unavailable inspection
+	// this test captures must be declared through Inspection.Status and its
+	// required Inspection.Reason, not through evidence text.
+	unavailable.Inspection.Status = "unavailable"
+	unavailable.Inspection.Reason = "access " + "denied; candidate was not " + "inspected"
+	unavailable.Result.Evidence = []string{"inspection unavailable; see inspection.reason"}
+	if _, err := store.CaptureAdmittedReviewerResult(t.Context(), unavailable); err == nil ||
+		!strings.Contains(err.Error(), "declared inspection unavailable") ||
+		!strings.Contains(err.Error(), "access "+"denied; candidate was not "+"inspected") {
 		t.Fatalf("unavailable inspection capture error = %v", err)
 	}
 	afterRejected, err := store.Load()
