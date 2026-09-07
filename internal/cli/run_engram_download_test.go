@@ -142,7 +142,7 @@ func TestRunInstallFreshEngramDownloadUsesDownloadedBinaryForVersionProbeAndSetu
 	var versionCommand string
 	verifyEngramVersionCommand = func(command string) (string, error) {
 		versionCommand = command
-		return "engram 1.18.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	var probeCommand string
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
@@ -312,7 +312,7 @@ func TestRunInstallWindowsRefreshesEngramWhenDuplicatePathEntriesShadowManagedBi
 	var versionCommand string
 	verifyEngramVersionCommand = func(command string) (string, error) {
 		versionCommand = command
-		return "engram 1.18.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	var probeCommand string
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
@@ -643,7 +643,7 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 	var versionCommand string
 	verifyEngramVersionCommand = func(command string) (string, error) {
 		versionCommand = command
-		return "engram 1.18.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	var probeCommand string
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {

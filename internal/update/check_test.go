@@ -1286,7 +1286,8 @@ func TestUpdateHint(t *testing.T) {
 }
 
 func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
-	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewRoot := t.TempDir()
+	brewPrefix := filepath.Join(brewRoot, "opt", "gentle-ai")
 	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
 	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
 
@@ -1299,6 +1300,11 @@ func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
 		}
 		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
 			return mockCmd("echo", brewPrefix)
+		}
+		// `brew --prefix` (no args) returns the Homebrew root used to derive
+		// the bin directory the package owns symlinks under.
+		if len(args) == 1 && args[0] == "--prefix" {
+			return mockCmd("echo", brewRoot)
 		}
 		return mockCmd("false")
 	}
@@ -1483,7 +1489,7 @@ func TestRegistryContents(t *testing.T) {
 	if Tools[1].DetectCmd == nil {
 		t.Fatalf("engram DetectCmd should not be nil")
 	}
-	if Tools[1].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+$` {
+	if Tools[1].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.\d+)?$` {
 		t.Fatalf("engram ReleaseTagPattern = %q, want binary v* channel pattern", Tools[1].ReleaseTagPattern)
 	}
 	if Tools[2].DetectCmd == nil {
