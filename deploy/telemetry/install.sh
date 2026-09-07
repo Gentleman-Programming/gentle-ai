@@ -312,6 +312,21 @@ EOF
 	# DynamicUser, whose group is allocated per-unit with no stable name
 	# to add "grafana" to.
 	dnf install -y acl >/dev/null 2>&1 || true
+	# With DynamicUser, systemd materialises StateDirectory under
+	# /var/lib/private (mode 0700) and leaves a symlink at STATE_DIR, so
+	# grafana also needs search permission on every ancestor that is not
+	# world-searchable; without it the datasource fails with
+	# "permission denied" even though the file ACL below is in place.
+	local ancestor
+	ancestor="$(dirname "$(readlink -f "${STATE_DIR}" 2>/dev/null || printf '/')")"
+	# Walk only absolute paths below "/": an unresolvable STATE_DIR (unit
+	# never started, dangling symlink) yields "." and must not loop forever.
+	while [[ "${ancestor}" == /?* ]]; do
+		if [[ ! -x "${ancestor}" ]] || [[ "$(stat -c '%A' "${ancestor}")" != *x ]]; then
+			setfacl -m u:grafana:--x "${ancestor}"
+		fi
+		ancestor="$(dirname "${ancestor}")"
+	done
 	setfacl -m u:grafana:rx "${STATE_DIR}"
 	if [[ -f "${STATE_DIR}/events.sqlite" ]]; then
 		setfacl -m u:grafana:r "${STATE_DIR}/events.sqlite"
