@@ -31,14 +31,14 @@ func TestVerifyVersionCommandUsesTimeoutAndProvidedBinary(t *testing.T) {
 	runVersionCommand = func(ctx context.Context, command string) ([]byte, error) {
 		gotCommand = command
 		_, sawDeadline = ctx.Deadline()
-		return []byte("engram 1.18.0\n"), nil
+		return []byte("engram 2.0.0-rc.8\n"), nil
 	}
 
 	version, err := VerifyVersionCommand("/tmp/beta/engram")
 	if err != nil {
 		t.Fatalf("VerifyVersionCommand() error = %v", err)
 	}
-	if version != "engram 1.18.0" {
+	if version != "engram 2.0.0-rc.8" {
 		t.Fatalf("version = %q, want trimmed output", version)
 	}
 	if gotCommand != "/tmp/beta/engram" {

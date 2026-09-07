@@ -37,7 +37,7 @@ var Tools = []ToolInfo{
 		Repo:              "engram",
 		DetectCmd:         []string{"engram", "version"},
 		VersionPrefix:     "v",
-		ReleaseTagPattern: `^v[0-9]+\.[0-9]+\.[0-9]+$`,
+		ReleaseTagPattern: `^v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.\d+)?$`,
 		// engram: Homebrew when the package is brew-owned, binary download elsewhere.
 		InstallMethod: InstallBinary,
 		// FallbackPaths covers the Windows stale-PATH scenario (and Linux ~/.local/bin

@@ -113,7 +113,7 @@ func TestRepro4020RunInstallUsesOffPathEngramWithoutInvokingBrew(t *testing.T) {
 	var versionCommand, probeCommand string
 	verifyEngramVersionCommand = func(command string) (string, error) {
 		versionCommand = command
-		return "engram 1.20.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
 		probeCommand = command
@@ -193,7 +193,7 @@ func TestRunInstallFreshBrewInstallUsesInstalledBinaryForVersionProbeAndSetup(t 
 	var versionCommand, probeCommand string
 	verifyEngramVersionCommand = func(command string) (string, error) {
 		versionCommand = command
-		return "engram 1.20.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
 		probeCommand = command

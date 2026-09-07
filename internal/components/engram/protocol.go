@@ -19,17 +19,16 @@ const engramProtocolAssetPath = "engram/protocol.md"
 // engramProtocolVersionFloor is the minimum engram binary version (Decision 1)
 // verified to serve the MCP `instructions` channel, which is the redundant
 // channel that makes slimming the Claude Code CLAUDE.md section safe.
-const engramProtocolVersionFloor = "1.4.0"
+const engramProtocolVersionFloor = "2.0.0"
 
 // engramVersionPattern anchors the entire (trimmed) version string to the
 // exact `engram version` output shape: an optional "engram " prefix, an
-// optional "v" prefix, then bare "X.Y.Z" — nothing more. This intentionally
-// rejects pre-release/build-suffixed versions ("1.4.0-beta", "1.4.0-rc1")
-// and embedded semver inside arbitrary text ("foo 1.5.0 bar"): both fall
-// back to engramVersionMeetsFloor's safe default (full), since a suffixed
-// version may predate the MCP instructions wiring and arbitrary text is not
-// a trustworthy version-command output (JD-014).
-var engramVersionPattern = regexp.MustCompile(`^(?:engram\s+)?v?(\d+)\.(\d+)\.(\d+)$`)
+// optional "v" prefix, then bare "X.Y.Z" with an optional pre-release suffix
+// like "-rc.8". This accepts pre-release versions while still rejecting
+// arbitrary text ("foo 1.5.0 bar") which falls back to engramVersionMeetsFloor's
+// safe default (full) since arbitrary text is not a trustworthy version-command
+// output (JD-014).
+var engramVersionPattern = regexp.MustCompile(`^(?:engram\s+)?v?(\d+)\.(\d+)\.(\d+)(?:-rc\.?\d+)?$`)
 
 // protocolAssetContent returns the raw canonical protocol asset content.
 func protocolAssetContent() string {
@@ -89,7 +88,7 @@ func IsVerifiedSlimAdapter(agent model.AgentID, version string) bool {
 }
 
 // engramVersionMeetsFloor reports whether version is >= engramProtocolVersionFloor.
-// It tolerates raw VerifyVersion() output such as "engram 1.18.0" and returns
+// It tolerates raw VerifyVersion() output such as "engram 2.0.0-rc.8" and returns
 // false for empty, unknown, or unparseable input (safe default: full).
 func engramVersionMeetsFloor(version string) bool {
 	match := engramVersionPattern.FindStringSubmatch(strings.TrimSpace(version))

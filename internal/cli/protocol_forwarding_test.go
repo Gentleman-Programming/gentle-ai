@@ -40,7 +40,7 @@ func TestRunInstallThreadsEngramVersionIntoClaudeSlimSelection(t *testing.T) {
 	var versionCommand, probeCommand string
 	verifyEngramVersionCommand = func(command string) (string, error) {
 		versionCommand = command
-		return "engram 1.18.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
 		probeCommand = command
@@ -140,7 +140,7 @@ func TestRunInstallForwardsProtocolSlimForClaudeCodeWhenSupported(t *testing.T) 
 	cmdLookPath = func(name string) (string, error) {
 		return name, nil
 	}
-	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
+	verifyEngramVersion = func() (string, error) { return "engram 2.0.0-rc.8", nil }
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
 		return "Usage: engram setup <slug> [--protocol=slim|full]\n", nil
 	}
@@ -194,7 +194,7 @@ func TestRunInstallSafestWinsAcrossSharedSlug(t *testing.T) {
 	cmdLookPath = func(name string) (string, error) {
 		return name, nil
 	}
-	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
+	verifyEngramVersion = func() (string, error) { return "engram 2.0.0-rc.8", nil }
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
 		return "Usage: engram setup <slug> [--protocol=slim|full]\n", nil
 	}
@@ -270,7 +270,7 @@ func TestRunInstallOmitsProtocolFlagWhenProbeFails(t *testing.T) {
 	cmdLookPath = func(name string) (string, error) {
 		return name, nil
 	}
-	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
+	verifyEngramVersion = func() (string, error) { return "engram 2.0.0-rc.8", nil }
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
 		return "", errors.New("engram setup --help: context deadline exceeded")
 	}
@@ -334,7 +334,7 @@ func TestRunInstallSkipsProtocolProbeWhenSetupModeOff(t *testing.T) {
 		return name, nil
 	}
 	runCommand = func(string, ...string) error { return nil }
-	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
+	verifyEngramVersion = func() (string, error) { return "engram 2.0.0-rc.8", nil }
 
 	probeCalls := 0
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
@@ -387,7 +387,7 @@ func TestRunInstallShellsOutEngramVersionOnlyOnce(t *testing.T) {
 	runCommand = func(string, ...string) error { return nil }
 	verifyEngramVersion = engram.VerifyVersion
 
-	callCount := engram.CountVersionCallsForTest(t, "engram 1.18.0")
+	callCount := engram.CountVersionCallsForTest(t, "engram 2.0.0-rc.8")
 
 	result, err := RunInstall(
 		[]string{"--agent", "claude-code", "--component", "engram"},

@@ -190,9 +190,9 @@ type InjectOptions struct {
 	CodexModelAssignments map[string]model.CodexEffort
 
 	// Version carries the raw installed engram binary version string (e.g.
-	// "engram 1.18.0"), as returned by VerifyVersion(). It feeds the
+	// "engram 2.0.0-rc.8"), as returned by VerifyVersion(). It feeds the
 	// Decision 1 version-gate: the Claude Code CLAUDE.md section only
-	// renders slim when Version parses to >= v1.4.0. Empty, unknown, or
+	// renders slim when Version parses to >= v2.0.0. Empty, unknown, or
 	// unparseable values fall back to the full section (safe default). A
 	// raw string (rather than a bool) is required to support the inclusive
 	// at-floor v1.4.0 boundary comparison.

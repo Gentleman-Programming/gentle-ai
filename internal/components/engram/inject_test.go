@@ -2256,12 +2256,11 @@ func TestEngramYAMLCommandRecoveryListShape(t *testing.T) {
 // Decision 1 per-adapter slim/full selection matrix (16 adapters).
 // ---------------------------------------------------------------------------
 
-// aboveFloorVersion is a version comfortably above the v1.4.0 gate (matches
-// the live evidence cited in design.md Decision 1: engram 1.18.0).
-const aboveFloorVersion = "1.18.0"
+// aboveFloorVersion is a version comfortably above the v2.0.0 gate.
+const aboveFloorVersion = "2.0.0-rc.8"
 
 // TestProtocolForSelectsSlimOrFullPerDecision1Matrix is the 16-row table test
-// required by task 1.2: Claude Code -> slim (gated on engram >= v1.4.0), all
+// required by task 1.2: Claude Code -> slim (gated on engram >= v2.0.0), all
 // other adapters with a setup slug or system-prompt surface -> full. Pi is
 // covered separately below since it never renders protocol text at all
 // (existing MCP-only precedent, unchanged by this change).
@@ -2351,7 +2350,7 @@ func TestProtocolForVersionGateBoundary(t *testing.T) {
 		{"below floor", "1.3.9", false},
 		{"unknown/unparseable version", "not-a-version", false},
 		{"empty version (VerifyVersion failed)", "", false},
-		{"exact floor v1.4.0 (inclusive boundary)", "1.4.0", true},
+		{"exact floor v2.0.0 (inclusive boundary)", "2.0.0", true},
 		{"above floor", aboveFloorVersion, true},
 	}
 
@@ -2373,10 +2372,10 @@ func TestProtocolForVersionGateBoundary(t *testing.T) {
 }
 
 // TestInjectWithOptionsThreadsVersionIntoClaudeSlimSelection is the
-// integration-level counterpart of the boundary test above: it exercises the
-// full InjectWithOptions -> CLAUDE.md write path and asserts the rendered
-// section flips from full to slim once InjectOptions.Version crosses the
-// v1.4.0 floor.
+	// integration-level counterpart of the boundary test above: it exercises the
+	// full InjectWithOptions -> CLAUDE.md write path and asserts the rendered
+	// section flips from full to slim once InjectOptions.Version crosses the
+	// v2.0.0 floor.
 func TestInjectWithOptionsThreadsVersionIntoClaudeSlimSelection(t *testing.T) {
 	belowFloorHome := t.TempDir()
 	if _, err := InjectWithOptions(belowFloorHome, claudeAdapter(), InjectOptions{Version: "1.3.9"}); err != nil {

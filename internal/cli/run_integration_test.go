@@ -1187,7 +1187,7 @@ func TestRunInstallEngramFallsBackToInjectWhenSetupFails(t *testing.T) {
 		if command != engramPath {
 			t.Fatalf("verify command = %q, want %q", command, engramPath)
 		}
-		return "engram 1.20.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
 		if command != engramPath {
@@ -1254,7 +1254,7 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 		if command != engramPath {
 			t.Fatalf("verify command = %q, want %q", command, engramPath)
 		}
-		return "engram 1.20.0", nil
+		return "engram 2.0.0-rc.8", nil
 	}
 	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
 		if command != engramPath {

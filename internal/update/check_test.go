@@ -1489,7 +1489,7 @@ func TestRegistryContents(t *testing.T) {
 	if Tools[1].DetectCmd == nil {
 		t.Fatalf("engram DetectCmd should not be nil")
 	}
-	if Tools[1].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+$` {
+	if Tools[1].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.\d+)?$` {
 		t.Fatalf("engram ReleaseTagPattern = %q, want binary v* channel pattern", Tools[1].ReleaseTagPattern)
 	}
 	if Tools[2].DetectCmd == nil {

@@ -578,7 +578,7 @@ func TestComponentSyncStepSkipsEngramBinaryInstall(t *testing.T) {
 func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
 	home := t.TempDir()
 
-	const installedEngramVersion = "engram 1.18.0" // above the v1.4.0 slim floor
+	const installedEngramVersion = "engram 2.0.0-rc.8" // above the v2.0.0 slim floor
 	restoreVerify := verifyEngramVersion
 	t.Cleanup(func() { verifyEngramVersion = restoreVerify })
 	verifyEngramVersion = func() (string, error) { return installedEngramVersion, nil }
