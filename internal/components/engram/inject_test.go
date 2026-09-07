@@ -238,6 +238,11 @@ func TestInjectOpenCodeMergesEngramToSettings(t *testing.T) {
 	if !strings.Contains(agentsText, "one plain string with labeled lines") {
 		t.Fatal("AGENTS.md must describe mem_save content as one plain string")
 	}
+	for _, label := range []string{"What:", "Why:", "Where:"} {
+		if !strings.Contains(agentsText, label) {
+			t.Fatalf("AGENTS.md missing required mem_save content label %q", label)
+		}
+	}
 	if strings.Contains(agentsText, "- **content**:\n  - **What**:") {
 		t.Fatal("AGENTS.md must not describe mem_save content as an object-shaped nested list")
 	}
