@@ -673,6 +673,157 @@ func TestInjectOpenCodeSensitivePathsDenied(t *testing.T) {
 	}
 }
 
+// TestInjectOpenCodeDeniesRemoteShellUtilities verifies that the remote shell
+// utilities used to reach machines outside the workspace (ssh, scp, sftp,
+// rsync) are denied in the OpenCode/Kilocode bash permission map in both
+// their exact and wildcard forms, and that these deny entries coexist with
+// the global bash allow (#4324).
+func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
+	remoteDenyRules := []string{
+		"ssh",
+		"ssh *",
+		"scp",
+		"scp *",
+		"sftp",
+		"sftp *",
+		"rsync",
+		"rsync *",
+	}
+
+	tests := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{"opencode", opencodeAdapter()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if _, err := Inject(home, tt.adapter); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsPath := tt.adapter.SettingsPath(home)
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("read settings file %q: %v", settingsPath, err)
+			}
+
+			var settings map[string]any
+			if err := json.Unmarshal(content, &settings); err != nil {
+				t.Fatalf("unmarshal settings json: %v", err)
+			}
+
+			permNode, ok := settings["permission"].(map[string]any)
+			if !ok {
+				t.Fatalf("permission node missing or invalid: %#v", settings["permission"])
+			}
+
+			bashNode, ok := permNode["bash"].(map[string]any)
+			if !ok {
+				t.Fatalf("bash node missing or invalid: %#v", permNode["bash"])
+			}
+
+			for _, pattern := range remoteDenyRules {
+				t.Run(pattern, func(t *testing.T) {
+					val, exists := bashNode[pattern]
+					if !exists {
+						t.Errorf("bash deny map missing pattern %q; got: %v", pattern, bashNode)
+						return
+					}
+					if val != "deny" {
+						t.Errorf("pattern %q has value %q, want %q", pattern, val, "deny")
+					}
+				})
+			}
+
+			// The remote denials must coexist with the global bash allow.
+			if bashNode["*"] != "allow" {
+				t.Errorf("global bash allow rule \"*\" missing or changed after Inject; got: %v", bashNode["*"])
+			}
+		})
+	}
+}
+
+// TestInjectClaudeCodeDeniesRemoteShellUtilities verifies that the remote shell
+// utilities used to reach machines outside the workspace (ssh, scp, sftp,
+// rsync) are denied in the Claude Code deny list in both their exact and
+// wildcard command forms (#4324).
+func TestInjectClaudeCodeDeniesRemoteShellUtilities(t *testing.T) {
+	remoteDenyRules := []string{
+		"Bash(ssh)",
+		"Bash(ssh:*)",
+		"Bash(scp)",
+		"Bash(scp:*)",
+		"Bash(sftp)",
+		"Bash(sftp:*)",
+		"Bash(rsync)",
+		"Bash(rsync:*)",
+	}
+
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Pre-existing settings with a sibling key under permissions (not deny),
+	// mirroring the default-deny test: the remote denials must land even when
+	// a permissions block is already present.
+	existing := `{
+  "permissions": {
+    "defaultMode": "default"
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(content, &settings); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	perms, ok := settings["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("permissions node missing")
+	}
+
+	denyList, ok := perms["deny"].([]any)
+	if !ok {
+		t.Fatalf("deny list missing")
+	}
+
+	denySet := make(map[string]bool, len(denyList))
+	for _, entry := range denyList {
+		if v, ok := entry.(string); ok {
+			denySet[v] = true
+		}
+	}
+
+	for _, rule := range remoteDenyRules {
+		if !denySet[rule] {
+			t.Errorf("remote shell deny rule %q was not present; got: %v", rule, denyList)
+		}
+	}
+
+	// The overlay wins for defaultMode because arrays replace but maps deep-merge.
+	mode, _ := perms["defaultMode"].(string)
+	if mode != "bypassPermissions" {
+		t.Errorf("expected defaultMode=bypassPermissions after overlay, got %q", mode)
+	}
+}
+
 // TestInjectClaudeCodeDefaultDenyRulesApplied ensures that the default deny
 // rules (including sensitive paths) are written into settings.json even when
 // a pre-existing permissions block is already present with other top-level keys.
