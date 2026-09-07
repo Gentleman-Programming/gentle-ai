@@ -635,6 +635,54 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 	}
 }
 
+func TestPartialUninstallOpenCodeLogoScopedToOpenCodeAgent(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	logoPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+	if err := os.MkdirAll(filepath.Dir(logoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logoPath, []byte("// managed logo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Uninstalling an unrelated agent must not touch the OpenCode-owned logo —
+	// both when the logo component is named explicitly and, the issue's actual
+	// repro, when the default component list (nil) includes it (#4229).
+	for _, components := range [][]model.ComponentID{
+		{model.ComponentOpenCodeGentleLogo},
+		nil, // default: allManagedComponents
+	} {
+		if _, err := svc.PartialUninstall(
+			[]model.AgentID{model.AgentGeminiCLI},
+			components,
+		); err != nil {
+			t.Fatalf("PartialUninstall(gemini-cli, %v) error = %v", components, err)
+		}
+		if got, err := os.ReadFile(logoPath); err != nil || string(got) != "// managed logo" {
+			t.Fatalf("OpenCode logo removed by gemini-cli uninstall (components %v): got %q, %v; want preserved", components, got, err)
+		}
+	}
+
+	// Positive control: the OpenCode adapter itself still removes the logo.
+	if _, err := svc.PartialUninstall(
+		[]model.AgentID{model.AgentOpenCode},
+		[]model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	); err != nil {
+		t.Fatalf("PartialUninstall(opencode) error = %v", err)
+	}
+	if _, err := os.Stat(logoPath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode logo should be removed by opencode uninstall: %v", err)
+	}
+}
+
 func readJSONFileForTest(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -850,6 +850,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeDirIfEmpty(filepath.Dir(paths[0])))
 		}
 	case model.ComponentOpenCodeGentleLogo:
+		if adapter.Agent() != model.AgentOpenCode {
+			break
+		}
 		pluginPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
 		targets = append(targets, pluginPath)
 		ops = append(ops, removeFile(pluginPath), removeDirIfEmpty(filepath.Dir(pluginPath)))
