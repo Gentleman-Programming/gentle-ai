@@ -6,15 +6,69 @@ import (
 )
 
 const (
-	sddSessionPreflightMarker = "<!-- gentle-ai:sdd-session-preflight -->"
-	sddSessionPreflightEnd    = "<!-- /gentle-ai:sdd-session-preflight -->"
-	sddSessionPreflightInit   = "### SDD Init Guard (MANDATORY)"
-	sddSessionPreflightBody   = "### SDD Session Preflight (HARD GATE)\n\nBefore every SDD command or natural-language SDD request, run this preflight before the SDD init guard; cache choices for the session.\n\nUse the `question` tool only when available and all three groups (Pace, Artifacts, and PR strategy) are exactly representable; otherwise use the lossless blocking fallback and STOP.\nAsk Pace, Artifacts, and PR strategy in ONE `question` tool call; no sequential wizard and no three separate calls.\nMatch labels and descriptions to the conversation language and persona; do not expose canonical/internal codes.\n\n1. **Pace**: Interactive or Automatic.\n2. **Artifacts**: OpenSpec, Engram, or Both (user-facing Both maps only to internal `hybrid`).\n3. **PR strategy**: Ask me, Single PR, or Auto.\n\nReview policy is fixed at 400 changed lines per PR; above 400, split the PR or require maintainer-approved `size:exception`; NEVER ask it as a fourth group or selectable budget.\n\nCanonical mappings:\n- Interactive -> `interactive`\n- Automatic -> `auto`\n- OpenSpec -> `openspec`\n- Engram -> `engram`\n- Both -> `hybrid`\n- Ask me -> `ask-on-risk`\n- Single PR -> `single-pr`\n- Auto -> `auto-chain`"
+	sddSessionPreflightMarker       = "<!-- gentle-ai:sdd-session-preflight -->"
+	sddSessionPreflightEnd          = "<!-- /gentle-ai:sdd-session-preflight -->"
+	sddSessionPreflightInit         = "### SDD Init Guard (MANDATORY)"
+	legacySDDSessionPreflightMarker = "<!-- gentle-ai:sdd-session-preflight-migration -->"
+	legacySDDSessionPreflightEnd    = "<!-- /gentle-ai:sdd-session-preflight-migration -->"
+	sddSessionPreflightBody         = "### SDD Session Preflight (HARD GATE)\n\nBefore every SDD command or natural-language SDD request, run this preflight before the SDD init guard; cache choices for the session.\n\nUse the `question` tool only when available and all three groups (Pace, Artifacts, and PR strategy) are exactly representable; otherwise use the lossless blocking fallback and STOP.\nAsk Pace, Artifacts, and PR strategy in ONE `question` tool call; no sequential wizard and no three separate calls.\nMatch labels and descriptions to the conversation language and persona; do not expose canonical/internal codes.\n\n1. **Pace**: Interactive or Automatic.\n2. **Artifacts**: OpenSpec, Engram, or Both (user-facing Both maps only to internal `hybrid`).\n3. **PR strategy**: Ask me, Single PR, or Auto.\n\nReview policy is fixed at 400 changed lines per PR; above 400, split the PR or require maintainer-approved `size:exception`; NEVER ask it as a fourth group or selectable budget.\n\nCanonical mappings:\n- Interactive -> `interactive`\n- Automatic -> `auto`\n- OpenSpec -> `openspec`\n- Engram -> `engram`\n- Both -> `hybrid`\n- Ask me -> `ask-on-risk`\n- Single PR -> `single-pr`\n- Auto -> `auto-chain`"
 )
 
 func sddSessionPreflightBlock() string {
 	return sddSessionPreflightMarker + "\n" + sddSessionPreflightBody + "\n" + sddSessionPreflightEnd
 }
+
+// migratePreservedSDDSessionPreflight is the only migration path for a
+// preserved external OpenCode or Kilo prompt. It replaces owned legacy ranges
+// in place and otherwise appends the canonical block without interpreting any
+// unmarked user-authored prompt text.
+func validatePreservedSDDSessionPreflight(rendered string) error {
+	canonicalStart, _, err := sddSessionPreflightMarkerRange(rendered)
+	if err != nil {
+		return err
+	}
+	legacyStart, _, err := sddSessionPreflightOwnedMarkerRange(rendered, legacySDDSessionPreflightMarker, legacySDDSessionPreflightEnd)
+	if err != nil {
+		return err
+	}
+	if canonicalStart >= 0 && legacyStart >= 0 {
+		return fmt.Errorf("sdd session preflight cannot contain canonical and legacy marker pairs")
+	}
+	return nil
+}
+
+func migratePreservedSDDSessionPreflight(rendered string) (string, error) {
+	if err := validatePreservedSDDSessionPreflight(rendered); err != nil {
+		return "", err
+	}
+	newline, err := sddSessionPreflightNewline(rendered)
+	if err != nil {
+		return "", err
+	}
+	legacyStart, legacyEnd, err := sddSessionPreflightOwnedMarkerRange(rendered, legacySDDSessionPreflightMarker, legacySDDSessionPreflightEnd)
+	if err != nil {
+		return "", err
+	}
+	block := strings.ReplaceAll(sddSessionPreflightBlock(), "\n", newline)
+	if legacyStart >= 0 {
+		rendered = rendered[:legacyStart] + block + rendered[legacyEnd:]
+	}
+	open, closeEnd, err := sddSessionPreflightMarkerRange(rendered)
+	if err != nil {
+		return "", err
+	}
+	if open >= 0 {
+		return rendered[:open] + block + rendered[closeEnd:], nil
+	}
+	if rendered == "" {
+		return block, nil
+	}
+	if strings.HasSuffix(rendered, newline) {
+		return rendered + newline + block, nil
+	}
+	return rendered + newline + newline + block, nil
+}
+
 func projectSDDSessionPreflight(rendered, preInitAnchor string) (string, error) {
 	anchor, err := sddSessionPreflightAnchorIndex(rendered, preInitAnchor)
 	if err != nil {
@@ -27,9 +81,9 @@ func projectSDDSessionPreflight(rendered, preInitAnchor string) (string, error) 
 	if open >= 0 && (open >= anchor || closeEnd > anchor) {
 		return "", fmt.Errorf("sdd session preflight is not at the supplied pre-init anchor")
 	}
-	newline := "\n"
-	if strings.Contains(rendered, "\r\n") {
-		newline = "\r\n"
+	newline, err := sddSessionPreflightNewline(rendered)
+	if err != nil {
+		return "", err
 	}
 	block := strings.ReplaceAll(sddSessionPreflightBlock(), "\n", newline)
 	if open >= 0 {
@@ -91,24 +145,46 @@ func sddSessionPreflightAnchorIndex(rendered, anchor string) (int, error) {
 }
 
 func sddSessionPreflightMarkerRange(rendered string) (int, int, error) {
-	openCount := strings.Count(rendered, sddSessionPreflightMarker)
-	closeCount := strings.Count(rendered, sddSessionPreflightEnd)
+	return sddSessionPreflightOwnedMarkerRange(rendered, sddSessionPreflightMarker, sddSessionPreflightEnd)
+}
+
+func sddSessionPreflightOwnedMarkerRange(rendered, openMarker, closeMarker string) (int, int, error) {
+	openCount := strings.Count(rendered, openMarker)
+	closeCount := strings.Count(rendered, closeMarker)
 	if openCount == 0 && closeCount == 0 {
 		return -1, -1, nil
 	}
 	if openCount != 1 || closeCount != 1 {
 		return 0, 0, fmt.Errorf("sdd session preflight markers must contain exactly one pair")
 	}
-	open := strings.Index(rendered, sddSessionPreflightMarker)
-	close := strings.Index(rendered, sddSessionPreflightEnd)
+	open := strings.Index(rendered, openMarker)
+	close := strings.Index(rendered, closeMarker)
 	if close <= open {
 		return 0, 0, fmt.Errorf("sdd session preflight markers are orphaned or reversed")
 	}
-	closeEnd := close + len(sddSessionPreflightEnd)
+	closeEnd := close + len(closeMarker)
 	if !sddSessionPreflightLineStart(rendered, open) || !sddSessionPreflightLineEnd(rendered, closeEnd) {
 		return 0, 0, fmt.Errorf("sdd session preflight markers must occupy complete lines")
 	}
 	return open, closeEnd, nil
+}
+
+func sddSessionPreflightNewline(value string) (string, error) {
+	withoutCRLF := strings.ReplaceAll(value, "\r\n", "")
+	if strings.Contains(withoutCRLF, "\r") || (strings.Contains(value, "\r\n") && strings.Contains(withoutCRLF, "\n")) {
+		return "", fmt.Errorf("sdd session preflight contains mixed or unsupported line endings")
+	}
+	if strings.Contains(value, "\r\n") {
+		return "\r\n", nil
+	}
+	return "\n", nil
+}
+
+func normalizeSDDSessionPreflightPromptLineEndings(value, newline string) string {
+	if newline == "\n" {
+		return value
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\n", newline)
 }
 
 func normalizeSDDSessionPreflightLineEndings(value string) (string, error) {

@@ -28,6 +28,33 @@ func TestOpenCodeSessionPreflightCompositionIsRuntimeScoped(t *testing.T) {
 		t.Fatal("Claude composition unexpectedly received the OpenCode session preflight projection")
 	}
 }
+func TestMigratePreservedSDDSessionPreflightReplacesOnlyOwnedBytes(t *testing.T) {
+	for _, newline := range []string{"\n", "\r\n"} {
+		for _, testCase := range []struct {
+			name, prompt, want string
+		}{
+			{name: "unmarked", prompt: "PREFIX" + newline + "SUFFIX", want: "PREFIX" + newline + "SUFFIX" + newline + newline},
+			{name: "legacy", prompt: "PREFIX" + newline + legacySDDSessionPreflightMarker + newline + "Both -> `both`" + newline + legacySDDSessionPreflightEnd + newline + "SUFFIX", want: "PREFIX" + newline},
+			{name: "canonical", prompt: "PREFIX" + newline + sddSessionPreflightMarker + newline + "Both -> `both`" + newline + sddSessionPreflightEnd + newline + "SUFFIX", want: "PREFIX" + newline},
+		} {
+			t.Run(testCase.name+"/"+strings.ReplaceAll(newline, "\r", "cr"), func(t *testing.T) {
+				got, err := migratePreservedSDDSessionPreflight(testCase.prompt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				block := strings.ReplaceAll(sddSessionPreflightBlock(), "\n", newline)
+				want := testCase.want + block
+				if testCase.name != "unmarked" {
+					want += newline + "SUFFIX"
+				}
+				if got != want || strings.Contains(got, "Both -> `both`") {
+					t.Fatalf("migration = %q, want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
 func TestSDDSessionPreflightProjectionCanonicalAndBounded(t *testing.T) {
 	block := sddSessionPreflightBlock()
 	for _, want := range []string{"<!-- gentle-ai:sdd-session-preflight -->", "### SDD Session Preflight (HARD GATE)", "1. **Pace**", "2. **Artifacts**", "3. **PR strategy**", "Both -> `hybrid`", "fixed at 400 changed lines", "<!-- /gentle-ai:sdd-session-preflight -->"} {

@@ -58,6 +58,7 @@ func journeySources() []journeySource {
 		{"journeys_issue2906.go", issue2906Journeys()},
 		{"journeys_issue_2138.go", issue2138Journeys()},
 		{"journeys_issue_3336.go", issue3336Journeys()},
+		{"journeys_issue_3500.go", issue3500Journeys()},
 		{"journeys_issue_3043.go", issue3043Journeys()},
 		{"journeys_issue_3557.go", issue3557Journeys()},
 		{"journeys_issue_3561.go", issue3561Journeys()},
