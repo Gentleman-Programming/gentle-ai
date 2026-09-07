@@ -27,7 +27,7 @@ const (
 
 // DefaultEndpoint is the collector URL used when GENTLE_AI_TELEMETRY_ENDPOINT
 // is not set.
-const DefaultEndpoint = "https://telemetry.gentleman-programming.com/v1/events"
+const DefaultEndpoint = "https://telemetry.gentlemanprogramming.com/v1/events"
 
 // EndpointEnvVar overrides DefaultEndpoint.
 const EndpointEnvVar = "GENTLE_AI_TELEMETRY_ENDPOINT"

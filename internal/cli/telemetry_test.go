@@ -125,6 +125,15 @@ func validateTelemetrySchema(t *testing.T, schema *jsonschema.Schema, payload []
 	}
 }
 
+// enableTelemetryForTest re-enables telemetry for one test by pinning every
+// kill switch, so the test is hermetic on a CI runner or an opted-out shell.
+func enableTelemetryForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("DO_NOT_TRACK", "")
+	t.Setenv("GENTLE_AI_TELEMETRY", "")
+	t.Setenv("CI", "")
+}
+
 func telemetryTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -185,7 +194,7 @@ func TestRunTelemetryStatusJSONValidatesAgainstSchema(t *testing.T) {
 
 func TestRunTelemetryEnableDisableRoundTrip(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	var disableOut bytes.Buffer
 	if err := RunTelemetry([]string{"disable", "--json"}, &disableOut); err != nil {
@@ -229,7 +238,7 @@ func TestRunTelemetryEnableDisableRoundTrip(t *testing.T) {
 // notice_shown, and counters are unaffected by a bare `status`.
 func TestRunTelemetryStatusAndPreviewShareAStableInstallID(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	var firstStatus bytes.Buffer
 	if err := RunTelemetry([]string{"status", "--json"}, &firstStatus); err != nil {
@@ -278,7 +287,7 @@ func TestRunTelemetryStatusAndPreviewShareAStableInstallID(t *testing.T) {
 
 func TestRunTelemetryPreviewIsStableAcrossRepeatedCalls(t *testing.T) {
 	telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	var first, second bytes.Buffer
 	if err := RunTelemetry([]string{"preview", "--json"}, &first); err != nil {
@@ -320,7 +329,7 @@ func TestRunTelemetryTriggerDisabledValidatesAgainstSchema(t *testing.T) {
 
 func TestRunTelemetryTriggerEnrolledValidatesAgainstSchema(t *testing.T) {
 	telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 	var buf bytes.Buffer
 	if err := RunTelemetry([]string{"trigger", "--json"}, &buf); err != nil {
 		t.Fatal(err)
@@ -338,7 +347,7 @@ func TestRunTelemetryTriggerEnrolledValidatesAgainstSchema(t *testing.T) {
 
 func TestRunTelemetryTriggerRateLimitedValidatesAgainstSchema(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 	sentInstall := time.Now().Add(-time.Hour).UTC()
 	lastHeartbeat := time.Now().Add(-time.Minute).UTC()
 	seed := telemetry.State{
@@ -369,7 +378,7 @@ func TestRunTelemetryTriggerRateLimitedValidatesAgainstSchema(t *testing.T) {
 // window must never spawn a second sender.
 func TestRunTelemetryTriggerCalledTwiceWithin24hSpawnsAtMostOneSend(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 	telemetryTestSpawnRecorder.Reset()
 
 	sentInstall := time.Now().Add(-48 * time.Hour).UTC()
@@ -431,7 +440,7 @@ func TestRunTelemetrySendTakesNoArguments(t *testing.T) {
 
 func TestRunTelemetrySendReadsPayloadFromStdinAndUpdatesState(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -496,7 +505,7 @@ func TestRunTelemetrySendRefusesOversizedStdin(t *testing.T) {
 
 func TestTelemetryRecordReviewOutcomeApprovedIncrementsExactlyOneCounter(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	telemetryRecordReviewOutcome("approved")
 
@@ -512,7 +521,7 @@ func TestTelemetryRecordReviewOutcomeApprovedIncrementsExactlyOneCounter(t *test
 
 func TestTelemetryRecordReviewOutcomeCorrectionIncrementsExactlyOneCounter(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	telemetryRecordReviewOutcome("correction")
 
@@ -528,7 +537,7 @@ func TestTelemetryRecordReviewOutcomeCorrectionIncrementsExactlyOneCounter(t *te
 
 func TestTelemetryRecordReviewOutcomeEscalatedIncrementsExactlyOneCounter(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 
 	telemetryRecordReviewOutcome("escalated")
 
@@ -564,7 +573,7 @@ func TestTelemetryRecordReviewOutcomeDisabledCreatesNoStateFile(t *testing.T) {
 // read, so the outer disabled test above stays about the disk-free path).
 func TestTelemetryRecordReviewOutcomeStateDisabledSkipsAfterRead(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 	if err := telemetry.Save(home, telemetry.State{InstallID: "seed", Enabled: false}); err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +598,7 @@ func TestTelemetryRecordReviewOutcomeStateDisabledSkipsAfterRead(t *testing.T) {
 // is exactly "an enrolled install with an expired heartbeat window".
 func TestTelemetryRecordReviewOutcomeTriggersAtMostOneHeartbeatPerDay(t *testing.T) {
 	home := telemetryTestHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 	telemetryTestSpawnRecorder.Reset()
 
 	sentInstall := time.Now().Add(-48 * time.Hour).UTC()
@@ -663,7 +672,7 @@ func settleOneSDDAttempt(t *testing.T, repo, change, suffix string) compactAttem
 
 func TestSDDAttemptSettleIncrementsSDDPhaseRunsExactlyOnce(t *testing.T) {
 	home := reviewEnabledHome(t)
-	t.Setenv("DO_NOT_TRACK", "")
+	enableTelemetryForTest(t)
 	repo := initReviewCLIRepo(t)
 
 	settleOneSDDAttempt(t, repo, "telemetry-sdd-phase", "1")

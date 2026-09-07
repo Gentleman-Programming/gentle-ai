@@ -122,6 +122,6 @@ nothing to look up or delete on request.
 
 ## Endpoint
 
-The default collector is `https://telemetry.gentleman-programming.com/v1/events`,
+The default collector is `https://telemetry.gentlemanprogramming.com/v1/events`,
 overridable with `GENTLE_AI_TELEMETRY_ENDPOINT` (useful for self-hosting or
 testing against a local collector).

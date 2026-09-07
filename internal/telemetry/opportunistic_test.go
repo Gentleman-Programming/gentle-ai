@@ -299,3 +299,25 @@ func TestOpportunisticNeverErrorsWhenStateUnwritable(t *testing.T) {
 		t.Fatal("want a non-empty reason explaining why nothing was attempted")
 	}
 }
+
+func TestOpportunisticQuietTriggerNeverEnrollsSilently(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var calls []recordedSpawn
+	// A closure hook has no stderr to show the notice on.
+	outcome := Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now }, Spawn: fakeSpawner(&calls)})
+	if outcome.Decision != DecisionEnrolled || outcome.Attempted || len(calls) != 0 {
+		t.Fatalf("quiet first trigger = %+v (spawns %d), want enrolled with nothing attempted", outcome, len(calls))
+	}
+	s, err := Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.NoticeShown {
+		t.Fatal("a trigger that could not show the notice must not record it as shown")
+	}
+	// The next interactive trigger shows the notice; only then does enrollment complete.
+	if _, notice := enrollHome(t, home, now); !strings.Contains(notice, NoticeLine) {
+		t.Fatalf("stderr = %q, want the notice line", notice)
+	}
+}

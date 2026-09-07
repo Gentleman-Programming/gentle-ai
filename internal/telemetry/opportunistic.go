@@ -97,9 +97,13 @@ func Opportunistic(d Deps) Outcome {
 	}
 
 	if !persisted.NoticeShown {
-		if d.Stderr != nil {
-			_, _ = fmt.Fprintln(d.Stderr, NoticeLine)
+		if d.Stderr == nil {
+			// A machine-driven trigger (review or SDD closure) has nowhere to
+			// show the notice. Enrollment waits for a human-facing command;
+			// nothing is sent and nothing is recorded until then.
+			return Outcome{Decision: DecisionEnrolled, Source: decision.Source, Reason: "enrollment pending: the notice is shown only by an interactive command"}
 		}
+		_, _ = fmt.Fprintln(d.Stderr, NoticeLine)
 		persisted.NoticeShown = true
 		if err := Save(d.HomeDir, persisted); err != nil {
 			return Outcome{Decision: DecisionDisabled, Source: decision.Source, Reason: "persist enrollment: " + err.Error()}

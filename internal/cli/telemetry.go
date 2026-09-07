@@ -331,7 +331,7 @@ func telemetryRecordReviewOutcome(kind string) {
 	case "escalated":
 		_ = telemetry.IncrementReviewsEscalated(homeDir)
 	}
-	TelemetryTrigger(homeDir)
+	telemetryTriggerQuiet(homeDir)
 }
 
 // telemetryRecordSDDPhaseRun increments sdd_phase_runs when a `sdd-attempt
@@ -344,7 +344,7 @@ func telemetryRecordSDDPhaseRun() {
 		return
 	}
 	_ = telemetry.IncrementSDDPhaseRuns(homeDir)
-	TelemetryTrigger(homeDir)
+	telemetryTriggerQuiet(homeDir)
 }
 
 // runTelemetryTriggerCommand runs exactly the opportunistic path a
@@ -396,7 +396,16 @@ func runTelemetryTriggerCommand(args []string, stdout io.Writer) error {
 // way) and hands it to telemetry.Opportunistic. It never returns an error
 // and never panics: telemetry is best-effort and must never affect the
 // caller's own exit code or output.
-func TelemetryTrigger(homeDir string) {
+func TelemetryTrigger(homeDir string) { telemetryTrigger(homeDir, os.Stderr) }
+
+// telemetryTriggerQuiet is the closure-hook variant: review and SDD phase
+// closures are machine-driven JSON verbs whose stderr belongs to the host
+// agent, so the one-time notice is never printed there. Until an
+// interactive command has shown it, these triggers record nothing and send
+// nothing.
+func telemetryTriggerQuiet(homeDir string) { telemetryTrigger(homeDir, nil) }
+
+func telemetryTrigger(homeDir string, stderr io.Writer) {
 	defer func() { _ = recover() }()
 	homeDir = strings.TrimSpace(homeDir)
 	if homeDir == "" {
@@ -407,7 +416,7 @@ func TelemetryTrigger(homeDir string) {
 		return
 	}
 	telemetry.Opportunistic(telemetry.Deps{
-		HomeDir: homeDir, Getenv: os.Getenv, Stderr: os.Stderr, Version: strings.TrimSpace(AppVersion),
+		HomeDir: homeDir, Getenv: os.Getenv, Stderr: stderr, Version: strings.TrimSpace(AppVersion),
 		Agents: agents, Components: components, RDDEnabled: telemetryRDDEnabled("."),
 	})
 }
