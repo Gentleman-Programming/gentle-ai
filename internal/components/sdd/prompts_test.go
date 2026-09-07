@@ -758,7 +758,7 @@ func TestInjectKimiYAMLSubagentsOmitCodeGraphGuidanceByDefault(t *testing.T) {
 	}
 
 	for _, fileName := range kimiYAMLSubagentFilesForCodeGraphTest() {
-		path := filepath.Join(home, ".kimi", "agents", fileName)
+		path := filepath.Join(home, ".kimi-code", "agents", fileName)
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
@@ -778,7 +778,7 @@ func TestInjectKimiYAMLSubagentsRemainControlFilesWhenCodeGraphEnabled(t *testin
 	}
 
 	for _, fileName := range kimiYAMLSubagentFilesForCodeGraphTest() {
-		path := filepath.Join(home, ".kimi", "agents", fileName)
+		path := filepath.Join(home, ".kimi-code", "agents", fileName)
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)

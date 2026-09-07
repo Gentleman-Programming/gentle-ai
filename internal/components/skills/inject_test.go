@@ -9,6 +9,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -458,7 +459,9 @@ func TestInjectWithCapability_WritesExtractedSDDSkillWithFrontmatterAtStart(t *t
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.HasPrefix(string(content), "---\n") {
+	// Normalize line endings for cross-platform comparison
+	normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+	if !strings.HasPrefix(normalized, "---\n") {
 		t.Fatalf("extracted SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(content[:min(len(content), 16)]))
 	}
 }
@@ -484,5 +487,63 @@ func requiredBundledSkillIDs() []model.SkillID {
 		model.SkillRDDDefectWorkflow,
 		model.SkillSystemicIssueTriage,
 		model.SkillGentleAIBench,
+	}
+}
+
+// --- PluginInstaller interface check tests ---
+
+func TestInject_PluginInstaller_UsesPluginDir(t *testing.T) {
+	home := t.TempDir()
+	// Create the .kimi-code sentinel so usesKimiCodeLayout returns true.
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := kimi.NewTestAdapter(
+		kimi.WithStatPath(func(path string) kimi.StatResult {
+			if path == filepath.Join(home, ".kimi-code") {
+				return kimi.StatResult{IsDir: true}
+			}
+			return kimi.StatResult{Err: os.ErrNotExist}
+		}),
+		kimi.WithPathExists(func(path string) bool {
+			return path == filepath.Join(home, ".kimi-code")
+		}),
+	)
+
+	result, err := Inject(home, adapter, []model.SkillID{model.SkillCreator})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	// Skills should be written to the plugin subdirectory, not the flat path.
+	pluginSkillsDir := filepath.Join(home, ".kimi-code", "plugins", "managed", "gentle-ai", "skills")
+	flatSkillsDir := filepath.Join(home, ".kimi-code", "skills")
+
+	for _, f := range result.Files {
+		if strings.Contains(f, flatSkillsDir) {
+			t.Errorf("file written to flat skills dir %q, want plugin dir %q", f, pluginSkillsDir)
+		}
+	}
+	if !containsFile(result.Files, filepath.Join(pluginSkillsDir, "skill-creator", "SKILL.md")) {
+		t.Errorf("expected skill file in plugin dir; got files: %v", result.Files)
+	}
+}
+
+func TestInject_NonPluginInstaller_UsesSkillsDir(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillCreator})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	// Non-plugin adapters should write to the flat skills path.
+	expectedPath := filepath.Join(home, ".config", "opencode", "skills", "skill-creator", "SKILL.md")
+	if !containsFile(result.Files, expectedPath) {
+		t.Errorf("expected skill file at %q; got files: %v", expectedPath, result.Files)
 	}
 }

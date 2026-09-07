@@ -107,6 +107,18 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testing.T) {
 	home := t.TempDir()
 
+	// Run from an isolated directory so AGENTS.md resolution does not pick up
+	// the repository's own AGENTS.md file during the test.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error = %v", err)
+	}
+	isolated := t.TempDir()
+	if err := os.Chdir(isolated); err != nil {
+		t.Fatalf("Chdir error = %v", err)
+	}
+	defer os.Chdir(cwd)
+
 	result, err := Inject(home, kimiAdapter(), model.PersonaGentleman)
 	if err != nil {
 		t.Fatalf("Inject(kimi) error = %v", err)
@@ -115,8 +127,8 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 		t.Fatal("Inject(kimi) changed = false")
 	}
 
-	// KIMI.md should be the static Jinja template (includes + variable placeholders).
-	templatePath := filepath.Join(home, ".kimi", "KIMI.md")
+	// AGENTS.md should be the static Jinja template (includes + variable placeholders).
+	templatePath := filepath.Join(home, ".kimi-code", "AGENTS.md")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", templatePath, err)
@@ -124,17 +136,20 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 
 	text := string(content)
 	if !strings.Contains(text, `{% include "output-style.md"`) {
-		t.Fatal("KIMI.md template missing {% include \"output-style.md\" %}")
+		t.Fatal("AGENTS.md template missing {% include \"output-style.md\" %}")
 	}
-	if !strings.Contains(text, "${KIMI_AGENTS_MD}") {
-		t.Fatal("KIMI.md missing ${KIMI_AGENTS_MD} for project AGENTS.md parity")
+	// BootstrapTemplate no longer copies cwd-derived AGENTS.md into the global
+	// Kimi config; it only writes a project-scoped placeholder.
+	if !strings.Contains(text, "<!-- Project AGENTS.md is read from the current worktree at runtime") {
+		t.Fatal("AGENTS.md missing project-scoped AGENTS.md placeholder")
 	}
-	if !strings.Contains(text, "${KIMI_SKILLS}") {
-		t.Fatal("KIMI.md missing ${KIMI_SKILLS} for loaded-skills parity")
+	// ${KIMI_SKILLS} is also resolved during bootstrap.
+	if !strings.Contains(text, "Skills loaded from skill directories") {
+		t.Fatal("AGENTS.md missing resolved skills content")
 	}
 
 	// output-style.md module should contain the Gentleman style content.
-	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	outputStylePath := filepath.Join(home, ".kimi-code", "output-style.md")
 	styleContent, err := os.ReadFile(outputStylePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", outputStylePath, err)
@@ -158,7 +173,7 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 
 	// persona.md module should exist and be the residual — tone/language now
 	// lives exclusively in the reconciled output-style.md module checked above.
-	personaPath := filepath.Join(home, ".kimi", "persona.md")
+	personaPath := filepath.Join(home, ".kimi-code", "persona.md")
 	personaFileBytes, err := os.ReadFile(personaPath)
 	if err != nil {
 		t.Fatalf("persona.md not written: %v", err)
@@ -1013,7 +1028,7 @@ func TestInjectKimiNeutralWritesMeaningfulOutputStyle(t *testing.T) {
 		t.Fatal("Inject(kimi neutral) changed = false")
 	}
 
-	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	outputStylePath := filepath.Join(home, ".kimi-code", "output-style.md")
 	content, err := os.ReadFile(outputStylePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", outputStylePath, err)
@@ -1731,6 +1746,11 @@ func TestNeutralAndGentlemanToneSectionsMatch(t *testing.T) {
 		return rest[:nextIdx+1]
 	}
 
+	// Normalize line endings so the comparison is independent of CRLF/LF
+	// checked-into-asset files.
+	neutral = strings.ReplaceAll(neutral, "\r\n", "\n")
+	gentleman = strings.ReplaceAll(gentleman, "\r\n", "\n")
+
 	neutralTone := extractSection(neutral, "Tone")
 	gentlemanTone := extractSection(gentleman, "Tone")
 
@@ -2075,7 +2095,7 @@ func TestInjectKimi_SwitchGentlemanToNeutral_NoResidualPersonaContent(t *testing
 		t.Fatalf("Inject(neutral) error = %v", err)
 	}
 
-	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	outputStylePath := filepath.Join(home, ".kimi-code", "output-style.md")
 	data, err := os.ReadFile(outputStylePath)
 	if err != nil {
 		t.Fatalf("ReadFile(output-style.md) error = %v", err)

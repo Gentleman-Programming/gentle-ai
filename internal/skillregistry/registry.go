@@ -60,6 +60,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".pi", "agent", "skills"),
 		filepath.Join(home, ".config", "agents", "skills"),
 		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(home, ".kimi-code", "skills"),
 		filepath.Join(home, ".kimi", "skills"),
 
 		// Agent-specific global skill locations supported by Gentle AI adapters.
