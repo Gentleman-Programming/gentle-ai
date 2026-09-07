@@ -54,7 +54,15 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(**/*.key)",
       "Edit(**/*.key)",
       "Read(**/secrets/*)",
-      "Edit(**/secrets/*)"
+      "Edit(**/secrets/*)",
+      "Bash(ssh)",
+      "Bash(ssh:*)",
+      "Bash(scp)",
+      "Bash(scp:*)",
+      "Bash(sftp)",
+      "Bash(sftp:*)",
+      "Bash(rsync)",
+      "Bash(rsync:*)"
     ]
   }
 }
@@ -71,14 +79,14 @@ var openCodeOverlayJSON = []byte(`{
       "git push --force *": "ask",
       "git rebase *": "ask",
       "git reset --hard *": "ask",
-      "ssh": "ask",
-      "ssh *": "ask",
-      "scp": "ask",
-      "scp *": "ask",
-      "sftp": "ask",
-      "sftp *": "ask",
-      "rsync": "ask",
-      "rsync *": "ask"
+      "ssh": "deny",
+      "ssh *": "deny",
+      "scp": "deny",
+      "scp *": "deny",
+      "sftp": "deny",
+      "sftp *": "deny",
+      "rsync": "deny",
+      "rsync *": "deny"
     },
     "read": {
       "*": "allow",

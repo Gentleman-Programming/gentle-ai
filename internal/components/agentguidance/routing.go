@@ -75,5 +75,16 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	output.WriteString("- Delivery under a disabled switch follows ordinary repository policy and reports `disabled/unmanaged`, never a fabricated approval.\n")
 	output.WriteString("- Never enable receipt-driven development on the user's behalf unless the user explicitly asks for it.\n")
 
+	// The remote execution boundary ships in the routing block, not only in the
+	// optional permission profiles, for the same reason as the kill switch above:
+	// it is unconditional for every configured agent, including agents with no
+	// permission profile at all. Ambient authenticated sessions (SSH
+	// ControlMaster sockets) let a local agent reach remote infrastructure
+	// without any permission rule firing (#4324).
+	output.WriteString("\n### Remote execution boundary\n\n")
+	output.WriteString("Remote systems are outside every authorized workspace. Never execute commands on remote infrastructure — `ssh`, `scp`, `sftp`, `rsync`, or equivalents — unless the user explicitly requested that remote action in this conversation.\n")
+	output.WriteString("- Never discover, enumerate, or attach to authenticated sessions or Unix domain sockets outside the workspace, including SSH ControlMaster sockets under `/tmp` or `~/.ssh` reached through the process table or socket files.\n")
+	output.WriteString("- Local problems stay local: when a task appears to need remote access (database outages, service checks), report findings and ask the user to run the remote step or grant explicit direction first.\n")
+
 	return output.String(), nil
 }

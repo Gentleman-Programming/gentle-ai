@@ -1840,6 +1840,8 @@ var organicRoutingGuidanceRequiredFragments = []string{
 	"never create SDD artifacts",
 	"gentle-ai review mode enable|disable|status",
 	"disabled/unmanaged",
+	"Remote execution boundary",
+	"SSH ControlMaster",
 }
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
