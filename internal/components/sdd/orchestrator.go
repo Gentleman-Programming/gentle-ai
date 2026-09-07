@@ -93,7 +93,13 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 // Generic is also consumed by Pi, OpenClaw, and Trae. Select by identity,
 // not asset path, so this cohort cannot change deferred runtime prompts.
 func usesFallbackSessionPreflight(agent model.AgentID) bool {
-	return agent == model.AgentVSCodeCopilot || agent == model.AgentCursor || agent == model.AgentGeminiCLI
+	switch agent {
+	case model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI,
+		model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf:
+		return true
+	default:
+		return false
+	}
 }
 
 // Replace only owned session-choice producers before composing shared sections.
@@ -101,7 +107,11 @@ func usesFallbackSessionPreflight(agent model.AgentID) bool {
 func composeFallbackSessionPreflight(content string, agent model.AgentID) string {
 	// Validate cardinality before removing any range: a duplicate nested in an
 	// earlier range must not disappear before its own validation runs.
-	for _, heading := range []string{"### Artifact Store Policy", "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy"} {
+	policyHeading := "### Artifact Store Policy"
+	if agent == model.AgentCodex {
+		policyHeading = "### Artifact store (engram default)"
+	}
+	for _, heading := range []string{policyHeading, "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy"} {
 		if _, err := sddSessionPreflightAnchorIndex(content, heading); err != nil {
 			panic(fmt.Sprintf("sdd: fallback source %s: %v", heading, err))
 		}
@@ -111,6 +121,11 @@ func composeFallbackSessionPreflight(content string, agent model.AgentID) string
 		{"### Artifact Store Mode", "### Delivery Strategy", "Pass the preflight artifact choice as `artifact_store.mode` to every sub-agent launch."},
 		{"### Delivery Strategy", "### Chain Strategy", "Pass the preflight PR strategy as `delivery_strategy` to `sdd-tasks` and `sdd-apply`. `exception-ok` is never a preflight choice; it requires explicit maintainer-approved `size:exception`."},
 	} {
+		if agent == model.AgentCodex && section.start == "### Artifact Store Policy" {
+			const tableHeading = "### Artifact store (engram default)\n"
+			content = strings.Replace(content, tableHeading, "### Artifact store (preflight-selected backend)\n\nUse the following topic keys and retrieval calls only in `engram` or `hybrid` mode. In `openspec` mode, use OpenSpec artifacts instead; do not call Engram for this table.\n", 1)
+			continue
+		}
 		start := strings.Index(content, section.start+"\n")
 		end := strings.Index(content, section.end+"\n")
 		if start < 0 || end <= start {
@@ -119,9 +134,13 @@ func composeFallbackSessionPreflight(content string, agent model.AgentID) string
 		content = content[:start] + section.start + "\n\n" + section.body + "\n\n" + content[end:]
 	}
 	// Keep runtime-specific execution semantics and phase approval rules.
+	executionEnd := "In **Interactive** mode, between phases:"
+	if agent == model.AgentKimi || agent == model.AgentKiroIDE {
+		executionEnd = "Interactive approval is phase-scoped."
+	}
 	for _, bounds := range [][2]string{
 		{"When the user invokes `/sdd-new`", "- **Automatic**"},
-		{"If the user doesn't specify, default to **Automatic**.", "In **Interactive** mode, between phases:"},
+		{"If the user doesn't specify, default to **Automatic**.", executionEnd},
 	} {
 		start := strings.Index(content, bounds[0])
 		end := strings.Index(content, bounds[1])
@@ -146,11 +165,31 @@ func composeFallbackSessionPreflight(content string, agent model.AgentID) string
 		}
 		content = strings.Replace(content, replacement.old, replacement.new, want)
 	}
-	const legacyInitLookup = "1. Search Engram: `mem_search(query: \"sdd-init/{project}\", project: \"{project}\")`\n2. If found → init was done, proceed normally\n3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command"
+	// Match each runtime's complete source clause, never a permissive substring.
+	legacyInitAction := "run `sdd-init` FIRST (delegate to sdd-init sub-agent)"
+	initAction := "delegate to `sdd-init`"
+	switch agent {
+	case model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode, model.AgentHermes, model.AgentCodex:
+	case model.AgentWindsurf:
+		legacyInitAction = "run the `sdd-init` phase inline FIRST"
+		initAction = "run the `sdd-init` phase inline"
+	case model.AgentAntigravity:
+		legacyInitAction = "invoke the `sdd-init` phase subagent FIRST"
+		initAction = "invoke the `sdd-init` phase subagent"
+	case model.AgentKimi:
+		legacyInitAction = "run `sdd-init` FIRST by launching the `sdd-init` custom agent"
+		initAction = "launch the `sdd-init` custom agent"
+	case model.AgentKiroIDE:
+		legacyInitAction = "run `sdd-init` FIRST (load the sdd-init skill and execute it)"
+		initAction = "load the `sdd-init` skill and execute it in the native Kiro phase context"
+	default:
+		panic("sdd: unsupported fallback runtime: " + string(agent))
+	}
+	legacyInitLookup := "1. Search Engram: `mem_search(query: \"sdd-init/{project}\", project: \"{project}\")`\n2. If found → init was done, proceed normally\n3. If NOT found → " + legacyInitAction + ", THEN proceed with the requested command"
 	if strings.Count(content, legacyInitLookup) != 1 {
 		panic("sdd: missing or ambiguous fallback init lookup")
 	}
-	content = strings.Replace(content, legacyInitLookup, "1. Use the artifact store resolved by SDD Session Preflight. In `openspec` mode, check project context and testing capabilities in `openspec/config.yaml` without calling Engram. In `engram` mode, search `sdd-init/{project}` in Engram. In `hybrid` mode, check both stores.\n2. If the selected store contains initialized project context and testing capabilities, proceed normally; a directory alone is not initialization evidence.\n3. If initialization is missing, delegate to `sdd-init` with the cached `artifact_store.mode`, then proceed. If a selected backend is unavailable, STOP and report it; never silently change the user's artifact choice.", 1)
+	content = strings.Replace(content, legacyInitLookup, "1. Use the artifact store resolved by SDD Session Preflight. In `openspec` mode, check project context and testing capabilities in `openspec/config.yaml` without calling Engram. In `engram` mode, search `sdd-init/{project}` in Engram. In `hybrid` mode, check both stores.\n2. If the selected store contains initialized project context and testing capabilities, proceed normally; a directory alone is not initialization evidence.\n3. If initialization is missing, "+initAction+" with the cached `artifact_store.mode`, then proceed. If a selected backend is unavailable, STOP and report it; never silently change the user's artifact choice.", 1)
 	projected, err := projectSDDSessionPreflightWithTool(content, "### Native SDD Dispatcher Guard", "")
 	if err != nil {
 		panic(err)

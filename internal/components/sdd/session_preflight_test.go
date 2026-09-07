@@ -37,9 +37,19 @@ func assertFallbackSessionPreflight(t *testing.T, got string) {
 }
 
 func TestFallbackSessionPreflightCohort(t *testing.T) {
-	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf} {
 		t.Run(string(agent), func(t *testing.T) {
 			got := composeOrchestratorPrompt(agent)
+			if agent == model.AgentCodex {
+				for _, want := range []string{"{{CODEX_PHASE_EFFORTS}}", "only in `engram` or `hybrid` mode", "In `openspec` mode, use OpenSpec artifacts instead; do not call Engram for this table."} {
+					if !strings.Contains(got, want) {
+						t.Errorf("Codex projection missing %q", want)
+					}
+				}
+				if strings.Contains(got, "engram default") || strings.Contains(got, "Default: `engram`") {
+					t.Error("Codex projection retained an independent artifact default")
+				}
+			}
 			for _, marker := range []string{sddSessionPreflightMarker, sddSessionPreflightEnd} {
 				if strings.Count(got, marker) != 1 {
 					t.Fatalf("expected exactly one %s", marker)

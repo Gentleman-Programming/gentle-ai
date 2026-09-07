@@ -33,7 +33,8 @@ func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 			// invariant is unchanged in spirit: composition is bounded review
 			// plus the shared sections plus the Pi route, and nothing else.
 			content := assets.MustRead(path)
-			if agent.ID == model.AgentVSCodeCopilot || agent.ID == model.AgentCursor || agent.ID == model.AgentGeminiCLI {
+			if agent.ID == model.AgentVSCodeCopilot || agent.ID == model.AgentCursor || agent.ID == model.AgentGeminiCLI ||
+				agent.ID == model.AgentAntigravity || agent.ID == model.AgentQwenCode || agent.ID == model.AgentHermes || agent.ID == model.AgentKimi || agent.ID == model.AgentKiroIDE || agent.ID == model.AgentCodex || agent.ID == model.AgentWindsurf {
 				assertFallbackSessionPreflight(t, composeOrchestratorPrompt(agent.ID))
 				return
 			}
@@ -51,17 +52,30 @@ func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 }
 
 func TestFallbackSessionPreflightRejectsAmbiguousSource(t *testing.T) {
-	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf} {
 		source := assets.MustRead(sddOrchestratorAsset(agent))
-		for _, heading := range []string{"### Artifact Store Policy", "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy"} {
-			t.Run(string(agent)+"/duplicate/"+heading, func(t *testing.T) {
-				defer func() {
-					if recover() == nil {
-						t.Fatal("ambiguous source did not fail closed")
+		initStart := strings.Index(source, "1. Search Engram:")
+		initEnd := strings.Index(source[initStart:], "\n\n") + initStart
+		initLookup := source[initStart:initEnd]
+		policyHeading := "### Artifact Store Policy"
+		if agent == model.AgentCodex {
+			policyHeading = "### Artifact store (engram default)"
+		}
+		for _, heading := range []string{initLookup, policyHeading, "### Commands", "### Execution Mode", "### Artifact Store Mode", "### Delivery Strategy", "### Chain Strategy", "### Native SDD Dispatcher Guard", "### SDD Init Guard (MANDATORY)", "If the user doesn't specify, default to **Automatic**."} {
+			for _, mutation := range []string{"missing", "duplicate"} {
+				t.Run(string(agent)+"/"+mutation+"/"+heading, func(t *testing.T) {
+					defer func() {
+						if recover() == nil {
+							t.Fatal("ambiguous source did not fail closed")
+						}
+					}()
+					mutated := source + "\n" + heading + "\n"
+					if mutation == "missing" {
+						mutated = strings.Replace(source, heading, "drifted source", 1)
 					}
-				}()
-				composeFallbackSessionPreflight(source+"\n"+heading+"\n", agent)
-			})
+					composeFallbackSessionPreflight(mutated, agent)
+				})
+			}
 		}
 	}
 	for _, tc := range []struct {

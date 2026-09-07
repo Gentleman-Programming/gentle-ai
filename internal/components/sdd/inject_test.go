@@ -41,7 +41,7 @@ func mockNoPackageManager(t *testing.T) {
 }
 
 func TestInjectFallbackSessionPreflight(t *testing.T) {
-	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI} {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf} {
 		t.Run(string(agent), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -51,6 +51,9 @@ func TestInjectFallbackSessionPreflight(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := adapter.SystemPromptFile(home)
+			if agent == model.AgentKimi {
+				path = filepath.Join(home, ".kimi", "sdd-orchestrator.md")
+			}
 			before, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -2201,6 +2204,21 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 				t.Fatalf("ReadFile(%s prompt) error = %v", tt.name, readErr)
 			}
 			text := string(content)
+
+			// Chain topology is a later, independent choice, not an initial
+			// delivery-strategy producer.
+			assertFallbackSessionPreflight(t, text)
+			chainStart := strings.Index(text, "### Chain Strategy\n")
+			chainEnd := strings.Index(text, "### Review Workload Guard (MANDATORY)")
+			if chainStart < 0 || chainEnd <= chainStart {
+				t.Fatal("missing bounded chain strategy section")
+			}
+			chain := text[chainStart:chainEnd]
+			for _, want := range []string{"When `delivery_strategy` results in chained PRs", "ask the user which chain strategy to use", "Cache the chain strategy for the session", "`chain_strategy`", "`delivery_strategy`"} {
+				if !strings.Contains(chain, want) {
+					t.Errorf("native chain strategy missing independent semantics %q", want)
+				}
+			}
 
 			for _, required := range tt.required {
 				if !strings.Contains(text, required) {
@@ -7645,6 +7663,38 @@ func containsPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestInjectCodexFallbackProfilesRemainIdempotent(t *testing.T) {
+	for name, opts := range map[string]InjectOptions{
+		"recommended": {CodexModelAssignments: model.CodexModelPresetRecommended()},
+		"low-cost":    {CodexModelAssignments: model.CodexModelPresetLowCost()},
+		"powerful":    {CodexModelAssignments: model.CodexModelPresetPowerful()},
+		"custom":      {CodexModelAssignments: model.CodexModelPresetRecommended(), CodexPhaseModelAssignments: map[string]string{"sdd-propose": "gpt-5.4"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := codexInjectAdapter()
+			if _, err := Inject(home, adapter, "", opts); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(adapter.SystemPromptFile(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFallbackSessionPreflight(t, string(before))
+			if strings.Contains(string(before), "{{CODEX_PHASE_EFFORTS}}") || !strings.Contains(string(before), "reasoning_effort") {
+				t.Fatal("preflight projection lost phase-effort substitution")
+			}
+			if result, err := Inject(home, adapter, "", opts); err != nil || result.Changed {
+				t.Fatalf("repeat profile install = %+v, %v", result, err)
+			}
+			after, err := os.ReadFile(adapter.SystemPromptFile(home))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("repeat profile install changed bytes: %v", err)
+			}
+		})
+	}
 }
 
 func TestInject_CodexSubstitutesPhaseEfforts(t *testing.T) {
