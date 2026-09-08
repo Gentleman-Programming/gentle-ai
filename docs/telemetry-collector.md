@@ -289,6 +289,17 @@ the `:80` block must be live before Certbot's webroot check can pass, and
 the `:443` block must **not** be appended until the certificate it
 references actually exists, or `apachectl configtest` fails.
 
+On a cPanel/WHM box, Apache selects a name-based vhost only among the
+vhosts already bound to the address a request arrived on, so a
+`*:80`/`*:443` block is silently skipped once any other vhost (cPanel's
+own defaults included) is bound to the server's IPv4 address instead of
+`*` — requests for the subdomain fall through to cPanel's default vhost
+(404), and Certbot's HTTP-01 challenge fails the same way. `install.sh`
+renders both blocks bound to that same IPv4 address automatically,
+detected from an existing `:443` vhost in `${APACHE_INCLUDE_FILE}`; pass
+`--address <ipv4|*>` to override the detected value (`*` is only correct
+when every other vhost on the box is also `*`).
+
 1. **DNS**: at your registrar, create an A record for the subdomain
    (`telemetry`, in this doc) pointing at the VPS's IP. Confirm with
    `dig +short telemetry.example.com`.

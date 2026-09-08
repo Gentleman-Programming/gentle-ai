@@ -37,6 +37,7 @@ RELEASE_TAG=""
 LOCAL_SOURCE=""
 WITH_GRAFANA="false"
 DOMAIN=""
+ADDRESS=""
 BIN_DEST="/usr/local/bin/gentle-telemetry"
 UNIT_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/gentle-telemetry"
@@ -53,6 +54,15 @@ usage() {
 	cat >&2 <<EOF
 Usage: $0 (--release-tag <tag> | --local-source <path>)
           [--domain <fqdn>] [--with-grafana]
+          [--address <ipv4|*>]
+
+  --address  Address to bind the rendered <VirtualHost> blocks to. On a
+             cPanel/WHM Apache box, a "*:80"/"*:443" block is silently
+             skipped once any other vhost is bound to the server's IPv4
+             address instead of "*" (name-based selection only happens
+             among vhosts bound to the same address). By default this is
+             detected from \${APACHE_INCLUDE_FILE}; pass this flag to
+             override that detection.
 EOF
 	exit 1
 }
@@ -71,6 +81,10 @@ while [[ $# -gt 0 ]]; do
 		DOMAIN="$2"
 		shift 2
 		;;
+	--address)
+		ADDRESS="$2"
+		shift 2
+		;;
 	--with-grafana)
 		WITH_GRAFANA="true"
 		shift
@@ -87,6 +101,34 @@ done
 
 if [[ -z "${RELEASE_TAG}" && -z "${LOCAL_SOURCE}" ]]; then
 	usage
+fi
+
+# validate_ipv4_or_star accepts "*" or a dotted-quad IPv4 address with every
+# octet in 0-255. Used for --address so a typo produces a clear error here
+# rather than silently rendering a broken <VirtualHost> line.
+validate_ipv4_or_star() {
+	local addr="$1"
+	if [[ "${addr}" == "*" ]]; then
+		return 0
+	fi
+	if [[ ! "${addr}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+		return 1
+	fi
+	local octet
+	for octet in "${BASH_REMATCH[@]:1}"; do
+		# Force base 10: a leading zero would otherwise make bash read the
+		# octet as octal, and "08"/"09" would abort the arithmetic instead of
+		# being compared.
+		if ((10#${octet} > 255)); then
+			return 1
+		fi
+	done
+	return 0
+}
+
+if [[ -n "${ADDRESS}" ]] && ! validate_ipv4_or_star "${ADDRESS}"; then
+	printf 'invalid --address value: %s (expected an IPv4 address such as 203.0.113.10, or "*")\n' "${ADDRESS}" >&2
+	exit 1
 fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -344,8 +386,38 @@ fi
 
 mkdir -p /var/log/gentle-telemetry
 
+# detect_vhost_address looks for an existing IPv4-bound :443 vhost in
+# ${APACHE_INCLUDE_FILE} and prints the first address it finds, or "*" if
+# the file is missing or has none. On a cPanel/WHM box, Apache selects a
+# name-based vhost only among the vhosts bound to the address a request
+# arrived on, so matching that existing address (rather than "*") is what
+# makes the rendered blocks actually reachable — see the comment in
+# apache/telemetry-vhost.conf.tmpl.
+detect_vhost_address() {
+	local include_file="$1" detected
+	if [[ -f "${include_file}" ]]; then
+		detected="$(grep -oE '<VirtualHost[[:space:]]+[0-9]+(\.[0-9]+){3}:443>' "${include_file}" 2>/dev/null |
+			head -n1 | grep -oE '[0-9]+(\.[0-9]+){3}')"
+		if [[ -n "${detected}" ]]; then
+			printf '%s' "${detected}"
+			return
+		fi
+	fi
+	printf '*'
+}
+
 if [[ -n "${DOMAIN}" ]]; then
-	sed "s/__DOMAIN__/${DOMAIN}/g" "${SCRIPT_DIR}/apache/telemetry-vhost.conf.tmpl" >"${RENDERED_VHOST}"
+	if [[ -n "${ADDRESS}" ]]; then
+		printf 'binding the rendered vhost blocks to %s (from --address)\n' "${ADDRESS}"
+	else
+		ADDRESS="$(detect_vhost_address "${APACHE_INCLUDE_FILE}")"
+		if [[ "${ADDRESS}" == "*" ]]; then
+			printf 'binding the rendered vhost blocks to "*": no IPv4-bound :443 vhost found in %s (pass --address to override)\n' "${APACHE_INCLUDE_FILE}"
+		else
+			printf 'binding the rendered vhost blocks to %s: matched an existing :443 vhost in %s\n' "${ADDRESS}" "${APACHE_INCLUDE_FILE}"
+		fi
+	fi
+	sed -e "s/__DOMAIN__/${DOMAIN}/g" -e "s/__ADDRESS__/${ADDRESS}/g" "${SCRIPT_DIR}/apache/telemetry-vhost.conf.tmpl" >"${RENDERED_VHOST}"
 	chmod 0600 "${RENDERED_VHOST}"
 	# The :80 block's DocumentRoot and Certbot's --webroot both need this
 	# directory to exist before httpd is reloaded with the block appended.

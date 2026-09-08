@@ -22,8 +22,15 @@
 # DocumentRoot/Alias below (and the operator commands install.sh prints)
 # if not.
 
+# cPanel/WHM Apache selects a name-based vhost only among the vhosts bound
+# to the address a request arrived on, so a `*:80`/`*:443` block here is
+# silently skipped once any other vhost on the box (cPanel's own defaults
+# included) is bound to the server's IPv4 address instead of `*`. Bind
+# both blocks below to that same address; `*` is only correct when every
+# other vhost on the box is also `*`.
+
 # --- BEGIN :80 VHOST ---
-<VirtualHost *:80>
+<VirtualHost __ADDRESS__:80>
 	ServerName __DOMAIN__
 
 	DocumentRoot /var/www/gentle-telemetry-acme
@@ -39,7 +46,7 @@
 # --- END :80 VHOST ---
 
 # --- BEGIN :443 VHOST ---
-<VirtualHost *:443>
+<VirtualHost __ADDRESS__:443>
 	ServerName __DOMAIN__
 
 	SSLEngine on
