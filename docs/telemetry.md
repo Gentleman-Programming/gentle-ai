@@ -78,7 +78,9 @@ Telemetry respects, in this order:
 
 1. `DO_NOT_TRACK` set to anything but empty, `0`, or `false`
 2. `GENTLE_AI_TELEMETRY=0`
-3. `CI=true` (most CI providers set this already)
+3. `CI` or `GITHUB_ACTIONS` set to anything but empty, `0`, or `false` (most CI providers export one of them)
+
+Builds without a release identity (`gentle-ai --version` reporting `dev` or `0.0.0-dev`, which is what a plain `go build` or a test harness produces) never send anything and never write telemetry state; the collector refuses such versions too. Pseudo-versions from `go install ...@main` carry a commit stamp and count as real installs.
 4. `gentle-ai telemetry disable`
 
 Any one of these disables sending; nothing else needs to change. Re-enable a

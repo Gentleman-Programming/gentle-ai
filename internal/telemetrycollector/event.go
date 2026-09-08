@@ -155,8 +155,22 @@ func ParseEvent(raw []byte) (Event, error) {
 	if event.Kind == EventInstall && event.Counters != nil {
 		return Event{}, invalid("install event must not carry counters")
 	}
+	if isDevBuildVersion(event.Version) {
+		// A build with no release identity (plain `go build`, test harnesses,
+		// CI journeys) is not an installation anyone uses. Refusing it here
+		// keeps the counts honest even when an older client sends it.
+		return Event{}, invalid("dev build versions are not counted")
+	}
 
 	return event, nil
+}
+
+// isDevBuildVersion mirrors the client's IsDevBuild: empty, "dev", or the
+// "0.0.0-dev" form a build without a VCS stamp reports. Pseudo-versions from
+// `go install ...@main` carry a commit stamp and are real installs.
+func isDevBuildVersion(version string) bool {
+	v := strings.TrimSpace(version)
+	return v == "" || v == "dev" || strings.HasPrefix(v, "0.0.0-dev")
 }
 
 // NormalizedInstallID lower-cases the install id for storage and grouping,

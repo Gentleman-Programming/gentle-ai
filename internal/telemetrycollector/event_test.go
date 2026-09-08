@@ -167,3 +167,16 @@ func TestParseEvent_RejectsOversizeBody(t *testing.T) {
 		t.Errorf("Code = %v, want ErrOversize", verr.Code)
 	}
 }
+
+func TestParseEventRejectsDevBuildVersions(t *testing.T) {
+	for _, version := range []string{"dev", "0.0.0-dev", "0.0.0-dev+local"} {
+		raw := []byte(`{"schema":"gentle-ai.telemetry-event/v1","event":"install","install_id":"0f6a9c4e-7b2d-4e8a-9c31-2d7f5b8a1c3e","sent_at":"2026-09-08T08:00:00Z","version":"` + version + `","os":"linux","arch":"amd64","agents":[],"components":[],"rdd_enabled":false}`)
+		if _, err := ParseEvent(raw); err == nil {
+			t.Fatalf("version %q: want rejection", version)
+		}
+	}
+	raw := []byte(`{"schema":"gentle-ai.telemetry-event/v1","event":"install","install_id":"0f6a9c4e-7b2d-4e8a-9c31-2d7f5b8a1c3e","sent_at":"2026-09-08T08:00:00Z","version":"2.7.1-0.20260908070514-a12e1321eea8","os":"linux","arch":"amd64","agents":[],"components":[],"rdd_enabled":false}`)
+	if _, err := ParseEvent(raw); err != nil {
+		t.Fatalf("pseudo-version must be accepted: %v", err)
+	}
+}

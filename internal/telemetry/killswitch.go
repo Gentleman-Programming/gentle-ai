@@ -26,7 +26,8 @@ type Getenv func(key string) string
 
 // Decide evaluates the kill switches in their documented precedence:
 // DO_NOT_TRACK set to anything but empty, "0", or "false", then
-// GENTLE_AI_TELEMETRY=0, then CI=true, then the persisted state's enabled
+// GENTLE_AI_TELEMETRY=0, then CI or GITHUB_ACTIONS set to anything but
+// empty, "0", or "false", then the persisted state's enabled
 // flag. The first one that opts out wins; with none present, telemetry is
 // enabled by default.
 func Decide(getenv Getenv, persisted State) Decision {
@@ -36,7 +37,7 @@ func Decide(getenv Getenv, persisted State) Decision {
 	if getenv("GENTLE_AI_TELEMETRY") == "0" {
 		return Decision{Enabled: false, Source: SourceEnvOptOut}
 	}
-	if strings.EqualFold(strings.TrimSpace(getenv("CI")), "true") {
+	if truthy(getenv("CI")) || truthy(getenv("GITHUB_ACTIONS")) {
 		return Decision{Enabled: false, Source: SourceCI}
 	}
 	if !persisted.Enabled {
@@ -47,7 +48,12 @@ func Decide(getenv Getenv, persisted State) Decision {
 
 // doNotTrack follows the console DO_NOT_TRACK convention: opted out for any
 // value other than empty, "0", or "false" (case-insensitive, trimmed).
-func doNotTrack(v string) bool {
+func doNotTrack(v string) bool { return truthy(v) }
+
+// truthy reads a CI-style flag: set to anything but empty, "0", or "false".
+// CI systems disagree on the value (GitHub Actions and most others export
+// CI=true, some export CI=1), so equality with "true" is not enough.
+func truthy(v string) bool {
 	v = strings.ToLower(strings.TrimSpace(v))
 	return v != "" && v != "0" && v != "false"
 }

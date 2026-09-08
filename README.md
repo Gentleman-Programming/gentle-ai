@@ -606,7 +606,7 @@ What is never sent: repository names, file paths, code, diffs, prompts, reviewer
 
 See the exact payload before anything leaves your machine with `gentle-ai telemetry preview --json`. The first run only prints a notice and sends nothing; the first real event goes out starting from the next run.
 
-Turn it off with `gentle-ai telemetry disable`, or `DO_NOT_TRACK` set to anything but `0` / `GENTLE_AI_TELEMETRY=0`. `CI=true` disables it automatically. `gentle-ai telemetry status` shows the deciding source.
+Turn it off with `gentle-ai telemetry disable`, or `DO_NOT_TRACK` set to anything but `0` / `GENTLE_AI_TELEMETRY=0`. `CI` or `GITHUB_ACTIONS` set to anything but `0`/`false` disables it automatically, and builds without a release identity (`dev`, `0.0.0-dev`) never send. `gentle-ai telemetry status` shows the deciding source.
 
 It goes to a collector we run ourselves, whose source is in this repository (`cmd/gentle-telemetry`). Raw events are kept for 90 days, then only aggregated counts remain. Full contract and schema: **[Telemetry](docs/telemetry.md)**.
 

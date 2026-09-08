@@ -55,3 +55,22 @@ func TestEndpointDefaultAndOverride(t *testing.T) {
 		t.Fatalf("Endpoint() with blank override = %q, want default", got)
 	}
 }
+
+func TestDecideTreatsCIStyleFlagsAsSet(t *testing.T) {
+	cases := map[string]map[string]string{
+		"CI=1":                {"CI": "1"},
+		"CI=yes":              {"CI": "yes"},
+		"GITHUB_ACTIONS=true": {"GITHUB_ACTIONS": "true"},
+		"CI=true upper":       {"CI": "TRUE"},
+	}
+	for name, env := range cases {
+		if d := Decide(envMap(env), State{Enabled: true}); d.Enabled || d.Source != SourceCI {
+			t.Fatalf("%s: decision = %+v, want disabled by CI", name, d)
+		}
+	}
+	for _, v := range []string{"", "0", "false"} {
+		if d := Decide(envMap(map[string]string{"CI": v, "GITHUB_ACTIONS": v}), State{Enabled: true}); !d.Enabled {
+			t.Fatalf("CI=%q: decision = %+v, want enabled", v, d)
+		}
+	}
+}

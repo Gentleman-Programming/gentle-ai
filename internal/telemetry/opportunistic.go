@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -89,6 +90,13 @@ func Opportunistic(d Deps) Outcome {
 	decision := Decide(d.Getenv, preState)
 	if !decision.Enabled {
 		return Outcome{Decision: DecisionDisabled, Source: decision.Source, Reason: "disabled by " + string(decision.Source)}
+	}
+	// A build with no release identity (plain `go build`, test harnesses,
+	// CI end-to-end journeys) is not an installation anyone uses; counting
+	// it would inflate the numbers with every test run. Nothing is written
+	// to disk either, so a fresh temp HOME stays empty.
+	if IsDevBuild(d.Version) {
+		return Outcome{Decision: DecisionDisabled, Source: decision.Source, Reason: "dev build: nothing to report"}
 	}
 
 	persisted, err := EnsureState(d.HomeDir)
@@ -179,4 +187,13 @@ func Opportunistic(d Deps) Outcome {
 		sentDecision = DecisionSentHeartbeat
 	}
 	return Outcome{Attempted: true, Kind: kind, Decision: sentDecision, Source: decision.Source}
+}
+
+// IsDevBuild reports whether a version string names a build without release
+// identity: empty, "dev", or the "0.0.0-dev" form ResolveVersion produces
+// when no VCS stamp is available. Pseudo-versions from `go install ...@main`
+// carry a commit stamp and are real installs.
+func IsDevBuild(version string) bool {
+	v := strings.TrimSpace(version)
+	return v == "" || v == "dev" || strings.HasPrefix(v, "0.0.0-dev")
 }

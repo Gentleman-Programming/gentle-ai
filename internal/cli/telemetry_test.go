@@ -132,6 +132,12 @@ func enableTelemetryForTest(t *testing.T) {
 	t.Setenv("DO_NOT_TRACK", "")
 	t.Setenv("GENTLE_AI_TELEMETRY", "")
 	t.Setenv("CI", "")
+	t.Setenv("GITHUB_ACTIONS", "")
+	// The test binary reports "dev", which the client refuses to count;
+	// pretend to be a released build so the send path is exercised.
+	previous := AppVersion
+	AppVersion = "2.7.0"
+	t.Cleanup(func() { AppVersion = previous })
 }
 
 func telemetryTestHome(t *testing.T) string {

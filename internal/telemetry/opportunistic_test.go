@@ -31,7 +31,7 @@ func enrollHome(t *testing.T, home string, now time.Time) (installID string, not
 	t.Helper()
 	var calls []recordedSpawn
 	var stderr bytes.Buffer
-	outcome := Opportunistic(Deps{
+	outcome := Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now }, Spawn: fakeSpawner(&calls), Stderr: &stderr,
 	})
 	if outcome.Attempted {
@@ -78,7 +78,7 @@ func TestOpportunisticSecondTriggerSendsInstall(t *testing.T) {
 	installID, _ := enrollHome(t, home, now)
 
 	var calls []recordedSpawn
-	outcome := Opportunistic(Deps{
+	outcome := Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now.Add(time.Minute) }, Spawn: fakeSpawner(&calls),
 	})
 	if !outcome.Attempted || outcome.Kind != EventInstall {
@@ -106,7 +106,7 @@ func TestOpportunisticNoticeIsNeverPrintedTwice(t *testing.T) {
 
 	var calls []recordedSpawn
 	var stderr bytes.Buffer
-	Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now.Add(time.Hour) }, Spawn: fakeSpawner(&calls), Stderr: &stderr})
+	Opportunistic(Deps{Version: "2.7.0", HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now.Add(time.Hour) }, Spawn: fakeSpawner(&calls), Stderr: &stderr})
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr on the second trigger = %q, want no further notice", stderr.String())
 	}
@@ -126,7 +126,7 @@ func TestOpportunisticHeartbeatRateLimit(t *testing.T) {
 
 	var calls []recordedSpawn
 	within24h := lastHeartbeat.Add(23 * time.Hour)
-	outcome := Opportunistic(Deps{
+	outcome := Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return within24h }, Spawn: fakeSpawner(&calls),
 	})
 	if outcome.Attempted {
@@ -134,7 +134,7 @@ func TestOpportunisticHeartbeatRateLimit(t *testing.T) {
 	}
 
 	after24h := lastHeartbeat.Add(25 * time.Hour)
-	outcome = Opportunistic(Deps{
+	outcome = Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return after24h }, Spawn: fakeSpawner(&calls),
 	})
 	if !outcome.Attempted || outcome.Kind != EventHeartbeat {
@@ -150,7 +150,7 @@ func TestOpportunisticFirstHeartbeatFiresImmediatelyAfterInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []recordedSpawn
-	outcome := Opportunistic(Deps{
+	outcome := Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return sentInstall.Add(time.Minute) }, Spawn: fakeSpawner(&calls),
 	})
 	if !outcome.Attempted || outcome.Kind != EventHeartbeat {
@@ -169,7 +169,7 @@ func TestOpportunisticBacksOffAfterAFailureAndResumesAfterTheWindow(t *testing.T
 
 	var calls []recordedSpawn
 	withinBackoff := failedAt.Add(FailureBackoff - time.Minute)
-	outcome := Opportunistic(Deps{
+	outcome := Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return withinBackoff }, Spawn: fakeSpawner(&calls),
 	})
 	if outcome.Attempted || outcome.Decision != DecisionBackoff {
@@ -180,7 +180,7 @@ func TestOpportunisticBacksOffAfterAFailureAndResumesAfterTheWindow(t *testing.T
 	}
 
 	afterBackoff := failedAt.Add(FailureBackoff + time.Minute)
-	outcome = Opportunistic(Deps{
+	outcome = Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return afterBackoff }, Spawn: fakeSpawner(&calls),
 	})
 	if !outcome.Attempted || outcome.Decision != DecisionSentHeartbeat {
@@ -208,7 +208,7 @@ func TestOpportunisticDisabledByEachKillSwitch(t *testing.T) {
 				t.Fatal(err)
 			}
 			var calls []recordedSpawn
-			outcome := Opportunistic(Deps{HomeDir: home, Getenv: envMap(c.env), Spawn: fakeSpawner(&calls)})
+			outcome := Opportunistic(Deps{Version: "2.7.0", HomeDir: home, Getenv: envMap(c.env), Spawn: fakeSpawner(&calls)})
 			if outcome.Attempted {
 				t.Fatalf("outcome = %+v, want disabled", outcome)
 			}
@@ -227,7 +227,7 @@ func TestOpportunisticDisabledDuringEnrollmentStillPersistsNothingBeyondTheKillS
 	home := t.TempDir()
 	var calls []recordedSpawn
 	var stderr bytes.Buffer
-	outcome := Opportunistic(Deps{
+	outcome := Opportunistic(Deps{Version: "2.7.0",
 		HomeDir: home, Getenv: envMap(map[string]string{"DO_NOT_TRACK": "1"}), Spawn: fakeSpawner(&calls), Stderr: &stderr,
 	})
 	if outcome.Attempted {
@@ -248,7 +248,7 @@ func TestOpportunisticAttemptWindowThrottlesRespawnUntilSuccessOrWindowElapses(t
 
 	var calls []recordedSpawn
 	first := now.Add(time.Minute)
-	outcome := Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return first }, Spawn: fakeSpawner(&calls)})
+	outcome := Opportunistic(Deps{Version: "2.7.0", HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return first }, Spawn: fakeSpawner(&calls)})
 	if !outcome.Attempted || len(calls) != 1 {
 		t.Fatalf("first attempt outcome = %+v, calls = %d, want one attempted spawn", outcome, len(calls))
 	}
@@ -257,7 +257,7 @@ func TestOpportunisticAttemptWindowThrottlesRespawnUntilSuccessOrWindowElapses(t
 	// failure was ever recorded (the detached child never finished): must
 	// not fork another sender.
 	second := first.Add(time.Minute)
-	outcome = Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return second }, Spawn: fakeSpawner(&calls)})
+	outcome = Opportunistic(Deps{Version: "2.7.0", HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return second }, Spawn: fakeSpawner(&calls)})
 	if outcome.Attempted || outcome.Decision != DecisionBackoff || len(calls) != 1 {
 		t.Fatalf("in-flight retry outcome = %+v, calls = %d, want backoff with still 1 spawn", outcome, len(calls))
 	}
@@ -274,7 +274,7 @@ func TestOpportunisticAttemptWindowThrottlesRespawnUntilSuccessOrWindowElapses(t
 		t.Fatal(err)
 	}
 	third := second.Add(time.Minute)
-	outcome = Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return third }, Spawn: fakeSpawner(&calls)})
+	outcome = Opportunistic(Deps{Version: "2.7.0", HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return third }, Spawn: fakeSpawner(&calls)})
 	if !outcome.Attempted || len(calls) != 2 {
 		t.Fatalf("post-success outcome = %+v, calls = %d, want a second spawn once success was recorded", outcome, len(calls))
 	}
@@ -291,7 +291,7 @@ func TestOpportunisticNeverErrorsWhenStateUnwritable(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []recordedSpawn
-	outcome := Opportunistic(Deps{HomeDir: blocker + "/child", Getenv: envMap(nil), Spawn: fakeSpawner(&calls)})
+	outcome := Opportunistic(Deps{Version: "2.7.0", HomeDir: blocker + "/child", Getenv: envMap(nil), Spawn: fakeSpawner(&calls)})
 	if outcome.Attempted {
 		t.Fatalf("outcome = %+v, want not attempted", outcome)
 	}
@@ -305,7 +305,7 @@ func TestOpportunisticQuietTriggerNeverEnrollsSilently(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var calls []recordedSpawn
 	// A closure hook has no stderr to show the notice on.
-	outcome := Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now }, Spawn: fakeSpawner(&calls)})
+	outcome := Opportunistic(Deps{Version: "2.7.0", HomeDir: home, Getenv: envMap(nil), Now: func() time.Time { return now }, Spawn: fakeSpawner(&calls)})
 	if outcome.Decision != DecisionEnrolled || outcome.Attempted || len(calls) != 0 {
 		t.Fatalf("quiet first trigger = %+v (spawns %d), want enrolled with nothing attempted", outcome, len(calls))
 	}
@@ -319,5 +319,25 @@ func TestOpportunisticQuietTriggerNeverEnrollsSilently(t *testing.T) {
 	// The next interactive trigger shows the notice; only then does enrollment complete.
 	if _, notice := enrollHome(t, home, now); !strings.Contains(notice, NoticeLine) {
 		t.Fatalf("stderr = %q, want the notice line", notice)
+	}
+}
+
+func TestOpportunisticSkipsDevBuildsWithoutTouchingDisk(t *testing.T) {
+	for _, version := range []string{"", "dev", "0.0.0-dev", "0.0.0-dev+abc"} {
+		home := t.TempDir()
+		var calls []recordedSpawn
+		var stderr bytes.Buffer
+		outcome := Opportunistic(Deps{HomeDir: home, Getenv: envMap(nil), Version: version, Spawn: fakeSpawner(&calls), Stderr: &stderr})
+		if outcome.Decision != DecisionDisabled || outcome.Attempted || len(calls) != 0 || stderr.Len() != 0 {
+			t.Fatalf("version %q: outcome = %+v spawns=%d stderr=%q, want disabled, silent", version, outcome, len(calls), stderr.String())
+		}
+		if _, err := os.Stat(Path(home)); !os.IsNotExist(err) {
+			t.Fatalf("version %q: a dev build must leave no state file (stat err = %v)", version, err)
+		}
+	}
+	for _, version := range []string{"2.7.0", "2.7.1-0.20260908070514-a12e1321eea8"} {
+		if IsDevBuild(version) {
+			t.Fatalf("%q must count as a real build", version)
+		}
 	}
 }
