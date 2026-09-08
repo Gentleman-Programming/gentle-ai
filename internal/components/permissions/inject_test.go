@@ -63,9 +63,19 @@ func remoteAction(t *testing.T, raw []byte, command string) string {
 }
 
 func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
-	// These are matcher inputs, not shell programs. bash.ts extracts command
+	// #4324 deny policy: absolute-path, backslash-escape, and shell resolution
+	// wrapper invocations of the remote shell utilities are denied by the
+	// overlay itself. Pattern-only rules are bypassable through these forms
+	// (the command token is not the bare utility name), so the deny entries
+	// enumerate them explicitly instead of relying on guidance alone.
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst"} {
+		if got := remoteAction(t, openCodeOverlayJSON, input); got != "deny" {
+			t.Errorf("bypass invocation %q not denied: %s", input, got)
+		}
+	}
+	// These remain matcher inputs, not shell programs. bash.ts extracts command
 	// nodes separately; no claim is made about parsing arbitrary shell syntax.
-	for _, input := range []string{"/usr/bin/ssh example.invalid", "env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
+	for _, input := range []string{"env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
 		if got := remoteAction(t, openCodeOverlayJSON, input); got != "allow" {
 			t.Errorf("unsupported matcher input %q unexpectedly intercepted: %s", input, got)
 		}
@@ -93,9 +103,12 @@ func TestRemoteCommandApprovalDefaults(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, command := range []string{"ssh", "ssh example.invalid", "scp", "scp file example.invalid:file", "sftp", "sftp example.invalid", "rsync", "rsync source destination"} {
-					want := "ask"
-					if seed == `{"permission":"deny"}` || seed == `{"permission":{"bash":"deny"}}` || strings.Contains(seed, `"*":"deny"`) || (strings.Contains(seed, `"deny"`) && strings.HasPrefix(command, "ssh")) {
-						want = "deny"
+					// #4324 deny policy: the overlay denies the remote shell
+					// utilities by default instead of asking per command; a human
+					// who wants them re-enables them explicitly in their own config.
+					want := "deny"
+					if seed == `{"permission":{"bash":"ask"}}` {
+						want = "ask" // Explicit personal scalar ask is not silently rewritten.
 					}
 					if strings.Contains(seed, `"ssh*":"allow"`) && strings.HasPrefix(command, "ssh") {
 						want = "allow" // Explicit personal allow is not silently rewritten.
