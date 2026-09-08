@@ -1,17 +1,15 @@
 Receipt-Driven Development
 
-RDD provides bounded, independent review of a frozen change candidate, with recorded evidence and traceability.
-It adds review evidence and a bounded correction process, with additional review time and potential model cost.
+RDD adds an independent review of your code changes to help catch bugs and regressions before they reach your project.
+It records review findings and verifies corrections, helping you understand what was checked and build confidence in your changes.
 
-Choose RDD ON or RDD OFF for the global setting after this installation succeeds.
-RDD is optional and defaults to OFF when no global preference is configured.
-Existing clone-local overrides remain unchanged and can make a clone's effective mode differ from this global setting.
-Review evidence does not authorize commits, pushes, pull requests, or releases; repository policy still governs delivery.
+Would you like to enable RDD?
+Your choice applies globally after installation succeeds. Existing project-specific settings are preserved.
 
 No global RDD preference is configured. RDD defaults to OFF until you explicitly choose otherwise.
 
-  RDD ON
-▸ RDD OFF
+  Enable RDD
+▸ Disable RDD
   Back
 
 j/k: navigate • enter: choose • esc: back

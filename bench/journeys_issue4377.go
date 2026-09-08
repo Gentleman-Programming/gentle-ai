@@ -71,10 +71,10 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 								}
 								return waitForIssue4377TTY(reader, []string{
 									"Receipt-Driven Development",
-									"frozen change candidate",
-									"RDD OFF",
+									"Would you like to enable RDD?",
+									"Disable RDD",
 								}, func() error {
-									// The fresh install default is RDD OFF. Choose ON, then
+									// The fresh install default is RDD OFF. Choose Enable RDD, then
 									// return from final confirmation and revise to OFF.
 									if _, err := io.WriteString(writer, "\x1b[A\r"); err != nil {
 										return err
@@ -83,7 +83,7 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 										if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
 											return err
 										}
-										return waitForIssue4377TTY(reader, []string{"Receipt-Driven Development", "RDD ON"}, func() error {
+										return waitForIssue4377TTY(reader, []string{"Receipt-Driven Development", "Enable RDD"}, func() error {
 											if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
 												return err
 											}
