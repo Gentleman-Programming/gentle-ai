@@ -1,13 +1,17 @@
-Review and Confirm
+Receipt-Driven Development
 
-  Agents  cursor
-  Persona  gentleman — Voseo conversation; English technical artifacts
-  Preset  choose components and skills manually
+RDD provides bounded, independent review of a frozen change candidate, with recorded evidence and traceability.
+It adds review evidence and a bounded correction process, with additional review time and potential model cost.
 
-Components
-  engram selected
+Choose RDD ON or RDD OFF for the global setting after this installation succeeds.
+RDD is optional and defaults to OFF when no global preference is configured.
+Existing clone-local overrides remain unchanged and can make a clone's effective mode differ from this global setting.
+Review evidence does not authorize commits, pushes, pull requests, or releases; repository policy still governs delivery.
 
-▸ Install
+No global RDD preference is configured. RDD defaults to OFF until you explicitly choose otherwise.
+
+  RDD ON
+▸ RDD OFF
   Back
 
-enter: install • esc: back
+j/k: navigate • enter: choose • esc: back

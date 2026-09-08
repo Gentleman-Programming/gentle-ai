@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"flag"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
@@ -19,6 +21,7 @@ type flowAction struct {
 	cursor    int
 	setCursor bool
 	prepare   func(Model) Model
+	runCmd    bool
 }
 
 func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
@@ -159,11 +162,15 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 			golden:     "custom-no-opencode-sdd-skills-next.golden",
 		},
 		{
-			name:       "no opencode with Engram only reaches review",
+			name:       "no opencode with Engram only loads the RDD choice before review",
 			agents:     []model.AgentID{model.AgentCursor},
 			components: []model.ComponentID{model.ComponentEngram},
-			actions:    []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
-			wantScreen: ScreenReview,
+			actions: []flowAction{{
+				key:     tea.KeyMsg{Type: tea.KeyEnter},
+				runCmd:  true,
+				prepare: installReviewModeStatusFixture,
+			}},
+			wantScreen: ScreenInstallReviewMode,
 			golden:     "custom-no-opencode-engram-next.golden",
 		},
 	}
@@ -179,11 +186,7 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 
 			state := m
 			for _, action := range tt.actions {
-				if action.setCursor {
-					state.Cursor = action.cursor
-				}
-				updated, _ := state.Update(action.key)
-				state = updated.(Model)
+				state = applyFlowAction(t, state, action)
 			}
 
 			if state.Screen != tt.wantScreen {
@@ -350,7 +353,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			reverseScreens: []Screen{ScreenStrictTDD, ScreenSDDMode, ScreenDependencyTree},
 		},
 		{
-			name: "custom Engram only returns from review to component selector",
+			name: "custom Engram only revises RDD before returning to component selector",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
@@ -358,11 +361,14 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m.Selection.Agents = []model.AgentID{model.AgentCursor}
 				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
 				m.Cursor = len(screens.AllComponents())
-				return m
+				return installReviewModeStatusFixture(m)
 			},
-			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
-			forwardScreens: []Screen{ScreenReview},
-			reverseScreens: []Screen{ScreenDependencyTree},
+			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, runCmd: true},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: 1, setCursor: true},
+			},
+			forwardScreens: []Screen{ScreenInstallReviewMode, ScreenReview},
+			reverseScreens: []Screen{ScreenInstallReviewMode, ScreenDependencyTree},
 		},
 		{
 			// Full picker chain, SDD single mode (no model picker). This is the
@@ -511,6 +517,14 @@ func TestPiOnlyDependencyTreeBackRowReturnsToAgentSelection(t *testing.T) {
 	}
 }
 
+func installReviewModeStatusFixture(state Model) Model {
+	state.ReviewModeCwdFn = func() (string, error) { return "/isolated-repo", nil }
+	state.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: reviewtransaction.RDDModeUnset}, nil
+	}
+	return state
+}
+
 func applyFlowAction(t *testing.T, state Model, action flowAction) Model {
 	t.Helper()
 	if action.prepare != nil {
@@ -519,8 +533,13 @@ func applyFlowAction(t *testing.T, state Model, action flowAction) Model {
 	if action.setCursor {
 		state.Cursor = action.cursor
 	}
-	updated, _ := state.Update(action.key)
-	return updated.(Model)
+	updated, cmd := state.Update(action.key)
+	state = updated.(Model)
+	if action.runCmd && cmd != nil {
+		updated, _ = state.Update(cmd())
+		state = updated.(Model)
+	}
+	return state
 }
 
 func presetCursor(t *testing.T, preset model.PresetID) int {

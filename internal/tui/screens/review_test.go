@@ -128,6 +128,13 @@ func TestRenderReviewHidesStrictTDDWhenNoSDD(t *testing.T) {
 	}
 }
 
+func TestRenderReviewShowsDeferredInstallReviewMode(t *testing.T) {
+	out := RenderReviewWithInstallReviewMode(planner.ReviewPayload{}, 0, "RDD OFF (global setting after successful installation)")
+	if !strings.Contains(out, "Receipt-Driven Development") || !strings.Contains(out, "RDD OFF") {
+		t.Fatalf("review summary omitted selected RDD mode:\n%s", out)
+	}
+}
+
 func TestRenderReviewClarifiesCustomPersonaAndPreset(t *testing.T) {
 	payload := planner.ReviewPayload{
 		Agents:  []model.AgentID{model.AgentClaudeCode},

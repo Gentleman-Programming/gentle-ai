@@ -402,6 +402,21 @@ type ReviewModeUpdatedMsg struct {
 	Err    error
 }
 
+// InstallReviewModeLoadedMsg carries the read-only global mode status used by
+// the installer-only RDD choice. It is separate from ScreenReviewMode because
+// installation must not mutate state before the pipeline succeeds.
+type InstallReviewModeLoadedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
+// InstallReviewModePersistedMsg reports the deferred global-mode update after
+// a successful installation pipeline.
+type InstallReviewModePersistedMsg struct {
+	Status reviewtransaction.RDDModeStatus
+	Err    error
+}
+
 type CommunityToolInstallationDoneMsg struct {
 	Results []communitytool.Result
 	Err     error
@@ -498,6 +513,7 @@ const (
 	ScreenCommunityToolResult
 	ScreenDependencyTree
 	ScreenSkillPicker
+	ScreenInstallReviewMode
 	ScreenReview
 	ScreenOpenCodeBackground
 	ScreenPiBackground
@@ -799,6 +815,17 @@ type Model struct {
 	ReviewModeSetGlobalFn func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error)
 	ReviewModeStatus      reviewtransaction.RDDModeStatus
 	ReviewModeErr         error
+
+	// InstallReviewMode* carries the installer-only choice. It never reuses the
+	// standalone settings screen because that screen intentionally mutates
+	// immediately, while this choice is saved only after installation succeeds.
+	InstallReviewModeStatus     reviewtransaction.RDDModeStatus
+	InstallReviewModeLoadErr    error
+	InstallReviewModeLoading    bool
+	InstallReviewModeChoiceSet  bool
+	InstallReviewModeEnabled    bool
+	InstallReviewModePersisting bool
+	InstallReviewModePersistErr error
 	// OpenCodePluginUninstallFn is the async uninstall runner. Returns a
 	// result and error from the 4-layer engine. Defaults to
 	// opencodeplugin.Uninstall if nil.
@@ -1119,6 +1146,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ReviewModeStatus = msg.Status
 		m.setScreen(ScreenWelcome)
 		return m, nil
+	case InstallReviewModeLoadedMsg:
+		if m.Screen != ScreenInstallReviewMode {
+			return m, nil
+		}
+		m.InstallReviewModeLoading = false
+		m.InstallReviewModeStatus = msg.Status
+		m.InstallReviewModeLoadErr = msg.Err
+		if msg.Err == nil {
+			m.Cursor = 1 // RDD OFF is the opt-in default for unset and off global modes.
+			if msg.Status.Global == reviewtransaction.RDDModeOn {
+				m.Cursor = 0
+			}
+		}
+		return m, nil
+	case InstallReviewModePersistedMsg:
+		if m.Screen != ScreenInstalling {
+			return m, nil
+		}
+		m.InstallReviewModePersisting = false
+		m.InstallReviewModePersistErr = msg.Err
+		if msg.Err != nil {
+			m.Progress.AppendLog("FAILED: save global RDD mode — %s", msg.Err)
+			m.Execution.ManualActions = append(m.Execution.ManualActions,
+				"RDD mode was not saved. Retry with `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global`.")
+		}
+		return m, nil
 	case ReviewStoreResetDoneMsg:
 		// Deliberately not guarded on the current screen. This message reports
 		// an irreversible removal that has already happened; dropping it
@@ -1379,8 +1432,13 @@ func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
 
 	if msg.Result.Err != nil {
 		m.Progress.AppendLog("pipeline completed with errors")
-	} else {
-		m.Progress.AppendLog("pipeline completed successfully")
+		return m, nil
+	}
+	m.Progress.AppendLog("pipeline completed successfully")
+	if m.InstallReviewModeChoiceSet {
+		m.InstallReviewModePersisting = true
+		m.Progress.AppendLog("saving selected global RDD mode")
+		return m, m.persistInstallReviewMode()
 	}
 
 	return m, nil
@@ -1496,8 +1554,10 @@ func (m Model) View() string {
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenSkillPicker:
 		return screens.RenderSkillPicker(m.SkillPicker, m.Cursor, m.Height)
+	case ScreenInstallReviewMode:
+		return screens.RenderInstallReviewMode(m.InstallReviewModeStatus, m.InstallReviewModeLoadErr, m.Cursor)
 	case ScreenReview:
-		return screens.RenderReview(m.Review, m.Cursor)
+		return screens.RenderReviewWithInstallReviewMode(m.Review, m.Cursor, m.installReviewModeSummary())
 	case ScreenOpenCodeBackground:
 		return screens.RenderOpenCodeBackground(m.Cursor)
 	case ScreenPiBackground:
@@ -2529,7 +2589,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenSkillPicker)
 				} else {
 					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
+					return m.startInstallReviewModeLoad()
 				}
 			} else {
 				if m.shouldShowCommunityToolsScreen() {
@@ -2606,7 +2666,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenSkillPicker)
 				} else {
 					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
+					return m.startInstallReviewModeLoad()
 				}
 			} else if next, ok := m.pickerNextScreen(); ok {
 				// Non-custom: advance to the next screen in the picker slice
@@ -2685,7 +2745,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-				m.setScreen(ScreenReview)
+				return m.startInstallReviewModeLoad()
 			default:
 				m.setScreen(ScreenPreset)
 			}
@@ -2693,8 +2753,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		if m.Cursor == 0 {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
-			return m, nil
+			return m.startInstallReviewModeLoad()
 		}
 		// Non-custom Back: mirrors goBack (Esc) — isPiOnlyAgents early check,
 		// then optional setup guards (outside the slice), then pickerPreviousScreen.
@@ -2719,11 +2778,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor < len(allSkills):
 			m.toggleCurrentSkill()
 		case m.Cursor == len(allSkills):
-			// "Continue" — store selected skills into Selection and proceed to review.
+			// "Continue" — store selected skills into Selection and proceed to the RDD choice.
 			m.Selection.Skills = make([]model.SkillID, len(m.SkillPicker))
 			copy(m.Selection.Skills, m.SkillPicker)
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			return m.startInstallReviewModeLoad()
 		default:
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
@@ -2744,6 +2803,20 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenDependencyTree)
 			}
 		}
+	case ScreenInstallReviewMode:
+		options := screens.InstallReviewModeOptions(m.InstallReviewModeLoadErr)
+		if m.Cursor >= len(options) || m.Cursor == len(options)-1 {
+			m.setScreen(ScreenDependencyTree)
+			return m, nil
+		}
+		if m.InstallReviewModeLoading || m.InstallReviewModeLoadErr != nil {
+			return m, nil
+		}
+		m.InstallReviewModeChoiceSet = true
+		m.InstallReviewModeEnabled = m.Cursor == 0
+		m.InstallReviewModePersistErr = nil
+		m.setScreen(ScreenReview)
+		return m, nil
 	case ScreenReview:
 		if m.Cursor == 0 {
 			if m.shouldShowOpenCodeBackgroundScreen() {
@@ -2787,7 +2860,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenDependencyTree)
 			}
 		} else {
-			m.setScreen(ScreenDependencyTree)
+			m.setScreen(ScreenInstallReviewMode)
+			if m.InstallReviewModeChoiceSet && !m.InstallReviewModeEnabled {
+				m.Cursor = 1
+			}
 		}
 	case ScreenOpenCodeBackground:
 		options := screens.OpenCodeBackgroundOptions()
@@ -2820,14 +2896,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.Err = nil
 		m.setScreen(ScreenReview)
 	case ScreenInstalling:
-		if m.Progress.Done() && !m.pipelineRunning {
+		if m.Progress.Done() && !m.pipelineRunning && !m.InstallReviewModePersisting {
 			m.setScreen(ScreenComplete)
 			return m, nil
 		}
 		// If no ExecuteFn, fall back to manual step-through for dev/tests.
 		if m.ExecuteFn == nil && !m.pipelineRunning {
 			m.Progress.Mark(m.Progress.Current, "succeeded")
-			if m.Progress.Done() {
+			if m.Progress.Done() && !m.InstallReviewModePersisting {
 				m.setScreen(ScreenComplete)
 			}
 		}
@@ -3251,6 +3327,55 @@ func (m Model) startOpenCodePluginUninstall() tea.Cmd {
 // read-only survey behind a spinner. The screen is entered first on purpose: a
 // survey that fails has to be reportable, and a menu entry that silently does
 // nothing is worse than one that explains itself.
+func (m Model) startInstallReviewModeLoad() (tea.Model, tea.Cmd) {
+	m.InstallReviewModeStatus = reviewtransaction.RDDModeStatus{}
+	m.InstallReviewModeLoadErr = nil
+	m.InstallReviewModeLoading = true
+	m.InstallReviewModeChoiceSet = false
+	m.InstallReviewModePersistErr = nil
+	m.setScreen(ScreenInstallReviewMode)
+	cwd := m.ReviewModeCwdFn
+	load := m.ReviewModeStatusFn
+	return m, func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return InstallReviewModeLoadedMsg{Err: err}
+		}
+		if load == nil {
+			return InstallReviewModeLoadedMsg{Err: errors.New("review mode status is not available in this build")}
+		}
+		status, err := load(context.Background(), repo)
+		return InstallReviewModeLoadedMsg{Status: status, Err: err}
+	}
+}
+
+func (m Model) persistInstallReviewMode() tea.Cmd {
+	cwd := m.ReviewModeCwdFn
+	update := m.ReviewModeSetGlobalFn
+	enabled := m.InstallReviewModeEnabled
+	return func() tea.Msg {
+		repo, err := cwd()
+		if err != nil {
+			return InstallReviewModePersistedMsg{Err: err}
+		}
+		if update == nil {
+			return InstallReviewModePersistedMsg{Err: errors.New("review mode update is not available in this build")}
+		}
+		status, err := update(context.Background(), repo, enabled)
+		return InstallReviewModePersistedMsg{Status: status, Err: err}
+	}
+}
+
+func (m Model) installReviewModeSummary() string {
+	if !m.InstallReviewModeChoiceSet {
+		return ""
+	}
+	if m.InstallReviewModeEnabled {
+		return "RDD ON (global setting after successful installation)"
+	}
+	return "RDD OFF (global setting after successful installation)"
+}
+
 func (m Model) startReviewModeLoad() (tea.Model, tea.Cmd) {
 	m.OperationRunning = true
 	m.ReviewModeStatus = reviewtransaction.RDDModeStatus{}
@@ -3927,8 +4052,18 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		}
 	}
 
-	// In custom preset, going back from Review walks through intermediate screens.
-	// Order (reverse of forward): SkillPicker → StrictTDD → SDDMode/ModelPicker → ClaudeModelPicker → DependencyTree.
+	// The final confirmation always returns to the installer RDD choice so the
+	// user can revise it without walking back through the configuration flow.
+	if m.Screen == ScreenReview {
+		m.setScreen(ScreenInstallReviewMode)
+		if m.InstallReviewModeChoiceSet && !m.InstallReviewModeEnabled {
+			m.Cursor = 1
+		}
+		return m
+	}
+
+	// In custom preset, going back from Review used to walk through intermediate
+	// screens. Review now returns above to the immediate RDD choice instead.
 	if m.Screen == ScreenReview && m.Selection.Preset == model.PresetCustom {
 		if m.shouldShowSkillPickerScreen() {
 			if len(m.SkillPicker) == 0 {
@@ -4199,6 +4334,8 @@ func (m Model) optionCount() int {
 		return len(screens.DependencyTreeOptions())
 	case ScreenSkillPicker:
 		return screens.SkillPickerOptionCount()
+	case ScreenInstallReviewMode:
+		return len(screens.InstallReviewModeOptions(m.InstallReviewModeLoadErr))
 	case ScreenReview:
 		return len(screens.ReviewOptions())
 	case ScreenOpenCodeBackground:
@@ -4458,16 +4595,16 @@ func (m Model) confirmCommunityTools() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenCommunityToolInstalling)
 			return m, tea.Batch(m.startCommunityToolInstallation(), tickCmd())
 		}
-		return m.continueAfterCommunityTools(), nil
+		return m.continueAfterCommunityTools()
 	default:
 		return m.goBackFromCommunityTools(), nil
 	}
 }
 
-func (m Model) continueAfterCommunityTools() Model {
+func (m Model) continueAfterCommunityTools() (tea.Model, tea.Cmd) {
 	if m.shouldShowOpenCodePluginsScreen() {
 		m.setScreen(ScreenOpenCodePlugins)
-		return m
+		return m, nil
 	}
 	if m.Selection.Preset == model.PresetCustom {
 		if m.shouldShowSkillPickerScreen() {
@@ -4477,13 +4614,13 @@ func (m Model) continueAfterCommunityTools() Model {
 			m.setScreen(ScreenSkillPicker)
 		} else {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			return m.startInstallReviewModeLoad()
 		}
-		return m
+		return m, nil
 	}
 	m.buildDependencyPlan()
 	m.setScreen(ScreenDependencyTree)
-	return m
+	return m, nil
 }
 
 func (m Model) goBackFromCommunityTools() Model {
@@ -4545,18 +4682,18 @@ func (m Model) confirmOpenCodePlugins() (tea.Model, tea.Cmd) {
 			}
 			return m, m.startOpenCodePluginRegistration()
 		}
-		return m.continueAfterOpenCodePlugins(), nil
+		return m.continueAfterOpenCodePlugins()
 	default:
 		return m.goBackFromOpenCodePlugins(), nil
 	}
 }
 
-func (m Model) continueAfterOpenCodePlugins() Model {
+func (m Model) continueAfterOpenCodePlugins() (tea.Model, tea.Cmd) {
 	if m.OpenCodePluginsStandalone {
 		m.OpenCodePluginRegistrationResults = nil
 		m.OpenCodePluginRegistrationErr = nil
 		m.setScreen(ScreenOpenCodePluginResult)
-		return m
+		return m, nil
 	}
 
 	if m.Selection.Preset == model.PresetCustom {
@@ -4567,13 +4704,13 @@ func (m Model) continueAfterOpenCodePlugins() Model {
 			m.setScreen(ScreenSkillPicker)
 		} else {
 			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-			m.setScreen(ScreenReview)
+			return m.startInstallReviewModeLoad()
 		}
-		return m
+		return m, nil
 	}
 	m.buildDependencyPlan()
 	m.setScreen(ScreenDependencyTree)
-	return m
+	return m, nil
 }
 
 func (m Model) goBackFromOpenCodePlugins() Model {
