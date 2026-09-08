@@ -279,6 +279,87 @@ func TestCompactSettlePreservesFailedEvidenceAndReplay(t *testing.T) {
 	}
 }
 
+// TestCompactSettleDerivesEvidenceRevisionFromRemediationEvidence reproduces
+// #2896: a passing remediation settle had no provider-owned value for
+// --evidence-revision, only the caller's own unverifiable hash. Passing
+// --remediation-evidence must let settle derive and publish that revision
+// itself, leaving the caller nothing to invent.
+func TestCompactSettleDerivesEvidenceRevisionFromRemediationEvidence(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "compact-remediation-evidence")
+	failedEvidence := runtimeTestHash('a')
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "failed-begin", WorkUnit: "verify", EvidenceGoal: "independent verification",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "failed-settle", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "verification found a correction",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "no descendants",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
+		RequestID: "correction-acquire", WorkUnit: "verify", EvidenceGoal: "independent verification",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	}, RemediatesEvidenceRevision: failedEvidence})
+	if err != nil || acquired.State != CompactStateProceed {
+		t.Fatalf("correction acquire = %#v err=%v", acquired, err)
+	}
+	appendRuntimeLedgerFile(t, repo, "bounded correction\n")
+
+	evidence := remediationEvidenceFixture(failedEvidence)
+	wantRevision, err := DeriveRemediationEvidenceRevision(evidence, failedEvidence)
+	if err != nil {
+		t.Fatalf("DeriveRemediationEvidenceRevision setup: %v", err)
+	}
+
+	request := CompactSettleRequest{
+		Token: acquired.Token, RequestID: "correction-settle", Outcome: AttemptPassed,
+		Diagnosis:          "correction passed verification",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "no descendants",
+		RemediatesEvidenceRevision: failedEvidence, RemediationEvidence: evidence,
+	}
+	result, err := store.Settle(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompactStateComplete {
+		t.Fatalf("compact remediation-evidence result = %#v", result)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Complete || status.EvidenceRevision != wantRevision || status.EvidenceRevision == failedEvidence {
+		t.Fatalf("status.EvidenceRevision = %q, want the derived %q (and never the failed evidence it repairs)", status.EvidenceRevision, wantRevision)
+	}
+
+	// An explicit --evidence-revision that disagrees with the derivation is
+	// refused; the derivation is authoritative, not advisory.
+	mismatched := CompactSettleRequest{
+		Token: "unused", RequestID: "mismatch-settle", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('c'), Diagnosis: "correction passed verification",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "no descendants",
+		RemediatesEvidenceRevision: failedEvidence, RemediationEvidence: evidence,
+	}
+	if _, err := store.Settle(context.Background(), mismatched); err == nil {
+		t.Fatal("Settle with a mismatched --evidence-revision error = nil, want rejection")
+	}
+}
+
+// remediationEvidenceFixture returns a strict gentle-ai.remediation-
+// evidence/v1 JSON object admissible against failedEvidence.
+func remediationEvidenceFixture(failedEvidence string) string {
+	return `{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"` + failedEvidence + `",` +
+		`"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}],` +
+		`"runtime_harness":{"status":"not_applicable","na_reason":"no runtime harness because this change is test-only"},` +
+		`"rollback":{"boundary":"commit 9ec76eec32","evidence":"git revert 9ec76eec32 restores the prior passing state"}}`
+}
+
 func TestCompactSettleReplaysCanonicalLegacyInterruptedRequest(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store := mustRuntimeStore(t, repo, "compact-legacy-interrupted-replay")

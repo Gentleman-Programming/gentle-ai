@@ -79,11 +79,11 @@ func TestResolveEffectiveConfigPrecedenceAndDefaultWriteTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveEffectiveConfig() error = %v", err)
 	}
-	if snapshot.Path != projectJSONC {
-		t.Fatalf("effective path = %q, want nearest project opencode.jsonc", snapshot.Path)
+	if snapshot.Path != projectJSONC || snapshot.WritePath != projectJSON {
+		t.Fatalf("paths = (%q, %q), want JSONC read / JSON write", snapshot.Path, snapshot.WritePath)
 	}
-	if _, ok := snapshot.Providers["jsonc"]; !ok {
-		t.Fatalf("providers = %#v, want project JSONC provider", snapshot.Providers)
+	if _, ok := snapshot.Providers["json"]; !ok {
+		t.Fatalf("providers = %#v, want project JSON provider", snapshot.Providers)
 	}
 
 	if err := os.Remove(parentConfig); err != nil {
@@ -203,5 +203,193 @@ func TestEffectiveSettingsPathPreservesSelectedWritePathOnReadError(t *testing.T
 
 	if got := EffectiveSettingsPath(home, projectDir); got != configPath {
 		t.Fatalf("EffectiveSettingsPath() = %q, want selected malformed config path %q", got, configPath)
+	}
+}
+
+func TestResolveEffectiveConfigSelectsOpenCodeConfigFile(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		writeJSON    bool
+		jsonManaged  bool
+		writeJSONC   bool
+		jsoncManaged bool
+		wantName     string
+	}{
+		{name: "only json", writeJSON: true, wantName: "opencode.json"},
+		{name: "only jsonc", writeJSONC: true, wantName: "opencode.jsonc"},
+		{name: "both managed only in json", writeJSON: true, jsonManaged: true, writeJSONC: true, wantName: "opencode.json"},
+		{name: "both managed only in jsonc", writeJSON: true, writeJSONC: true, jsoncManaged: true, wantName: "opencode.jsonc"},
+		{name: "both managed in neither", writeJSON: true, writeJSONC: true, wantName: "opencode.json"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			projectDir := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+
+			if tt.writeJSON {
+				writeOpenCodeConfigFixture(t, filepath.Join(projectDir, "opencode.json"), tt.jsonManaged)
+			}
+			if tt.writeJSONC {
+				writeOpenCodeConfigFixture(t, filepath.Join(projectDir, "opencode.jsonc"), tt.jsoncManaged)
+			}
+
+			snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+			if err != nil {
+				t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+			}
+			wantPath := filepath.Join(projectDir, tt.wantName)
+			if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
+				t.Fatalf("paths = (%q, %q), want %q", snapshot.Path, snapshot.WritePath, wantPath)
+			}
+		})
+	}
+
+	// Regression for CodeRabbit r3952255572: when JSON has a user-owned agent
+	// with the managed shape (hidden + prompt + permission) but no Gentle AI
+	// ownership marker, and JSONC has the real Gentle AI-managed config with
+	// the marker, the resolver must select JSONC.
+	t.Run("json user-owned managed shape without marker selects jsonc with marker", func(t *testing.T) {
+		home := t.TempDir()
+		projectDir := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+
+		jsonPath := filepath.Join(projectDir, "opencode.json")
+		// User-owned agent that matches hidden+prompt+permission shape
+		// but lacks the __managed_by marker.
+		if err := os.MkdirAll(projectDir, 0o755); err != nil {
+			t.Fatalf("mkdir project dir: %v", err)
+		}
+		if err := os.WriteFile(jsonPath, []byte(`{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "my custom orchestrator",
+      "permission": {"task": "allow"}
+    }
+  }
+}`), 0o600); err != nil {
+			t.Fatalf("write json fixture: %v", err)
+		}
+
+		jsoncPath := filepath.Join(projectDir, "opencode.jsonc")
+		// Real Gentle AI managed config with the ownership marker.
+		if err := os.WriteFile(jsoncPath, []byte(`{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "managed by Gentle AI",
+      "permission": {},
+      "__managed_by": "gentle-ai/sdd"
+    }
+  }
+}`), 0o600); err != nil {
+			t.Fatalf("write jsonc fixture: %v", err)
+		}
+
+		snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+		}
+		wantPath := filepath.Join(projectDir, "opencode.jsonc")
+		if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
+			t.Fatalf("paths = (%q, %q), want %q", snapshot.Path, snapshot.WritePath, wantPath)
+		}
+	})
+}
+
+func TestResolveEffectiveConfigUsesOpenCodeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	projectDir := t.TempDir()
+	defaultDir := filepath.Join(home, ".config", "opencode")
+	overrideDir := filepath.Join(t.TempDir(), "opencode")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", overrideDir)
+	writeOpenCodeConfigFixture(t, filepath.Join(defaultDir, "opencode.json"), true)
+	writeOpenCodeConfigFixture(t, filepath.Join(overrideDir, "opencode.jsonc"), false)
+
+	snapshot, err := ResolveEffectiveConfigForHome(home, projectDir)
+	if err != nil {
+		t.Fatalf("ResolveEffectiveConfigForHome() error = %v", err)
+	}
+	wantPath := filepath.Join(overrideDir, "opencode.jsonc")
+	if snapshot.Path != wantPath || snapshot.WritePath != wantPath {
+		t.Fatalf("paths = (%q, %q), want OPENCODE_CONFIG_DIR config %q", snapshot.Path, snapshot.WritePath, wantPath)
+	}
+}
+
+func TestRuntimeConfigPreservesWriteAuthorityAndLayeredReads(t *testing.T) {
+	home, project, override := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	// os.UserHomeDir (used by ResolveEffectiveConfig) reads USERPROFILE on
+	// Windows, not HOME, so both must point at the fixture home directory.
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", override)
+	global := DefaultSettingsPathForHome(home)
+	writeOpenCodeConfigFixture(t, global, false)
+	jsonPath := filepath.Join(project, "opencode.json")
+	jsoncPath := filepath.Join(project, "opencode.jsonc")
+	writeOpenCodeConfigFixture(t, jsonPath, true)
+	for _, path := range []string{jsoncPath, filepath.Join(override, "opencode.jsonc")} {
+		if err := os.WriteFile(path, []byte(`{"agent":{"gentle-orchestrator":{"model":"custom/override"}},"provider":{"custom":{"name":"Higher priority","models":{"__replace__":{}}}}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := ResolveEffectiveConfig(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.WritePath != jsonPath || snapshot.Path != filepath.Join(override, "opencode.jsonc") {
+		t.Fatalf("read/write paths = %q / %q", snapshot.Path, snapshot.WritePath)
+	}
+	if snapshot.Assignments["gentle-orchestrator"].Assignment.ModelID != "override" || snapshot.Providers["custom"].Name != "Higher priority" || len(snapshot.Providers["custom"].Models) != 1 || len(snapshot.Providers["fixture"].Models) != 1 || len(snapshot.Diagnostics) == 0 {
+		t.Fatalf("missing layered reads or conflict warning: %+v", snapshot)
+	}
+	// The same directory's JSONC wins without the additive config directory.
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	snapshot, err = ResolveEffectiveConfig(project)
+	if err != nil || snapshot.Path != jsoncPath || snapshot.WritePath != jsonPath || snapshot.Assignments["gentle-orchestrator"].Assignment.ModelID != "override" {
+		t.Fatalf("JSONC precedence: %+v, %v", snapshot, err)
+	}
+	for _, path := range []string{jsoncPath, jsonPath} {
+		if path == jsonPath {
+			writeOpenCodeConfigFixture(t, jsoncPath, false)
+		}
+		if err := os.WriteFile(path, []byte(`{"broken":`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ResolveEffectiveConfig(project); err == nil {
+			t.Fatalf("malformed config %s silently ignored", path)
+		}
+	}
+}
+
+func writeOpenCodeConfigFixture(t *testing.T, path string, managed bool) {
+	t.Helper()
+	content := `{"provider":{"fixture":{"models":{"m":{}}}}}`
+	if managed {
+		content = `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "hidden": true,
+      "prompt": "managed by Gentle AI",
+      "permission": {}
+    }
+  }
+}`
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config fixture: %v", err)
 	}
 }

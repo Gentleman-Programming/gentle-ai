@@ -95,6 +95,18 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
 6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD.
 
+#### Delegated Verification Gate (MANDATORY)
+
+Verification of a delegated writer's work is decided by two inputs the parent reads deterministically: the receipt-driven development (RDD) state for the repository (`on`, `off`, or `unknown`), and the native risk tier from `gentle-ai review assess --cwd <repo> --json` (`gentle-ai.review-assessment/v1`, `risk` one of `passive`, `medium`, `high`). A runtime that already renders an RDD status line reads it from there; otherwise read `gentle-ai review mode status` (read-only) and treat a failure as `unknown`. Any assessment failure or an unrecognized verb is treated as `high`.
+
+The `on` branch below holds only while the native review reaches a terminal outcome for this candidate. When the human declines the consent envelope for this candidate (candidate-scoped; never the kill switch), when receipt-driven development is disabled for the clone after this status was read, or when START or STATUS refuses, the parent follows the RDD off path instead: run `gentle-ai review assess --cwd <repo> --json` over the writer's diff and apply the tier table below. An unknown outcome is treated as not closed, never as terminal.
+
+- **RDD on**: the bounded writer runs the parent-authorized `## Verification` commands in the foreground and reports `<command>: <observed result>`; that report is the verification of record, and the native review is the independent check. A separate verifier stays on-demand only — the writer reported `partial` or `blocked`, an expensive or external check the parent wants run on a cheaper profile, or a parent spot check. A passive candidate needs only the parent's structural readback.
+- **RDD off or unknown**: after the writer returns, the parent runs `gentle-ai review assess` over the writer's diff and follows the tier — passive: structural readback only; medium: writer self-verification, with a separate verifier only when the writer ran on a small-model profile (low effort or a mini model); high or unassessable: writer self-verification plus an independent verifier. `unknown` never lowers a tier, and the small-model bias raises the tier by one for verification purposes.
+- The parent spot check — re-running one reported command before delivery — stays in every tier.
+- The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
+- Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to the writer doing that write.
+
 #### Native Checking Contract
 
 - Final source-mutating normalization happens before functional verification and candidate freeze.
@@ -194,10 +206,7 @@ SDD is the structured planning layer for substantial changes.
 
 ### Artifact Store Policy
 
-- `engram` — default when available; persistent memory across sessions via MCP
-- `openspec` — file-based artifacts; use only when user explicitly requests
-- `hybrid` — both backends; cross-session recovery + local files; more tokens per op
-- `none` — return results inline only; recommend enabling engram or openspec
+Use the artifact store resolved by SDD Session Preflight; never detect or default a separate choice.
 
 ### Commands
 
@@ -219,6 +228,31 @@ Meta-commands (type directly — orchestrator handles them, will not appear in a
 
 `/sdd-new`, `/sdd-continue`, and `/sdd-ff` are meta-commands handled by YOU. Do NOT invoke them as skills. You orchestrate the phase sequence, delegating each phase to its native Kiro subagent (`/sdd-<phase>`), pausing for user approval between phases.
 
+<!-- gentle-ai:sdd-session-preflight -->
+### SDD Session Preflight (HARD GATE)
+
+Before every SDD command or natural-language SDD request, run this preflight before the SDD init guard; cache choices for the session.
+
+This runtime has no classified native question UI. Present ONE complete blocking prompt in plain chat or terminal with all three groups below, in order, and explain that their answers are required before init. Each group is single-select; its listed labels are the complete allowed-answer domain. Include every label and description, the fixed review policy, and this answer syntax: `Pace: <label>; Artifacts: <label>; PR strategy: <label>`. Then STOP; never default, infer, or launch dependent work. Validate all three answers under the Lossless Blocking Prompts contract before caching their canonical mappings.
+
+Match labels and descriptions to the conversation language and persona; do not expose canonical/internal codes.
+
+1. **Pace**: Interactive or Automatic.
+2. **Artifacts**: OpenSpec, Engram, or Both (user-facing Both maps only to internal `hybrid`).
+3. **PR strategy**: Ask me, Single PR, or Auto.
+
+Review policy is fixed at 400 changed lines per PR; above 400, split the PR or require maintainer-approved `size:exception`; NEVER ask it as a fourth group or selectable budget.
+
+Canonical mappings:
+- Interactive -> `interactive`
+- Automatic -> `auto`
+- OpenSpec -> `openspec`
+- Engram -> `engram`
+- Both -> `hybrid`
+- Ask me -> `ask-on-risk`
+- Single PR -> `single-pr`
+- Auto -> `auto-chain`
+<!-- /gentle-ai:sdd-session-preflight -->
 ### Native SDD Dispatcher Guard
 
 Before routing, continuing, applying, verifying, or archiving an SDD change, **invoke the native dispatcher** (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`). It resolves the artifact store the workspace DECLARES, reports it in `artifactStore`, and returns that store's locators in `artifactPaths`. **Do NOT determine the artifact store yourself, and do NOT branch on it** — an actor that re-derives the store disagrees with the authority that launched it, which is how a phase ends up reading a store the workspace never declared. Use the dispatcher for every store when `gentle-ai` is available and treat its native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
@@ -227,9 +261,9 @@ Before routing, continuing, applying, verifying, or archiving an SDD change, **i
 
 Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
 
-1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
-2. If found → init was done, proceed normally
-3. If NOT found → run `sdd-init` FIRST (load the sdd-init skill and execute it), THEN proceed with the requested command
+1. Use the artifact store resolved by SDD Session Preflight. In `openspec` mode, check project context and testing capabilities in `openspec/config.yaml` without calling Engram. In `engram` mode, search `sdd-init/{project}` in Engram. In `hybrid` mode, check both stores.
+2. If the selected store contains initialized project context and testing capabilities, proceed normally; a directory alone is not initialization evidence.
+3. If initialization is missing, load the `sdd-init` skill and execute it in the native Kiro phase context with the cached `artifact_store.mode`, then proceed. If a selected backend is unavailable, STOP and report it; never silently change the user's artifact choice.
 
 This ensures:
 
@@ -241,14 +275,12 @@ Do NOT skip this check. Do NOT ask the user — just run init silently if needed
 
 ### Execution Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request, e.g. "create an SDD for X" / "do SDD for X") for the first time in a session, ASK which execution mode they prefer:
+Use the execution mode cached by SDD Session Preflight.
 
 - **Automatic** (`auto`): Run all phases back-to-back without pausing. Phases still run back-to-back WITHOUT interrupting the user, BUT the orchestrator runs a gatekeeper validation after every phase before launching the next Kiro phase — the user only sees an interruption when the gatekeeper catches a real problem. Otherwise only the final result is shown. Use this when the user wants speed and trusts the process.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK before proceeding to the next phase. Use this when the user wants to review and steer each step.
 
-If the user doesn't specify, default to **Automatic**. After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision.
-
-Cache the mode choice for the session — don't ask again unless the user explicitly requests a mode change.
+Use the execution mode cached by SDD Session Preflight.
 
 Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
 
@@ -290,19 +322,11 @@ Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `
 
 ### Artifact Store Mode
 
-When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which artifact store they want for this change:
-
-- **`engram`**: Fast, no files created. Artifacts live in engram only. Best for solo work and quick iteration. Note: re-running a phase overwrites the previous version.
-- **`openspec`**: File-based. Creates `openspec/` directory with full artifact trail. Committable, shareable with team, full git history.
-- **`hybrid`**: Both — files for team sharing + engram for cross-session recovery.
-
-If the user doesn't specify, detect: if engram is available → default to `engram`. Otherwise → `none`.
-
-Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every phase.
+Pass the preflight artifact choice as `artifact_store.mode` to every sub-agent launch.
 
 ### Delivery Strategy
 
-On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` context.
+Pass the preflight PR strategy as `delivery_strategy` to `sdd-tasks` and `sdd-apply`. `exception-ok` is never a preflight choice; it requires explicit maintainer-approved `size:exception`.
 
 ### Chain Strategy
 

@@ -13,6 +13,36 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
+func TestProfileCleanupPreservesPermissionOrder(t *testing.T) {
+	for _, operation := range []string{"stale", "kilo", "remove"} {
+		t.Run(operation, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.json")
+			seed := `{"permission":{"bash":{"ssh *":"allow","*":"deny"}},"agent":{"jd-judge-a-test":{"permission":{"bash":"deny"}},"sdd-apply-test":{}}}`
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			profile := model.Profile{Name: "test"}
+			var err error
+			switch operation {
+			case "stale":
+				_, err = cleanupStaleProfileJDAgents(path, profile)
+			case "kilo":
+				profile.PhaseAssignments = map[string]model.ModelAssignment{"jd-judge-a": {ProviderID: "test", ModelID: "test"}}
+				_, err = cleanupKilocodeProfileJDPermissions(path, profile)
+			case "remove":
+				err = RemoveProfileAgents(path, "test")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(strings.Join(strings.Fields(string(got)), ""), `"bash":{"ssh*":"allow","*":"deny"}`) {
+				t.Fatalf("cleanup changed last-match deny: %s, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
 	home := t.TempDir()
 

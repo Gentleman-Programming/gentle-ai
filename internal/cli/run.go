@@ -302,6 +302,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, persistErr
 	}
 
+	TelemetryTrigger(homeDir)
 	return result, nil
 }
 
@@ -1481,7 +1482,7 @@ func (s componentApplyStep) Run() error {
 				return fmt.Errorf("install beta engram from main: %w", err)
 			}
 			engramCommand = binaryPath
-		} else if installedPath, err := cmdLookPath("engram"); err != nil {
+		} else if installedPath, found := resolveEngramInstalledPath(s.profile); !found {
 			// Engram not on PATH — install it.
 			if s.profile.PackageManager == "brew" {
 				// macOS (or Linux with Homebrew): use brew tap + brew install.
@@ -1489,7 +1490,13 @@ func (s componentApplyStep) Run() error {
 				if err != nil {
 					return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 				}
+				commands = withResolvedBrewCommand(commands)
 				installErr = runCommandSequence(commands)
+				if installErr == nil {
+					if installedPath, found := resolveEngramInstalledPath(s.profile); found {
+						engramCommand = installedPath
+					}
+				}
 			} else if binaryPath, err := engramDownloadFn(s.profile); err != nil {
 				// Linux / Windows: download the pre-built binary from GitHub Releases.
 				// No Go required — engram ships pre-built binaries.
@@ -1535,6 +1542,8 @@ func (s componentApplyStep) Run() error {
 				return fmt.Errorf("repair Windows Engram PATH shadowing: refreshed managed Engram at %s, but could not move %s ahead of stale PATH entry %s: %w. Move %s before %s in your user PATH, then rerun install", binaryPath, binDir, installedPath, err, binDir, filepath.Dir(installedPath))
 			}
 			fmt.Fprintf(os.Stderr, "WARNING: multiple engram.exe entries were found on PATH and %s resolved first. Refreshed managed Engram at %s and moved %s ahead of the stale entry in the user PATH.\n", installedPath, binaryPath, binDir)
+		} else {
+			engramCommand = installedPath
 		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
@@ -1917,6 +1926,74 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 		}
 	}
 	return false
+}
+
+func isExecutableFile(path string) bool {
+	info, err := osStat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	// Windows has no POSIX executable permission bit (os.FileMode.Perm()
+	// never carries 0o111 there), so a regular file at a known binary path
+	// is treated as usable without a permission check.
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm()&0o111 != 0
+}
+
+func standardHomebrewExecutable(name string) (string, bool) {
+	for _, binDir := range []string{
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/home/linuxbrew/.linuxbrew/bin",
+	} {
+		path := filepath.Join(binDir, name)
+		if isExecutableFile(path) {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// resolveEngramInstalledPath finds an existing Engram even when the installer's
+// inherited PATH omits a standard Homebrew prefix (#4020).
+func resolveEngramInstalledPath(profile system.PlatformProfile) (string, bool) {
+	if path, err := cmdLookPath("engram"); err == nil {
+		return path, true
+	}
+	if profile.OS == "darwin" || profile.PackageManager == "brew" {
+		return standardHomebrewExecutable("engram")
+	}
+	return "", false
+}
+
+// resolveBrewCommand avoids environment-sensitive shell profile probing. The
+// inherited PATH and Homebrew's documented standard prefixes are sufficient.
+func resolveBrewCommand() string {
+	if path, err := cmdLookPath("brew"); err == nil {
+		return path
+	}
+	if path, found := standardHomebrewExecutable("brew"); found {
+		return path
+	}
+	return "brew"
+}
+
+func withResolvedBrewCommand(commands [][]string) [][]string {
+	brewPath := ""
+	rewritten := make([][]string, len(commands))
+	for i, command := range commands {
+		if len(command) > 0 && command[0] == "brew" {
+			if brewPath == "" {
+				brewPath = resolveBrewCommand()
+			}
+			rewritten[i] = append([]string{brewPath}, command[1:]...)
+			continue
+		}
+		rewritten[i] = command
+	}
+	return rewritten
 }
 
 // runCommandSequence runs each command in the sequence one at a time, stopping on first error.
@@ -2660,8 +2737,28 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 		checks = append(checks, engramHealthChecks(input.State, input.Resolved.Agents)...)
 	}
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
+	checks = append(checks, openCodeConfigChecks(input.HomeDir, input.WorkspaceDir, input.Resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+}
+
+func openCodeConfigChecks(homeDir, workspaceDir string, agentIDs []model.AgentID) []verify.Check {
+	if !containsAgent(agentIDs, model.AgentOpenCode) {
+		return nil
+	}
+	return []verify.Check{{
+		ID: "verify:opencode:config-layers", Description: "OpenCode model write authority", Soft: true,
+		Run: func(context.Context) error {
+			snapshot, err := opencodeactivation.ResolveRuntimeConfigForHome(homeDir, workspaceDir)
+			if err != nil {
+				return err
+			}
+			if len(snapshot.Diagnostics) > 0 {
+				return errors.New(strings.Join(snapshot.Diagnostics, "\n"))
+			}
+			return nil
+		},
+	}}
 }
 
 // isRetiredManagedPath reports whether path names a managed file that install

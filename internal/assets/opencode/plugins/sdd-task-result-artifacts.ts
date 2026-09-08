@@ -5,6 +5,8 @@ const TASK_TAG = /<\/?(?:task|task_result|summary)(?:\s|>)/
 const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
 const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
 const SDD_TASK_ROUTE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
+// #2855: host cwd does not identify the coordinator's selected change/store.
+const SDD_TASK_CONTINUATION_GUIDANCE = "Return to the active SDD coordinator and inspect only its retained structured status for the selected change and artifact store. If that status is unavailable, report this terminal failure and ask the user to select the change and artifact store. Do not infer either, run unscoped status discovery, retry, or launch another phase."
 
 type SDDTaskFailure = { phase: string, code: string, handoff: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
@@ -31,34 +33,6 @@ function taskResult(output: unknown): void {
   if (TASK_TAG.test(envelope[1])) throw Object.assign(new Error("SDD phase task result contains a nested task envelope"), { sddClass: "malformed_result" })
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`
-}
-
-// #3516: OpenCode can hand a failed delegated task an empty or filesystem-root
-// cwd, and `gentle-ai sdd-status --cwd /` is refused on the Go side. A root is
-// never a repository, so it never renders as a `--cwd` value.
-function isFilesystemRoot(path: string): boolean {
-  return /^(?:[\\/]+|[A-Za-z]:[\\/]*)$/.test(path)
-}
-
-function continuationCwd(...candidates: Array<string | undefined>): string {
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim() !== "" && !isFilesystemRoot(candidate.trim())) return candidate
-  }
-  return ""
-}
-
-const SDD_CWD_PLACEHOLDER_NOTE = " This session has no usable workspace path, so the continuation carries a placeholder: replace <repo> with the repository root."
-
-function continuationCommand(cwd: string): string {
-  return cwd === "" ? "gentle-ai sdd-status --cwd <repo> --json" : `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`
-}
-
-function cwdPlaceholderNote(cwd: string): string {
-  return cwd === "" ? SDD_CWD_PLACEHOLDER_NOTE : ""
-}
-
 function taskRouteModel(metadata: unknown): string | undefined {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
   const model = (metadata as Record<string, unknown>).model
@@ -70,14 +44,14 @@ function taskRouteModel(metadata: unknown): string | undefined {
   return `${providerID}/${modelID}`
 }
 
-function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
+function sddTaskFailure(phase: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
   const empty = (cause as Record<string, unknown> | null)?.sddClass === "empty_result"
   const code = empty ? "sdd_task_result_empty" : "sdd_task_result_malformed"
   const taskModel = taskRouteModel(metadata)
   const guidance = "Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user."
-  const summary = (empty
+  const summary = empty
     ? `${phase} produced no task output at all. The child task returned nothing, which most often means the provider rejected the request before generation (authentication, region, or model access), the task was interrupted, or the phase genuinely wrote nothing. ${guidance}`
-    : `${phase} returned no valid task result. ${guidance}`) + cwdPlaceholderNote(cwd)
+    : `${phase} returned no valid task result. ${guidance}`
   const failure: SDDTaskFailure = {
     phase,
     code,
@@ -88,13 +62,13 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
       phase,
       ...(taskModel === undefined ? {} : { taskModel }),
       summary,
-      continuation: continuationCommand(cwd),
+      continuation: SDD_TASK_CONTINUATION_GUIDANCE,
     }),
   }
   return Object.assign(new Error(failure.handoff), { sddFailure: failure }) as SDDTaskFailureError
 }
 
-function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: string): Error {
+function sddDispatchLatched(requested: string, failure: SDDTaskFailure): Error {
   return new Error(SDD_TASK_FAILURE_PREFIX + JSON.stringify({
     schemaName: "gentle-ai.sdd-task-result-failure/v1",
     status: "blocked",
@@ -102,15 +76,14 @@ function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: str
     phase: requested,
     latchedPhase: failure.phase,
     latchedCode: failure.code,
-    summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently retried and no later phase advances on top of it. No provider call, no subagent, and no artifact write happened for this launch, so it produced no new evidence about the original failure.` + cwdPlaceholderNote(cwd),
-    continuation: continuationCommand(cwd),
+    summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently retried and no later phase advances on top of it. No provider call, no subagent, and no artifact write happened for this launch, so it produced no new evidence about the original failure.`,
+    continuation: SDD_TASK_CONTINUATION_GUIDANCE,
     exit: "Inspect the artifact state the original failure left, surface it to the user, and start a new session to launch SDD phases again. Relaunching in this session cannot dispatch.",
   }))
 }
 
-const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+const SDDTaskResultArtifactsPlugin: Plugin = async () => {
   const failedSDDSessions = new Map<string, SDDTaskFailure>()
-  const cwd = continuationCwd(worktree, directory)
   return {
     dispose: async () => { failedSDDSessions.clear() },
     event: async ({ event }) => {
@@ -121,7 +94,7 @@ const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => 
       const subagent = output.args.subagent_type
       if (!isSDDPhase(subagent)) return
       const failure = failedSDDSessions.get(input.sessionID)
-      if (failure) throw sddDispatchLatched(subagent, failure, cwd)
+      if (failure) throw sddDispatchLatched(subagent, failure)
     },
     "tool.execute.after": async (input, output) => {
       if (input.tool !== "task" || typeof input.args?.subagent_type !== "string") return
@@ -134,7 +107,7 @@ const SDDTaskResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => 
       try {
         taskResult(output.output)
       } catch (cause) {
-        const failure = sddTaskFailure(subagent, cwd, cause, output.metadata)
+        const failure = sddTaskFailure(subagent, cause, output.metadata)
         failedSDDSessions.set(input.sessionID, failure.sddFailure)
         throw failure
       }

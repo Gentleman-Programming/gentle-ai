@@ -10,9 +10,102 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
+
+func TestRemoteAuthorizationSectionPreservesUserText(t *testing.T) {
+	const personal = "Personal instructions: do not deploy.\n"
+	first := InjectRemoteAuthorization(personal)
+	if !strings.HasPrefix(first, personal) || InjectRemoteAuthorization(first) != first {
+		t.Fatal("section projection lost user text or was not idempotent")
+	}
+	routing, err := RenderRouting(model.AgentClaudeCode)
+	if err != nil || strings.Contains(routing, "remote-authorization") {
+		t.Fatal("routing-only renderer gained the remote boundary")
+	}
+}
+
+// This compares against the pre-existing merger, NOT native last-match semantics.
+// That merger sorts maps; this slice must not claim to fix custom rule ordering.
+func TestRemoteAuthorizationRetainsExistingPermissionMergeBehavior(t *testing.T) {
+	const seed = `{"permission":{"bash":{"ssh *":"allow","*":"deny"}},"agent":{"gentle-orchestrator":{"prompt":"Personal instructions","permission":{"bash":"deny","task":"deny"}}}}`
+	baseline, err := filemerge.MergeJSONObjects([]byte(seed), []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions := func(raw []byte) string {
+		var root map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &root); err != nil {
+			t.Fatal(err)
+		}
+		var agents map[string]map[string]json.RawMessage
+		if err := json.Unmarshal(root["agent"], &agents); err != nil {
+			t.Fatal(err)
+		}
+		return string(root["permission"]) + string(agents["gentle-orchestrator"]["permission"])
+	}
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			paths, err := RoutingPaths(home, agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(paths[0]), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths[0], []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InjectRouting(home, agent); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(paths[0])
+			if err != nil || permissions(got) != permissions(baseline) {
+				t.Fatalf("permission projection changed relative to existing merger: %v", err)
+			}
+			if !strings.Contains(deliveredGuidance(t, paths[0]), "Personal instructions") {
+				t.Fatal("personal orchestrator instructions lost")
+			}
+		})
+	}
+}
+
+func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
+	covered := 0
+	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentPi {
+			continue // The install/sync step leaves package-owned Pi prompts untouched.
+		}
+		covered++
+		t.Run(string(agent.ID), func(t *testing.T) {
+			home := t.TempDir()
+			first, err := InjectRouting(home, agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt := deliveredGuidance(t, first.Files[0])
+			for _, required := range []string{
+				"<!-- gentle-ai:remote-authorization -->",
+				"destination", "operation", "credential/session",
+				"SSH agents", "ControlMaster", "not a sandbox",
+			} {
+				if !strings.Contains(prompt, required) {
+					t.Errorf("primary carrier missing %q", required)
+				}
+			}
+			second, err := InjectRouting(home, agent.ID)
+			if err != nil || second.Changed {
+				t.Fatalf("repeat injection = %+v, %v", second, err)
+			}
+		})
+	}
+	if covered != 15 {
+		t.Fatalf("covered %d non-Pi clients, want 15", covered)
+	}
+}
 
 func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 	t.Parallel()

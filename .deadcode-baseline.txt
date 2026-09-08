@@ -77,6 +77,9 @@ internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
+internal/reviewerprovider/windows_batch_cmdline.go	isWindowsBatchFile
+internal/reviewerprovider/windows_batch_cmdline.go	quoteWindowsArgument
+internal/reviewerprovider/windows_batch_cmdline.go	windowsBatchCommandLine
 internal/reviewtransaction/authority_repair.go	AssessAuthorityRepair
 internal/reviewtransaction/candidate_decline.go	CandidateDeclineAuthorization.validate
 internal/reviewtransaction/candidate_decline.go	candidateDeclineDigest
@@ -140,6 +143,7 @@ internal/reviewtransaction/rar_plan_authority.go	rarPlanAuthorityDigest
 internal/reviewtransaction/rar_plan_authority.go	validatePlanEffectBinding
 internal/reviewtransaction/rar_plan_authority.go	verificationEffectAuthorizationDigest
 internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDigest
+internal/reviewtransaction/rar_windows_authority_filesystem.go	classifyWindowsAuthorityFilesystem
 internal/reviewtransaction/rar_windows_owner_trust.go	rarWindowsOwnerOnlyMismatch
 internal/reviewtransaction/rar_windows_owner_trust.go	rarWindowsRepairOwnerControlled
 internal/reviewtransaction/rdd_mode.go	AuthorizeRDDCandidate
@@ -229,6 +233,10 @@ internal/system/install_deps.go	installCommandsCurl
 internal/system/install_deps.go	installCommandsGit
 internal/system/install_deps.go	installCommandsGo
 internal/system/install_deps.go	installCommandsNode
+internal/telemetry/recording_spawn.go	NewRecordingSpawner
+internal/telemetry/recording_spawn.go	RecordingSpawner.Calls
+internal/telemetry/recording_spawn.go	RecordingSpawner.Reset
+internal/telemetry/recording_spawn.go	RecordingSpawner.Spawn
 internal/tui/model.go	setOSExecutableForTest
 internal/tui/model.go	setOSGetwdForTest
 internal/tui/model.go	setOSRemoveForTest

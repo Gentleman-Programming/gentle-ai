@@ -126,6 +126,49 @@ func TestCompactStoreCreateOrReplayAtomicStartReplaysExactActiveBindingWithoutMu
 	}
 }
 
+// TestCompactStoreFirstAtomicStartSyncsV2ParentDirectory is issue #1721's
+// second gap: the first compact publication under a previously absent v2/
+// must synchronize v2/ itself (the parent that names the new lineage
+// directory), not only the lineage directory that writeAtomic's own
+// post-rename sync already covers.
+func TestCompactStoreFirstAtomicStartSyncsV2ParentDirectory(t *testing.T) {
+	const lineage = "compact-atomic-start-first-publication-syncs-v2"
+	repo := initSnapshotRepo(t)
+	base, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionRoot := filepath.Join(base, "v2")
+	if _, err := os.Stat(versionRoot); !os.IsNotExist(err) {
+		t.Fatalf("v2/ already exists before the first publication: stat = %v", err)
+	}
+
+	originalSync := syncReviewDirectory
+	var synced []string
+	syncReviewDirectory = func(path string) error {
+		synced = append(synced, path)
+		return originalSync(path)
+	}
+	t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+	store := compactAtomicStartStore(t, repo, lineage)
+	request := compactAtomicStartFixture(t, repo, lineage)
+	if _, err := store.CreateOrReplayAtomicStart(context.Background(), request); err != nil {
+		t.Fatalf("CreateOrReplayAtomicStart(create): %v", err)
+	}
+
+	found := false
+	for _, path := range synced {
+		if path == versionRoot {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("first compact publication never synced its newly created v2/ parent %s; recorded = %v", versionRoot, synced)
+	}
+}
+
 func TestCompactStoreCreateOrReplayAtomicStartRefusesEveryBindingMismatchWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name   string

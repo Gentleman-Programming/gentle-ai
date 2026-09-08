@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/telemetry/v1/schemas/status.schema.json",
+  "title": "gentle-ai.telemetry-status/v1",
+  "description": "Answer to `gentle-ai telemetry status|enable|disable`: whether sending is enabled, which source decided it, and the persisted send history.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation",
+    "enabled",
+    "source",
+    "install_id",
+    "notice_shown",
+    "endpoint",
+    "counters"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.telemetry-status/v1"
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["status", "enable", "disable"]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["DO_NOT_TRACK", "GENTLE_AI_TELEMETRY", "CI", "state", "default"]
+    },
+    "install_id": {
+      "type": "string"
+    },
+    "notice_shown": {
+      "type": "boolean"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "last_install_sent_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_heartbeat_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_failure_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "backoff_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "syncs",
+        "sdd_phase_runs",
+        "reviews_approved",
+        "reviews_correction",
+        "reviews_escalated"
+      ],
+      "properties": {
+        "syncs": { "type": "integer", "minimum": 0 },
+        "sdd_phase_runs": { "type": "integer", "minimum": 0 },
+        "reviews_approved": { "type": "integer", "minimum": 0 },
+        "reviews_correction": { "type": "integer", "minimum": 0 },
+        "reviews_escalated": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

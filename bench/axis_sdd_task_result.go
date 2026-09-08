@@ -44,8 +44,8 @@ func sddTaskResultJourneys() []Journey {
 		{
 			ID:     "tr02-sdd-empty-task-result",
 			Review: reviewOptedIn,
-			Title:  "Empty SDD task result: typed terminal failure without artifact mutation or downstream launch",
-			Source: "issue #2117 provider transport report",
+			Title:  "Empty SDD task result: terminal latch preserves coordinator identity without artifact mutation",
+			Source: "issues #2117 and #2855: transport failure must not infer change or artifact store",
 			Steps: []Step{{
 				Name:      "provider-shaped empty task result reaches the installed OpenCode plugin",
 				Skip:      sddTaskResultUnavailable,
@@ -344,6 +344,11 @@ result
 		if !strings.Contains(result.Downstream, `"code":"sdd_task_dispatch_latched"`) || !strings.Contains(result.Downstream, `"latchedCode":"`+tc.wantCode+`"`) {
 			return fmt.Errorf("%s downstream = %q, want latched %q", tc.name, result.Downstream, tc.wantCode)
 		}
+		for _, handoff := range []string{result.Failure, result.Downstream} {
+			if err := validateSDDTaskResultGuidance(handoff); err != nil {
+				return fmt.Errorf("%s: %w", tc.name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -372,6 +377,24 @@ func runSDDTaskResultGrammarCase(r *journeyRun, root, work string, tc sddTaskRes
 		return sddTaskResultGrammarObservation{}, fmt.Errorf("decode OpenCode task-result grammar harness for %s: %w: %q", tc.name, err, output.String())
 	}
 	return result, nil
+}
+
+// #2855: a workspace path is not a selected change/store identity. Pin the
+// provider's non-command continuation on both the original failure and latch.
+func validateSDDTaskResultGuidance(handoff string) error {
+	const prefix = "GENTLE_AI_SDD_FAILURE "
+	const want = "Return to the active SDD coordinator and inspect only its retained structured status for the selected change and artifact store. If that status is unavailable, report this terminal failure and ask the user to select the change and artifact store. Do not infer either, run unscoped status discovery, retry, or launch another phase."
+	var payload struct{ SchemaName, Status, Continuation string }
+	if !strings.HasPrefix(handoff, prefix) {
+		return fmt.Errorf("task-result failure lost its typed prefix: %q", handoff)
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(handoff, prefix)), &payload); err != nil {
+		return fmt.Errorf("decode task-result failure: %w", err)
+	}
+	if payload.SchemaName != "gentle-ai.sdd-task-result-failure/v1" || payload.Status != "blocked" || payload.Continuation != want {
+		return fmt.Errorf("task-result failure lost terminal v1 coordinator guidance: %q", handoff)
+	}
+	return nil
 }
 
 func sddEmptyTaskResult(r *journeyRun) error {
@@ -405,8 +428,15 @@ func sddEmptyTaskResult(r *journeyRun) error {
 	if len(parts) != 3 {
 		return fmt.Errorf("task-result harness output = %q", output.String())
 	}
-	if !strings.Contains(parts[0], "sdd_task_result_empty") || !strings.Contains(parts[1], "sdd_task_result_empty") {
+	if !strings.Contains(parts[0], `"code":"sdd_task_result_empty"`) ||
+		!strings.Contains(parts[1], `"code":"sdd_task_dispatch_latched"`) ||
+		!strings.Contains(parts[1], `"latchedCode":"sdd_task_result_empty"`) {
 		return fmt.Errorf("empty result was not routed as one typed terminal failure: %q", parts[:2])
+	}
+	for _, handoff := range parts[:2] {
+		if err := validateSDDTaskResultGuidance(handoff); err != nil {
+			return err
+		}
 	}
 	if parts[2] != "existing artifact" {
 		return fmt.Errorf("task-result failure mutated artifact state: %q", parts[2])

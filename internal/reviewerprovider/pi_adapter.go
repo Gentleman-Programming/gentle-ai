@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -51,6 +52,7 @@ func (adapter *PiAdapter) Review(ctx context.Context, invocation Invocation) ([]
 		"--print", "--mode", "text", "--no-session", "--no-tools", "--no-extensions",
 		"--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve")
 	command.Dir = scratch
+	command.Env = piRuntimeEnvironment()
 	command.WaitDelay = piReviewerWaitDelay
 	command.Stdin = bytes.NewReader(invocation.Prompt())
 	var stdout, stderr bytes.Buffer
@@ -66,4 +68,27 @@ func (adapter *PiAdapter) Review(ctx context.Context, invocation Invocation) ([]
 		return nil, errors.New("pi reviewer transport produced no final message")
 	}
 	return stdout.Bytes(), nil
+}
+
+// piRuntimeEnvironment passes only the process locators Pi needs to launch and
+// resolve its local configuration. Credentials remain in Pi's auth file.
+func piRuntimeEnvironment() []string {
+	environment := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+	}
+	if runtime.GOOS == "windows" {
+		environment = appendPiRuntimeEnvironmentValue(environment, "SYSTEMROOT")
+		environment = appendPiRuntimeEnvironmentValue(environment, "USERPROFILE")
+		environment = appendPiRuntimeEnvironmentValue(environment, "HOMEDRIVE")
+		environment = appendPiRuntimeEnvironmentValue(environment, "HOMEPATH")
+	}
+	return appendPiRuntimeEnvironmentValue(environment, "PI_CODING_AGENT_DIR")
+}
+
+func appendPiRuntimeEnvironmentValue(environment []string, name string) []string {
+	if value := os.Getenv(name); value != "" {
+		return append(environment, name+"="+value)
+	}
+	return environment
 }

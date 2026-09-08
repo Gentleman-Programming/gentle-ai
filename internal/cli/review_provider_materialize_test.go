@@ -81,6 +81,43 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 	}
 }
 
+// TestReviewCaptureResultMaterializeIsEligibleWithoutRelayHandshake is issue
+// #4256: a Pi capture-result --materialize=true call must derive eligibility
+// from the bound transaction (lineage, revision, target) and the compiled
+// --agent capability, never from the GENTLE_PI_REVIEW_RELAY_CONTRACT host
+// environment variable. An unrelayed shell (no handshake exported) holding a
+// genuinely bound transaction is eligible and materializes exactly like a
+// relayed one, while the same unrelayed shell presenting a mismatched
+// (stale) binding is refused with the existing subject-hash mismatch
+// continuation -- a literal `gentle-ai …` invocation -- proving the binding
+// is still enforced even though the handshake no longer is.
+func TestReviewCaptureResultMaterializeIsEligibleWithoutRelayHandshake(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
+	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	binding := piHostRelayCaptureBinding(t, repo, args, record)
+
+	var materialized bytes.Buffer
+	if err := RunReviewCaptureResult(append(slices.Clone(binding), "--agent", string(model.AgentPi), "--materialize=true"), &materialized); err != nil {
+		t.Fatalf("unrelayed pi materialize with a valid bound transaction was refused: %v", err)
+	}
+	if !bytes.Contains(materialized.Bytes(), []byte(record.State.InitialSnapshot.Identity)) {
+		t.Fatal("materialized provider task omits the frozen target identity")
+	}
+
+	stale := replaceInspectionArg(t, slices.Clone(binding), "--subject-hash", "sha256:"+strings.Repeat("0", 64))
+	err := RunReviewCaptureResult(append(stale, "--agent", string(model.AgentPi), "--materialize=true"), io.Discard)
+	if err == nil {
+		t.Fatal("unrelayed pi materialize with a mismatched binding was admitted")
+	}
+	if !strings.Contains(err.Error(), "materialize subject hash does not match") {
+		t.Fatalf("mismatched binding refusal = %v, want the subject hash mismatch cause", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review status") {
+		t.Fatalf("mismatched binding refusal does not carry a gentle-ai continuation: %v", err)
+	}
+}
+
 func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
@@ -163,9 +200,15 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "requires --agent",
 		},
 		{
-			name: "without relay handshake", env: "",
+			// Issue #4256: without a real bound transaction, an unrelayed Pi
+			// materialize call is refused by the same repository-context
+			// binding check every other runtime hits -- never by an
+			// eligibility gate keyed on the relay handshake env var, which
+			// TestReviewCaptureResultMaterializeIsEligibleWithoutRelayHandshake
+			// proves separately with a genuine binding.
+			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "not eligible for immutable receipt review",
+			want: "repository_context_unavailable",
 		},
 	}
 	for _, test := range tests {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
@@ -114,6 +115,14 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 	if failure.Cause != managedAssetProvenanceRefusal {
 		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, managedAssetProvenanceRefusal)
 	}
+	// #3299, #4170: the failure names the exact candidate-preserving sync
+	// continuation instead of leaving the caller to guess "run sync" from the
+	// cause prose.
+	if failure.Continuation == nil || failure.Continuation.Operation != "sync" ||
+		failure.Continuation.Command != "gentle-ai sync --agent opencode" || failure.Continuation.Agent != "opencode" ||
+		len(failure.Continuation.StaleAssets) != 1 || failure.Continuation.StaleAssets[0] != "sha256:stale" {
+		t.Fatalf("stale managed assets continuation = %#v", failure.Continuation)
+	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("stale managed assets failure does not satisfy its published contract: %v", err)
 	}
@@ -136,6 +145,128 @@ func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) 
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if err := started.Validate(); err != nil || started.LineageID == "" {
 		t.Fatalf("current managed assets START = %#v, validate = %v", started, err)
+	}
+}
+
+// TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart is the
+// RED-first proof for #3299/#4170: selectorless STATUS must classify a stale
+// managed-asset digest and name the exact sync continuation BEFORE it ever
+// offers a START that preflight would refuse anyway. Executing the returned
+// START used to be the only way to discover the skew, and its failure named
+// no continuation the caller could run instead of guessing "run sync" from
+// prose.
+func TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart(t *testing.T) {
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/status-stale-assets.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "managed_assets_outdated" ||
+		status.NextTransition.Execute != nil {
+		t.Fatalf("stale managed assets STATUS transition = %#v", status.NextTransition)
+	}
+	continuation := status.NextTransition.Continuation
+	if continuation == nil || continuation.Operation != "sync" || continuation.Command != "gentle-ai sync --agent opencode" ||
+		continuation.Agent != "opencode" || len(continuation.StaleAssets) != 1 || continuation.StaleAssets[0] != "sha256:stale" {
+		t.Fatalf("stale managed assets STATUS continuation = %#v", continuation)
+	}
+	statusV7Schema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+	validatePublishedReviewSchema(t, statusV7Schema, output.Bytes())
+
+	// Once the recorded digest converges with this binary's, the very same
+	// candidate must be offered again: the skew was the only thing blocking
+	// it, and nothing about the candidate itself changed.
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	recordManagedAssetDigest(t, home, digest)
+
+	var convergedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &convergedOutput); err != nil {
+		t.Fatalf("converged managed assets STATUS: %v\n%s", err, convergedOutput.String())
+	}
+	var converged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, convergedOutput.Bytes(), &converged)
+	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute ||
+		converged.NextTransition.ReasonCode != "fresh_target_ready" || converged.NextTransition.Execute == nil ||
+		converged.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("converged managed assets STATUS transition = %#v", converged.NextTransition)
+	}
+}
+
+// TestManagedAssetsStopTransitionCarriesExactlyOneSignal is the RED-first
+// proof for the inconclusive review finding on #3299/#4170: the negotiated
+// STATUS envelope must carry exactly one signal for a stale managed-asset
+// digest -- the typed `stop`/`managed_assets_outdated` transition with its
+// sync continuation -- and Validate() must refuse either way this could
+// drift: the continuation missing from the stop that requires it, or the
+// continuation attached to a transition it does not belong to (a producer
+// bug that would let a caller read two disagreeing exits from one envelope).
+func TestManagedAssetsStopTransitionCarriesExactlyOneSignal(t *testing.T) {
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/dual-signal.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var staleOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &staleOutput); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, staleOutput.String())
+	}
+	var stale ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, staleOutput.Bytes(), &stale)
+	if stale.NextTransition == nil || stale.NextTransition.Kind != reviewNextTransitionStop ||
+		stale.NextTransition.ReasonCode != "managed_assets_outdated" || stale.NextTransition.Continuation == nil {
+		t.Fatalf("baseline stale managed assets STATUS = %#v", stale.NextTransition)
+	}
+	if err := stale.Validate(); err != nil {
+		t.Fatalf("baseline stale managed assets STATUS should validate: %v", err)
+	}
+
+	// A managed_assets_outdated stop without its continuation names no way
+	// out at all: the caller cannot resolve it and cannot tell it apart from
+	// a producer defect.
+	missingContinuation := stale
+	strippedTransition := *stale.NextTransition
+	strippedTransition.Continuation = nil
+	missingContinuation.NextTransition = &strippedTransition
+	if err := missingContinuation.Validate(); err == nil {
+		t.Fatal("STATUS accepted a managed_assets_outdated stop with no sync continuation")
+	}
+
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	recordManagedAssetDigest(t, home, digest)
+	var convergedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &convergedOutput); err != nil {
+		t.Fatalf("converged managed assets STATUS: %v\n%s", err, convergedOutput.String())
+	}
+	var converged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, convergedOutput.Bytes(), &converged)
+	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute {
+		t.Fatalf("converged managed assets STATUS = %#v", converged.NextTransition)
+	}
+
+	// A continuation on an executable START is a second, disagreeing signal:
+	// nothing about a fresh_target_ready execute names a sync problem, so a
+	// caller reading both would not know which one to trust.
+	executeWithContinuation := converged
+	bogusTransition := *converged.NextTransition
+	bogusTransition.Continuation = &ReviewManagedAssetsContinuation{Operation: "sync", Command: "gentle-ai sync --agent opencode", Agent: "opencode"}
+	executeWithContinuation.NextTransition = &bogusTransition
+	if err := executeWithContinuation.Validate(); err == nil {
+		t.Fatal("STATUS accepted a sync continuation attached to an executable START transition")
 	}
 }
 

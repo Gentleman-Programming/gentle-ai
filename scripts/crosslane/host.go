@@ -54,7 +54,8 @@ func (b *battery) runEnv(dir string, env []string, args ...string) (string, stri
 	command.WaitDelay = 30 * time.Second
 	command.Dir = dir
 	overrides := append([]string(nil), env...)
-	if b.sandboxHome != "" {
+	piEnvironment := len(overrides) == 4 && strings.HasPrefix(overrides[0], "HOME=") && strings.HasPrefix(overrides[1], "PATH=") && strings.HasPrefix(overrides[2], "PI_CODING_AGENT_DIR=") && overrides[3] == "GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1"
+	if b.sandboxHome != "" && !piEnvironment {
 		supplied := make(map[string]bool, len(overrides))
 		for _, entry := range overrides {
 			if name, _, found := strings.Cut(entry, "="); found {
@@ -68,7 +69,11 @@ func (b *battery) runEnv(dir string, env []string, args ...string) (string, stri
 		}
 	}
 	if len(overrides) > 0 {
-		command.Env = mergeEnvironment(overrides)
+		if piEnvironment {
+			command.Env = overrides
+		} else {
+			command.Env = mergeEnvironment(overrides)
+		}
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -144,10 +149,7 @@ func hasArgument(input map[string]any, name string) bool {
 	return false
 }
 
-// hostNegotiatedMediumStart drives status -> provider-rendered review.start
-// -> consent/v3 granted round-trip for one host runtime, asserting the frozen
-// medium tier. Returns false after recording the failing check.
-func (b *battery) hostNegotiatedMediumStart(lane, repo, agent string, env []string) bool {
+func (b *battery) hostNegotiatedStart(lane, repo, agent string, env []string, risk string) bool {
 	statusDoc, stderr, code := b.statusEnv(repo, agent, env)
 	command := getString(statusDoc, "next_transition", "execute", "command")
 	if getString(statusDoc, "next_transition", "execute", "operation") != "review.start" || command == "" {
@@ -166,7 +168,7 @@ func (b *battery) hostNegotiatedMediumStart(lane, repo, agent string, env []stri
 		return false
 	}
 	startDoc, stderr, code := b.runCommandLineEnv("start", repo, env, granted)
-	if code != 0 || getString(startDoc, "state") != "reviewing" || getString(startDoc, "risk_level") != "medium" {
+	if code != 0 || getString(startDoc, "state") != "reviewing" || getString(startDoc, "risk_level") != risk || risk == "high" && fmt.Sprint(getSlice(startDoc, "selected_lenses")) != "[review-risk review-resilience review-readability review-reliability]" {
 		b.fail(lane, "consent granted round-trip", fmt.Sprintf("exit=%d state=%q risk=%q %s",
 			code, getString(startDoc, "state"), getString(startDoc, "risk_level"), firstLine(stderr)))
 		return false
@@ -175,7 +177,7 @@ func (b *battery) hostNegotiatedMediumStart(lane, repo, agent string, env []stri
 		b.fail(lane, "consent granted round-trip", err.Error())
 		return false
 	}
-	b.pass(lane, "consent granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing medium lineage")
+	b.pass(lane, "consent granted round-trip", "consent/v3 surfaced; granted invocation created a reviewing "+risk+" lineage with its canonical lenses")
 	return true
 }
 
@@ -212,7 +214,8 @@ func (b *battery) hostMediumCandidate(lane, name string) (string, bool) {
 // the installed gentle-pi relay implementation instead.
 func (b *battery) hostCaptureLens(lane, repo, agent string, env []string, input map[string]any) bool {
 	if hasArgument(input, "materialize") {
-		return b.runPiRelaySlot(lane, repo, input)
+		_, admitted := b.runPiRelaySlot(lane, repo, input)
+		return admitted
 	}
 	b.noteHostCost(lane, "1 compiled reviewer subprocess run (capture-result --agent)")
 	capture, stderr, code := b.runJSONEnv("result-artifact", repo, env,

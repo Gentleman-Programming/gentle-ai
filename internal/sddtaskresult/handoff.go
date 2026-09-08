@@ -17,6 +17,8 @@ const handoffSchema = "gentle-ai.sdd-task-result-failure/v1"
 
 const retryGuidance = "Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user."
 
+const unscopedContinuation = "Return to the active SDD coordinator and inspect only its retained structured status for the selected change and artifact store. If that status is unavailable, report this terminal failure and ask the user to select the change and artifact store. Do not infer either, run unscoped status discovery, retry, or launch another phase."
+
 // routeToken bounds what may be echoed back as taskModel. An unvalidated
 // provider string would otherwise reach a consumer inside an envelope it is
 // told to preserve verbatim.
@@ -45,14 +47,14 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-// continuationFor names the change when the caller knows it (#2790): with two
-// active changes the selector-less form only answers select-change.
+// Without a change, defer to retained coordinator status rather than discover
+// unrelated state (#2855). Preserve the existing explicit-change command (#2790);
+// naming a change alone does not establish artifact-store identity.
 func continuationFor(cwd, change string) string {
-	selector := ""
-	if change != "" {
-		selector = shellQuote(change) + " "
+	if change == "" {
+		return unscopedContinuation
 	}
-	return "gentle-ai sdd-status " + selector + "--cwd " + shellQuote(cwd) + " --json"
+	return "gentle-ai sdd-status " + shellQuote(change) + " --cwd " + shellQuote(cwd) + " --json"
 }
 
 func encode(payload handoffPayload) string {

@@ -127,22 +127,32 @@ func TestExhaustedBudgetSurfacesTheQuestionEndToEnd(t *testing.T) {
 	// One attempt, one budget, and the harness never runs the work: the actor
 	// settles it invalidated, which is the settle contract's existing way of
 	// saying the harness could not be used.
+	//
+	// #3152: a failed/invalidated/zero-changed-line settlement now refunds the
+	// attempt it spent instead of charging it, up to the objective's own
+	// MaxAttempts (1 here), so it takes TWO such harness failures -- not one
+	// -- to actually exhaust the budget and reach the consent question this
+	// test is about. This is the intended behavior the design decision
+	// selected: a harness that never ran the work must not by itself force a
+	// maintainer decision.
 	writeCLIAttemptFile(t, cliAttemptChangePath(repo, change, "tasks.md"), "- [x] 1.1 Work\n# harness\n")
-	acquired, _ := runCompactSDDAttempt(t, []string{
-		"acquire", "--cwd", repo, "--change", change, "--request-id", "h1",
-		"--work-unit", "acceptance", "--evidence-goal", "postgres acceptance",
-		"--max-attempts", "1", "--max-changed-lines", "400",
-	})
-	if acquired.State != "proceed" {
-		t.Fatalf("acquire = %#v", acquired)
+	for _, requestID := range []string{"h1", "h3"} {
+		acquired, _ := runCompactSDDAttempt(t, []string{
+			"acquire", "--cwd", repo, "--change", change, "--request-id", requestID,
+			"--work-unit", "acceptance", "--evidence-goal", "postgres acceptance",
+			"--max-attempts", "1", "--max-changed-lines", "400",
+		})
+		if acquired.State != "proceed" {
+			t.Fatalf("acquire %s = %#v", requestID, acquired)
+		}
+		runCompactSDDAttempt(t, []string{
+			"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", requestID + "-settle",
+			"--outcome", "failed", "--evidence-revision", cliAttemptHash('a'),
+			"--diagnosis", "the harness could not be constructed; no consumer command ran",
+			"--harness-disposition", "invalidated",
+			"--cleanup-evidence", "container removed", "--process-evidence", "no descendants",
+		})
 	}
-	runCompactSDDAttempt(t, []string{
-		"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "h2",
-		"--outcome", "failed", "--evidence-revision", cliAttemptHash('a'),
-		"--diagnosis", "the harness could not be constructed; no consumer command ran",
-		"--harness-disposition", "invalidated",
-		"--cleanup-evidence", "container removed", "--process-evidence", "no descendants",
-	})
 
 	// The budget is gone. Status must now ASK, with the accounting and a
 	// verbatim-runnable grant.

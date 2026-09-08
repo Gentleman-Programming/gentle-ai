@@ -40,6 +40,7 @@ interface CaseConfig {
   }
   gentle_ai_executable: string
   pi_executable: string
+  target_cwd: string
 }
 
 const config = JSON.parse(readFileSync(process.argv[2], "utf8")) as CaseConfig
@@ -59,7 +60,8 @@ const result = await runReviewHostRelaySlot({
   submission,
   gentleAiExecutable: config.gentle_ai_executable,
   piExecutable: config.pi_executable,
-  environment: { ...process.env, GENTLE_PI_REVIEW_RELAY_CONTRACT: "gentle-pi.review-relay/v1" },
+  targetCwd: config.target_cwd,
+  environment: { HOME: process.env.HOME, PATH: process.env.PATH, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, GENTLE_PI_REVIEW_RELAY_CONTRACT: "gentle-pi.review-relay/v1" },
 })
 console.log(JSON.stringify({
   prompt_bytes: result.promptByteLength,

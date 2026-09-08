@@ -17,11 +17,9 @@ import (
 
 // SDD delivery strategy has a producer and a consumer. The producer is the
 // session-preflight label->canonical mapping; the consumer is every phase skill
-// and orchestrator branch that reads `delivery_strategy`. In the Claude and
-// OpenCode orchestrators both halves live in the same document about a hundred
-// lines apart, and OpenCode carries a third copy of the producer compiled into
-// ensurePreservedOpenCodeOrchestratorPreflight, which re-injects it into
-// installed configs on every sync.
+// and orchestrator branch that reads `delivery_strategy`. Claude and OpenCode
+// receive the same canonical producer at render time; raw assets are templates.
+// Preserved OpenCode prompts receive it through marker-owned migration.
 //
 // Nothing asserted the halves agreed, so the preflight emitted `ask-always`,
 // `single-pr-default`, `force-chained`, and `auto-forecast` into a consumer
@@ -33,8 +31,8 @@ import (
 // Both halves below are derived from shipped artifacts, never from a list
 // restated here: the domain from the phase skills that declare it as their
 // input contract, the producer from the preflight UI label list plus the
-// mapping block in the same document, and the producer sites from walking the
-// embedded assets tree. A renamed label, a fifth canonical value, or a typo on
+// mapping block in the installed document. Walking the embedded assets rejects
+// a second producer. A renamed label, a fifth canonical value, or a typo on
 // either side fails here instead of drifting silently.
 
 // deliveryDomainDeclaration matches a phase skill's declared input domain for
@@ -44,12 +42,8 @@ import (
 var deliveryDomainDeclaration = regexp.MustCompile("`(ask-on-risk(?: \\| [a-z][a-z0-9-]*)+)`")
 
 // preflightPRGroupLabels matches the user-facing PR option list the preflight
-// renders, e.g. "3. PRs: Ask me, Single PR, Auto."
-var preflightPRGroupLabels = regexp.MustCompile(`(?m)^\s*3\. PRs: (.+?)\.[ \t]*\r?$`)
-
-// preflightStrategyChoiceDeclaration matches the preflight requirement line that
-// names the canonical values the chained-PR question collects.
-var preflightStrategyChoiceDeclaration = regexp.MustCompile(`(?m)^\s*3\. \*\*Chained PR strategy\*\*[^:]*: (.+?)[ \t]*\r?$`)
+// renders, e.g. "3. **PR strategy**: Ask me, Single PR, or Auto."
+var preflightPRGroupLabels = regexp.MustCompile(`(?m)^\s*3\. \*\*PR strategy\*\*: (.+?)\.[ \t]*\r?$`)
 
 var backtickSpan = regexp.MustCompile("`([^`]+)`")
 
@@ -117,36 +111,40 @@ func splitDeclaredDomain(declaration string) []string {
 	return values
 }
 
-// preflightMappingSources returns every shipped asset that carries the
-// label->canonical preflight mapping, discovered by walking the embedded tree so
-// a new runtime that grows a preflight is covered without editing this guard.
+// preflightMappingSources reads the actual installed Claude authority and rejects
+// any raw asset that reintroduces a separately authored mapping producer.
 func preflightMappingSources(t *testing.T) map[string]string {
 	t.Helper()
 
-	sources := map[string]string{}
-	err := fs.WalkDir(assets.FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+	home := t.TempDir()
+	if _, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if err := validateSDDSessionPreflightProjection(content, testSDDSessionPreflightEntryAnchor, "AskUserQuestion"); err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{"installed Claude": content}
+	err = fs.WalkDir(assets.FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".md") {
 			return walkErr
 		}
 		content := assets.MustRead(path)
-		if strings.Contains(content, "Map answers to canonical values") {
-			sources[path] = content
+		for _, producer := range []string{"Map answers to canonical values", "Canonical mappings:", "Ask me ->", sddSessionPreflightMarker} {
+			if strings.Contains(content, producer) {
+				t.Errorf("raw asset %s owns a second preflight producer: %q", path, producer)
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk embedded assets: %v", err)
 	}
-	if len(sources) == 0 {
-		t.Fatal("no shipped asset carries a preflight label->canonical mapping; the guard has lost its subject")
-	}
-
-	// The OpenCode installer re-injects its own copy of the mapping into
-	// existing configs, so a markdown-only fix would be reverted on the next
-	// sync. Check the compiled literal through the same derivation.
-	sources["internal/components/sdd/inject.go (ensurePreservedOpenCodeOrchestratorPreflight)"] =
-		ensurePreservedOpenCodeOrchestratorPreflight("")
-
 	return sources
 }
 
@@ -171,12 +169,12 @@ func mappedCanonicalValue(mapping, label string) (string, bool) {
 func canonicalMappingBlock(t *testing.T, path, content string) string {
 	t.Helper()
 
-	start := strings.Index(content, "Map answers to canonical values")
+	start := strings.Index(content, "Canonical mappings:")
 	if start < 0 {
 		t.Fatalf("%s lost its canonical mapping block", path)
 	}
 	block := content[start:]
-	if end := strings.Index(block, "Hard gate rules:"); end >= 0 {
+	if end := strings.Index(block, sddSessionPreflightEnd); end >= 0 {
 		block = block[:end]
 	}
 	return block
@@ -197,7 +195,7 @@ func TestSDDPreflightDeliveryStrategyMappingStaysInsideConsumerDomain(t *testing
 
 		mapping := canonicalMappingBlock(t, path, content)
 		for _, rawLabel := range strings.Split(labelMatch[1], ",") {
-			label := strings.TrimSpace(rawLabel)
+			label := strings.TrimPrefix(strings.TrimSpace(rawLabel), "or ")
 			if label == "" {
 				continue
 			}
@@ -231,13 +229,16 @@ func TestSDDPreflightStrategyChoicesStayInsideConsumerDomain(t *testing.T) {
 
 	checked := 0
 	for path, content := range preflightMappingSources(t) {
-		match := preflightStrategyChoiceDeclaration.FindStringSubmatch(content)
-		if match == nil {
-			continue
+		mapping := canonicalMappingBlock(t, path, content)
+		// Inspect every emitted mapping, including one accidentally added outside
+		// the declared UI choices. Pace/artifact mappings are not PR strategies.
+		start := strings.Index(mapping, "- Ask me ->")
+		if start < 0 {
+			t.Fatalf("%s missing PR strategy mappings", path)
 		}
 		checked++
 
-		for _, span := range backtickSpan.FindAllStringSubmatch(match[1], -1) {
+		for _, span := range backtickSpan.FindAllStringSubmatch(mapping[start:], -1) {
 			for _, value := range splitDeclaredDomain(span[1]) {
 				if !canonicalValueShape.MatchString(value) {
 					continue
@@ -332,11 +333,8 @@ func TestSDDReviewWorkloadGuardsRejectUnrecognisedDeliveryStrategy(t *testing.T)
 	}
 }
 
-// A preserved OpenCode prompt that already carries a well-formed preflight
-// satisfies every other freshness clause in
-// ensurePreservedOpenCodeOrchestratorPreflight, so before this the retired
-// mapping survived every sync and a markdown-only fix would have been reverted
-// on the user's next install.
+// A preserved OpenCode prompt with a legacy owned block must replace that block,
+// so retired delivery mappings cannot survive a sync.
 func TestInjectOpenCodeMigratesRetiredDeliveryStrategyMapping(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -346,11 +344,10 @@ func TestInjectOpenCodeMigratesRetiredDeliveryStrategyMapping(t *testing.T) {
 		t.Fatalf("MkdirAll(settings dir) error = %v", err)
 	}
 
-	stalePrompt := strings.ReplaceAll(
-		ensurePreservedOpenCodeOrchestratorPreflight(""),
-		"Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`",
-		"Ask me -> `ask-always`; Single PR -> `single-pr-default`; Auto -> `auto-forecast`",
-	)
+	stalePrompt := legacySDDSessionPreflightMarker + "\n" +
+		"3. PRs: Ask me, Single PR, Auto.\n" +
+		"Ask me -> `ask-always`; Single PR -> `single-pr-default`; Auto -> `auto-forecast`\n" +
+		legacySDDSessionPreflightEnd
 	if !strings.Contains(stalePrompt, "Ask me -> `ask-always`") {
 		t.Fatal("test seed did not reproduce the retired mapping; the literal shape changed")
 	}
@@ -406,7 +403,7 @@ func TestSDDPreflightNoLongerOffersRetiredChainedPRLabel(t *testing.T) {
 		}
 
 		for _, rawLabel := range strings.Split(labelMatch[1], ",") {
-			if strings.TrimSpace(rawLabel) != retired {
+			if strings.TrimPrefix(strings.TrimSpace(rawLabel), "or ") != retired {
 				continue
 			}
 			t.Errorf(
@@ -462,14 +459,11 @@ func TestInjectOpenCodeMigratesRetiredChainedPRPreflightOption(t *testing.T) {
 	// Rebuild the exact prompt the previous release injected by reversing this
 	// change on the current literal, so the seed tracks the literal instead of
 	// freezing a copy of it that could drift.
-	stalePrompt := strings.NewReplacer(
-		"3. PRs: Ask me, Single PR, Auto.",
-		"3. PRs: Ask me, Single PR, Chained, Auto.",
-		"Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`",
-		"Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Chained -> `auto-chain`; Auto -> `auto-chain`",
-		"The preflight offers no separate chained option because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it `Auto` already resolves to `auto-chain`.",
-		"Chained and Auto both resolve to `auto-chain` because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk.",
-	).Replace(ensurePreservedOpenCodeOrchestratorPreflight(""))
+	stalePrompt := legacySDDSessionPreflightMarker + "\n" +
+		"3. PRs: Ask me, Single PR, Chained, Auto.\n" +
+		"Chained -> `auto-chain`\n" +
+		"Chained and Auto both resolve to `auto-chain` because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk.\n" +
+		legacySDDSessionPreflightEnd
 
 	for _, seeded := range []string{
 		"3. PRs: Ask me, Single PR, Chained, Auto.",
@@ -510,8 +504,8 @@ func TestInjectOpenCodeMigratesRetiredChainedPRPreflightOption(t *testing.T) {
 			t.Errorf("opencode.json kept retired preflight fragment %q after sync", residue)
 		}
 	}
-	if !strings.Contains(text, "3. PRs: Ask me, Single PR, Auto.") {
-		t.Error("opencode.json did not receive the three-option PR preflight list")
+	if !strings.Contains(text, "3. **PR strategy**: Ask me, Single PR, or Auto.") {
+		t.Error("opencode.json did not receive the canonical three-option PR preflight list")
 	}
 	if !strings.Contains(text, "Auto -> `auto-chain`") {
 		t.Error("opencode.json lost the `auto-chain` canonical value; only the `Chained` label was retired")
@@ -519,8 +513,8 @@ func TestInjectOpenCodeMigratesRetiredChainedPRPreflightOption(t *testing.T) {
 	if !strings.Contains(text, "# Custom prompt") {
 		t.Error("migration discarded the user's own prompt content")
 	}
-	if count := strings.Count(text, "3. PRs: "); count != 1 {
-		t.Errorf("migrated prompt carries %d PR option lists; the retired menu must be replaced, not appended to", count)
+	if count := strings.Count(text, sddSessionPreflightMarker); count != 1 {
+		t.Errorf("migrated prompt carries %d canonical preflight blocks; the retired menu must be replaced, not appended to", count)
 	}
 
 	// The freshness clause that fires this migration must also stop firing once

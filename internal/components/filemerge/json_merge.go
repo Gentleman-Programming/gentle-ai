@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -23,7 +24,7 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	}
 
 	merged := mergeObjects(base, overlay)
-	encoded, err := json.MarshalIndent(merged, "", "  ")
+	encoded, err := MarshalJSONPreservingPermissions(baseJSON, merged)
 	if err != nil {
 		return nil, fmt.Errorf("marshal merged json: %w", err)
 	}
@@ -63,20 +64,121 @@ func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte,
 	}
 
 	merged := mergeObjects(base, overlay)
+	encoded, err := MarshalJSONPreservingPermissions(baseJSON, merged)
+	if err != nil {
+		return nil, err
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &members); err != nil {
+		return nil, err
+	}
 	updated := string(baseJSON)
 	for key := range overlay {
-		value := merged[key]
-		encoded, err := json.MarshalIndent(value, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("marshal merged jsonc value %q: %w", key, err)
-		}
-		updated = upsertTopLevelJSONCValue(updated, key, string(encoded))
-		base[key] = value
+		updated = upsertTopLevelJSONCValue(updated, key, string(members[key]))
 	}
 	if !strings.HasSuffix(updated, "\n") {
 		updated += "\n"
 	}
 	return []byte(updated), nil
+}
+
+// MarshalJSONPreservingPermissions retains existing rule order when a settings
+// writer changes unrelated fields. Permission objects are order-sensitive in
+// OpenCode; ordinary objects keep the existing sorted encoding convention.
+func MarshalJSONPreservingPermissions(base []byte, value any) ([]byte, error) {
+	return marshalPermissionOrder(normalizeJSON(base), value, false)
+}
+
+// MergeJSONDefaultsForPath fills missing values without overriding user policy.
+// New rules precede existing rules, except an initial catch-all allow remains
+// the fallback before new defaults. Existing rule order and scalar values win.
+func MergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byte, error) {
+	base, err := unmarshalJSONObject(baseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("refuse defaults over unreadable settings: %w", err)
+	}
+	defaults, err := unmarshalJSONObject(defaultsJSON)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := marshalPermissionOrder(normalizeJSON(baseJSON), mergeObjectScope(defaults, base, false, false), false)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(path, ".jsonc") || len(bytes.TrimSpace(baseJSON)) == 0 {
+		return append(encoded, '\n'), nil
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &members); err != nil {
+		return nil, err
+	}
+	updated := string(baseJSON)
+	for key := range defaults {
+		if topLevelJSONCKeyCount(updated, key) > 1 {
+			return nil, fmt.Errorf("duplicate defaults key %q", key)
+		}
+		updated = upsertTopLevelJSONCValue(updated, key, string(members[key]))
+	}
+	return []byte(strings.TrimRight(updated, "\n") + "\n"), nil
+}
+
+func marshalPermissionOrder(base []byte, value any, ordered bool) ([]byte, error) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return json.Marshal(value)
+	}
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(base, &raw)
+	var existing, added []string
+	if ordered && raw != nil {
+		decoder := json.NewDecoder(bytes.NewReader(base))
+		_, _ = decoder.Token()
+		for decoder.More() {
+			key, _ := decoder.Token()
+			var ignored json.RawMessage
+			if err := decoder.Decode(&ignored); err != nil {
+				return nil, err
+			}
+			if _, present := object[key.(string)]; present {
+				existing = append(existing, key.(string))
+			}
+		}
+	}
+	for key := range object {
+		if !ordered || raw[key] == nil {
+			added = append(added, key)
+		}
+	}
+	sort.Strings(added)
+	keys := append(append([]string{}, existing...), added...)
+	// Newly introduced rules must not override existing custom rules.
+	if ordered {
+		keys = append(append([]string{}, added...), existing...)
+		if len(existing) > 0 && existing[0] == "*" && string(raw["*"]) == `"allow"` {
+			keys = append([]string{"*"}, append(added, existing[1:]...)...)
+		}
+	}
+	var compact bytes.Buffer
+	compact.WriteByte('{')
+	for i, key := range keys {
+		if i > 0 {
+			compact.WriteByte(',')
+		}
+		name, _ := json.Marshal(key)
+		compact.Write(name)
+		compact.WriteByte(':')
+		child, err := marshalPermissionOrder(raw[key], object[key], ordered || key == "permission")
+		if err != nil {
+			return nil, err
+		}
+		compact.Write(child)
+	}
+	compact.WriteByte('}')
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, compact.Bytes(), "", "  "); err != nil {
+		return nil, err
+	}
+	return indented.Bytes(), nil
 }
 
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {
@@ -122,7 +224,7 @@ func RemoveJSONAgentTools(raw []byte, names ...string) ([]byte, error) {
 	if !changed {
 		return raw, nil
 	}
-	encoded, err := json.MarshalIndent(root, "", "  ")
+	encoded, err := MarshalJSONPreservingPermissions(raw, root)
 	if err != nil {
 		return nil, err
 	}
@@ -747,12 +849,30 @@ func asSentinel(v any) (any, bool) {
 }
 
 func mergeObjects(base map[string]any, overlay map[string]any) map[string]any {
+	return mergeObjectScope(base, overlay, false, true)
+}
+
+func mergeObjectScope(base map[string]any, overlay map[string]any, permission, protect bool) map[string]any {
 	result := make(map[string]any, len(base)+len(overlay))
 	for key, value := range base {
 		result[key] = value
 	}
 
 	for key, overlayValue := range overlay {
+		// A generated overlay must not loosen an existing scalar restriction,
+		// including when an agent permission object replaces a scalar deny.
+		if action, ok := result[key].(string); ok && protect && (permission || key == "permission") {
+			if action == "deny" || (action == "ask" && overlayValue != "deny") {
+				continue
+			}
+		}
+		// A scalar allow/ask cannot safely replace an ordered rule object:
+		// it could erase a deny anywhere in that object.
+		if _, ok := result[key].(map[string]any); ok && protect && (permission || key == "permission") {
+			if overlayValue == "allow" || overlayValue == "ask" {
+				continue
+			}
+		}
 		// Check for the replace sentinel: if the overlay value is a map with
 		// exactly one key "__replace__", use the sentinel's value verbatim —
 		// regardless of whether the key exists in base. This allows callers to
@@ -768,7 +888,7 @@ func mergeObjects(base map[string]any, overlay map[string]any) map[string]any {
 			// that any nested __replace__ sentinels are unwrapped before
 			// they reach the output.
 			if overlayMap, isMap := overlayValue.(map[string]any); isMap {
-				result[key] = mergeObjects(map[string]any{}, overlayMap)
+				result[key] = mergeObjectScope(map[string]any{}, overlayMap, permission || key == "permission", protect)
 			} else {
 				result[key] = overlayValue
 			}
@@ -778,7 +898,7 @@ func mergeObjects(base map[string]any, overlay map[string]any) map[string]any {
 		baseMap, baseIsMap := baseValue.(map[string]any)
 		overlayMap, overlayIsMap := overlayValue.(map[string]any)
 		if baseIsMap && overlayIsMap {
-			result[key] = mergeObjects(baseMap, overlayMap)
+			result[key] = mergeObjectScope(baseMap, overlayMap, permission || key == "permission", protect)
 			continue
 		}
 

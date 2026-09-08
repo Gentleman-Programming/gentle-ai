@@ -1,11 +1,99 @@
 package sdd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
+
+func TestRemoteAuthorizationSharedPrompts(t *testing.T) {
+	for _, capability := range []string{"capable", "small"} {
+		t.Run(capability, func(t *testing.T) {
+			home := t.TempDir()
+			capabilities := map[string]string{}
+			for _, phase := range SharedPromptPhases() {
+				capabilities[phase] = capability
+			}
+			if _, err := WriteSharedPromptFiles(home, capabilities); err != nil {
+				t.Fatal(err)
+			}
+			canonical := strings.TrimSpace(agentguidance.InjectRemoteAuthorization(""))
+			for _, phase := range SharedPromptPhases() {
+				content, err := os.ReadFile(filepath.Join(SharedPromptDir(home), phase+".md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Count(string(content), canonical) != 1 {
+					t.Errorf("%s: canonical remote authorization must occur once", phase)
+				}
+			}
+			if changed, err := WriteSharedPromptFiles(home, capabilities); err != nil || changed {
+				t.Fatalf("second write: changed=%v err=%v", changed, err)
+			}
+		})
+	}
+}
+
+func TestRemoteAuthorizationProfile(t *testing.T) {
+	home := t.TempDir()
+	profile := makeHaikuProfile()
+	for _, phase := range []string{"jd-judge-a", "jd-judge-b", "jd-fix-agent"} {
+		profile.PhaseAssignments[phase] = model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4-5"}
+	}
+	data, err := GenerateProfileOverlay(profile, home, openCodeSettingsPathForTest(home), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	for _, phase := range []string{"jd-judge-a", "jd-judge-b", "jd-fix-agent"} {
+		prompt := agents[phase+"-cheap"].(map[string]any)["prompt"].(string)
+		if strings.Count(prompt, strings.TrimSpace(agentguidance.InjectRemoteAuthorization(""))) != 1 {
+			t.Errorf("%s: missing unique canonical contract", phase)
+		}
+	}
+}
+
+func TestRemoteAuthorizationProjectionPreservesMetadata(t *testing.T) {
+	for _, prompt := range []any{nil, 42, "{file:./phase.md}", "Review without tools."} {
+		for _, mode := range []string{"primary", "subagent"} {
+			agent := map[string]any{"mode": mode, "prompt": prompt, "permission": map[string]any{"bash": "deny"}, "tools": []string{}, "model": "unchanged"}
+			before, _ := json.Marshal(agent)
+			mapping := map[string]any{"agent": agent, "invalid": 42, "missing": map[string]any{}}
+			injectRemoteAuthorizationIntoSubagentPrompts(mapping)
+			if prompt == "Review without tools." && mode == "subagent" {
+				if agent["prompt"] != agentguidance.InjectRemoteAuthorization(prompt.(string)) {
+					t.Fatal("tool-free executor missed contract")
+				}
+			} else if !reflect.DeepEqual(agent["prompt"], prompt) {
+				t.Fatal("excluded prompt changed")
+			}
+			once, _ := json.Marshal(mapping)
+			injectRemoteAuthorizationIntoSubagentPrompts(mapping)
+			twice, _ := json.Marshal(mapping)
+			if string(once) != string(twice) {
+				t.Fatal("projection not idempotent")
+			}
+			agent["prompt"] = prompt
+			after, _ := json.Marshal(agent)
+			if string(before) != string(after) {
+				t.Fatal("metadata changed")
+			}
+			if len(mapping["missing"].(map[string]any)) != 0 {
+				t.Fatal("missing prompt synthesized")
+			}
+		}
+	}
+}
 
 const preWriteArtifactLanguageCheck = "Before any Write/Edit whose content is an artifact, re-verify these artifact language rules."
 

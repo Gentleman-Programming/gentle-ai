@@ -1499,7 +1499,14 @@ func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
 }
 
 func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
 	dir := t.TempDir()
+	writePath := filepath.Join(dir, "opencode.json")
+	if err := os.WriteFile(writePath, []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"}},"provider":{"custom-cloud":{"name":"Lower priority"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	settingsPath := filepath.Join(dir, "opencode.jsonc")
 	settings := `{
   // Custom provider configured only in the effective OpenCode file.
@@ -1519,6 +1526,9 @@ func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *
 		t.Fatalf("write opencode.jsonc: %v", err)
 	}
 	withModelPickerWorkingDir(t, dir)
+	if got := currentOpenCodeSettingsPath(); got != writePath {
+		t.Fatalf("profile/deletion target = %q, want %q", got, writePath)
+	}
 	withModelPickerCatalogDiscoverer(t, func(_ context.Context, projectDir string) (map[string]opencode.Provider, error) {
 		if projectDir != dir {
 			t.Fatalf("projectDir = %q, want %q", projectDir, dir)
@@ -1551,6 +1561,9 @@ func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *
 	}
 	if gotProviders["runtime-ai"] != 1 || gotProviders["custom-cloud"] != 1 {
 		t.Fatalf("provider entries = %+v, want runtime-ai and custom-cloud with one selectable model each", entries)
+	}
+	if state.ModelPicker.ConfiguredProviders["custom-cloud"].Name != "Custom Cloud" || state.ModelPicker.ConfigWarning == "" {
+		t.Fatalf("missing JSONC precedence or layered-config warning: %+v", state.ModelPicker)
 	}
 	if got := state.ModelPicker.SDDModels["custom-cloud"][0].ID; got != "custom-reasoner" {
 		t.Fatalf("custom-cloud selectable model = %q, want custom-reasoner", got)
@@ -4934,6 +4947,224 @@ func TestModelConfigOpenCodeNoPrePopulationWhenFileEmpty(t *testing.T) {
 	// When no assignments in file, ModelAssignments should remain nil (not an empty map)
 	if state.Selection.ModelAssignments != nil {
 		t.Errorf("expected nil ModelAssignments when file has no agents, got %v", state.Selection.ModelAssignments)
+	}
+}
+
+// ─── Issue #950: isolate default OpenCode model config from custom SDD
+// profiles ───────────────────────────────────────────────────────────────
+
+// TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig is a table test
+// for issue #950. A custom SDD profile edit loads its own OrchestratorModel
+// and PhaseAssignments into m.Selection.ModelAssignments — keyed by the same
+// "gentle-orchestrator" constant the default OpenCode model config screen
+// uses for its own base row — because both screens share one ModelPicker.
+// Without resetting that map on entry/exit of the profile flow:
+//   - a profile's assignments bleed into the default gentle-orchestrator
+//     config (a custom profile overwrites the default), and
+//   - the default config's nil guard (`if ModelAssignments == nil`) never
+//     fires, so opening it after visiting a profile shows/persists stale
+//     profile-specific phase keys (e.g. "sdd-apply") instead of just the
+//     real default.
+//
+// Each case drives the model through a sequence of screens and asserts the
+// final m.Selection.ModelAssignments contents.
+func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
+	defaultAssignment := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
+	profileOrchestrator := model.ModelAssignment{ProviderID: "openai", ModelID: "o3"}
+	profilePhase := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o"}
+
+	profile := model.Profile{
+		Name:              "high-performance",
+		OrchestratorModel: profileOrchestrator,
+		PhaseAssignments:  map[string]model.ModelAssignment{"sdd-apply": profilePhase},
+	}
+
+	origAssignments := readCurrentAssignmentsFn
+	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
+		return map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment}, nil
+	}
+	t.Cleanup(func() { readCurrentAssignmentsFn = origAssignments })
+
+	origProfiles := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{profile}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = origProfiles })
+
+	openDefaultModelConfig := func(m *Model) {
+		m.setScreen(ScreenModelConfig)
+		m.Cursor = 1 // "Configure OpenCode models"
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		*m = updated.(Model)
+		if m.Screen != ScreenModelPicker {
+			t.Fatalf("expected ScreenModelPicker, got %v", m.Screen)
+		}
+	}
+
+	editProfile := func(m *Model) {
+		m.setScreen(ScreenProfiles)
+		m.Cursor = 0 // the only entry: "high-performance"
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		*m = updated.(Model)
+		if m.Screen != ScreenProfileCreate {
+			t.Fatalf("expected ScreenProfileCreate, got %v", m.Screen)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		drive       func(m *Model)
+		wantAssign  map[string]model.ModelAssignment
+		wantMissing []string // keys that must be absent from the final map
+
+		// checkStash, when true, additionally asserts m.DefaultModelAssignmentsStash
+		// equals wantStash exactly (nil-safe via reflect.DeepEqual semantics).
+		checkStash bool
+		wantStash  map[string]model.ModelAssignment
+	}{
+		{
+			name: "fresh default OpenCode model config loads only the real default",
+			drive: func(m *Model) {
+				openDefaultModelConfig(m)
+			},
+			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantMissing: []string{"sdd-apply"},
+		},
+		{
+			name: "editing a profile loads only that profile's own assignments",
+			drive: func(m *Model) {
+				editProfile(m)
+			},
+			wantAssign: map[string]model.ModelAssignment{
+				"gentle-orchestrator": profileOrchestrator,
+				"sdd-apply":           profilePhase,
+			},
+		},
+		{
+			name: "leaving a profile edit then opening default config loads real defaults, not the profile's",
+			drive: func(m *Model) {
+				editProfile(m)
+				m.setScreen(ScreenWelcome) // abandon the profile edit
+				openDefaultModelConfig(m)
+			},
+			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantMissing: []string{"sdd-apply"},
+		},
+		{
+			name: "opening default config then editing a profile does not carry default fields into the profile",
+			drive: func(m *Model) {
+				openDefaultModelConfig(m)
+				editProfile(m)
+			},
+			wantAssign: map[string]model.ModelAssignment{
+				"gentle-orchestrator": profileOrchestrator,
+				"sdd-apply":           profilePhase,
+			},
+		},
+		{
+			// Regression for a review finding: an earlier version of this fix
+			// nil'd m.Selection.ModelAssignments unconditionally on entering
+			// ScreenProfiles, which wiped in-session default edits the user had
+			// not synced yet just by visiting the Profiles screen. The default
+			// must be stashed and restored intact instead of discarded.
+			name: "configuring defaults then visiting Profiles and leaving without editing leaves defaults intact",
+			drive: func(m *Model) {
+				openDefaultModelConfig(m)
+				m.setScreen(ScreenProfiles)
+				m.setScreen(ScreenWelcome)
+			},
+			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantMissing: []string{"sdd-apply"},
+		},
+		{
+			// Regression for the same finding: editing a profile and leaving
+			// must restore the stashed default, not the profile's edited data
+			// nor an empty map.
+			name: "configuring defaults then editing a profile and leaving restores the defaults, not the profile edit",
+			drive: func(m *Model) {
+				openDefaultModelConfig(m)
+				editProfile(m)
+				m.setScreen(ScreenWelcome)
+			},
+			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantMissing: []string{"sdd-apply"},
+		},
+		{
+			// Regression for a second review finding (R4-profile-picker-wipe):
+			// the exit-side restore fired on every transition out of
+			// {ScreenProfiles, ScreenProfileCreate}, including a detour into the
+			// shared ScreenModelPicker that a profile edit may open to display/
+			// edit its own assignments — swapping the profile's live data for
+			// the stashed default mid-edit and clearing the stash early. The
+			// profile flow must be tracked by origin (ProfileFlowActive) so a
+			// picker detour stays "inside" the flow: the profile's assignments
+			// must survive the round trip, and the stash must be untouched.
+			name: "detouring through the model picker mid-profile-edit keeps the profile's own assignments and leaves the stash untouched",
+			drive: func(m *Model) {
+				openDefaultModelConfig(m)      // configure a real default first
+				editProfile(m)                 // stash := copy(default); ModelAssignments := profile's own data
+				m.setScreen(ScreenModelPicker) // detour reachable from a profile edit — must NOT restore/clear
+				m.setScreen(ScreenProfileCreate)
+			},
+			wantAssign: map[string]model.ModelAssignment{
+				"gentle-orchestrator": profileOrchestrator,
+				"sdd-apply":           profilePhase,
+			},
+			checkStash: true,
+			wantStash:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+		},
+		{
+			// Companion case for the same finding: ordinary navigation within
+			// the default config flow (never having entered the profile flow)
+			// must never touch the stash at all.
+			name: "opening the default config, editing it, then bouncing through the picker leaves defaults intact with no stash involvement",
+			drive: func(m *Model) {
+				openDefaultModelConfig(m) // ProfileFlowActive stays false throughout
+				m.Selection.ModelAssignments["sdd-onboard"] = model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-4-5"}
+				m.setScreen(ScreenModelConfig) // back out of the picker
+				m.setScreen(ScreenModelPicker) // and back in
+			},
+			wantAssign: map[string]model.ModelAssignment{
+				"gentle-orchestrator": defaultAssignment,
+				"sdd-onboard":         {ProviderID: "anthropic", ModelID: "claude-haiku-4-5"},
+			},
+			wantMissing: []string{"sdd-apply"},
+			checkStash:  true,
+			wantStash:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			tt.drive(&m)
+
+			for key, want := range tt.wantAssign {
+				got, ok := m.Selection.ModelAssignments[key]
+				if !ok {
+					t.Errorf("ModelAssignments[%q] missing, want %+v", key, want)
+					continue
+				}
+				if got != want {
+					t.Errorf("ModelAssignments[%q] = %+v, want %+v", key, got, want)
+				}
+			}
+			for _, key := range tt.wantMissing {
+				if got, ok := m.Selection.ModelAssignments[key]; ok {
+					t.Errorf("ModelAssignments[%q] = %+v, want absent (isolation leak)", key, got)
+				}
+			}
+			// Exact-size check: catches a stray extra key (from either side)
+			// that the per-key checks above would otherwise miss — important
+			// for the "defaults are intact and unchanged" regression cases.
+			if tt.wantAssign != nil && len(m.Selection.ModelAssignments) != len(tt.wantAssign) {
+				t.Errorf("ModelAssignments = %+v (%d entries), want exactly %+v (%d entries)",
+					m.Selection.ModelAssignments, len(m.Selection.ModelAssignments), tt.wantAssign, len(tt.wantAssign))
+			}
+			if tt.checkStash && !reflect.DeepEqual(m.DefaultModelAssignmentsStash, tt.wantStash) {
+				t.Errorf("DefaultModelAssignmentsStash = %+v, want %+v", m.DefaultModelAssignmentsStash, tt.wantStash)
+			}
+		})
 	}
 }
 

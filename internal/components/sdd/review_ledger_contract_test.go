@@ -147,8 +147,14 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 			}
 		}
 	}
-	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); strings.Contains(frontmatter, "Bash") || strings.Contains(frontmatter, "Write") || strings.Contains(frontmatter, "Edit") {
-		t.Errorf("Claude refuter grants an execution or mutation tool: %s", frontmatter)
+	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); !strings.Contains(frontmatter, "tools: []") {
+		t.Errorf("Claude refuter is not tool-free (must match the tool-free fresh reviewer contract): %s", frontmatter)
+	} else {
+		for _, forbidden := range []string{"Bash", "Write", "Edit", "Read", "Grep", "Glob"} {
+			if strings.Contains(frontmatter, forbidden) {
+				t.Errorf("Claude refuter frontmatter grants live-worktree-reaching tool %q: %s", forbidden, frontmatter)
+			}
+		}
 	}
 	for _, path := range []string{
 		"kiro/agents/review-risk.md", "kiro/agents/review-readability.md",
@@ -479,7 +485,27 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// no-hallucination clause in every runtime orchestrator, so a design that
 	// names files apply will create is no longer failed by the gate. Kilo
 	// renders the OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "b3c375b834db28f97daaf05c19b55f088c470e7ed58b0ba3dd965569ef04c74c"
+	// #3499 projects the canonical three-choice session preflight into the
+	// OpenCode-derived Kilocode prompt, so the combined baseline is rederived.
+	// #4296 adds the shared "Delegated Verification Gate (MANDATORY)" section
+	// to every runtime orchestrator's Delegation Rules block: the RDD-aware,
+	// risk-gated rule that decides whether a delegated writer's work is
+	// verified by the writer itself, by an on-demand separate verifier, or by
+	// a mandatory independent verifier. Kilo renders that section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	// #4304 adds the declined-review fallback to that same shared section: the
+	// RDD-on shortcut holds only while the native review reaches a terminal
+	// outcome for this candidate, and a declined consent envelope, clone-local
+	// RDD disable, or a START/STATUS refusal fall back to the risk-gated tier
+	// table exactly like RDD off. Kilo renders that section through the
+	// OpenCode orchestrator asset, so the baseline is rederived.
+	// #2855 replaces identity-free task-failure commands with coordinator
+	// guidance. Kilocode embeds the changed OpenCode consumer wording.
+	// #4315 adds __managed_by metadata through the shared OpenCode overlay.
+	// Kilocode inherits that metadata, not additional native RDD support.
+	// #4324 appends canonical remote authorization to managed executor prompts;
+	// native permissions and the primary orchestrator remain unchanged.
+	const want = "d2f4aad13b3930df018219bd91ea56ef8ddac3bc3978cd0374b1857e2a1c5944"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -735,8 +761,42 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// STATUS. Deliberate, not drift. The ceilings move with it
 		// (15_866 -> 16_649 / 30_063 -> 30_846) to restore the same small
 		// headroom each row already had.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_646, maxCharacters: 16_649},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_991, maxCharacters: 30_846},
+		// +107 per case (16_646 -> 16_753 / 28_991 -> 29_098) when #3299/#4170
+		// added the managed_assets_outdated row: STATUS now classifies a
+		// stale managed-asset digest before ever offering START, and the
+		// stop names the exact `gentle-ai sync` continuation instead of
+		// leaving the caller to guess it from prose. Deliberate, not drift.
+		// The ceilings move with it (16_649 -> 16_756 / 30_846 -> 30_953) to
+		// restore the same small headroom each row already had.
+		// +322 per case (16_753 -> 17_075 / 29_098 -> 29_420, on top of #3299/#4170) when #4256
+		// extended the reviewer-capture-transport sentence: inspection.status
+		// no longer implies "completed" alone, so the shared contract now
+		// spells out the typed "unavailable"+"reason" alternative and states
+		// that inspection.status/inspection.reason are the only
+		// admission-completeness signal admission reads (free text in
+		// evidence is ignored) -- closing the gap the free-text evidence scan
+		// used to fill. Deliberate, not drift. The standard ceiling moves
+		// with it (16_756 -> 17_078) to restore the same small headroom;
+		// full-4R already had enough headroom (29_420 < 30_953) and is
+		// unchanged.
+		// +187 per case (+187 on top of #3299/#4170 and #4256) when #3442 added
+		// the unachievable_lens_slot stop-reason row: a host can now declare a
+		// selected reviewer slot unachievable, and the shipped contract names
+		// its terminal continuation. Deliberate, not drift; the ceilings move
+		// with it (standard and full-4R ceilings move by the same amount) to restore the same
+		// small headroom each row already had.
+		// +102 per case (+102 more) when the native
+		// review found declaring a slot unachievable was irreversible: the
+		// row was reclassified caller-continuable and now also names the
+		// `--withdraw=true` retraction for a mistaken transient failure,
+		// alongside the existing new-transaction exit for a deterministic
+		// one. Deliberate, not drift; the ceilings move with it
+		// (ceilings move again by the same amount) to restore the same small
+		// headroom each row already had.
+		// #4324 adds 1,354 canonical remote-authorization characters per reviewer.
+		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_718, maxCharacters: 18_721},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_125, maxCharacters: 36_658},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

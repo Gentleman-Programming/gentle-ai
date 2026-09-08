@@ -8,17 +8,27 @@ import (
 )
 
 // The native runtime authority must accept every change identity that
-// sdd-status already resolves. Rejecting an Engram identity such as
-// DEC-EXAMPLE-CHANGE stalls the whole attempt gate for a change whose
-// artifacts resolve normally.
+// sdd-status already resolves (#2116): sdd-status's directory-based and
+// Engram-backed resolution impose no character-shape restriction of their
+// own, so the runtime authority cannot impose one narrower than "whatever a
+// filesystem path segment or a JSON string can safely represent". This table
+// covers the reported classes directly: dashes (the original kebab-case
+// contract), uppercase and underscores (DEC-EXAMPLE-CHANGE, tag_improvement),
+// dots (3.14), spaces and "@" (a human-readable Engram identity), and a
+// nested/topic-namespaced identity containing "/".
 func TestOpenRuntimeStoreAcceptsChangeIdentitiesResolvedBySDDStatus(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	for _, change := range []string{
+		"kebab-case",
 		"DEC-EXAMPLE-CHANGE",
 		"Add-User-Auth",
 		"add_user_auth",
 		"2116-fix-sdd-attempt",
 		"MixedCase_And-Digits2",
+		"3.14",
+		"Change.With.Dots",
+		"tag improvement @ v2",
+		"features/sub-change",
 	} {
 		store, err := OpenRuntimeStore(context.Background(), repo, change)
 		if err != nil {
@@ -30,7 +40,51 @@ func TestOpenRuntimeStoreAcceptsChangeIdentitiesResolvedBySDDStatus(t *testing.T
 	}
 }
 
-// Widening the accepted identity must not widen what reaches the filesystem.
+// The ledger directory derived for a name containing "/" or "." must stay a
+// single flat component under the encoded namespace: it must not reintroduce
+// extra directory levels (which "/" would create verbatim) or resolve
+// outside the runtime store's own base directory.
+func TestOpenRuntimeStoreEncodesPathLikeChangeAsOneFlatComponent(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	for _, change := range []string{"features/sub-change", "3.14", "a.b/c.d"} {
+		store, err := OpenRuntimeStore(context.Background(), repo, change)
+		if err != nil {
+			t.Fatalf("OpenRuntimeStore(%q) error = %v", change, err)
+		}
+		base := filepath.Dir(store.Dir)
+		if filepath.Base(base) != encodedRuntimeChangeNamespace {
+			t.Fatalf("OpenRuntimeStore(%q).Dir = %q, want a single leaf directly under %q", change, store.Dir, encodedRuntimeChangeNamespace)
+		}
+		if strings.ContainsAny(filepath.Base(store.Dir), `/\`) {
+			t.Fatalf("OpenRuntimeStore(%q) leaf %q still contains a path separator", change, filepath.Base(store.Dir))
+		}
+	}
+}
+
+// Every identity the pre-#2116 validator already accepted (letters, digits,
+// hyphens, and underscores) must keep resolving to the exact ledger
+// directory the old encoding produced -- `strings.ToLower(change)` verbatim,
+// with no byte substitution -- or an attempt acquired before this change
+// becomes unreachable after it: it cannot be settled, its max-attempts
+// budget silently resets, and its request-id replay is lost.
+func TestOpenRuntimeStoreEncodedLabelIsStableForPreviouslyValidIdentities(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	for _, change := range []string{"DEC-EXAMPLE-CHANGE", "MixedCase_And-Digits2", "tag_improvement-v2"} {
+		store, err := OpenRuntimeStore(context.Background(), repo, change)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLabel := strings.ToLower(change)
+		if leaf := filepath.Base(store.Dir); !strings.HasPrefix(leaf, wantLabel+"-") {
+			t.Fatalf("OpenRuntimeStore(%q) leaf = %q, want the unchanged pre-#2116 label %q preserved verbatim", change, leaf, wantLabel)
+		}
+	}
+}
+
+// Widening the accepted identity must not widen what reaches the filesystem:
+// these stay rejected because sdd-status itself can never resolve them (a
+// change name cannot be "..", cannot escape via a "../" segment, and the
+// filesystem/JSON hazards below have no legitimate identity behind them).
 func TestOpenRuntimeStoreRejectsUnsafeChangeName(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	for _, change := range []string{
@@ -38,14 +92,10 @@ func TestOpenRuntimeStoreRejectsUnsafeChangeName(t *testing.T) {
 		".",
 		"..",
 		"../escape",
-		"nested/change",
+		"escape/../../outside",
 		`nested\change`,
-		"-leading",
-		"trailing-",
-		"double--hyphen",
-		".hidden",
-		"has space",
 		"has:colon",
+		"control\x00char",
 		strings.Repeat("a", 97),
 	} {
 		if _, err := OpenRuntimeStore(context.Background(), repo, change); err == nil {
@@ -58,15 +108,15 @@ func TestOpenRuntimeStoreRejectsUnsafeChangeName(t *testing.T) {
 // otherwise callers are left guessing the flag contract.
 func TestOpenRuntimeStoreRejectionNamesValueAndShape(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	_, err := OpenRuntimeStore(context.Background(), repo, "nested/change")
+	_, err := OpenRuntimeStore(context.Background(), repo, "has:colon")
 	if err == nil {
 		t.Fatal("OpenRuntimeStore error = nil, want rejection")
 	}
 	message := err.Error()
-	if !strings.Contains(message, `"nested/change"`) {
+	if !strings.Contains(message, `"has:colon"`) {
 		t.Fatalf("error %q does not name the rejected value", message)
 	}
-	if !strings.Contains(message, "letters, digits") {
+	if !strings.Contains(message, "non-empty identity") {
 		t.Fatalf("error %q does not state the expected shape", message)
 	}
 	if !strings.Contains(message, "gentle-ai sdd-status") {

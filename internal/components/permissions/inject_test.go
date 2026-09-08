@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,97 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
+
+// Fixture port of OpenCode v1.2.27 util/wildcard.ts and permission/service.ts:
+// anchored, case-sensitive POSIX matching, optional trailing " *", last match wins.
+// Inputs are strings only; this does not emulate bash.ts's tree-sitter extraction.
+func remoteAction(t *testing.T, raw []byte, command string) string {
+	t.Helper()
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	var scalar string
+	if json.Unmarshal(root["permission"], &scalar) == nil {
+		return scalar
+	}
+	var permission map[string]json.RawMessage
+	if err := json.Unmarshal(root["permission"], &permission); err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(permission["bash"], &scalar) == nil {
+		return scalar
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(permission["bash"])))
+	_, _ = decoder.Token()
+	action := "ask"
+	for decoder.More() {
+		key, _ := decoder.Token()
+		var value string
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+		pattern := regexp.QuoteMeta(strings.ReplaceAll(key.(string), `\`, "/"))
+		pattern = strings.ReplaceAll(strings.ReplaceAll(pattern, `\*`, ".*"), `\?`, ".")
+		if strings.HasSuffix(pattern, " .*") {
+			pattern = strings.TrimSuffix(pattern, " .*") + "( .*)?"
+		}
+		if regexp.MustCompile("(?s)^" + pattern + "$").MatchString(strings.ReplaceAll(command, `\`, "/")) {
+			action = value
+		}
+	}
+	return action
+}
+
+func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
+	// These are matcher inputs, not shell programs. bash.ts extracts command
+	// nodes separately; no claim is made about parsing arbitrary shell syntax.
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
+		if got := remoteAction(t, openCodeOverlayJSON, input); got != "allow" {
+			t.Errorf("unsupported matcher input %q unexpectedly intercepted: %s", input, got)
+		}
+	}
+}
+
+func TestRemoteCommandApprovalDefaults(t *testing.T) {
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		for _, seed := range []string{`{}`, `{"permission":{"bash":{"*":"allow"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"deny"}}}`, `{"permission":"deny"}`, `{"permission":{"bash":"ask"}}`, `{"permission":{"bash":"deny"}}`, `{"permission":{"bash":{"*":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh *":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"allow"}}}`} {
+			t.Run(string(id)+seed, func(t *testing.T) {
+				home := t.TempDir()
+				adapter, _ := agents.NewAdapter(id)
+				path := adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := Inject(home, adapter); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, command := range []string{"ssh", "ssh example.invalid", "scp", "scp file example.invalid:file", "sftp", "sftp example.invalid", "rsync", "rsync source destination"} {
+					want := "ask"
+					if seed == `{"permission":"deny"}` || seed == `{"permission":{"bash":"deny"}}` || strings.Contains(seed, `"*":"deny"`) || (strings.Contains(seed, `"deny"`) && strings.HasPrefix(command, "ssh")) {
+						want = "deny"
+					}
+					if strings.Contains(seed, `"ssh*":"allow"`) && strings.HasPrefix(command, "ssh") {
+						want = "allow" // Explicit personal allow is not silently rewritten.
+					}
+					if got := remoteAction(t, raw, command); got != want {
+						t.Errorf("%q: got %s, want %s", command, got, want)
+					}
+				}
+				if result, err := Inject(home, adapter); err != nil || result.Changed {
+					t.Fatalf("repeat injection = %+v, %v", result, err)
+				}
+			})
+		}
+	}
+}
 
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }

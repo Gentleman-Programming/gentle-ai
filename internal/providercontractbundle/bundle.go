@@ -48,6 +48,64 @@ const (
 
 var bundleTimestamp = time.Unix(0, 0).UTC()
 
+// contractSemverIntroducingRuntimesField is the first contract_semver whose
+// manifest carries a "runtimes" inventory (issue #3249, PR #3254 bumped
+// CONTRACT_SEMVER to 1.1.0). Every bundle published before it never had the
+// field, so its own manifest correctly decodes Runtimes as nil: that absence
+// is not corruption, it is exactly what a contract at that version promised
+// (#3256).
+var contractSemverIntroducingRuntimesField = contractSemverComponents{major: 1, minor: 1, patch: 0}
+
+// contractSemverIntroducingOrchestrationField is the first contract_semver
+// whose manifest carries an "orchestration" inventory (issue #4056, PR that
+// bumped CONTRACT_SEMVER to 1.2.0). The same backward-compatibility rule
+// applies: a bundle published before it never shipped an orchestration/*.md
+// file, so an empty inventory there is correct, not incomplete.
+var contractSemverIntroducingOrchestrationField = contractSemverComponents{major: 1, minor: 2, patch: 0}
+
+type contractSemverComponents struct{ major, minor, patch int }
+
+// parseContractSemver decomposes an already-pattern-validated MAJOR.MINOR.PATCH
+// string. It is not itself the format check -- contractSemverPattern in
+// validateEntries and ReadContractSemver already reject anything else -- so a
+// parse failure here can only mean the pattern and this parser disagree, which
+// fails closed rather than silently treating an unparseable semver as the
+// oldest possible contract.
+func parseContractSemver(semver string) (contractSemverComponents, bool) {
+	parts := strings.SplitN(semver, ".", 3)
+	if len(parts) != 3 {
+		return contractSemverComponents{}, false
+	}
+	values := make([]int, 3)
+	for index, part := range parts {
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return contractSemverComponents{}, false
+		}
+		values[index] = value
+	}
+	return contractSemverComponents{major: values[0], minor: values[1], patch: values[2]}, true
+}
+
+// contractSemverAtLeast reports whether semver names a contract at or after
+// introduced. It is the single comparison every field-introduction
+// compatibility rule in validateEntries uses, so a bundle whose contract
+// predates a field is excused from that field's exact-match check instead of
+// being rejected for lacking a promise its own contract version never made.
+func contractSemverAtLeast(semver string, introduced contractSemverComponents) bool {
+	got, ok := parseContractSemver(semver)
+	if !ok {
+		return false
+	}
+	if got.major != introduced.major {
+		return got.major > introduced.major
+	}
+	if got.minor != introduced.minor {
+		return got.minor > introduced.minor
+	}
+	return got.patch >= introduced.patch
+}
+
 var (
 	// refusal:by-design input: an untrusted bundle never becomes an activation candidate.
 	errInvalidBundle = errors.New("invalid provider contract bundle")
@@ -520,8 +578,12 @@ func validateEntries(entries map[string][]byte) error {
 	if decoded.Schema != bundleSchema || !contractSemverPattern.MatchString(decoded.ContractSemver) || decoded.TransportCapability != reviewerprovider.TransportCapability {
 		return fmt.Errorf("%w: manifest identity is unsupported", errInvalidBundle)
 	}
-	if !slices.Equal(decoded.Runtimes, reviewerprovider.RegisteredRuntimeIdentities()) {
-		return fmt.Errorf("%w: manifest runtime inventory does not match the registered runtime identities", errInvalidBundle)
+	if contractSemverAtLeast(decoded.ContractSemver, contractSemverIntroducingRuntimesField) {
+		if !slices.Equal(decoded.Runtimes, reviewerprovider.RegisteredRuntimeIdentities()) {
+			return fmt.Errorf("%w: manifest runtime inventory does not match the registered runtime identities", errInvalidBundle)
+		}
+	} else if len(decoded.Runtimes) != 0 {
+		return fmt.Errorf("%w: manifest runtime inventory is not empty for a contract older than the field it names", errInvalidBundle)
 	}
 	contracts, err := canonicalContracts()
 	if err != nil {
@@ -565,29 +627,33 @@ func validateEntries(entries map[string][]byte) error {
 		expected[schemaPath] = struct{}{}
 		expected[vectorPath] = struct{}{}
 	}
-	orchestrationSources, err := canonicalOrchestrationEntries()
-	if err != nil {
-		return err
-	}
-	if len(decoded.Orchestration) != len(orchestrationSources) {
-		return fmt.Errorf("%w: manifest orchestration inventory is incomplete", errInvalidBundle)
-	}
-	for index, source := range orchestrationSources {
-		entry := decoded.Orchestration[index]
-		if index > 0 && decoded.Orchestration[index-1].Runtime >= entry.Runtime {
-			return fmt.Errorf("%w: manifest orchestration entries are not strictly sorted", errInvalidBundle)
-		}
-		if entry.Runtime != source.runtime {
-			return fmt.Errorf("%w: manifest orchestration runtime %q does not match the canonical registry", errInvalidBundle, entry.Runtime)
-		}
-		if !reviewerprovider.RegisteredRuntime(model.AgentID(entry.Runtime)) {
-			return fmt.Errorf("%w: manifest orchestration runtime %q is not a registered review runtime", errInvalidBundle, entry.Runtime)
-		}
-		filePath := path.Join("orchestration", entry.Runtime+".md")
-		if err := validateFileReference(entries, entry.File, filePath, source.content); err != nil {
+	if contractSemverAtLeast(decoded.ContractSemver, contractSemverIntroducingOrchestrationField) {
+		orchestrationSources, err := canonicalOrchestrationEntries()
+		if err != nil {
 			return err
 		}
-		expected[filePath] = struct{}{}
+		if len(decoded.Orchestration) != len(orchestrationSources) {
+			return fmt.Errorf("%w: manifest orchestration inventory is incomplete", errInvalidBundle)
+		}
+		for index, source := range orchestrationSources {
+			entry := decoded.Orchestration[index]
+			if index > 0 && decoded.Orchestration[index-1].Runtime >= entry.Runtime {
+				return fmt.Errorf("%w: manifest orchestration entries are not strictly sorted", errInvalidBundle)
+			}
+			if entry.Runtime != source.runtime {
+				return fmt.Errorf("%w: manifest orchestration runtime %q does not match the canonical registry", errInvalidBundle, entry.Runtime)
+			}
+			if !reviewerprovider.RegisteredRuntime(model.AgentID(entry.Runtime)) {
+				return fmt.Errorf("%w: manifest orchestration runtime %q is not a registered review runtime", errInvalidBundle, entry.Runtime)
+			}
+			filePath := path.Join("orchestration", entry.Runtime+".md")
+			if err := validateFileReference(entries, entry.File, filePath, source.content); err != nil {
+				return err
+			}
+			expected[filePath] = struct{}{}
+		}
+	} else if len(decoded.Orchestration) != 0 {
+		return fmt.Errorf("%w: manifest orchestration inventory is not empty for a contract older than the field it names", errInvalidBundle)
 	}
 	if len(entries) != len(expected) {
 		return fmt.Errorf("%w: archive inventory has %d files, want %d", errInvalidBundle, len(entries), len(expected))

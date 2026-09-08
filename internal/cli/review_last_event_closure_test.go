@@ -905,6 +905,68 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 	}
 }
 
+// TestTargetedValidatorCaptureRetriesInconsistentRegressionVerdictWithoutEscalating
+// mirrors the escalation test above for issue #4214: a targeted validator
+// that reports correction_regression.passed=false while every evidence
+// string says there was no regression is an inconsistent artifact, not a
+// genuine verdict. On a compiled runtime, admission refuses it with a plain
+// (non-inconclusive) error so the existing one-shot corrective retry is
+// spent on it; once the retry returns a consistent passing artifact, the
+// lineage must not escalate.
+func TestTargetedValidatorCaptureRetriesInconsistentRegressionVerdictWithoutEscalating(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inconsistent, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance criteria re-ran and passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: false, Evidence: []string{"there was no regression in the corrected candidate"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consistent := providerTargetedValidationPayload(t, request)
+	prompts := recordingProviderAdapter(t,
+		func() ([]byte, error) { return inconsistent, nil },
+		func() ([]byte, error) { return consistent, nil },
+	)
+
+	var terminalOutput bytes.Buffer
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+		"--agent", string(model.AgentClaudeCode),
+		"--execute=true",
+	}, &terminalOutput); err != nil {
+		t.Fatalf("capture retried targeted validator: %v\n%s", err, terminalOutput.String())
+	}
+	if len(*prompts) != 2 {
+		t.Fatalf("provider targeted validator invocations = %d, want exactly 2", len(*prompts))
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, terminalOutput.Bytes(), &terminal)
+	if terminal.State == reviewtransaction.StateEscalated {
+		t.Fatalf("consistent retry still escalated the lineage: %#v", terminal)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State == reviewtransaction.StateEscalated {
+		t.Fatalf("consistent retry left escalated authority = %#v, %v", after, err)
+	}
+}
+
 // assertAcknowledgedEnvelope pins the one typed answer the burn prints (#3946):
 // an orchestrator reports the most consequential step of the lifecycle from
 // the command's own output, not from a later STATUS offering a fresh START.

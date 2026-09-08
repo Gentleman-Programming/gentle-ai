@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -37,7 +38,53 @@ type reviewProviderCapture struct {
 }
 
 func (capture reviewProviderCapture) admit(ctx context.Context, raw []byte) (reviewProviderAdmittedResult, error) {
-	return reviewProviderAdmitRaw(ctx, capture.root, capture.state, capture.state.CapturePhaseRevision, capture.frozen, capture.subject, raw)
+	corrected := reviewProviderCorrectSubjectHashEcho(raw, capture.state.InitialSnapshot.Identity, capture.subject.SubjectHash)
+	return reviewProviderAdmitRaw(ctx, capture.root, capture.state, capture.state.CapturePhaseRevision, capture.frozen, capture.subject, corrected)
+}
+
+// reviewProviderCorrectSubjectHashEcho rewrites a raw in-process reviewer
+// payload's subject_hash field in place when -- and only when -- it exactly
+// echoes this transaction's target_identity instead of the lens binding's own
+// subject_hash (issue #4027).
+//
+// This narrow substitution is safe specifically because the caller is the
+// in-process capture path: the reviewer that produced raw is a fresh,
+// tool-free subprocess this same invocation just spawned with exactly one
+// candidate binding, so it has no other subject_hash to have confused this
+// one with. A wrong-but-explainable echo -- the model copying the adjacent
+// target_identity field the same materialized prompt also carries, rather
+// than the subject_hash field the prompt named -- is not evidence of a stale
+// or malicious result the way it would be for an externally submitted
+// --input payload (which reviewProviderAdmitRaw alone continues to validate
+// exactly as strictly as before; this correction never runs on that path).
+// Any other echoed value -- one that doesn't match target_identity either --
+// is left untouched and still fails admission exactly as before.
+func reviewProviderCorrectSubjectHashEcho(raw []byte, targetIdentity, expectedSubjectHash string) []byte {
+	if targetIdentity == "" || expectedSubjectHash == "" || targetIdentity == expectedSubjectHash {
+		return raw
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return raw
+	}
+	rawHash, present := fields["subject_hash"]
+	if !present {
+		return raw
+	}
+	var echoed string
+	if err := json.Unmarshal(rawHash, &echoed); err != nil || echoed != targetIdentity {
+		return raw
+	}
+	corrected, err := json.Marshal(expectedSubjectHash)
+	if err != nil {
+		return raw
+	}
+	fields["subject_hash"] = corrected
+	rewritten, err := json.Marshal(fields)
+	if err != nil {
+		return raw
+	}
+	return rewritten
 }
 
 func (capture reviewProviderCapture) preserve(ctx context.Context, attempt int, admission error, raw []byte) string {

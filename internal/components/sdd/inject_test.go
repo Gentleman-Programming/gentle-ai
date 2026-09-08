@@ -36,8 +36,118 @@ func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
+// Exercise the production optional workflow adapter boundary, not a renderer bypass.
+type invalidSessionPreflightWorkflowAdapter struct{ agents.Adapter }
+
+func (a invalidSessionPreflightWorkflowAdapter) SupportsWorkflows() bool { return true }
+func (a invalidSessionPreflightWorkflowAdapter) WorkflowsDir(root string) string {
+	return filepath.Join(root, ".windsurf", "workflows")
+}
+func (a invalidSessionPreflightWorkflowAdapter) EmbeddedWorkflowsDir() string {
+	if a.Agent() == model.AgentWindsurf {
+		return "opencode/commands" // Real assets, but not a native authority consumer.
+	}
+	return "missing-session-preflight-workflows"
+}
+
+type invalidRenderedSessionPreflightAdapter struct {
+	invalidSessionPreflightWorkflowAdapter
+}
+
+func (a invalidRenderedSessionPreflightAdapter) RenderCodexPhaseEfforts(map[string]model.CodexEffort, map[string]string) string {
+	return sddSessionPreflightBlockWithTool("") // A second block introduced during rendering.
+}
+
+func TestInjectSessionPreflightFailurePrecedesAllSDDWrites(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentWindsurf, model.AgentClaudeCode, model.AgentKimi, model.AgentOpenCode, model.AgentKilocode, model.AgentCodex} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", agent, existing), func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+				workspace := t.TempDir()
+				if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				var adapter agents.Adapter = invalidSessionPreflightWorkflowAdapter{mustAdapter(t, agent)}
+				if agent == model.AgentCodex {
+					adapter = invalidRenderedSessionPreflightAdapter{adapter.(invalidSessionPreflightWorkflowAdapter)}
+				}
+				if existing {
+					path := adapter.SystemPromptFile(home)
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte("pre-existing sentinel\n"), 0o640); err != nil {
+						t.Fatal(err)
+					}
+				}
+				snapshot := func(root string) map[string]string {
+					files := map[string]string{}
+					err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						files[path] = info.Mode().String()
+						if !info.IsDir() {
+							data, err := os.ReadFile(path)
+							if err != nil {
+								return err
+							}
+							files[path] += string(data)
+						}
+						return nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return files
+				}
+				beforeHome, beforeWorkspace := snapshot(home), snapshot(workspace)
+				_, err := Inject(home, adapter, model.SDDModeMulti, InjectOptions{WorkspaceDir: workspace, StrictTDD: true, Profiles: []model.Profile{{Name: "focused"}}})
+				if err == nil {
+					t.Fatal("invalid selected workflow source accepted")
+				}
+				if !reflect.DeepEqual(beforeHome, snapshot(home)) || !reflect.DeepEqual(beforeWorkspace, snapshot(workspace)) {
+					t.Fatal("invalid session preflight input mutated SDD files or directories")
+				}
+			})
+		}
+	}
+}
+
 func mockNoPackageManager(t *testing.T) {
 	t.Helper()
+}
+
+func TestInjectFallbackSessionPreflight(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf} {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+			adapter := mustAdapter(t, agent)
+			if _, err := Inject(home, adapter, ""); err != nil {
+				t.Fatal(err)
+			}
+			path := adapter.SystemPromptFile(home)
+			if agent == model.AgentKimi {
+				path = filepath.Join(home, ".kimi", "sdd-orchestrator.md")
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFallbackSessionPreflight(t, string(before))
+			if result, err := Inject(home, adapter, ""); err != nil || result.Changed {
+				t.Fatalf("repeat install = %+v, %v; want unchanged", result, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("repeat install changed prompt bytes: %v", err)
+			}
+			assertFallbackSessionPreflight(t, string(after))
+		})
+	}
 }
 
 func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
@@ -175,6 +285,84 @@ func TestInjectHermesSDDIdempotent(t *testing.T) {
 	}
 }
 
+func TestRemoteAuthorizationInstalledExecutors(t *testing.T) {
+	for _, tc := range []struct {
+		id    model.AgentID
+		count int
+	}{
+		{"claude-code", 19}, {"cursor", 16}, {model.AgentKiroIDE, 19}, {"kimi", 16},
+	} {
+		t.Run(string(tc.id), func(t *testing.T) {
+			adapter, err := agents.NewAdapter(tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			if _, err := Inject(home, adapter, model.SDDModeMulti); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(adapter.SubAgentsDir(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, entry := range entries {
+				if !isMarkdownSubAgentPromptFile(entry.Name()) {
+					continue
+				}
+				count++
+				content, err := os.ReadFile(filepath.Join(adapter.SubAgentsDir(home), entry.Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Count(string(content), strings.TrimSpace(agentguidance.InjectRemoteAuthorization(""))) != 1 {
+					t.Errorf("%s: missing unique canonical contract", entry.Name())
+				}
+			}
+			if count != tc.count {
+				t.Errorf("markdown count = %d, want %d", count, tc.count)
+			}
+			if result, err := Inject(home, adapter, model.SDDModeMulti); err != nil || result.Changed {
+				t.Errorf("second injection changed=%v err=%v", result.Changed, err)
+			}
+		})
+	}
+}
+
+func TestRemoteAuthorizationEmbeddedExecutors(t *testing.T) {
+	for _, adapter := range []agents.Adapter{opencodeAdapter(), kilocodeAdapter()} {
+		t.Run(string(adapter.Agent()), func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			if _, err := Inject(home, adapter, model.SDDModeMulti); err != nil {
+				t.Fatal(err)
+			}
+			content, err := os.ReadFile(adapter.SettingsPath(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings map[string]any
+			if err := json.Unmarshal(content, &settings); err != nil {
+				t.Fatal(err)
+			}
+			for name, raw := range settings["agent"].(map[string]any) {
+				agent := raw.(map[string]any)
+				if agent["mode"] == "primary" {
+					continue
+				}
+				prompt, ok := agent["prompt"].(string)
+				if !ok || strings.HasPrefix(prompt, "{file:") {
+					continue
+				}
+				if strings.Count(prompt, strings.TrimSpace(agentguidance.InjectRemoteAuthorization(""))) != 1 {
+					t.Errorf("%s: missing unique canonical contract", name)
+				}
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodeAndKilocodeLanguageContractOutputs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -299,6 +487,33 @@ func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
 		if !strings.Contains(lazy, want) {
 			t.Fatalf("lazy SDD workflow missing %q:\n%s", want, lazy)
 		}
+	}
+}
+
+func TestClaudeLazyPreflightCanonicalInstall(t *testing.T) {
+	home := t.TempDir()
+	if _, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	want := strings.ReplaceAll(sddSessionPreflightBlock(), "`question`", "`AskUserQuestion`")
+	if strings.Count(content, want) != 1 || strings.Count(content, sddSessionPreflightMarker) != 1 {
+		t.Fatal("installed Claude workflow must contain exactly one Claude-native canonical block")
+	}
+	if strings.Index(content, sddSessionPreflightEnd) > strings.Index(content, testSDDSessionPreflightEntryAnchor) {
+		t.Fatal("preflight must precede entry routing")
+	}
+	for _, forbidden := range []string{"all four", "800 lines", "Other", "numeric budget", "`question`"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("installed workflow retains %q", forbidden)
+		}
+	}
+	if result, err := writeClaudeLazySDDWorkflow(home, claudeAdapter()); err != nil || result.Changed {
+		t.Fatalf("second install = %+v, %v; want unchanged", result, err)
 	}
 }
 
@@ -492,7 +707,16 @@ func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T)
 	}
 
 	const stale = "Gentle AI only configures models for Agent tool calls to phase sub-agents."
-	const want = "The Claude Code session model is controlled by Claude Code; Gentle AI's always-on Model Assignments policy resolves every Agent tool call, including generic/organic delegation through `default`."
+	prompt, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Every Claude Agent tool call MUST include `model`", "organic explorer/mapper/writer/verifier and other generic delegations use the `default` assignment"} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("always-on model authority missing %q", want)
+		}
+	}
+	const want = "Delegate this intent and arguments to that authoritative lazy workflow"
 	for _, name := range []string{"gentle-sdd-new.md", "gentle-sdd-ff.md", "gentle-sdd-continue.md"} {
 		t.Run(name, func(t *testing.T) {
 			content, err := os.ReadFile(filepath.Join(home, ".claude", "commands", name))
@@ -500,11 +724,11 @@ func TestInjectClaudeCommandModelAssignmentsApplyToEveryDelegation(t *testing.T)
 				t.Fatalf("ReadFile(%s) error = %v", name, err)
 			}
 			text := string(content)
-			if strings.Contains(text, stale) {
-				t.Fatalf("installed command retains phase-only model wording %q", stale)
+			if strings.Contains(text, stale) || strings.Contains(text, "Model Assignments") || strings.Contains(text, "STATUS CONTRACT:") {
+				t.Fatal("installed thin command owns model/status policy")
 			}
 			if !strings.Contains(text, want) {
-				t.Fatalf("installed command missing always-on model wording %q", want)
+				t.Fatalf("installed command missing policy delegation %q", want)
 			}
 		})
 	}
@@ -661,7 +885,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 			for _, wanted := range []string{
 				"Gentle AI",
 				"Read the configured models from `opencode.json`",
-				"Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable",
+				"Use the `question` tool only when available and all three groups",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
 				"### Research and Pre-Proposal Gate (MANDATORY)",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
@@ -755,6 +979,134 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	}
 }
 
+func TestInjectOpenCodeAndKilocodeRejectMalformedPreservedPreflightBeforeAnyWrite(t *testing.T) {
+	adapters := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{name: "opencode", adapter: opencodeAdapter()},
+		{name: "kilocode", adapter: kilocodeAdapter()},
+	}
+	markers := []struct {
+		name, prompt string
+	}{
+		{name: "duplicate canonical", prompt: sddSessionPreflightMarker + "\n" + sddSessionPreflightEnd + "\n" + sddSessionPreflightMarker + "\n" + sddSessionPreflightEnd},
+		{name: "reversed canonical", prompt: sddSessionPreflightEnd + "\n" + sddSessionPreflightMarker},
+		{name: "duplicate legacy", prompt: legacySDDSessionPreflightMarker + "\n" + legacySDDSessionPreflightEnd + "\n" + legacySDDSessionPreflightMarker + "\n" + legacySDDSessionPreflightEnd},
+		{name: "reversed legacy", prompt: legacySDDSessionPreflightEnd + "\n" + legacySDDSessionPreflightMarker},
+		{name: "canonical and legacy", prompt: sddSessionPreflightMarker + "\n" + sddSessionPreflightEnd + "\n" + legacySDDSessionPreflightMarker + "\n" + legacySDDSessionPreflightEnd},
+	}
+	for _, adapterCase := range adapters {
+		for _, markerCase := range markers {
+			t.Run(adapterCase.name+"/"+markerCase.name, func(t *testing.T) {
+				home := t.TempDir()
+				settingsPath := adapterCase.adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				beforeSettings := []byte(`{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(markerCase.prompt) + `}}}`)
+				if err := os.WriteFile(settingsPath, beforeSettings, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				commandPath := filepath.Join(adapterCase.adapter.CommandsDir(home), "sdd-init.md")
+				beforeCommand := []byte("external sentinel must remain untouched\n")
+				if err := os.MkdirAll(filepath.Dir(commandPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(commandPath, beforeCommand, 0o644); err != nil {
+					t.Fatal(err)
+				}
+
+				if _, err := Inject(home, adapterCase.adapter, model.SDDModeMulti, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err == nil {
+					t.Fatal("Inject() accepted malformed preserved preflight markers")
+				}
+				for path, before := range map[string][]byte{settingsPath: beforeSettings, commandPath: beforeCommand} {
+					after, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(after, before) {
+						t.Fatalf("Inject() wrote %q before rejecting malformed markers: after=%q err=%v", path, after, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestInjectOpenCodeAndKilocodePreservedExternalPreflightUsesCanonicalOwnedBlock(t *testing.T) {
+	adapters := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{name: "opencode", adapter: opencodeAdapter()},
+		{name: "kilocode", adapter: kilocodeAdapter()},
+	}
+	for _, adapterCase := range adapters {
+		for _, lineEnding := range []struct {
+			name, value string
+		}{{name: "lf", value: "\n"}, {name: "crlf", value: "\r\n"}} {
+			for _, promptCase := range []struct {
+				name, prompt string
+			}{
+				{name: "unmarked", prompt: "CUSTOM_SENTINEL_A" + lineEnding.value + "CUSTOM_SENTINEL_B"},
+				{name: "legacy-owned-markers", prompt: "CUSTOM_SENTINEL_A" + lineEnding.value + "<!-- gentle-ai:sdd-session-preflight-migration -->" + lineEnding.value + "### SDD Session Preflight (HARD GATE)" + lineEnding.value + "Both -> `both`" + lineEnding.value + "<!-- /gentle-ai:sdd-session-preflight-migration -->" + lineEnding.value + "CUSTOM_SENTINEL_B"},
+			} {
+				t.Run(adapterCase.name+"/"+lineEnding.name+"/"+promptCase.name, func(t *testing.T) {
+					home := t.TempDir()
+					settingsPath := adapterCase.adapter.SettingsPath(home)
+					if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					seed := `{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(promptCase.prompt) + `}}}`
+					if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+						t.Fatal(err)
+					}
+
+					opts := InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}
+					if _, err := Inject(home, adapterCase.adapter, model.SDDModeMulti, opts); err != nil {
+						t.Fatalf("first Inject() error = %v", err)
+					}
+					first := readGentleOrchestratorPrompt(t, settingsPath)
+					if strings.Contains(promptCase.prompt, legacySDDSessionPreflightMarker) {
+						legacyStart := strings.Index(promptCase.prompt, legacySDDSessionPreflightMarker)
+						legacyEnd := strings.Index(promptCase.prompt, legacySDDSessionPreflightEnd) + len(legacySDDSessionPreflightEnd)
+						open, closeEnd, rangeErr := sddSessionPreflightMarkerRange(first)
+						if rangeErr != nil {
+							t.Fatalf("canonical preflight markers are malformed: %v", rangeErr)
+						}
+						if first[:open] != promptCase.prompt[:legacyStart] || !strings.HasPrefix(first[closeEnd:], promptCase.prompt[legacyEnd:]) {
+							t.Fatalf("legacy migration changed user-owned prefix or suffix:\n got: %q\nwant prefix: %q\nwant suffix: %q", first, promptCase.prompt[:legacyStart], promptCase.prompt[legacyEnd:])
+						}
+					} else if !strings.HasPrefix(first, promptCase.prompt+lineEnding.value+lineEnding.value) {
+						t.Fatalf("unmarked migration changed user-owned prompt bytes:\n got: %q\nwant prefix: %q", first, promptCase.prompt+lineEnding.value+lineEnding.value)
+					}
+					for _, marker := range []string{sddSessionPreflightMarker, sddSessionPreflightEnd} {
+						if got := strings.Count(first, marker); got != 1 {
+							t.Fatalf("canonical marker %q count = %d, want 1: %q", marker, got, first)
+						}
+					}
+					open, closeEnd, err := sddSessionPreflightMarkerRange(first)
+					if err != nil {
+						t.Fatalf("canonical preflight marker range: %v", err)
+					}
+					canonical, err := normalizeSDDSessionPreflightLineEndings(first[open:closeEnd])
+					if err != nil || canonical != sddSessionPreflightBlock() {
+						t.Fatalf("preserved prompt did not emit the exact canonical block: %q, err=%v", canonical, err)
+					}
+					if lineEnding.value == "\r\n" && strings.Contains(strings.ReplaceAll(first, "\r\n", ""), "\n") {
+						t.Fatalf("preserved CRLF prompt has mixed line endings: %q", first)
+					}
+
+					if _, err := Inject(home, adapterCase.adapter, model.SDDModeMulti, opts); err != nil {
+						t.Fatalf("second Inject() error = %v", err)
+					}
+					if second := readGentleOrchestratorPrompt(t, settingsPath); second != first {
+						t.Fatalf("second sync changed preserved prompt\nfirst:  %q\nsecond: %q", first, second)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -810,27 +1162,11 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Bind this to the dedicated `gentle-orchestrator` agent only.",
 		"agent.gentle-orchestrator.model",
 		"### SDD Session Preflight (HARD GATE)",
-		"Use the `question` tool for SDD Session Preflight",
-		"Ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `question` tool calls",
-		"Match the user's current language and active persona",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values or other internal values",
-		"map the selected human labels to canonical values internally",
-		"pause after each delegated phase returns",
-		"ask before launching the next phase via the `question` tool",
-		"present the proceed/adjust/stop options through a single `question` tool call",
-		"approve only the immediate next phase",
+		"all three groups (Pace, Artifacts, and PR strategy)",
+		"3. **PR strategy**: Ask me, Single PR, or Auto.",
+		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
 		"confirmed pre-proposal handoff",
-		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
 		"fully mandatory",
 		"Bounded read rule",
@@ -1319,27 +1655,11 @@ Map answers to canonical values: A1/Interactive -> interactive.
 	for _, wanted := range []string{
 		"# Custom prompt",
 		"### SDD Session Preflight (HARD GATE)",
-		"openspec/config.yaml",
-		"Use the `question` tool for SDD Session Preflight",
-		"Ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Match the user's current language and active persona",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values or other internal values",
-		"map the selected human labels to canonical values internally",
-		"pause after each delegated phase returns",
-		"ask before launching the next phase via the `question` tool",
-		"present the proceed/adjust/stop options through a single `question` tool call",
-		"approve only the immediate next phase",
+		"all three groups (Pace, Artifacts, and PR strategy)",
+		"3. **PR strategy**: Ask me, Single PR, or Auto.",
+		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
 		"confirmed pre-proposal handoff",
-		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated partial prompt content %q", wanted)
@@ -1429,23 +1749,10 @@ Hard gate rules:
 	}
 	for _, wanted := range []string{
 		"# Custom prompt",
-		"Use the `question` tool for SDD Session Preflight",
-		"Ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `question` tool calls",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values or other internal values",
-		"map the selected human labels to canonical values internally",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"for Spanish neutral fallback frame it as",
-		"ask before launching the next phase via the `question` tool",
-		"present the proceed/adjust/stop options through a single `question` tool call",
-		"approve only the immediate next phase",
+		"### SDD Session Preflight (HARD GATE)",
+		"all three groups (Pace, Artifacts, and PR strategy)",
+		"3. **PR strategy**: Ask me, Single PR, or Auto.",
+		"fixed at 400 changed lines",
 		"### Research and Pre-Proposal Gate (MANDATORY)",
 		"confirmed pre-proposal handoff",
 	} {
@@ -2054,6 +2361,21 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 				t.Fatalf("ReadFile(%s prompt) error = %v", tt.name, readErr)
 			}
 			text := string(content)
+
+			// Chain topology is a later, independent choice, not an initial
+			// delivery-strategy producer.
+			assertFallbackSessionPreflight(t, text)
+			chainStart := strings.Index(text, "### Chain Strategy\n")
+			chainEnd := strings.Index(text, "### Review Workload Guard (MANDATORY)")
+			if chainStart < 0 || chainEnd <= chainStart {
+				t.Fatal("missing bounded chain strategy section")
+			}
+			chain := text[chainStart:chainEnd]
+			for _, want := range []string{"When `delivery_strategy` results in chained PRs", "ask the user which chain strategy to use", "Cache the chain strategy for the session", "`chain_strategy`", "`delivery_strategy`"} {
+				if !strings.Contains(chain, want) {
+					t.Errorf("native chain strategy missing independent semantics %q", want)
+				}
+			}
 
 			for _, required := range tt.required {
 				if !strings.Contains(text, required) {
@@ -5211,7 +5533,15 @@ func TestInjectWindsurf_WorkflowContentMatchesAsset(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	want := assets.MustRead("windsurf/workflows/sdd-new.md")
+	want, err := renderWindsurfSessionPreflightEntry(assets.MustRead("windsurf/workflows/sdd-new.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"~/.codeium/windsurf/memories/global_rules.md", "SDD Session Preflight", "before any SDD-owned mutation", "STOP"} {
+		if !strings.Contains(string(got), required) {
+			t.Errorf("installed authority consumer missing %q", required)
+		}
+	}
 	if string(got) != want {
 		t.Fatalf("workflow file content mismatch:\ngot len=%d, want len=%d", len(got), len(want))
 	}
@@ -7498,6 +7828,38 @@ func containsPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestInjectCodexFallbackProfilesRemainIdempotent(t *testing.T) {
+	for name, opts := range map[string]InjectOptions{
+		"recommended": {CodexModelAssignments: model.CodexModelPresetRecommended()},
+		"low-cost":    {CodexModelAssignments: model.CodexModelPresetLowCost()},
+		"powerful":    {CodexModelAssignments: model.CodexModelPresetPowerful()},
+		"custom":      {CodexModelAssignments: model.CodexModelPresetRecommended(), CodexPhaseModelAssignments: map[string]string{"sdd-propose": "gpt-5.4"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := codexInjectAdapter()
+			if _, err := Inject(home, adapter, "", opts); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(adapter.SystemPromptFile(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFallbackSessionPreflight(t, string(before))
+			if strings.Contains(string(before), "{{CODEX_PHASE_EFFORTS}}") || !strings.Contains(string(before), "reasoning_effort") {
+				t.Fatal("preflight projection lost phase-effort substitution")
+			}
+			if result, err := Inject(home, adapter, "", opts); err != nil || result.Changed {
+				t.Fatalf("repeat profile install = %+v, %v", result, err)
+			}
+			after, err := os.ReadFile(adapter.SystemPromptFile(home))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("repeat profile install changed bytes: %v", err)
+			}
+		})
+	}
 }
 
 func TestInject_CodexSubstitutesPhaseEfforts(t *testing.T) {

@@ -414,6 +414,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 	}
 
 	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap, codeGraphGuidance)
+	injectRemoteAuthorizationIntoSubagentPrompts(agentMap)
 
 	overlay := map[string]any{
 		"agent": agentMap,
@@ -499,7 +500,7 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
 	}
@@ -552,7 +553,7 @@ func cleanupKilocodeProfileJDPermissions(settingsPath string, profile model.Prof
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
 	}
@@ -606,7 +607,10 @@ func judgmentDayJudgePermission() map[string]any {
 //  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile, options ...OrchestratorRenderOptions) (string, error) {
-	base := composeOrchestratorPrompt(model.AgentOpenCode, options...)
+	base, err := composeOpenCodeOrchestratorPrompt(model.AgentOpenCode, options...)
+	if err != nil {
+		return "", err
+	}
 	// Named profiles have their own orchestrator surface and must not inherit
 	// the default OpenCode Desktop progress narration.
 	base = filemerge.InjectMarkdownSection(base, openCodeDelegationVisibilitySectionID, "")
@@ -833,7 +837,7 @@ func RemoveProfileAgents(settingsPath string, profileName string) error {
 	}
 
 	root["agent"] = agentMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}

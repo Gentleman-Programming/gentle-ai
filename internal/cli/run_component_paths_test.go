@@ -772,6 +772,35 @@ func openCodeOrchestratorPrompt(t *testing.T, home string) string {
 	return settings.Agent[opencodedefault.ManagedAgent].Prompt
 }
 
+func TestRemoteAuthorizationLeavesPiPackagePromptUntouched(t *testing.T) {
+	home := t.TempDir()
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	const personal = "Package-owned Pi instructions\n"
+	mustWriteFile(t, path, []byte(personal))
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}}))
+	runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}})
+	if readTextFile(t, path) != personal {
+		t.Fatal("install/sync modified Pi's package-owned primary carrier")
+	}
+}
+
+func TestInstallRemoteAuthorizationIndependentOfComponents(t *testing.T) {
+	for _, persona := range []model.PersonaID{"", model.PersonaCustom} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Persona: persona}
+			if persona != "" {
+				selection.Components = []model.ComponentID{model.ComponentPersona}
+			}
+			runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+			prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
+			if !strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->") {
+				t.Fatal("install omitted remote authorization without SDD/default persona")
+			}
+		})
+	}
+}
+
 func TestInstallDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
 	home := t.TempDir()
 
@@ -850,6 +879,9 @@ func TestInstallRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
 	prompt := openCodeOrchestratorPrompt(t, home)
 	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
 		t.Fatalf("SDD injection erased the routing guidance from the OpenCode orchestrator prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->") {
+		t.Fatal("SDD reinjection erased the nested remote authorization boundary")
 	}
 	if !strings.Contains(prompt, "SDD Orchestrator") {
 		t.Fatalf("preserving routing guidance erased the SDD orchestrator prompt:\n%s", prompt)

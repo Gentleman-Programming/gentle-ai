@@ -852,6 +852,158 @@ func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeSkipsMCPServersEngramWhenPluginEnabled reproduces issue
+// #4188: gentle-ai sync must not add mcpServers.engram to ~/.claude.json
+// when the Engram plugin is already enabled via
+// ~/.claude/settings.json's enabledPlugins["engram@engram"], because the
+// plugin already exposes the same 18 tools under a different prefix.
+func TestInjectClaudeSkipsMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	registrySeed := []byte(`{"mcpServers":{"context7":{"command":"npx"}}}`)
+	if err := os.WriteFile(registryPath, registrySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Repeated syncs must leave the user registry byte-for-byte unchanged.
+	for run := 1; run <= 2; run++ {
+		if _, err := Inject(home, claudeAdapter()); err != nil {
+			t.Fatalf("Inject() run %d error = %v", run, err)
+		}
+		if got, err := os.ReadFile(registryPath); err != nil || !bytes.Equal(got, registrySeed) {
+			t.Fatalf("Inject() run %d changed registry: got=%q error=%v", run, got, err)
+		}
+	}
+
+	registry := readJSONFile(t, registryPath)
+	mcpServers, _ := registry["mcpServers"].(map[string]any)
+	if _, exists := mcpServers["engram"]; exists {
+		t.Fatalf("mcpServers.engram must not be added when the Engram plugin is enabled; registry = %#v", registry)
+	}
+	assertNestedString(t, registry, "npx", "mcpServers", "context7", "command")
+}
+
+// TestInjectClaudePreservesIdenticalManualRegistrationsWhenPluginEnabled
+// verifies that sync never infers ownership from an Engram registration's
+// shape. A user can author exactly the same registry and legacy entries that
+// gentle-ai would write, so plugin detection must only suppress new writes.
+func TestInjectClaudePreservesIdenticalManualRegistrationsWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	registrySeed := []byte(`{"mcpServers":{"context7":{"command":"npx"},"engram":{"command":"/opt/homebrew/bin/engram","args":["mcp","--tools=agent"]}}}`)
+	if err := os.WriteFile(registryPath, registrySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	legacySeed := []byte(`{"command":"/opt/homebrew/bin/engram","args":["mcp","--tools=agent"]}`)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, legacySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for run := 1; run <= 2; run++ {
+		if _, err := Inject(home, claudeAdapter()); err != nil {
+			t.Fatalf("Inject() run %d error = %v", run, err)
+		}
+	}
+	if got, err := os.ReadFile(registryPath); err != nil || !bytes.Equal(got, registrySeed) {
+		t.Fatalf("manual registry changed: got=%q error=%v", got, err)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacySeed) {
+		t.Fatalf("manual legacy config changed: got=%q error=%v", got, err)
+	}
+}
+
+// TestInjectClaudePreservesUserAuthoredMCPServersEngramWhenPluginEnabled
+// verifies that plugin detection only suppresses new direct registration and
+// never alters an existing customized mcpServers.engram entry.
+func TestInjectClaudePreservesUserAuthoredMCPServersEngramWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	writeClaudeEngramPluginEnabled(t, home)
+
+	registryPath := claude.UserConfigPath(home)
+	seed := `{"mcpServers":{"engram":{"command":"/custom/path/engram","args":["mcp","--tools=agent"],"env":{"FOO":"bar"}}}}`
+	if err := os.WriteFile(registryPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject() also bootstraps CLAUDE.md's protocol section on a fresh
+	// tempdir, so overall Changed being true here is expected and not the
+	// behavior under test; only the registry content matters (issue #4188).
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	registry := readJSONFile(t, registryPath)
+	assertNestedString(t, registry, "/custom/path/engram", "mcpServers", "engram", "command")
+	assertNestedString(t, registry, "bar", "mcpServers", "engram", "env", "FOO")
+}
+
+func TestInjectClaudeUsesDirectMCPWhenPluginIsNotEnabled(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		settings string
+	}{
+		{name: "plugin disabled", settings: `{"enabledPlugins":{"engram@engram":false}}`},
+		{name: "malformed settings", settings: `{not-json`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tt.settings), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			registry := readJSONFile(t, claude.UserConfigPath(home))
+			assertNestedString(t, registry, "/opt/homebrew/bin/engram", "mcpServers", "engram", "command")
+		})
+	}
+}
+
+func TestInjectClaudePreservesMalformedRegistryWhenPluginEnabled(t *testing.T) {
+	home := t.TempDir()
+	writeClaudeEngramPluginEnabled(t, home)
+	registryPath := claude.UserConfigPath(home)
+	registrySeed := []byte(`{not-json`)
+	if err := os.WriteFile(registryPath, registrySeed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if got, err := os.ReadFile(registryPath); err != nil || !bytes.Equal(got, registrySeed) {
+		t.Fatalf("malformed user registry changed: got=%q error=%v", got, err)
+	}
+}
+
+func writeClaudeEngramPluginEnabled(t *testing.T, home string) {
+	t.Helper()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"enabledPlugins":{"engram@engram":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
 	for _, symlinkParent := range []bool{true, false} {
 		name := "non-empty real parent"

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -227,6 +228,148 @@ func TestRunTTYCleansUpAfterARealExchangeFailure(t *testing.T) {
 	}
 	if cmd.ProcessState == nil {
 		t.Fatal("helper process was not reaped")
+	}
+}
+
+// ttyFrame is one scripted burst of terminal output preceded by silence.
+type ttyFrame struct {
+	silence time.Duration
+	text    string
+}
+
+// slowFrameTTY replays scripted frames the way a loaded runner's TUI paints
+// them: silence, then a partial screen, then more silence. It stands in for
+// the real PTY so the #3971 timing can be reproduced deterministically and
+// fast, without a real child or a real 10s budget. Writing anything
+// containing "q" — the j121 quit key — makes the fake child exit, and Close
+// unblocks any pending read exactly as runTTY requires of a terminal.
+type slowFrameTTY struct {
+	mu        sync.Mutex
+	frames    []ttyFrame
+	loop      bool
+	closed    chan struct{}
+	quit      chan struct{}
+	closeOnce sync.Once
+	quitOnce  sync.Once
+}
+
+func newSlowFrameTTY(frames []ttyFrame, loop bool) *slowFrameTTY {
+	return &slowFrameTTY{frames: frames, loop: loop, closed: make(chan struct{}), quit: make(chan struct{})}
+}
+
+func (terminal *slowFrameTTY) Read(p []byte) (int, error) {
+	terminal.mu.Lock()
+	if len(terminal.frames) == 0 {
+		terminal.mu.Unlock()
+		return 0, io.EOF
+	}
+	frame := terminal.frames[0]
+	if !terminal.loop || len(terminal.frames) > 1 {
+		terminal.frames = terminal.frames[1:]
+	}
+	terminal.mu.Unlock()
+	select {
+	case <-time.After(frame.silence):
+	case <-terminal.closed:
+		return 0, os.ErrClosed
+	}
+	return copy(p, frame.text), nil
+}
+
+func (terminal *slowFrameTTY) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "q") {
+		terminal.quitOnce.Do(func() { close(terminal.quit) })
+	}
+	return len(p), nil
+}
+
+func (terminal *slowFrameTTY) Close() error {
+	terminal.closeOnce.Do(func() { close(terminal.closed) })
+	return nil
+}
+
+// wait exits the fake child when the exchange quits it or the PTY is closed,
+// exactly as the real TUI child behaves.
+func (terminal *slowFrameTTY) wait(context.Context, *exec.Cmd) error {
+	select {
+	case <-terminal.quit:
+	case <-terminal.closed:
+	}
+	return nil
+}
+
+// TestRunTTYToleratesASlowFirstFrameUnderLoad is #3971 with every duration
+// scaled down: in the CI transition-axis run, j121's TUI keeps painting under
+// CPU contention but the whole exchange outlives the fixed 10s budget, so the
+// step deadline kills the child mid-read ("read TUI before ... input/output
+// error; context deadline exceeded"). Here the budget passed to
+// runTTYWithTimeout stands in for the old fixed 10s total: the terminal keeps
+// making progress — every silence is shorter than the budget — but the
+// expected banner only completes after more than the budget in total. A
+// fixed whole-exchange deadline kills this exchange; a deadline that treats
+// PTY bytes as progress lets it finish.
+func TestRunTTYToleratesASlowFirstFrameUnderLoad(t *testing.T) {
+	terminal := newSlowFrameTTY([]ttyFrame{
+		{silence: 400 * time.Millisecond, text: "\x1b[2J\x1b[HReceipt-Driven Development\r\n"},
+		{silence: 400 * time.Millisecond, text: "RDD is currently "},
+		{silence: 700 * time.Millisecond, text: "ENABLED globally.\r\n"},
+	}, false)
+	observation, err := runTTYWithTimeout(&exec.Cmd{}, terminal, []string{"review-mode"}, func(reader *bufio.Reader, writer io.WriteCloser) error {
+		return waitForReviewModeTTY(reader, "RDD is currently ENABLED globally.", "", "", func() error {
+			_, err := io.WriteString(writer, "q")
+			return err
+		})
+	}, time.Second, terminal.wait)
+	if err != nil {
+		t.Fatalf("runTTY killed an exchange that never stopped making progress: %v", err)
+	}
+	if !strings.Contains(observation.Stdout, "RDD is currently ENABLED globally.") {
+		t.Fatalf("transcript = %q, want the banner the exchange waited for", observation.Stdout)
+	}
+	if observation.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", observation.ExitCode)
+	}
+}
+
+// A TUI that paints forever without ever reaching the expected screen must
+// not outlive the overall cap just because every byte resets the inactivity
+// timer.
+func TestRunTTYOverallCapKillsAForeverChatteringExchange(t *testing.T) {
+	terminal := newSlowFrameTTY([]ttyFrame{{silence: 25 * time.Millisecond, text: "tick "}}, true)
+	started := time.Now()
+	_, err := runTTYWithDeadlines(&exec.Cmd{}, terminal, []string{"review-mode"}, func(reader *bufio.Reader, _ io.WriteCloser) error {
+		_, err := reader.ReadString('\n')
+		return err
+	}, 5*time.Second, 300*time.Millisecond, terminal.wait)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runTTY error = %v, want the overall cap's deadline", err)
+	}
+	if !strings.Contains(err.Error(), "overall") {
+		t.Fatalf("runTTY error = %v, want it to name the overall budget", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("runTTY took %v, want bounded termination", elapsed)
+	}
+}
+
+// A hung TUI still dies after exactly the inactivity budget — long before an
+// eventual frame that would only arrive after the exchange stopped receiving
+// bytes for that long — and the failure names the inactivity, not a total.
+func TestRunTTYInactivityBudgetStillKillsASilentExchange(t *testing.T) {
+	terminal := newSlowFrameTTY([]ttyFrame{{silence: 5 * time.Second, text: "too late\r\n"}}, false)
+	started := time.Now()
+	_, err := runTTYWithDeadlines(&exec.Cmd{}, terminal, []string{"review-mode"}, func(reader *bufio.Reader, _ io.WriteCloser) error {
+		_, err := reader.ReadString('\n')
+		return err
+	}, 200*time.Millisecond, 10*time.Second, terminal.wait)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runTTY error = %v, want the inactivity deadline", err)
+	}
+	if !strings.Contains(err.Error(), "no PTY output") {
+		t.Fatalf("runTTY error = %v, want it to name the inactivity budget", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("runTTY took %v, want the inactivity budget to fire well before the frame", elapsed)
 	}
 }
 

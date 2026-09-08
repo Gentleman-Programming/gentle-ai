@@ -542,3 +542,62 @@ func TestRunSDDAttemptFinishAndSettleNegativeControlsStillRefuse(t *testing.T) {
 		}
 	})
 }
+
+// TestRunSDDAttemptRescopeAdmitsFreshUntrackedSelection is the CLI-level
+// reproduction of #4195: eligible untracked files authored after a clean
+// interrupted settle -- outside any active attempt -- can be admitted by a
+// maintainer-authorized rescope carrying an explicit fresh selection, and a
+// following acquire that selects the exact same files then proceeds instead
+// of being refused as an objective change.
+func TestRunSDDAttemptRescopeAdmitsFreshUntrackedSelection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	change := "rescope-4195-cli"
+
+	acquired, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "4195-acquire-1",
+		"--work-unit", "worker task", "--evidence-goal", "do work", "--max-attempts", "2", "--max-changed-lines", "400",
+	})
+	if acquired.State != "proceed" || acquired.Token == "" {
+		t.Fatalf("initial acquire = %#v", acquired)
+	}
+	interrupted, _ := runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "4195-settle-1",
+		"--outcome", "interrupted", "--diagnosis", "worker stalled, no changes", "--harness-disposition", "reused",
+		"--cleanup-evidence", "none needed", "--process-evidence", "n/a",
+	})
+	if interrupted.State != "proceed" {
+		t.Fatalf("interrupted settle = %#v", interrupted)
+	}
+
+	// Files authored after settlement, outside any active attempt (#4195).
+	writeUndeclaredWorkspaceFile(t, repo, "client.go", "package demo\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "client_test.go", "package demo_test\n", 0o644)
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settled := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	rescoped := runSDDAttemptStatus(t, []string{
+		"rescope", "--cwd", repo, "--change", change, "--expected-revision", settled.Revision, "--request-id", "4195-rescope-1",
+		"--work-unit", "add client and tests", "--evidence-goal", "implement client with tests",
+		"--max-attempts", "2", "--max-changed-lines", "400",
+		"--reason", "narrow to additive client+tests", "--actor", "maintainer",
+		"--untracked-scope", "select", "--expected-untracked-inventory", digest,
+		"--intended-untracked", "client.go", "--intended-untracked", "client_test.go",
+	})
+	if rescoped.Objective == nil {
+		t.Fatal("rescoped status has no objective")
+	}
+
+	began, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "4195-acquire-2",
+		"--work-unit", "add client and tests", "--evidence-goal", "implement client with tests",
+		"--max-attempts", "2", "--max-changed-lines", "400",
+		"--untracked-scope", "select", "--expected-untracked-inventory", digest,
+		"--intended-untracked", "client.go", "--intended-untracked", "client_test.go",
+	})
+	if began.State != "proceed" || began.Token == "" {
+		t.Fatalf("acquire with the rescope-admitted selection was refused: %#v", began)
+	}
+}

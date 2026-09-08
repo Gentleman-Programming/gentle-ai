@@ -41,8 +41,9 @@ type compactAdmittedRefuterValue struct {
 }
 
 type CompactTargetedValidatorCheckEvidence struct {
-	Passed   bool     `json:"passed"`
-	Evidence []string `json:"evidence"`
+	Passed      bool         `json:"passed"`
+	Evidence    []string     `json:"evidence"`
+	Regressions []Regression `json:"regressions,omitempty"`
 }
 
 // CompactTargetedValidatorEvidence is the canonical observed evidence for one
@@ -352,6 +353,21 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 	if err != nil {
 		return CompactAdmittedReviewerCapture{}, err
 	}
+	if len(admission.DowngradedCausalFindings) > 0 {
+		// AdmitArtifact already rewrote each downgraded finding's disposition
+		// to CausalUnknown on admitted and derived admission.CanonicalSHA256
+		// from that exact rewritten content (CanonicalReviewerResultPayload).
+		// canonicalPayload above was still serialized from the pre-admission,
+		// self-claimed findings, so re-derive it here through the identical
+		// shared serializer AdmitArtifact used -- never a separate, caller-
+		// local re-marshal -- so the bytes persisted as the envelope Result
+		// can never independently drift from the digest admission carries.
+		downgradedPayload, payloadErr := CanonicalReviewerResultPayload(providerResult.SubjectHash, canonicalInspection, admitted)
+		if payloadErr != nil {
+			return CompactAdmittedReviewerCapture{}, payloadErr
+		}
+		canonicalPayload = downgradedPayload
+	}
 	envelopePayload, err := json.Marshal(compactAdmittedReviewerResult{
 		Schema:    admittedReviewerResultSchemaForSubject(expected),
 		Subject:   expected,
@@ -631,7 +647,8 @@ func compactAdmittedReviewerCaptureFromSlot(
 	if err != nil {
 		return CompactAdmittedReviewerCapture{}, fmt.Errorf("decode admitted reviewer result readback: %w", err)
 	}
-	if envelope.Schema != admittedReviewerResultSchemaForSubject(subject) || envelope.Subject != subject || envelope.Admission.Validate(subject) != nil {
+	if envelope.Schema != admittedReviewerResultSchemaForSubject(subject) || envelope.Subject != subject ||
+		envelope.Admission.Validate(subject, append(append([]byte(nil), envelope.Result...), '\n')) != nil {
 		// refusal:by-design human-authority: immutable readback bytes that no longer bind the admitted authority require storage inspection rather than replacement
 		return CompactAdmittedReviewerCapture{}, errors.New("admitted reviewer result readback does not match repository authority")
 	}

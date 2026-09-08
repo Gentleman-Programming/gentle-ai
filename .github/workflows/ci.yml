@@ -227,6 +227,21 @@ jobs:
           go test -v ./internal/components/filemerge -count=1 -run $selector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Every Windows git launch goes through the suspended-start / job-object
+      # / resume sequence; the crashes in #4081, #4128 and #4152 were a Go
+      # runtime fault on that path at roughly one launch in four, so the lane
+      # bursts real launches instead of trusting a single green run.
+      - name: Run native Windows git process tree tests
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $selector = '^(TestStartGitProcessTreeSurvivesRepeatedLaunches|TestStartGitProcessTreeKillsUnboundChildOnFailure)$'
+          $selected = @(go test ./internal/reviewtransaction -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list native Windows git process tree tests' }
+          if ($selected.Count -ne 2) { throw "Missing native Windows git process tree tests: $($selected -join ', ')" }
+          go test -v ./internal/reviewtransaction -count=1 -run $selector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build native test binary
         shell: pwsh
         run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai

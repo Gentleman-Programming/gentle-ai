@@ -1,0 +1,258 @@
+{
+  "uid": "gentle-ai-usage",
+  "title": "Gentle AI — Usage",
+  "tags": ["gentle-ai", "telemetry"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-90d", "to": "now" },
+  "refresh": "5m",
+  "panels": [
+    {
+      "id": 10,
+      "title": "Installs today (UTC)",
+      "description": "Distinct install ids that sent an install event since 00:00 UTC today, read live from the events table (the rollup panels below lag one day).",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(DISTINCT install_id) AS installs_today FROM events WHERE event = 'install' AND received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000",
+          "rawQueryText": "SELECT COUNT(DISTINCT install_id) AS installs_today FROM events WHERE event = 'install' AND received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
+    },
+    {
+      "id": 11,
+      "title": "Heartbeats today (UTC)",
+      "description": "Heartbeat events received since 00:00 UTC today: installs that were used again after their first report.",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT COUNT(*) AS heartbeats_today FROM events WHERE event = 'heartbeat' AND received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000",
+          "rawQueryText": "SELECT COUNT(*) AS heartbeats_today FROM events WHERE event = 'heartbeat' AND received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "title": "Platforms today",
+      "description": "Distinct installs seen today by operating system, live from the events table.",
+      "type": "bargauge",
+      "gridPos": { "x": 8, "y": 0, "w": 5, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT os, COUNT(DISTINCT install_id) AS installs FROM events WHERE received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000 GROUP BY os ORDER BY installs DESC",
+          "rawQueryText": "SELECT os, COUNT(DISTINCT install_id) AS installs FROM events WHERE received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000 GROUP BY os ORDER BY installs DESC"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 13,
+      "title": "Installs per hour (last 48 h)",
+      "description": "New install events per UTC hour over the last 48 hours, live from the events table.",
+      "type": "timeseries",
+      "gridPos": { "x": 13, "y": 0, "w": 11, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:00:00', received_at / 1000000000, 'unixepoch')) AS INTEGER) AS hour, COUNT(DISTINCT install_id) AS installs FROM events WHERE event = 'install' AND received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 172800) * 1000000000 GROUP BY hour ORDER BY hour ASC",
+          "rawQueryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:00:00', received_at / 1000000000, 'unixepoch')) AS INTEGER) AS hour, COUNT(DISTINCT install_id) AS installs FROM events WHERE event = 'install' AND received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 172800) * 1000000000 GROUP BY hour ORDER BY hour ASC",
+          "timeColumns": ["hour"]
+        }
+      ],
+      "fieldConfig": { "defaults": { "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "id": 1,
+      "title": "Unique installs per month (12 months)",
+      "description": "Distinct install ids active in each of the last 12 calendar months: live from the events table for the retention window, from rollups_daily.active_install beyond it. Matches GET /v1/summary's installs_per_month.",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT month, COUNT(DISTINCT id) AS unique_installs FROM (SELECT substr(day,1,7) AS month, key AS id FROM rollups_daily WHERE metric = 'active_install' AND day < date('now', '-89 day') UNION SELECT strftime('%Y-%m', received_at / 1000000000, 'unixepoch') AS month, install_id AS id FROM events WHERE received_at >= CAST(strftime('%s', date('now', '-89 day')) AS INTEGER) * 1000000000) GROUP BY month ORDER BY month DESC LIMIT 12",
+          "rawQueryText": "SELECT month, COUNT(DISTINCT id) AS unique_installs FROM (SELECT substr(day,1,7) AS month, key AS id FROM rollups_daily WHERE metric = 'active_install' AND day < date('now', '-89 day') UNION SELECT strftime('%Y-%m', received_at / 1000000000, 'unixepoch') AS month, install_id AS id FROM events WHERE received_at >= CAST(strftime('%s', date('now', '-89 day')) AS INTEGER) * 1000000000) GROUP BY month ORDER BY month DESC LIMIT 12"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Weekly active installs (12 weeks)",
+      "description": "Distinct install ids active per week, from rollups_daily.active_install. Uses SQLite's strftime('%W') (Monday-based week-of-year); this can disagree with the API's ISO week numbering right at a year boundary, so treat this as a trend view rather than a byte-for-byte match to /v1/summary.",
+      "type": "barchart",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT strftime('%Y-W%W', received_at / 1000000000, 'unixepoch') AS week, COUNT(DISTINCT install_id) AS active_installs FROM events WHERE received_at >= (CAST(strftime('%s','now') AS INTEGER) - 7776000) * 1000000000 GROUP BY week ORDER BY week DESC LIMIT 12",
+          "rawQueryText": "SELECT strftime('%Y-W%W', received_at / 1000000000, 'unixepoch') AS week, COUNT(DISTINCT install_id) AS active_installs FROM events WHERE received_at >= (CAST(strftime('%s','now') AS INTEGER) - 7776000) * 1000000000 GROUP BY week ORDER BY week DESC LIMIT 12"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Agent distribution (trailing 30 days)",
+      "description": "Install-days per agent over the trailing 30 rolled-up days: an install active on 10 different days contributes 10, once per day it reported that agent. Not distinct installs. Matches GET /v1/summary's agent_distribution.",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT je.value AS agent, COUNT(DISTINCT e.install_id) AS installs FROM events e, json_each(e.agents_json) je WHERE e.received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY agent ORDER BY installs DESC",
+          "rawQueryText": "SELECT je.value AS agent, COUNT(DISTINCT e.install_id) AS installs FROM events e, json_each(e.agents_json) je WHERE e.received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY agent ORDER BY installs DESC"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Component distribution (trailing 30 days)",
+      "description": "Install-days per component over the trailing 30 rolled-up days, same install-days semantics as agent distribution. Matches GET /v1/summary's component_distribution.",
+      "type": "bargauge",
+      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT je.value AS component, COUNT(DISTINCT e.install_id) AS installs FROM events e, json_each(e.components_json) je WHERE e.received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY component ORDER BY installs DESC",
+          "rawQueryText": "SELECT je.value AS component, COUNT(DISTINCT e.install_id) AS installs FROM events e, json_each(e.components_json) je WHERE e.received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY component ORDER BY installs DESC"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "title": "RDD enabled ratio (trailing 30 days)",
+      "description": "Share of install-days over the trailing 30 rolled-up days reporting rdd_enabled=true. Matches GET /v1/summary's rdd_enabled_ratio.",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT SUM(rdd) * 1.0 / NULLIF(COUNT(*), 0) AS rdd_enabled_ratio FROM (SELECT install_id, MAX(rdd_enabled) AS rdd FROM events WHERE received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY install_id)",
+          "rawQueryText": "SELECT SUM(rdd) * 1.0 / NULLIF(COUNT(*), 0) AS rdd_enabled_ratio FROM (SELECT install_id, MAX(rdd_enabled) AS rdd FROM events WHERE received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY install_id)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Version distribution (trailing 30 days)",
+      "description": "Install-days per reported version over the trailing 30 rolled-up days. A useful proxy for upgrade lag. Matches GET /v1/summary's version_distribution.",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT version, COUNT(DISTINCT install_id) AS installs FROM events WHERE received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY version ORDER BY installs DESC LIMIT 10",
+          "rawQueryText": "SELECT version, COUNT(DISTINCT install_id) AS installs FROM events WHERE received_at >= (CAST(strftime('%s','now') AS INTEGER) - 2592000) * 1000000000 GROUP BY version ORDER BY installs DESC LIMIT 10"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "title": "Events per day",
+      "description": "Raw event volume (install + heartbeat), bounded by --retention-days: older raw rows are purged, so this panel only ever shows the retention window, unlike the rollup-backed panels above which cover full history.",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "timeColumns": ["day"],
+          "queryText": "SELECT CAST(strftime('%s', date(received_at / 1000000000, 'unixepoch')) AS INTEGER) AS day, COUNT(*) AS events FROM events GROUP BY day ORDER BY day ASC",
+          "rawQueryText": "SELECT CAST(strftime('%s', date(received_at / 1000000000, 'unixepoch')) AS INTEGER) AS day, COUNT(*) AS events FROM events GROUP BY day ORDER BY day ASC"
+        }
+      ],
+      "fieldConfig": { "defaults": { "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "title": "npm downloads per day (gentle-pi, gentle-engram)",
+      "description": "Daily download counts from the npm registry's public API (api.npmjs.org) — a public count, not telemetry from any gentle-ai install. Matches GET /v1/summary's downloads.npm. The gentle_pi and gentle_engram columns mirror the collector's default --npm-package list; any other package it is configured to fetch lands in other_packages so nothing is silently dropped.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "timeColumns": ["day"],
+          "queryText": "SELECT CAST(strftime('%s', day) AS INTEGER) AS day, SUM(CASE WHEN key = 'gentle-pi' THEN value ELSE 0 END) AS gentle_pi, SUM(CASE WHEN key = 'gentle-engram' THEN value ELSE 0 END) AS gentle_engram, SUM(CASE WHEN key NOT IN ('gentle-pi', 'gentle-engram') THEN value ELSE 0 END) AS other_packages FROM rollups_daily WHERE metric = 'npm_downloads_day' GROUP BY day ORDER BY day ASC",
+          "rawQueryText": "SELECT CAST(strftime('%s', day) AS INTEGER) AS day, SUM(CASE WHEN key = 'gentle-pi' THEN value ELSE 0 END) AS gentle_pi, SUM(CASE WHEN key = 'gentle-engram' THEN value ELSE 0 END) AS gentle_engram, SUM(CASE WHEN key NOT IN ('gentle-pi', 'gentle-engram') THEN value ELSE 0 END) AS other_packages FROM rollups_daily WHERE metric = 'npm_downloads_day' GROUP BY day ORDER BY day ASC"
+        }
+      ],
+      "fieldConfig": { "defaults": { "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "title": "gentle-ai release downloads (cumulative per tag)",
+      "description": "Cumulative GitHub release asset download counts per tag, from the public GitHub API (api.github.com) — a public count, not telemetry from any gentle-ai install. Each bar is the latest known total for that tag, not a per-day delta. Matches GET /v1/summary's downloads.github.",
+      "type": "bargauge",
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT r.key AS tag, r.value AS total_downloads FROM rollups_daily r INNER JOIN (SELECT key, MAX(day) AS max_day FROM rollups_daily WHERE metric = 'github_release_downloads_total' GROUP BY key) latest ON latest.key = r.key AND latest.max_day = r.day WHERE r.metric = 'github_release_downloads_total' ORDER BY total_downloads DESC",
+          "rawQueryText": "SELECT r.key AS tag, r.value AS total_downloads FROM rollups_daily r INNER JOIN (SELECT key, MAX(day) AS max_day FROM rollups_daily WHERE metric = 'github_release_downloads_total' GROUP BY key) latest ON latest.key = r.key AND latest.max_day = r.day WHERE r.metric = 'github_release_downloads_total' ORDER BY total_downloads DESC"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 14,
+      "title": "Agents declared today",
+      "description": "Distinct installs seen today that declare each agent, live from the events table (json_each over agents_json). One install can declare several agents.",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "table",
+          "queryText": "SELECT je.value AS agent, COUNT(DISTINCT e.install_id) AS installs FROM events e, json_each(e.agents_json) je WHERE e.event = 'install' AND e.received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000 GROUP BY agent ORDER BY installs DESC",
+          "rawQueryText": "SELECT je.value AS agent, COUNT(DISTINCT e.install_id) AS installs FROM events e, json_each(e.agents_json) je WHERE e.event = 'install' AND e.received_at >= CAST(strftime('%s', date('now')) AS INTEGER) * 1000000000 GROUP BY agent ORDER BY installs DESC"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    }
+  ]
+}

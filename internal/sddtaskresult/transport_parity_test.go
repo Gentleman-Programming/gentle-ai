@@ -29,7 +29,7 @@ func TestOpenCodeTransportMatchesTheGoContract(t *testing.T) {
 		"retry guidance":       retryGuidance,
 		"task result grammar":  taskResultEnvelope.String(),
 		"task tag grammar":     taskTag.String(),
-		"continuation command": "gentle-ai sdd-status --cwd ",
+		"no-identity guidance": wantUnscopedContinuation,
 	} {
 		if !strings.Contains(plugin, want) {
 			t.Errorf("OpenCode transport lost the %s this package defines: %q", what, want)

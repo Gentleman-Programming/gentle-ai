@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Nightly backup of the gentle-telemetry SQLite database: a consistent
+# `sqlite3 .backup` snapshot uploaded via `rclone copy`, then removed
+# locally.
+#
+# Installed by install.sh to /usr/local/bin/gentle-telemetry-backup and
+# invoked with no arguments by gentle-telemetry-backup.service's
+# ExecStart. This logic does NOT live inline in that unit's ExecStart
+# line: systemd expands "$VAR"/"${VAR}" there using its OWN environment
+# before the shell ever runs, which would have silently mangled local
+# variables like $ts/$snapshot. A single ExecStart=<this script> has
+# nothing of that shape left for systemd to misinterpret.
+set -euo pipefail
+
+DB="${GENTLE_TELEMETRY_DB:-/var/lib/gentle-telemetry/events.sqlite}"
+: "${GENTLE_TELEMETRY_BACKUP_REMOTE:?GENTLE_TELEMETRY_BACKUP_REMOTE is not set}"
+
+backup_dir="$(dirname "${DB}")"
+
+# A snapshot left behind by an earlier failed run (upload failure, crash,
+# OOM-kill) is stale by definition — this run is about to take a fresh one
+# — so prune any of them before creating a new one, instead of letting one
+# full DB copy accumulate per failed night on the collector's own
+# filesystem.
+rm -f "${backup_dir}"/backup-*.sqlite
+
+ts="$(date -u +%Y%m%dT%H%M%SZ)"
+snapshot="${backup_dir}/backup-${ts}.sqlite"
+
+# Always remove this run's own snapshot on exit, success or failure ("set
+# -e" means a failed upload exits early, so only a trap reaches this on the
+# failure path too): the unit still fails and is visible via failed-unit
+# monitoring, but no snapshot is left on disk to eat space run after run.
+trap 'rm -f "${snapshot}"' EXIT
+
+# sqlite3's ".backup" command takes a consistent snapshot even while the
+# collector is writing (SQLite's own backup API), so this never needs to
+# stop gentle-telemetry.service.
+sqlite3 "${DB}" ".backup ${snapshot}"
+rclone copy "${snapshot}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"

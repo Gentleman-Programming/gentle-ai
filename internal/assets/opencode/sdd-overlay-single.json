@@ -1,6 +1,7 @@
 {
   "agent": {
     "gentle-orchestrator": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "primary",
       "description": "Gentle AI SDD Orchestrator - coordinates sub-agents, never does work inline",
       "prompt": "{file:./AGENTS.md}",
@@ -36,6 +37,7 @@
       }
     },
     "general": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "General unstructured queries and auxiliary fallback tasks",
@@ -43,6 +45,7 @@
       "permission": { "task": "deny" }
     },
     "explore": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Freeform exploration fallback agent",
@@ -50,6 +53,7 @@
       "permission": { "write": "deny", "edit": "deny", "bash": "deny", "task": "deny" }
     },
     "sdd-init": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Bootstrap SDD context and project configuration",
@@ -57,6 +61,7 @@
       "permission": {}
     },
     "sdd-explore": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Investigate codebase and think through ideas",
@@ -64,6 +69,7 @@
       "permission": {}
     },
     "sdd-research": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Collect source-backed evidence for selected SDD research",
@@ -76,6 +82,7 @@
       }
     },
     "sdd-propose": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Create change proposals from explorations",
@@ -83,6 +90,7 @@
       "permission": {}
     },
     "sdd-spec": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Write detailed specifications from proposals",
@@ -90,6 +98,7 @@
       "permission": {}
     },
     "sdd-design": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Create technical design from proposals",
@@ -97,6 +106,7 @@
       "permission": {}
     },
     "sdd-tasks": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Break down specs and designs into implementation tasks",
@@ -104,6 +114,7 @@
       "permission": {}
     },
     "sdd-apply": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Implement code changes from task definitions",
@@ -111,6 +122,7 @@
       "permission": {}
     },
     "sdd-verify": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Validate implementation against specs",
@@ -118,6 +130,7 @@
       "permission": {}
     },
     "sdd-archive": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Archive completed change artifacts",
@@ -125,6 +138,7 @@
       "permission": {}
     },
     "sdd-onboard": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Guide user through a complete SDD cycle using their real codebase",
@@ -132,6 +146,7 @@
       "permission": {}
     },
     "jd-judge-a": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
@@ -139,6 +154,7 @@
       "permission": {}
     },
     "jd-judge-b": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
@@ -146,6 +162,7 @@
       "permission": {}
     },
     "jd-fix-agent": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Surgical fix agent for judgment-day protocol",
@@ -153,6 +170,7 @@
       "permission": {}
     },
     "review-risk": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "R1 Risk reviewer — security, privilege boundaries, data exposure, dependency risks, and merge-blocking vulnerabilities",
@@ -160,6 +178,7 @@
       "permission": {}
     },
     "review-readability": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "R2 Readability reviewer — naming, complexity, intention, maintainability, review size, and context clarity",
@@ -167,6 +186,7 @@
       "permission": {}
     },
     "review-reliability": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "R3 Reliability reviewer — behavior-first tests, coverage value, edge cases, determinism, contracts, and regressions",
@@ -174,6 +194,7 @@
       "permission": {}
     },
     "review-resilience": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "R4 Resilience reviewer — fallbacks, retry/backoff, graceful degradation, observability, load, rollback, and SLO risks",
@@ -181,6 +202,7 @@
       "permission": {}
     },
     "review-refuter": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Batched adversarial refuter — evaluates every BLOCKER/CRITICAL candidate through one assigned lens and returns one verdict per finding",
@@ -188,6 +210,7 @@
       "permission": {}
     },
     "review-validator": {
+      "__managed_by": "gentle-ai/sdd",
       "mode": "subagent",
       "hidden": true,
       "description": "Targeted read-only validator for provider-issued review checks",

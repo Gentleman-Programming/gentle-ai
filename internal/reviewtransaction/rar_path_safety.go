@@ -127,7 +127,12 @@ func ensureRARDirectoryChain(commonDir, root, want string, privateFrom int, crea
 			return statErr
 		}
 		if private {
-			if err := validatePrivateRARDirectory(current); err != nil {
+			// #3416: route through the same repair helper the create path
+			// above uses, whether this entry was just created or already
+			// existed -- previously an already-existing directory skipped the
+			// create branch entirely and was refused on its first validation,
+			// never given the repair a freshly created one always got.
+			if err := repairAndValidatePrivateRARDirectory(current); err != nil {
 				return fmt.Errorf("validate private RAR directory %q: %w", current, err)
 			}
 		} else if err := validateRARRepositoryParent(current); err != nil {

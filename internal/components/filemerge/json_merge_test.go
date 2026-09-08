@@ -6,6 +6,73 @@ import (
 	"testing"
 )
 
+func TestPermissionOverlayNewWildcardCannotOverrideExistingDeny(t *testing.T) {
+	got, err := MergeJSONObjects([]byte(`{"permission":{"bash":{"ssh*":"deny"}}}`), []byte(`{"permission":{"bash":{"*":"allow"}}}`))
+	if err != nil || !strings.Contains(strings.Join(strings.Fields(string(got)), ""), `"bash":{"*":"allow","ssh*":"deny"}`) {
+		t.Fatalf("new wildcard changed the effective SSH deny: %s, %v", got, err)
+	}
+}
+
+func TestPermissionOverlayCannotReplaceRestrictionsWithScalarAllow(t *testing.T) {
+	for _, base := range []string{`{"permission":{"bash":{"ssh *":"deny"}}}`, `{"agent":{"custom":{"permission":{"bash":"deny"}}}}`} {
+		got, err := MergeJSONObjects([]byte(base), []byte(`{"permission":"allow","agent":{"custom":{"permission":"allow"}}}`))
+		if err != nil || !strings.Contains(string(got), `"deny"`) {
+			t.Fatalf("scalar overlay erased a restriction: %s, %v", got, err)
+		}
+	}
+}
+
+func TestPermissionDefaultsJSONCAndRestrictiveAgent(t *testing.T) {
+	base := []byte("// personal settings\n" + `{"permission":{"bash":{"*":"allow","ssh*":"deny"}},"agent":{"custom":{"permission":"deny"}}}`)
+	got, err := MergeJSONDefaultsForPath("opencode.jsonc", base, []byte(`{"permission":{"bash":{"*":"allow","ssh *":"ask"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), "// personal settings") {
+		t.Fatal("defaults lost JSONC comment")
+	}
+	repeated, err := MergeJSONDefaultsForPath("opencode.jsonc", got, []byte(`{"permission":{"bash":{"*":"allow","ssh *":"ask"}}}`))
+	if err != nil || string(repeated) != string(got) {
+		t.Fatalf("JSONC defaults are not idempotent: %v", err)
+	}
+	got, err = MergeJSONObjectsForPath("opencode.jsonc", got, []byte(`{"agent":{"custom":{"permission":{"bash":"allow"}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := strings.Join(strings.Fields(string(got)), "")
+	if !strings.Contains(compact, `"custom":{"permission":"deny"}`) || !strings.Contains(compact, `"bash":{"*":"allow","ssh*":"ask","ssh*":"deny"}`) {
+		t.Fatalf("cross-writer merge weakened restrictive permission: %s", got)
+	}
+}
+
+func TestPermissionOrderSurvivesCrossWriterMerge(t *testing.T) {
+	for _, path := range []string{"opencode.json", "opencode.jsonc"} {
+		t.Run(path, func(t *testing.T) {
+			base := []byte(`{"permission":{"bash":{"ssh *":"allow","*":"deny"}},"agent":{"custom":{"permission":{"bash":{"ssh *":"allow","*":"deny"}}}}}`)
+			// Agent-tools retirement is another settings writer outside the
+			// overlay merge; it must use the same serialization authority.
+			base = []byte(strings.Replace(string(base), `"custom":{`, `"custom":{"tools":{"bash":true},`, 1))
+			base, err := RemoveJSONAgentTools(base, "custom")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, overlay := range []string{`{"agent":{"gentle-orchestrator":{"prompt":"guidance"}}}`, `{"agent":{"sdd-apply":{"permission":{}}}}`} {
+				got, err := MergeJSONObjectsForPath(path, base, []byte(overlay))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Both patterns match ssh example.invalid: the final serialized
+				// rule must remain deny, globally and in the custom agent.
+				compact := strings.Join(strings.Fields(string(got)), "")
+				if strings.Count(compact, `"bash":{"ssh*":"allow","*":"deny"}`) != 2 {
+					t.Fatalf("last-match deny was reordered by %s: %s", overlay, got)
+				}
+				base = got
+			}
+		})
+	}
+}
+
 func TestMergeJSONObjectsRecursively(t *testing.T) {
 	base := []byte(`{"plugins":["a"],"settings":{"theme":"default","flags":{"x":true}}}`)
 	overlay := []byte(`{"settings":{"theme":"gentleman","flags":{"y":true}},"extra":1}`)

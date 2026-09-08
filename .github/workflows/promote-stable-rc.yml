@@ -77,14 +77,28 @@ jobs:
           [[ "$semver" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           printf 'semver=%s\n' "$semver" >>"$GITHUB_OUTPUT"
           printf 'PROVIDER_CONTRACT_SEMVER=%s\n' "$semver" >>"$GITHUB_ENV"
-      - name: Resolve source distribution plan without publishing
+      - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.15.2
-          workdir: source
-          args: release --snapshot --clean --skip=sign,publish
+          install-only: true
+      # The provenance hook binds its manifest to GITHUB_REF_NAME and GITHUB_SHA.
+      # Under workflow_dispatch those name this run on main, not the promoted
+      # source, so the hook refuses ("release provenance input is invalid") or,
+      # worse, would record the wrong commit. The hook runs from the promoted
+      # source tree, which may predate any code fix, so the stable identity is
+      # exported here in the shell, where the runner's reserved variables can be
+      # shadowed for the child process.
+      - name: Resolve source distribution plan without publishing
+        working-directory: source
         env:
           MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_sha }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: |
+          set -euo pipefail
+          export GITHUB_REF="refs/tags/$STABLE_TAG" GITHUB_REF_NAME="$STABLE_TAG" GITHUB_REF_TYPE=tag GITHUB_SHA="$SOURCE_SHA"
+          goreleaser release --snapshot --clean --skip=sign,publish
       - name: Verify source distribution policy
         working-directory: source
         run: ./scripts/verify-release-distribution-policy.sh
@@ -204,20 +218,30 @@ jobs:
           MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
           MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
         run: ./scripts/release-signing-preflight.sh
-      - name: Run GoReleaser
+      - name: Install GoReleaser
         if: steps.tag.outputs.publish == 'true'
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.15.2
-          workdir: source
-          args: release --clean
+          install-only: true
+      # Same identity shadowing as the preflight plan: the provenance manifest
+      # must name the stable tag and the promoted source commit.
+      - name: Run GoReleaser
+        if: steps.tag.outputs.publish == 'true'
+        working-directory: source
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GORELEASER_CURRENT_TAG: ${{ inputs.stable_tag }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
           PROVIDER_CONTRACT_SEMVER: ${{ needs.preflight.outputs.provider_contract_semver }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           MINISIGN_SECRET_KEY_FILE: ${{ env.MINISIGN_SECRET_KEY_FILE }}
           MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
+        run: |
+          set -euo pipefail
+          export GITHUB_REF="refs/tags/$STABLE_TAG" GITHUB_REF_NAME="$STABLE_TAG" GITHUB_REF_TYPE=tag GITHUB_SHA="$SOURCE_SHA"
+          goreleaser release --clean
       - name: Remove signing material
         if: always()
         run: |

@@ -36,6 +36,46 @@ var syncReviewDirectory = func(path string) error {
 	return directory.Close()
 }
 
+// mkdirAllSync creates the directory chain for path, like os.MkdirAll, but
+// synchronizes the parent of every directory it actually creates (#1721): a
+// newly created directory entry is not durable until its parent's own
+// directory data is synced, and a caller that publishes a file beneath a
+// freshly created directory (e.g. the first compact lineage under v2/) needs
+// that entry durable before it reports the publish as complete.
+//
+// Components are created one at a time with os.Mkdir rather than detected via
+// a Stat-before-MkdirAll check: os.Mkdir's own success/EEXIST outcome is race
+// free, where a preceding Stat would leave a TOCTOU window against a
+// concurrent creator.
+func mkdirAllSync(path string, mode os.FileMode) error {
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	if parent == path {
+		return nil
+	}
+	if err := mkdirAllSync(parent, mode); err != nil {
+		return err
+	}
+	switch err := os.Mkdir(path, mode); {
+	case err == nil:
+		return SyncReviewDirectory(parent)
+	case errors.Is(err, os.ErrExist):
+		// Stat, not Lstat: an existing entry may be a symlink to a directory
+		// (e.g. macOS /var -> /private/var), which must not be rejected as
+		// "not a directory".
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.IsDir() {
+			return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+		}
+		return nil
+	default:
+		return err
+	}
+}
+
 type directorySyncError struct {
 	path  string
 	cause error
@@ -164,7 +204,11 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		}
 		defer maintenance.Release()
 	}
-	if err := os.MkdirAll(filepath.Join(store.Dir, "events"), 0o755); err != nil {
+	// #1721: mkdirAllSync (not os.MkdirAll) so a first review/start on this
+	// lineage syncs the v1/ parent for the newly created lineage directory,
+	// and store.Dir for the newly created events/ directory, before any
+	// event or HEAD naming them is published below.
+	if err := mkdirAllSync(filepath.Join(store.Dir, "events"), 0o755); err != nil {
 		return "", err
 	}
 	lockPath := filepath.Join(store.Dir, "LOCK")
@@ -274,6 +318,13 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		} else {
 			return "", err
 		}
+	}
+	// #1721: HEAD is about to name this event as durable. Without syncing
+	// events/ first, a crash between the rename above and this point can
+	// leave a durable HEAD pointing at an event entry the directory never
+	// actually recorded.
+	if err := SyncReviewDirectory(filepath.Join(store.Dir, "events")); err != nil {
+		return "", &directorySyncError{path: eventPath, cause: err}
 	}
 	if err := writeAtomic(filepath.Join(store.Dir, "HEAD"), []byte(revision+"\n"), 0o644); err != nil {
 		return "", err
@@ -883,7 +934,7 @@ func readRevision(path string) (string, error) {
 }
 
 func writeAtomic(path string, payload []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirAllSync(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".atomic-*")

@@ -91,6 +91,11 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 		return Result{}, err
 	}
 
+	// Keep the boundary in the unconditional guidance carrier, independent of
+	// persona and SDD selection. Nesting inside the owned routing section also
+	// preserves it when other component writers retain that section.
+	rendered = InjectRemoteAuthorization(rendered)
+
 	switch delivery.kind {
 	case deliveryOrchestratorPrompt:
 		return injectOrchestratorPrompt(delivery, agent, rendered)

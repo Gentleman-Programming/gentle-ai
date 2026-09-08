@@ -18,6 +18,24 @@ func TestClaudeWorkflowPointersNameWorkspaceAndHomeLocations(t *testing.T) {
 	}
 }
 
+func TestClaudeMetaCommandsDelegatePolicy(t *testing.T) {
+	for _, name := range []string{"new", "continue", "ff"} {
+		t.Run(name, func(t *testing.T) {
+			content := MustRead("claude/commands/gentle-sdd-" + name + ".md")
+			for _, required := range []string{"description:", "Intent:", "$ARGUMENTS", "under the workspace first; if absent", "authoritative lazy workflow"} {
+				if !strings.Contains(content, required) {
+					t.Errorf("entrypoint missing %q", required)
+				}
+			}
+			for _, forbidden := range []string{"WORKFLOW:", "STATUS CONTRACT:", "preflight", "sdd-init", "sdd-propose", "sdd-spec", "sdd-apply", "nextRecommended", "blockedReasons", "artifact store", "review", "400", "mem_search", "AskUserQuestion", "`interactive`", "`auto`"} {
+				if strings.Contains(content, forbidden) {
+					t.Errorf("entrypoint duplicates policy %q", forbidden)
+				}
+			}
+		})
+	}
+}
+
 // #2480: regenerating tasks.md must keep the existing list and numbering.
 func TestTasksSkillPreservesExistingTaskListOnRegeneration(t *testing.T) {
 	if content := MustRead("skills/sdd-tasks/SKILL.md"); !strings.Contains(content, "never rewrite") || !strings.Contains(content, "numbering") {

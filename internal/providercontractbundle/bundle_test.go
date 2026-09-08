@@ -19,11 +19,23 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
+// currentShapeContractSemver labels fixtures built by generatedFiles/Generate
+// in tests that are not about historical-contract compatibility. Both
+// functions always emit the full current manifest shape (runtimes and
+// orchestration populated) regardless of the semver string passed in, so the
+// label here must be at or after every field's own introduction version
+// (contractSemverIntroducingRuntimesField, contractSemverIntroducingOrchestrationField)
+// -- otherwise validateEntries correctly refuses a manifest that claims an
+// older contract while still carrying fields that contract never promised
+// (#3256). Tests that exercise pre-1.1.0/pre-1.2.0 compatibility build their
+// own minimal legacy-shaped manifest instead of using this label.
+const currentShapeContractSemver = "1.2.0"
+
 func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 	first := filepath.Join(t.TempDir(), "first")
 	second := filepath.Join(t.TempDir(), "second")
 	for _, directory := range []string{first, second} {
-		if err := Generate(directory, "1.0.0"); err != nil {
+		if err := Generate(directory, currentShapeContractSemver); err != nil {
 			t.Fatalf("Generate(%s): %v", directory, err)
 		}
 	}
@@ -132,7 +144,7 @@ func TestVerifyArchiveRejectsUnsafeTarEntries(t *testing.T) {
 }
 
 func TestVerifyArchiveAcceptsTypeRegA(t *testing.T) {
-	files, err := generatedFiles("1.0.0")
+	files, err := generatedFiles(currentShapeContractSemver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,5 +704,58 @@ func TestVerifyArchiveRejectsAnUnregisteredOrchestrationRuntime(t *testing.T) {
 	writeArchive(t, archive, tampered, nil, false)
 	if err := VerifyArchive(archive); err == nil {
 		t.Fatal("VerifyArchive accepted an unregistered orchestration runtime")
+	}
+}
+
+// TestVerifyArchiveAcceptsAGenuinePre110PublishedBundleWithoutRuntimesOrOrchestrationFields
+// pins the fix for issue #3256: `providercontractbundle verify` used to reject
+// every bundle published before the 1.1.0 contract bump unconditionally,
+// because validateEntries required decoded.Runtimes to equal the registered
+// runtime identities regardless of contract_semver. A genuine pre-1.1.0
+// manifest never had a "runtimes" key at all (and a genuine pre-1.2.0
+// manifest never had "orchestration" either), so it correctly decodes both as
+// nil -- that is not corruption, it is exactly what the contract at that
+// version promised.
+func TestVerifyArchiveAcceptsAGenuinePre110PublishedBundleWithoutRuntimesOrOrchestrationFields(t *testing.T) {
+	files, err := generatedFiles("1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded manifest
+	if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	// legacyManifest is the exact pre-#3254 manifest shape: no "runtimes" key,
+	// no "orchestration" key. Marshaling this struct (rather than deleting
+	// keys from a generic map) guarantees the fixture cannot accidentally
+	// carry either field.
+	type legacyManifest struct {
+		Schema              string         `json:"schema"`
+		ContractSemver      string         `json:"contract_semver"`
+		TransportCapability string         `json:"transport_capability"`
+		README              fileReference  `json:"readme"`
+		Roles               []roleManifest `json:"roles"`
+	}
+	legacyPayload, err := json.MarshalIndent(legacyManifest{
+		Schema:              decoded.Schema,
+		ContractSemver:      decoded.ContractSemver,
+		TransportCapability: decoded.TransportCapability,
+		README:              decoded.README,
+		Roles:               decoded.Roles,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(legacyPayload, '\n')
+	delete(files, "orchestration/pi.md")
+
+	if strings.Contains(string(files["manifest.json"]), "runtime") {
+		t.Fatalf("legacy fixture manifest unexpectedly mentions runtimes:\n%s", files["manifest.json"])
+	}
+
+	archive := filepath.Join(t.TempDir(), "legacy-1.0.0.tar.gz")
+	writeArchive(t, archive, files, nil, false)
+	if err := VerifyArchive(archive); err != nil {
+		t.Fatalf("VerifyArchive rejected a genuine pre-1.1.0 published bundle: %v", err)
 	}
 }

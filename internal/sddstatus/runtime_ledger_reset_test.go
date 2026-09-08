@@ -490,3 +490,87 @@ func TestRuntimeLedgerResetWithoutDriftStillRequiresTerminalScope(t *testing.T) 
 		t.Fatalf("undrifted early reset error = %v, want ErrRuntimeResetNotAllowed", err)
 	}
 }
+
+// TestRuntimeLedgerResetAlreadyAdmitsAMaintainerAuthorizedBudgetRaise is
+// issue #1947: after an exhausted budget forces decision_required, the
+// existing `reset` already opens the way to a genuinely fresh objective, and
+// Begin already reads MaxChangedLines straight off its own request rather
+// than the retired objective's ceiling once Reset has cleared it
+// (runtime_admission.go's continuing-objective comparison never runs when
+// status.Objective is nil). This test proves a maintainer-authorized raise is
+// already possible through that existing path -- default stays 200 when
+// omitted, an explicit raise on the post-reset begin takes effect, and a
+// fresh replay of the ledger preserves it -- with no new reset fields needed.
+func TestRuntimeLedgerResetAlreadyAdmitsAMaintainerAuthorizedBudgetRaise(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "reset-budget-raise")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: an omitted MaxChangedLines is the CLI's job to default (#2589);
+	// the ledger itself still requires an explicit positive value in 1..max.
+	defaulted, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "raise-begin-default", WorkUnit: "size-exception-harness",
+		EvidenceGoal: "prove default budget", MaxAttempts: 1, MaxChangedLines: DefaultRuntimeChangedLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaulted.Objective == nil || defaulted.Objective.MaxChangedLines != 200 {
+		t.Fatalf("default objective = %#v, want 200 changed lines", defaulted.Objective)
+	}
+
+	// Exhaust the tiny budget: one failed attempt at MaxAttempts=1 drives the
+	// objective straight to decision_required, admitting reset.
+	exhausted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: defaulted.Revision, RequestID: "raise-finish-exhaust", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('2'), Diagnosis: "the tiny budget was consumed by design",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "process group exited cleanly",
+		ProcessEvidence: "process scan found no surviving descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exhausted.DecisionRequired || exhausted.NextAction != RuntimeActionReset {
+		t.Fatalf("exhausted objective status = %#v", exhausted)
+	}
+
+	reset, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: exhausted.Revision, RequestID: "raise-reset-1",
+		Reason: "maintainer approved a larger size exception after the default budget was exhausted",
+		Actor:  "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The raise: an explicit --max-changed-lines on the post-reset begin,
+	// well above the retired objective's 200-line ceiling, with the same
+	// audited actor/reason authority reset already required.
+	const raisedBudget = 900
+	raised, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: reset.Revision, RequestID: "raise-begin-2", WorkUnit: "size-exception-harness",
+		EvidenceGoal: "prove the raised budget", MaxAttempts: 2, MaxChangedLines: raisedBudget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raised.Objective == nil || raised.Objective.MaxChangedLines != raisedBudget {
+		t.Fatalf("post-reset objective = %#v, want %d changed lines", raised.Objective, raisedBudget)
+	}
+
+	// Replay: a fresh store instance re-reading the same on-disk ledger sees
+	// the identical raised ceiling, not the retired 200-line one.
+	reopened, err := OpenRuntimeStore(context.Background(), repo, "reset-budget-raise")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := reopened.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Objective == nil || replayed.Objective.MaxChangedLines != raisedBudget || replayed.Revision != raised.Revision {
+		t.Fatalf("replayed objective = %#v, want %d changed lines at revision %s", replayed.Objective, raisedBudget, raised.Revision)
+	}
+}

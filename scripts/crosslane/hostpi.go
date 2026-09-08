@@ -14,17 +14,21 @@ import (
 //go:embed pirelay.mts
 var piRelayDriver string
 
-// hostPiLane drives the REAL Pi host: the lens capture runs through the
-// INSTALLED gentle-pi review-host-relay implementation (byte-identical lib
-// copy) which spawns a brand-new locked-down print-mode `pi` subprocess, and
-// any refuter/validator leg runs through `--execute`, where Go itself spawns
-// the real pi role process. Every reviewer verdict in this lane comes out of
-// a real pi process over the dev subscription.
 const hostPiLane = "host-pi"
 
-// piRelayContractEnv is the exact handshake gentle-ai requires before the pi
-// runtime identity becomes eligible for immutable review transport.
-var piRelayContractEnv = []string{"GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1"}
+func piReviewEnvironment(operatorHome, operatorPath string) ([]string, string) {
+	if operatorHome == "" {
+		return nil, "operator HOME is empty; refusing to launch the Pi relay without an explicit runtime locator"
+	}
+	if operatorPath == "" {
+		return nil, "operator PATH is empty; refusing to launch the Pi relay without an explicit runtime locator"
+	}
+	agentDir := os.Getenv("PI_CODING_AGENT_DIR")
+	if agentDir == "" {
+		agentDir = filepath.Join(operatorHome, ".pi", "agent")
+	}
+	return []string{"HOME=" + operatorHome, "PATH=" + operatorPath, "PI_CODING_AGENT_DIR=" + agentDir, "GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1"}, ""
+}
 
 // piPackageDir returns the installed gentle-pi package root.
 func piPackageDir() string {
@@ -38,19 +42,11 @@ func piPackageDir() string {
 	return filepath.Join(home, ".pi", "agent", "npm", "node_modules", "gentle-pi")
 }
 
-// runHostPiLane probes the real pi surface, documents the print-mode
-// extension evidence, and drives one medium candidate review to the receipt.
-//
-// Print-mode extension note, verified against `pi --help`: pi discovers and
-// loads extensions in print mode too (`--no-extensions` exists to turn that
-// off, and extension-registered CLI flags appear in the help output). What
-// stays out of this battery is driving gentle-pi's ORCHESTRATOR review flow
-// through a live print-mode model session: that is an unbounded multi-turn
-// agentic run answering consent envelopes, not a boundable lane. The bounded
-// real-host coverage is this host-relay reviewer lane: the exact seam where
-// gentle-pi's launcher meets the Go facade, with real pi processes at every
-// reviewer, refuter, and validator leg.
 func (b *battery) runHostPiLane() {
+	if b.piEnvironmentErr != "" {
+		b.fail(hostPiLane, "Pi runtime environment", b.piEnvironmentErr)
+		return
+	}
 	if _, err := exec.LookPath("pi"); err != nil {
 		b.skip(hostPiLane, "pi host lane", "pi binary is not on PATH")
 		return
@@ -74,27 +70,161 @@ func (b *battery) runHostPiLane() {
 	}
 	b.piRelayDir = relayDir
 
-	repo, ok := b.hostMediumCandidate(hostPiLane, "host-pi")
+	repo, ok := b.hostPiCorrectionCandidate()
 	if !ok {
 		return
 	}
-	if !b.hostNegotiatedMediumStart(hostPiLane, repo, "pi", piRelayContractEnv) {
+	if !b.hostNegotiatedStart(hostPiLane, repo, "pi", b.piEnvironment, "high") {
 		return
 	}
-	statusDoc, stderr, _ := b.statusEnv(repo, "pi", piRelayContractEnv)
-	input := collectInput(statusDoc)
-	if input == nil || input["capture_operation"] != "review.capture-result" || !hasArgument(input, "materialize") || getMap(input, "submission") == nil {
-		b.fail(hostPiLane, "relay capture admitted", "no materialize+submission capture-result collect input; "+firstLine(stderr))
+	if !b.hostPiCaptureReviewers(repo) {
 		return
 	}
-	if !b.runPiRelaySlot(hostPiLane, repo, input) {
+	if !b.hostPiDriveCorrectionToValidation(repo) {
 		return
 	}
-	b.hostFollowToReceipt(hostPiLane, repo, "pi", piRelayContractEnv)
+	b.hostFollowToReceipt(hostPiLane, repo, "pi", b.piEnvironment)
+	if _, active := b.lineages[repo]; active {
+		b.fail(hostPiLane, "correction to validator closure", "Pi review did not close through review.capture-validation")
+		return
+	}
+	b.pass(hostPiLane, "correction to validator closure", "Pi correction reached validator closure")
 }
 
-// probePiPrintModeExtensions records the probe evidence for pi's print-mode
-// extension surface from `pi --help` output.
+func (b *battery) hostPiCaptureReviewers(repo string) bool {
+	const check = "relay reviewer sequence"
+	fail := func(note string) bool { b.fail(hostPiLane, check, note); return false }
+	seen := map[string]bool{}
+	for status, stderr, code := b.statusEnv(repo, "pi", b.piEnvironment); ; status, stderr, code = b.statusEnv(repo, "pi", b.piEnvironment) {
+		reason := getString(status, "next_transition", "reason_code")
+		if code != 0 || reason == "" {
+			return fail(fmt.Sprintf("status after relay capture exit=%d %s", code, firstLine(stderr)))
+		}
+		if reason == "correction_plan_required" {
+			return true
+		}
+		if reason != "reviewer_results_required" {
+			return fail("unexpected status transition " + reason)
+		}
+		input, slot := piUnadmittedReviewerInput(status, seen)
+		if input == nil || slot == "" || !hasArgument(input, "materialize") || getMap(input, "submission") == nil {
+			return fail("STATUS reoffered no unadmitted materialized review.capture-result slot")
+		}
+		capture, admitted := b.runPiRelaySlot(hostPiLane, repo, input)
+		if !admitted {
+			return false
+		}
+		seen[slot] = true
+		if operationState(capture) == "correction_required" {
+			return b.hostCorrectionReentry(hostPiLane, "lifecycle correction re-entry", repo, b.piEnvironment, capture)
+		}
+	}
+}
+
+func piUnadmittedReviewerInput(status map[string]any, seen map[string]bool) (map[string]any, string) {
+	for _, raw := range getSlice(status, "next_transition", "collect", "inputs") {
+		input, _ := raw.(map[string]any)
+		if input == nil || input["capture_operation"] != "review.capture-result" {
+			continue
+		}
+		args := argumentValues(input)
+		slot := strings.Join([]string{args["order"], args["lens"], args["subject-hash"]}, "\x00")
+		if args["order"] == "" || args["lens"] == "" || args["subject-hash"] == "" || !seen[slot] {
+			return input, slot
+		}
+	}
+	return nil, ""
+}
+
+const hostPiCorrectedModule = "export function authorize(token) { return token === \"trusted-token\" }\n"
+
+func (b *battery) hostPiCorrectionCandidate() (string, bool) {
+	fail := func(name, note string) (string, bool) { b.fail(hostPiLane, name, note); return "", false }
+	repo, err := b.scratchRepo("host-pi")
+	if err != nil {
+		return fail("scratch repository", err.Error())
+	}
+	if err = writeFile(repo, "auth/authorize.mjs", hostPiCorrectedModule); err == nil {
+		err = writeFile(repo, "test/authorize.test.mjs", `import assert from "node:assert/strict"; import { authorize } from "../auth/authorize.mjs"; assert.equal(authorize("trusted-token"), true); assert.equal(authorize("invalid-token"), false);`)
+	}
+	if err == nil {
+		err = commitAll(repo, "feat: add token authorization")
+	}
+	if err != nil {
+		return fail("scratch repository", err.Error())
+	}
+	if err := runHostPiScratchTest(repo); err != nil {
+		return fail("authorization expectations before bypass", err.Error())
+	}
+	b.pass(hostPiLane, "authorization expectations before bypass", "committed base passed node --test test/authorize.test.mjs with trusted token authorized and invalid token denied")
+	if err := writeFile(repo, "auth/authorize.mjs", strings.Replace(hostPiCorrectedModule, `return token === "trusted-token"`, "return true", 1)); err != nil {
+		return fail("scratch repository", err.Error())
+	}
+	if err := runHostPiScratchTest(repo); err == nil {
+		return fail("authorization expectations reject bypass", "node --test test/authorize.test.mjs unexpectedly passed after authorize() bypass returned true")
+	}
+	b.pass(hostPiLane, "authorization expectations reject bypass", "unchanged committed invalid-token denial failed after only authorize() changed from token validation to return true")
+	return repo, true
+}
+func runHostPiScratchTest(repo string) error {
+	command := exec.Command("node", "--test", "test/authorize.test.mjs")
+	command.Dir = repo
+	return command.Run()
+}
+func (b *battery) hostPiDriveCorrectionToValidation(repo string) bool {
+	const check = "Pi correction plan and validator vector"
+	fail := func(note string) bool { b.fail(hostPiLane, check, note); return false }
+	status, stderr, code := b.statusEnv(repo, "pi", b.piEnvironment)
+	input := collectInput(status)
+	if code != 0 || getString(status, "next_transition", "reason_code") != "correction_plan_required" || input == nil || input["capture_operation"] != "review.capture-correction-plan" {
+		return fail(fmt.Sprintf("expected correction-plan collect input: exit=%d reason=%q operation=%q %s",
+			code, getString(status, "next_transition", "reason_code"), getString(input, "capture_operation"), firstLine(stderr)))
+	}
+	planTokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"value": "2"})
+	plan, stderr, code := b.runJSONEnv("operation", repo, b.piEnvironment,
+		append([]string{"review", getString(input, "submission", "operation_token")}, planTokens...)...)
+	if code != 0 || operationState(plan) != "correction_required" {
+		return fail(fmt.Sprintf("exact correction-plan vector exit=%d state=%q %s", code, operationState(plan), firstLine(stderr)))
+	}
+	if err := writeFile(repo, "auth/authorize.mjs", hostPiCorrectedModule); err != nil {
+		return fail("apply in-scope correction: " + err.Error())
+	}
+	if err := runHostPiScratchTest(repo); err != nil {
+		return fail("corrected authorization expectations: " + err.Error())
+	}
+	b.pass(hostPiLane, check, "exact correction-plan vector forecast one deletion plus one addition; restoring authorize(token) to trusted-token validation made the unchanged security test pass")
+	status, stderr, code = b.statusEnv(repo, "pi", b.piEnvironment)
+	input = collectInput(status)
+	if code != 0 || getString(status, "next_transition", "reason_code") != "targeted_validation_required" || input == nil || input["capture_operation"] != "review.capture-validation" || !hasArgument(input, "agent") || !hasArgument(input, "execute") {
+		return fail(fmt.Sprintf("expected targeted-validator vector: exit=%d reason=%q operation=%q %s",
+			code, getString(status, "next_transition", "reason_code"), getString(input, "capture_operation"), firstLine(stderr)))
+	}
+	vector := argumentTokens(input)
+	wrong := append([]string(nil), vector...)
+	for index, token := range wrong {
+		if strings.HasPrefix(token, "--request-hash=") {
+			wrong[index] = "--request-hash=sha256:" + strings.Repeat("0", 64)
+			break
+		}
+	}
+	if strings.Join(wrong, "\x00") == strings.Join(vector, "\x00") {
+		return fail("targeted-validator vector omitted request-hash")
+	}
+	if _, rejection, rejected := b.runJSONEnv("validator-unconfirmed", repo, b.piEnvironment,
+		append([]string{"review", "capture-validation"}, wrong...)...); rejected == 0 {
+		return fail("wrong validator binding unexpectedly succeeded: " + firstLine(rejection))
+	}
+	reoffered, reofferStderr, reofferCode := b.statusEnv(repo, "pi", b.piEnvironment)
+	reofferedInput := collectInput(reoffered)
+	if reofferCode != 0 || getString(reoffered, "next_transition", "reason_code") != "targeted_validation_required" ||
+		reofferedInput == nil || strings.Join(argumentTokens(reofferedInput), "\x00") != strings.Join(vector, "\x00") {
+		return fail(fmt.Sprintf("unconfirmed validator capture lost its exact live slot: exit=%d reason=%q %s",
+			reofferCode, getString(reoffered, "next_transition", "reason_code"), firstLine(reofferStderr)))
+	}
+	b.pass(hostPiLane, check, "a rejected unconfirmed validator vector retained the same lineage and exact reoffered capture; no fresh review was authorized")
+	return true
+}
+
 func (b *battery) probePiPrintModeExtensions() {
 	output, err := exec.Command("pi", "--help").CombinedOutput()
 	if err != nil {
@@ -103,12 +233,10 @@ func (b *battery) probePiPrintModeExtensions() {
 	}
 	help := string(output)
 	if strings.Contains(help, "Extension CLI Flags") && strings.Contains(help, "--no-extensions") {
-		b.pass(hostPiLane, "print-mode extension probe",
-			"pi loads extensions in print mode (extension-registered CLI flags in --help; --no-extensions is the opt-out); the full extension-driven review flow is an unbounded agentic session, so this lane drives the bounded host relay instead")
+		b.pass(hostPiLane, "print-mode extension probe", "pi loads extensions in print mode")
 		return
 	}
-	b.skip(hostPiLane, "print-mode extension probe",
-		"pi --help shows no extension-registered flags; extension loading in print mode unproven, lane drives the host relay")
+	b.skip(hostPiLane, "print-mode extension probe", "extension loading in print mode unproven")
 }
 
 func piRelayClosurePresent(packageDir string) bool {
@@ -116,9 +244,6 @@ func piRelayClosurePresent(packageDir string) bool {
 	return err == nil
 }
 
-// preparePiRelayDriver copies the installed gentle-pi lib/ and scripts/
-// sources byte-identical into the work directory (relocated out of
-// node_modules only so Node can type-strip them) next to the battery driver.
 func (b *battery) preparePiRelayDriver(packageDir string) (string, error) {
 	relayDir := filepath.Join(b.workRoot, "gentle-pi-relay")
 	for _, sub := range []string{"lib", "scripts"} {
@@ -154,56 +279,49 @@ type piRelayResult struct {
 	Submission  string `json:"submission"`
 }
 
-// runPiRelaySlot satisfies one materialize+submission capture-result collect
-// input through the installed gentle-pi relay: materialize -> real locked-down
-// pi subprocess -> provider-owned submission, all owned by gentle-pi's code.
-func (b *battery) runPiRelaySlot(lane, repo string, input map[string]any) bool {
+func (b *battery) runPiRelaySlot(lane, repo string, input map[string]any) (map[string]any, bool) {
 	const check = "relay capture admitted"
+	fail := func(note string) (map[string]any, bool) { b.fail(lane, check, note); return nil, false }
 	if b.piRelayDir == "" {
-		b.fail(lane, check, "gentle-pi relay driver is not prepared")
-		return false
+		return fail("gentle-pi relay driver is not prepared")
 	}
 	caseConfig := map[string]any{
 		"capture_argument_tokens": argumentTokens(input),
 		"submission":              input["submission"],
 		"gentle_ai_executable":    b.binary,
 		"pi_executable":           "pi",
+		"target_cwd":              repo,
 	}
 	payload, err := json.Marshal(caseConfig)
 	if err != nil {
-		b.fail(lane, check, err.Error())
-		return false
+		return fail(err.Error())
 	}
 	casePath := filepath.Join(b.piRelayDir, "case.json")
 	if err := os.WriteFile(casePath, payload, 0o644); err != nil {
-		b.fail(lane, check, err.Error())
-		return false
+		return fail(err.Error())
 	}
 	b.noteHostCost(lane, "1 real pi print-mode reviewer run (gentle-pi host relay)")
 	ctx, cancel := context.WithTimeout(context.Background(), hostCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "node", "driver.mts", casePath)
 	command.Dir = b.piRelayDir
-	command.Env = append(os.Environ(), piRelayContractEnv...)
+	command.Env = b.piEnvironment
 	output, err := command.Output()
 	if err != nil {
 		detail := ""
 		if exit, ok := err.(*exec.ExitError); ok {
 			detail = string(exit.Stderr)
 		}
-		b.fail(lane, check, fmt.Sprintf("gentle-pi relay driver failed: %v %s", err, firstLine(detail)))
-		return false
+		return fail(fmt.Sprintf("gentle-pi relay driver failed: %v %s", err, strings.TrimSpace(detail)))
 	}
 	var result piRelayResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(output))), &result); err != nil {
-		b.fail(lane, check, fmt.Sprintf("decode relay driver output %q: %v", firstLine(string(output)), err))
-		return false
+		return fail(fmt.Sprintf("decode relay driver output %q: %v", firstLine(string(output)), err))
 	}
-	manifest := b.record("result-artifact", []byte(result.Submission))
-	if getString(manifest, "schema") != "gentle-ai.review-result-artifact/v2" {
-		b.fail(lane, check, "relay submission did not round-trip a native result artifact")
-		return false
+	capture := b.record("result-artifact", []byte(result.Submission))
+	if !admittedCapture(capture) {
+		return fail(fmt.Sprintf("relay submission was not an admitted native capture (schema=%q state=%q)", getString(capture, "schema"), operationState(capture)))
 	}
 	b.pass(lane, check, fmt.Sprintf("installed gentle-pi relay ran a real pi process (%d prompt bytes -> %d result bytes) and the capture was admitted", result.PromptBytes, result.ResultBytes))
-	return true
+	return capture, true
 }

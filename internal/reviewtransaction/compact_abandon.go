@@ -134,7 +134,8 @@ func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record
 		}
 		nativeFrozen, expected, err := artifactSubjectForSchema(ctx, builder, record.State, entry.CapturePhaseRevision,
 			frozen, entry.Lens, entry.SelectedOrder, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
-		if err != nil || envelope.Schema != admittedReviewerResultSchemaForSubject(expected) || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
+		if err != nil || envelope.Schema != admittedReviewerResultSchemaForSubject(expected) || envelope.Subject != expected ||
+			envelope.Admission.Validate(expected, append(append([]byte(nil), envelope.Result...), '\n')) != nil {
 			return CompactDiscardedWorkSummary{}, errors.New("admit captured reviewer record value") // refusal:by-design world-action: this structural compact-authority invariant requires a provider code fix; no operator command can safely repair it
 		}
 		result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen)
