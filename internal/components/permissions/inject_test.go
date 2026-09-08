@@ -673,11 +673,45 @@ func TestInjectOpenCodeSensitivePathsDenied(t *testing.T) {
 	}
 }
 
+// remoteShellTools are the utilities that execute commands on or copy data to
+// machines outside the authorized workspace (#4324).
+var remoteShellTools = []string{"ssh", "scp", "sftp", "rsync"}
+
+// remoteShellPathPrefixes are the canonical absolute install prefixes of the
+// remote shell utilities across the supported platforms: FHS Linux (/bin,
+// /usr/bin), custom installs (/usr/local/bin), Apple Silicon Homebrew
+// (/opt/homebrew/bin), and NixOS (/run/current-system/sw/bin). Bare-command
+// deny rules never match these because permission matchers anchor on the
+// literal start of the command string.
+var remoteShellPathPrefixes = []string{
+	"/bin/",
+	"/usr/bin/",
+	"/usr/local/bin/",
+	"/opt/homebrew/bin/",
+	"/run/current-system/sw/bin/",
+}
+
+// remoteShellEscapeForms returns every deny surface one tool needs beyond the
+// bare name: one entry per absolute install prefix, the root-level absolute
+// form (which OpenCode's matcher also reaches for backslash-escaped
+// invocations because it normalizes backslashes to forward slashes), and the
+// shell command-resolution wrappers `command` and `exec`.
+func remoteShellEscapeForms(tool, openCodeSuffix, claudeCodeSuffix string) (openCode []string, claudeCode []string) {
+	for _, prefix := range remoteShellPathPrefixes {
+		openCode = append(openCode, prefix+tool+openCodeSuffix)
+		claudeCode = append(claudeCode, "Bash("+prefix+tool+claudeCodeSuffix+")")
+	}
+	openCode = append(openCode, "/"+tool+openCodeSuffix, "command "+tool+openCodeSuffix, "exec "+tool+openCodeSuffix)
+	claudeCode = append(claudeCode, "Bash(\\"+tool+claudeCodeSuffix+")", "Bash(command "+tool+claudeCodeSuffix+")", "Bash(exec "+tool+claudeCodeSuffix+")")
+	return openCode, claudeCode
+}
+
 // TestInjectOpenCodeDeniesRemoteShellUtilities verifies that the remote shell
 // utilities used to reach machines outside the workspace (ssh, scp, sftp,
-// rsync) are denied in the OpenCode/Kilocode bash permission map in both
-// their exact and wildcard forms, and that these deny entries coexist with
-// the global bash allow (#4324).
+// rsync) are denied in the OpenCode/Kilocode bash permission map in their
+// exact and wildcard forms — including absolute-path and wrapper invocations,
+// which OpenCode's full-command matcher treats as distinct patterns — and that
+// these deny entries coexist with the global bash allow (#4324).
 func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
 	remoteDenyRules := []string{
 		"ssh",
@@ -688,6 +722,10 @@ func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
 		"sftp *",
 		"rsync",
 		"rsync *",
+	}
+	for _, tool := range remoteShellTools {
+		openCode, _ := remoteShellEscapeForms(tool, " *", ":*")
+		remoteDenyRules = append(remoteDenyRules, openCode...)
 	}
 
 	tests := []struct {
@@ -748,8 +786,9 @@ func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
 
 // TestInjectClaudeCodeDeniesRemoteShellUtilities verifies that the remote shell
 // utilities used to reach machines outside the workspace (ssh, scp, sftp,
-// rsync) are denied in the Claude Code deny list in both their exact and
-// wildcard command forms (#4324).
+// rsync) are denied in the Claude Code deny list in their exact and wildcard
+// command forms, plus the absolute-path and wrapper prefix forms that bypass a
+// bare-command prefix rule (#4324).
 func TestInjectClaudeCodeDeniesRemoteShellUtilities(t *testing.T) {
 	remoteDenyRules := []string{
 		"Bash(ssh)",
@@ -760,6 +799,10 @@ func TestInjectClaudeCodeDeniesRemoteShellUtilities(t *testing.T) {
 		"Bash(sftp:*)",
 		"Bash(rsync)",
 		"Bash(rsync:*)",
+	}
+	for _, tool := range remoteShellTools {
+		_, claudeCode := remoteShellEscapeForms(tool, " *", ":*")
+		remoteDenyRules = append(remoteDenyRules, claudeCode...)
 	}
 
 	home := t.TempDir()
