@@ -1930,7 +1930,16 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 
 func isExecutableFile(path string) bool {
 	info, err := osStat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	// Windows has no POSIX executable permission bit (os.FileMode.Perm()
+	// never carries 0o111 there), so a regular file at a known binary path
+	// is treated as usable without a permission check.
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm()&0o111 != 0
 }
 
 func standardHomebrewExecutable(name string) (string, bool) {

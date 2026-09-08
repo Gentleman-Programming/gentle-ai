@@ -203,6 +203,16 @@ func looksLikeGlobPattern(token string) bool {
 	return false
 }
 
+// isRootedToken reports whether token is already an absolute path rather
+// than one that should be resolved against workspaceRoot. filepath.IsAbs
+// alone is not enough: on Windows it requires a volume name, so a bare
+// POSIX-style route literal like `/` or `/api/health` reads as relative and
+// gets joined onto workspaceRoot — which trivially exists — misclassifying
+// the route literal as a real edit path (#4192).
+func isRootedToken(token string) bool {
+	return filepath.IsAbs(token) || strings.HasPrefix(token, "/")
+}
+
 // candidatePathExists reports whether token, resolved against workspaceRoot
 // when relative, already exists on disk — either the path itself or its
 // containing directory (a plausible new file location). The bare filesystem
@@ -210,7 +220,7 @@ func looksLikeGlobPattern(token string) bool {
 // treating it as "existing" would readmit #4192's bare `/` route literal.
 func candidatePathExists(token string, workspaceRoot string) bool {
 	resolved := token
-	if !filepath.IsAbs(resolved) {
+	if !isRootedToken(resolved) {
 		resolved = filepath.Join(workspaceRoot, resolved)
 	}
 	resolved = filepath.Clean(resolved)

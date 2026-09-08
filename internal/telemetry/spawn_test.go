@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,7 +63,10 @@ func TestBuildSendCommandInvokesSelfWithTelemetrySendAndPipesPayloadOnStdin(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(argv); got != "telemetry send\n" && got != "telemetry send\r\n" {
+	// Normalize line endings and surrounding whitespace: cmd.exe's batch
+	// recorder can pad the captured argv with a trailing space before its
+	// CRLF, which is a recording-helper artifact, not a real argv difference.
+	if got := strings.TrimRight(string(argv), " \t\r\n"); got != "telemetry send" {
 		t.Fatalf("recorded argv = %q, want \"telemetry send\"", got)
 	}
 
@@ -87,8 +91,14 @@ func TestSpawnDetachedSendDoesNotBlockAndReaches(t *testing.T) {
 	}
 	// SpawnDetachedSend does not wait for the child; poll briefly (bounded,
 	// no unbounded sleep) for the file it produces rather than assuming it
-	// is already there.
-	deadline := time.Now().Add(5 * time.Second)
+	// is already there. Windows runners are slower to spawn a detached
+	// process (console/job-object setup), so the deadline is more generous
+	// than a bare Unix fork+exec needs.
+	timeout := 5 * time.Second
+	if runtime.GOOS == "windows" {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
 	for {
 		if data, err := os.ReadFile(stdinFile); err == nil && string(data) == string(payload) {
 			return

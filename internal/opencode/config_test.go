@@ -327,6 +327,9 @@ func TestResolveEffectiveConfigUsesOpenCodeConfigDir(t *testing.T) {
 func TestRuntimeConfigPreservesWriteAuthorityAndLayeredReads(t *testing.T) {
 	home, project, override := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir (used by ResolveEffectiveConfig) reads USERPROFILE on
+	// Windows, not HOME, so both must point at the fixture home directory.
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("OPENCODE_CONFIG_DIR", override)
 	global := DefaultSettingsPathForHome(home)

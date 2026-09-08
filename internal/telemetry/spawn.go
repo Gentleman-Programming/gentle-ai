@@ -47,6 +47,12 @@ func SpawnDetachedSend(ctx context.Context, payload []byte) error {
 	if err != nil {
 		return err
 	}
+	// Detach the child from any console/process-group the triggering command
+	// owns. This is a no-op on Unix (spawn_unix.go); on Windows
+	// (spawn_windows.go) it skips console allocation/inheritance, which the
+	// synchronous buildSendCommand callers (tests running cmd.Run()) do not
+	// need or want.
+	configureDetachedProcAttr(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = stdinRead.Close()
 		return err

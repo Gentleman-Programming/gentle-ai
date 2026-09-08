@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -48,7 +49,10 @@ func TestIsExecutableFile(t *testing.T) {
 		want bool
 	}{
 		{name: "executable regular file", path: executable, want: true},
-		{name: "non-executable regular file", path: plainFile, want: false},
+		// Windows has no POSIX executable permission bit, so isExecutableFile
+		// treats any regular file there as usable; the mode distinction this
+		// case exercises only applies on POSIX platforms.
+		{name: "non-executable regular file", path: plainFile, want: runtime.GOOS == "windows"},
 		{name: "directory", path: directory, want: false},
 		{name: "missing file", path: filepath.Join(t.TempDir(), "missing"), want: false},
 	}
@@ -62,6 +66,9 @@ func TestIsExecutableFile(t *testing.T) {
 }
 
 func TestResolveEngramInstalledPathUsesExecutableHomebrewFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew's standard install prefixes are macOS/Linux-only; this fallback never runs on Windows")
+	}
 	restoreLookPath := cmdLookPath
 	cmdLookPath = missingBinaryLookPath
 	t.Cleanup(func() { cmdLookPath = restoreLookPath })
@@ -89,6 +96,9 @@ func TestResolveEngramInstalledPathRejectsNonExecutableFile(t *testing.T) {
 }
 
 func TestRepro4020RunInstallUsesOffPathEngramWithoutInvokingBrew(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew's standard install prefixes are macOS/Linux-only; this fallback never runs on Windows")
+	}
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -144,6 +154,9 @@ func TestRepro4020RunInstallUsesOffPathEngramWithoutInvokingBrew(t *testing.T) {
 }
 
 func TestRunInstallFreshBrewInstallUsesInstalledBinaryForVersionProbeAndSetup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew's standard install prefixes are macOS/Linux-only; this fallback never runs on Windows")
+	}
 	home := t.TempDir()
 	brewFixture := writeFakeExecutable(t, 0o755)
 	engramFixture := writeFakeExecutable(t, 0o755)
