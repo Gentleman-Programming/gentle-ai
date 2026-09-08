@@ -15,14 +15,21 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=15s
 
-# DynamicUser allocates a private, non-persistent uid/gid for this unit and
-# owns StateDirectory (/var/lib/gentle-telemetry) accordingly; nothing here
-# needs a real system user.
-DynamicUser=yes
+# A static system user/group (created by install.sh) rather than
+# DynamicUser: Grafana needs a stable, grantable path to read the SQLite
+# file via ACL, and DynamicUser materializes StateDirectory under
+# /var/lib/private/<name> with a symlink at /var/lib/gentle-telemetry —
+# granting Grafana search access anywhere under /var/lib/private widens
+# that directory's mode, and systemd refuses to (re)start this unit once
+# /var/lib/private is no longer exactly 0700. A real directory owned by a
+# static user avoids touching /var/lib/private at all.
+DynamicUser=no
+User=gentle-telemetry
+Group=gentle-telemetry
 StateDirectory=gentle-telemetry
-StateDirectoryMode=0700
+StateDirectoryMode=0750
 
-# Hands the root-owned 0600 token to the DynamicUser sandbox read-only at
+# Hands the root-owned 0600 token to this unit's sandbox read-only at
 # $CREDENTIALS_DIRECTORY/summary-token, without granting broader access.
 LoadCredential=summary-token:/etc/gentle-telemetry/summary.token
 

@@ -268,10 +268,10 @@ domain configured this way, so this kit does not use one.
 | File | Purpose |
 |---|---|
 | `apache/telemetry-vhost.conf.tmpl` | Template for the two `<VirtualHost>` blocks (`:80` and `:443`), mirroring the existing pattern: proxies `/v1/`, `/healthz`, and (with `--with-grafana`) `/grafana/` to loopback, asserts `X-Forwarded-For` from Apache itself, force-HTTPS except for the ACME challenge path, and a supplementary access log that omits the client address for `/v1/`. `__DOMAIN__` is substituted by `install.sh --domain`. Not applied automatically — see below. |
-| `gentle-telemetry.service` | systemd unit: `DynamicUser=yes`, `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). |
-| `gentle-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `gentle-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root (not `DynamicUser`) because it needs to read the collector's `DynamicUser`-owned state directory, which a second, independently allocated dynamic user could not. |
+| `gentle-telemetry.service` | systemd unit: runs as the static `gentle-telemetry` system user (created by `install.sh`), `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). See [Why a static user, not `DynamicUser`](#why-a-static-user-not-dynamicuser). |
+| `gentle-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `gentle-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. |
 | `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). |
-| `install.sh` | Installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
+| `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
 
 ```
 sudo ./deploy/telemetry/install.sh --local-source /path/to/gentle-ai/checkout \
@@ -281,6 +281,47 @@ sudo ./deploy/telemetry/install.sh --local-source /path/to/gentle-ai/checkout \
 (Omit `--domain` to install just the service and have the script print
 where to render `apache/telemetry-vhost.conf.tmpl` yourself; omit
 `--with-grafana` to skip Grafana entirely.)
+
+### Why a static user, not DynamicUser
+
+`gentle-telemetry.service` used to run with `DynamicUser=yes`. With
+`DynamicUser`, systemd materializes `StateDirectory=gentle-telemetry` under
+`/var/lib/private/gentle-telemetry` (a directory it keeps at exactly mode
+`0700`) and leaves a symlink at `/var/lib/gentle-telemetry`. To let Grafana
+read the SQLite file, `install.sh --with-grafana` had to grant the
+`grafana` user search access on every ancestor of that private directory
+that was not already world-searchable, including `/var/lib/private`
+itself. That ACL raised `/var/lib/private`'s effective mode above `0700`,
+and on the next restart systemd refused to start the unit at all:
+
+```
+Directory "/var/lib/private" already exists, but has mode 0710 that is
+too permissive (0700 was requested), refusing.
+```
+
+That is a hard requirement of `DynamicUser`, not a bug to work around with
+a looser ACL: `/var/lib/private` is shared by every `DynamicUser` unit on
+the box, so anything that widens it risks every one of them. The fix is to
+not need a path under `/var/lib/private` at all. `install.sh` now creates
+a static system user/group (`useradd --system --home-dir
+/var/lib/gentle-telemetry --shell /sbin/nologin --user-group
+gentle-telemetry`), and the unit runs with `DynamicUser=no`,
+`User=gentle-telemetry`, `Group=gentle-telemetry`. `StateDirectory` then
+resolves to the real directory `/var/lib/gentle-telemetry` — no symlink,
+nothing under `/var/lib/private` — owned by that user, with
+`StateDirectoryMode=0750`. Grafana gets access via a POSIX ACL scoped to
+exactly two paths: the state directory itself (`u:grafana:rx`) and
+`events.sqlite` (`u:grafana:r`) — never an ancestor.
+
+**Migrating an existing install**: run `install.sh` again. It detects the
+old layout (`/var/lib/gentle-telemetry` is a symlink into
+`/var/lib/private`) and migrates it in place before installing the unit:
+stops `gentle-telemetry.service`, removes the symlink, moves the private
+directory to `/var/lib/gentle-telemetry`, `chown -R`s it to the new
+`gentle-telemetry` user, and strips any ACL this script previously granted
+on `/var/lib/private` (`setfacl -b /var/lib/private; chmod 0700
+/var/lib/private`). It prints one line per step actually taken; nothing
+prints on a fresh install or one already migrated.
 
 ### Going live: DNS, the vhost blocks, and the certificate
 
@@ -360,8 +401,9 @@ skip it if `/v1/summary` (see below) is enough.
 ### Token rotation
 
 `install.sh` generates `/etc/gentle-telemetry/summary.token` (root-owned
-0600) if missing; `LoadCredential` in the unit hands it to the DynamicUser
-service without loosening ownership. To rotate, edit the file and restart:
+0600) if missing; `LoadCredential` in the unit hands it to the service
+(running as the static `gentle-telemetry` user) without loosening
+ownership. To rotate, edit the file and restart:
 
 ```
 sudo install -m 0600 <(openssl rand -hex 32) /etc/gentle-telemetry/summary.token
@@ -417,13 +459,14 @@ optional; `/v1/summary` above already answers the headline questions.
 uses the [`frser-sqlite-datasource`](https://grafana.com/grafana/plugins/frser-sqlite-datasource/)
 plugin pointed read-only at `/var/lib/gentle-telemetry/events.sqlite`.
 Grafana's own process needs read access to that one file; since
-`gentle-telemetry.service` runs under systemd's `DynamicUser` (a group
-allocated per-unit, with no stable name to add `grafana` to),
-`install.sh --with-grafana` grants access via a POSIX ACL
-(`setfacl -m u:grafana:r ...`) instead of group membership. This stays a
-single file to grant because the collector opens SQLite with
-`journal_mode=DELETE`, not WAL (see [Storage](#storage)) — no `-wal`/`-shm`
-sidecar files are ever created for a second ACL entry to chase.
+`gentle-telemetry.service` runs as the static `gentle-telemetry` system
+user (see [Why a static user, not DynamicUser](#why-a-static-user-not-dynamicuser)),
+which `grafana` does not belong to, `install.sh --with-grafana` grants
+access via a POSIX ACL (`setfacl -m u:grafana:r ...`) instead of group
+membership. This stays a single file to grant because the collector opens
+SQLite with `journal_mode=DELETE`, not WAL (see [Storage](#storage)) — no
+`-wal`/`-shm` sidecar files are ever created for a second ACL entry to
+chase.
 
 **Dashboard**: `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
 provisioned via `deploy/telemetry/grafana/provisioning/dashboards/telemetry.yaml`
