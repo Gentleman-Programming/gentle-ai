@@ -27,6 +27,17 @@ func TargetPath(homeDir string, adapter agents.Adapter) string {
 
 // claudeCodeOverlayJSON sets Claude Code to bypassPermissions mode (auto-accept all).
 // Valid modes: "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan".
+//
+// The remote-shell deny entries (#4324) cover more than the bare command names:
+// Claude Code prefix rules only match the literal start of the command string, so
+// an agent can otherwise sidestep Bash(ssh:*) by invoking the interpreter-free
+// utilities through an absolute path (/usr/bin/ssh ...), a backslash escape
+// (\ssh ...), or a shell resolution wrapper (command ssh ..., exec ssh ...).
+// The enumerated directories are the canonical install prefixes of the OpenSSH
+// client and rsync across the supported platforms (FHS Linux /bin and /usr/bin,
+// custom /usr/local/bin, Apple Silicon /opt/homebrew/bin, NixOS
+// /run/current-system/sw/bin). Agents whose ssh lives elsewhere still hit the
+// always-on routing guidance "Remote execution boundary" section.
 var claudeCodeOverlayJSON = []byte(`{
   "permissions": {
     "defaultMode": "bypassPermissions",
@@ -57,18 +68,60 @@ var claudeCodeOverlayJSON = []byte(`{
       "Edit(**/secrets/*)",
       "Bash(ssh)",
       "Bash(ssh:*)",
+      "Bash(/bin/ssh:*)",
+      "Bash(/usr/bin/ssh:*)",
+      "Bash(/usr/local/bin/ssh:*)",
+      "Bash(/opt/homebrew/bin/ssh:*)",
+      "Bash(/run/current-system/sw/bin/ssh:*)",
+      "Bash(\\ssh:*)",
+      "Bash(command ssh:*)",
+      "Bash(exec ssh:*)",
       "Bash(scp)",
       "Bash(scp:*)",
+      "Bash(/bin/scp:*)",
+      "Bash(/usr/bin/scp:*)",
+      "Bash(/usr/local/bin/scp:*)",
+      "Bash(/opt/homebrew/bin/scp:*)",
+      "Bash(/run/current-system/sw/bin/scp:*)",
+      "Bash(\\scp:*)",
+      "Bash(command scp:*)",
+      "Bash(exec scp:*)",
       "Bash(sftp)",
       "Bash(sftp:*)",
+      "Bash(/bin/sftp:*)",
+      "Bash(/usr/bin/sftp:*)",
+      "Bash(/usr/local/bin/sftp:*)",
+      "Bash(/opt/homebrew/bin/sftp:*)",
+      "Bash(/run/current-system/sw/bin/sftp:*)",
+      "Bash(\\sftp:*)",
+      "Bash(command sftp:*)",
+      "Bash(exec sftp:*)",
       "Bash(rsync)",
-      "Bash(rsync:*)"
+      "Bash(rsync:*)",
+      "Bash(/bin/rsync:*)",
+      "Bash(/usr/bin/rsync:*)",
+      "Bash(/usr/local/bin/rsync:*)",
+      "Bash(/opt/homebrew/bin/rsync:*)",
+      "Bash(/run/current-system/sw/bin/rsync:*)",
+      "Bash(\\rsync:*)",
+      "Bash(command rsync:*)",
+      "Bash(exec rsync:*)"
     ]
   }
 }
 `)
 
 // openCodeOverlayJSON uses the OpenCode "permission" key with bash/read granularity.
+//
+// The remote-shell deny entries (#4324) match OpenCode's evaluation semantics
+// (v1.18.10 permission/index.ts): rules keep their insertion order, the last
+// matching rule wins, and a command matches only the full source text of a
+// parsed shell command node — so "*": "allow" must stay first and each deny
+// needs its own surface form. A trailing " *" pattern also covers the bare
+// invocation because OpenCode compiles "X *" to ^X( .*)?$ (util/wildcard.ts).
+// Absolute paths get one entry per canonical install prefix; the "/X *"
+// entries additionally cover backslash-escaped invocations (\ssh ...) because
+// the matcher normalizes backslashes to forward slashes before matching.
 var openCodeOverlayJSON = []byte(`{
   "permission": {
     "bash": {
@@ -81,12 +134,44 @@ var openCodeOverlayJSON = []byte(`{
       "git reset --hard *": "ask",
       "ssh": "deny",
       "ssh *": "deny",
+      "/bin/ssh *": "deny",
+      "/usr/bin/ssh *": "deny",
+      "/usr/local/bin/ssh *": "deny",
+      "/opt/homebrew/bin/ssh *": "deny",
+      "/run/current-system/sw/bin/ssh *": "deny",
+      "/ssh *": "deny",
+      "command ssh *": "deny",
+      "exec ssh *": "deny",
       "scp": "deny",
       "scp *": "deny",
+      "/bin/scp *": "deny",
+      "/usr/bin/scp *": "deny",
+      "/usr/local/bin/scp *": "deny",
+      "/opt/homebrew/bin/scp *": "deny",
+      "/run/current-system/sw/bin/scp *": "deny",
+      "/scp *": "deny",
+      "command scp *": "deny",
+      "exec scp *": "deny",
       "sftp": "deny",
       "sftp *": "deny",
+      "/bin/sftp *": "deny",
+      "/usr/bin/sftp *": "deny",
+      "/usr/local/bin/sftp *": "deny",
+      "/opt/homebrew/bin/sftp *": "deny",
+      "/run/current-system/sw/bin/sftp *": "deny",
+      "/sftp *": "deny",
+      "command sftp *": "deny",
+      "exec sftp *": "deny",
       "rsync": "deny",
-      "rsync *": "deny"
+      "rsync *": "deny",
+      "/bin/rsync *": "deny",
+      "/usr/bin/rsync *": "deny",
+      "/usr/local/bin/rsync *": "deny",
+      "/opt/homebrew/bin/rsync *": "deny",
+      "/run/current-system/sw/bin/rsync *": "deny",
+      "/rsync *": "deny",
+      "command rsync *": "deny",
+      "exec rsync *": "deny"
     },
     "read": {
       "*": "allow",
