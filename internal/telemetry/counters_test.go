@@ -25,6 +25,7 @@ func TestIncrementSyncsWhenEnabledPersistsTheCounter(t *testing.T) {
 	t.Setenv("DO_NOT_TRACK", "")
 	t.Setenv("GENTLE_AI_TELEMETRY", "")
 	t.Setenv("CI", "")
+	t.Setenv("GITHUB_ACTIONS", "")
 
 	if err := IncrementSyncs(home); err != nil {
 		t.Fatal(err)
@@ -46,6 +47,7 @@ func TestIncrementSyncsConcurrentDoesNotLoseUpdates(t *testing.T) {
 	t.Setenv("DO_NOT_TRACK", "")
 	t.Setenv("GENTLE_AI_TELEMETRY", "")
 	t.Setenv("CI", "")
+	t.Setenv("GITHUB_ACTIONS", "")
 
 	const n = 20
 	var wg sync.WaitGroup
