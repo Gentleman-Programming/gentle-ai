@@ -1274,6 +1274,35 @@ func TestEscBlockedWhilePipelineRunning(t *testing.T) {
 	}
 }
 
+func TestEscBlockedWhileInstallReviewModePersists(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "succeeds"},
+		{name: "fails", err: errors.New("write global mode")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenInstalling
+			m.InstallReviewModePersisting = true
+
+			state := updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+			if state.Screen != ScreenInstalling {
+				t.Fatalf("screen = %v, want ScreenInstalling while RDD mode persists", state.Screen)
+			}
+
+			state = updateModel(state, InstallReviewModePersistedMsg{Err: testCase.err})
+			if state.InstallReviewModePersisting {
+				t.Fatal("persistence result was discarded after blocked esc")
+			}
+			if (state.InstallReviewModePersistErr != nil) != (testCase.err != nil) {
+				t.Fatalf("persist error = %v, want %v", state.InstallReviewModePersistErr, testCase.err)
+			}
+		})
+	}
+}
+
 func TestEnterAtFullProgressWaitsForPipelineDone(t *testing.T) {
 	m := installingModel([]string{"only-step"}, 11)
 	m.Progress.Mark(0, string(pipeline.StepStatusSucceeded))

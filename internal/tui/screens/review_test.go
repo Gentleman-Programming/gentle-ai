@@ -25,7 +25,7 @@ func TestRenderReviewShowsSkillNames(t *testing.T) {
 		Skills: []model.SkillID{"sdd-apply", "sdd-spec", "go-testing"},
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	for _, skillName := range []string{"sdd-apply", "sdd-spec", "go-testing"} {
 		if !strings.Contains(out, skillName) {
@@ -46,7 +46,7 @@ func TestRenderReviewHidesSkillsSectionWhenEmpty(t *testing.T) {
 		// No Skills field.
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	// Should not panic and should render something.
 	if len(out) == 0 {
@@ -72,7 +72,7 @@ func TestRenderReviewShowsStrictTDDEnabled(t *testing.T) {
 		StrictTDD: true,
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	if !strings.Contains(out, "Strict TDD") {
 		t.Errorf("RenderReview missing 'Strict TDD'; output:\n%s", out)
@@ -98,7 +98,7 @@ func TestRenderReviewShowsStrictTDDDisabled(t *testing.T) {
 		StrictTDD: false,
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	if !strings.Contains(out, "Strict TDD") {
 		t.Errorf("RenderReview missing 'Strict TDD'; output:\n%s", out)
@@ -121,7 +121,7 @@ func TestRenderReviewHidesStrictTDDWhenNoSDD(t *testing.T) {
 		StrictTDD: true,
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	if strings.Contains(out, "Strict TDD") {
 		t.Errorf("RenderReview should NOT show 'Strict TDD' when HasSDD=false; output:\n%s", out)
@@ -129,7 +129,7 @@ func TestRenderReviewHidesStrictTDDWhenNoSDD(t *testing.T) {
 }
 
 func TestRenderReviewShowsDeferredInstallReviewMode(t *testing.T) {
-	out := RenderReviewWithInstallReviewMode(planner.ReviewPayload{}, 0, "RDD OFF (global setting after successful installation)")
+	out := RenderReview(planner.ReviewPayload{}, 0, "RDD OFF (global setting after successful installation)")
 	if !strings.Contains(out, "Receipt-Driven Development") || !strings.Contains(out, "RDD OFF") {
 		t.Fatalf("review summary omitted selected RDD mode:\n%s", out)
 	}
@@ -142,7 +142,7 @@ func TestRenderReviewClarifiesCustomPersonaAndPreset(t *testing.T) {
 		Preset:  model.PresetCustom,
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	if !strings.Contains(out, "keep existing persona unmanaged") {
 		t.Fatalf("RenderReview missing custom persona clarification; output:\n%s", out)
@@ -172,7 +172,7 @@ func TestRenderReviewSummarizesPersonaConversationAndArtifacts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := planner.ReviewPayload{Persona: tt.persona}
-			out := RenderReview(payload, 0)
+			out := RenderReview(payload, 0, "")
 			if !strings.Contains(out, tt.want) {
 				t.Fatalf("RenderReview() missing %q; output:\n%s", tt.want, out)
 			}

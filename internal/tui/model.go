@@ -1557,7 +1557,7 @@ func (m Model) View() string {
 	case ScreenInstallReviewMode:
 		return screens.RenderInstallReviewMode(m.InstallReviewModeStatus, m.InstallReviewModeLoadErr, m.Cursor)
 	case ScreenReview:
-		return screens.RenderReviewWithInstallReviewMode(m.Review, m.Cursor, m.installReviewModeSummary())
+		return screens.RenderReview(m.Review, m.Cursor, m.installReviewModeSummary())
 	case ScreenOpenCodeBackground:
 		return screens.RenderOpenCodeBackground(m.Cursor)
 	case ScreenPiBackground:
@@ -1914,8 +1914,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "esc":
-		// Don't allow going back while pipeline is running.
-		if (m.Screen == ScreenInstalling && m.pipelineRunning) || m.Screen == ScreenCommunityToolInstalling {
+		// Don't allow leaving while the pipeline or its selected RDD mode is running.
+		if (m.Screen == ScreenInstalling && (m.pipelineRunning || m.InstallReviewModePersisting)) || m.Screen == ScreenCommunityToolInstalling {
 			return m, nil
 		}
 		if _, ok := m.GentleAIUpgradeVersion(); ok {

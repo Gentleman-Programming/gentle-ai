@@ -12,14 +12,9 @@ func ReviewOptions() []string {
 	return []string{"Install", "Back"}
 }
 
-func RenderReview(payload planner.ReviewPayload, cursor int) string {
-	return RenderReviewWithInstallReviewMode(payload, cursor, "")
-}
-
-// RenderReviewWithInstallReviewMode adds the installer-only, deferred RDD
-// selection to the final confirmation without changing the standalone review
-// renderer's callers.
-func RenderReviewWithInstallReviewMode(payload planner.ReviewPayload, cursor int, reviewMode string) string {
+// RenderReview adds the installer-only, deferred RDD selection to the final
+// confirmation when reviewMode is non-empty.
+func RenderReview(payload planner.ReviewPayload, cursor int, reviewMode string) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Review and Confirm"))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -32,13 +33,14 @@ func issue4377Journeys() []Journey {
 				if observation.ExitCode != 0 {
 					return fmt.Errorf("customizable installer TUI exited %d: %s", observation.ExitCode, strings.TrimSpace(observation.Stderr))
 				}
-				return nil
+				return issue4377CancelledModeIsOff(run.sandbox)
 			}},
 		},
 	}}
 }
 
 func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
+	agentCheckboxRows := 0
 	return waitForIssue4377TTY(reader, []string{"Start installation", "q: quit"}, func() error {
 		if _, err := io.WriteString(writer, "\r"); err != nil {
 			return err
@@ -48,9 +50,10 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 				return err
 			}
 			return waitForIssue4377TTY(reader, []string{"[x] claude-code", "Continue"}, func() error {
-				// Claude Code is selected from the sandbox configuration. There are
-				// sixteen agents, followed by Continue and Back.
-				if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 16)+"\r"); err != nil {
+				if agentCheckboxRows == 0 {
+					return fmt.Errorf("agent picker rendered no checkbox rows")
+				}
+				if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", agentCheckboxRows)+"\r"); err != nil {
 					return err
 				}
 				return waitForIssue4377TTY(reader, []string{"Choose your Persona", "gentleman"}, func() error {
@@ -98,12 +101,41 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 						})
 					})
 				})
+			}, func(screen string) {
+				agentCheckboxRows = strings.Count(screen, "[x]") + strings.Count(screen, "[ ]")
 			})
 		})
 	})
 }
 
-func waitForIssue4377TTY(reader *bufio.Reader, required []string, next func() error) error {
+// issue4377CancelledModeIsOff is deliberately black-box: status is the public
+// read-only projection, so the journey does not inspect persistence files.
+func issue4377CancelledModeIsOff(sandbox *Sandbox) error {
+	observation := sandbox.readBack("review", "mode", "status", "--cwd", sandbox.Repo, "--json")
+	var result struct {
+		Operation string `json:"operation"`
+		Scope     string `json:"scope"`
+		Status    struct {
+			Effective  string `json:"effective"`
+			Source     string `json:"source"`
+			Global     string `json:"global"`
+			CloneLocal string `json:"clone_local"`
+		} `json:"status"`
+	}
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("review mode status after cancellation exited %d: %s", observation.ExitCode, firstLine(observation.Stderr, observation.Stdout))
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse review mode status after cancellation: %w", err)
+	}
+	if result.Operation != "status" || result.Scope != "both" || result.Status.Effective != "off" ||
+		result.Status.Source != "default" || result.Status.Global != "" || result.Status.CloneLocal != "" {
+		return fmt.Errorf("cancelled review mode = operation=%q scope=%q effective=%q source=%q global=%q clone=%q, want status/both/off/default and unset sources", result.Operation, result.Scope, result.Status.Effective, result.Status.Source, result.Status.Global, result.Status.CloneLocal)
+	}
+	return nil
+}
+
+func waitForIssue4377TTY(reader *bufio.Reader, required []string, next func() error, matched ...func(string)) error {
 	var screen strings.Builder
 	for {
 		byteRead, err := reader.ReadByte()
@@ -111,14 +143,17 @@ func waitForIssue4377TTY(reader *bufio.Reader, required []string, next func() er
 			return fmt.Errorf("read TUI before %q: %w; output: %q", strings.Join(required, ", "), err, screen.String())
 		}
 		screen.WriteByte(byteRead)
-		matched := true
+		allMatched := true
 		for _, text := range required {
 			if !strings.Contains(screen.String(), text) {
-				matched = false
+				allMatched = false
 				break
 			}
 		}
-		if matched {
+		if allMatched {
+			if len(matched) > 0 {
+				matched[0](screen.String())
+			}
 			return next()
 		}
 	}
