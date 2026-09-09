@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -16,7 +15,7 @@ type PiModelPickerState struct {
 // NewPiModelPickerState creates a new state initialized with the active preset.
 func NewPiModelPickerState(active model.PiSubscription) PiModelPickerState {
 	if active == "" {
-		active = model.PiSubscriptionClaude
+		active = model.PiPresetClaudeBalanced
 	}
 	return PiModelPickerState{ActivePreset: active}
 }
@@ -26,22 +25,32 @@ func PiModelPickerOptionCount() int {
 	return len(model.PiSubscriptionsOrder()) + 1
 }
 
-// RenderPiModelPicker renders the subscription preset selection screen for Pi subagents.
+// RenderPiModelPicker renders the single-screen subscription and tier preset selector for Pi.
 func RenderPiModelPicker(state PiModelPickerState, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Configure Pi Agent Models"))
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.SubtextStyle.Render("Select your active AI subscription to assign optimal models to all 17+ Pi subagents:"))
+	b.WriteString(styles.SubtextStyle.Render("Choose your provider tier to assign models and reasoning effort across all 17+ subagents:"))
 	b.WriteString("\n\n")
 
 	presets := model.PiSubscriptionsOrder()
+	var currentGroup string
+
 	for i, sub := range presets {
 		isCursor := i == cursor
 		isActive := state.ActivePreset == sub
 
-		label := formatSubscriptionLabel(sub)
+		// Group header
+		group := getPresetGroup(sub)
+		if group != currentGroup {
+			currentGroup = group
+			b.WriteString(styles.HeadingStyle.Render("── " + currentGroup + " ──"))
+			b.WriteString("\n")
+		}
+
+		label := model.PiSubscriptionLabel(sub)
 		if isActive {
 			label += " (current)"
 		}
@@ -52,15 +61,9 @@ func RenderPiModelPicker(state PiModelPickerState, cursor int) string {
 			b.WriteString(styles.UnselectedStyle.Render("  " + label))
 		}
 		b.WriteString("\n")
-
-		desc := model.PiSubscriptionDescription(sub)
-		if desc != "" {
-			b.WriteString(styles.HelpStyle.Render("    " + desc))
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
 	}
 
+	b.WriteString("\n")
 	backIdx := len(presets)
 	if cursor == backIdx {
 		b.WriteString(styles.SelectedStyle.Render(styles.Cursor + "Back"))
@@ -69,7 +72,36 @@ func RenderPiModelPicker(state PiModelPickerState, cursor int) string {
 	}
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select preset • esc: back"))
+	// Detail preview box for the highlighted preset
+	if cursor >= 0 && cursor < len(presets) {
+		highlighted := presets[cursor]
+		mapping := model.PiPresetForSubscription(highlighted)
+		desc := model.PiSubscriptionDescription(highlighted)
+
+		b.WriteString(styles.HeadingStyle.Render("Configuration Preview:"))
+		b.WriteString("\n")
+		b.WriteString(styles.HelpStyle.Render("  Summary:    " + desc))
+		b.WriteString("\n")
+
+		reasoning := mapping["sdd-design"]
+		code := mapping["sdd-apply"]
+		light := mapping["sdd-archive"]
+
+		b.WriteString(styles.SubtextStyle.Render(
+			"  Reasoning:  " + reasoning.Model + " (thinking: " + formatEffort(reasoning.Thinking) + ")",
+		))
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render(
+			"  Execution:  " + code.Model + " (thinking: " + formatEffort(code.Thinking) + ")",
+		))
+		b.WriteString("\n")
+		b.WriteString(styles.SubtextStyle.Render(
+			"  Light work: " + light.Model + " (thinking: " + formatEffort(light.Thinking) + ")",
+		))
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select preset & sync • esc: back"))
 
 	return styles.FrameStyle.Render(b.String())
 }
@@ -88,17 +120,25 @@ func HandlePiModelPickerNav(key string, state *PiModelPickerState, cursor int) (
 	return false, ""
 }
 
-func formatSubscriptionLabel(sub model.PiSubscription) string {
-	switch sub {
-	case model.PiSubscriptionClaude:
-		return "Claude Subscription (Anthropic Opus / Sonnet / Haiku)"
-	case model.PiSubscriptionCodex:
-		return "Codex Subscription (OpenAI GPT-5.6 Sol / Terra / Luna)"
-	case model.PiSubscriptionKiro:
-		return "Kiro Subscription (Frontier Claude 4.8 / 4.6 / 4.5)"
-	case model.PiSubscriptionBudget:
-		return "Budget / Open Source (DeepSeek Reasoner & Chat)"
+func getPresetGroup(sub model.PiSubscription) string {
+	s := string(sub)
+	switch {
+	case strings.HasPrefix(s, "claude"):
+		return "Anthropic via API key"
+	case strings.HasPrefix(s, "codex"):
+		return "Codex (OpenAI)"
+	case strings.HasPrefix(s, "kiro"):
+		return "Kiro (Frontier)"
+	case strings.HasPrefix(s, "budget"):
+		return "Budget / Open Source"
 	default:
-		return fmt.Sprintf("%s Subscription", sub)
+		return "Other"
 	}
+}
+
+func formatEffort(effort string) string {
+	if effort == "" {
+		return "default"
+	}
+	return effort
 }

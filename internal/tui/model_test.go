@@ -2973,7 +2973,7 @@ func TestPiModelPicker_SelectPreset(t *testing.T) {
 	m.Screen = ScreenPiModelPicker
 	m.ModelConfigMode = true
 	m.PiModelPicker = screens.NewPiModelPickerState(model.PiSubscriptionClaude)
-	m.Cursor = 1 // Codex
+	m.Cursor = 3 // Codex Balanced
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -2984,8 +2984,8 @@ func TestPiModelPicker_SelectPreset(t *testing.T) {
 	if state.PendingSyncOverrides == nil {
 		t.Fatalf("PendingSyncOverrides is nil")
 	}
-	if state.PendingSyncOverrides.PiSubscription != model.PiSubscriptionCodex {
-		t.Errorf("expected subscription codex, got %s", state.PendingSyncOverrides.PiSubscription)
+	if state.PendingSyncOverrides.PiSubscription != model.PiPresetCodexBalanced {
+		t.Errorf("expected subscription codex balanced, got %s", state.PendingSyncOverrides.PiSubscription)
 	}
 	if len(state.PendingSyncOverrides.PiModelAssignments) == 0 {
 		t.Errorf("expected non-empty PiModelAssignments")

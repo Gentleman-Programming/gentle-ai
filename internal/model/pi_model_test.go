@@ -9,13 +9,17 @@ import (
 
 func TestPiSubscriptionsOrder(t *testing.T) {
 	subs := model.PiSubscriptionsOrder()
-	if len(subs) != 4 {
-		t.Fatalf("expected 4 subscriptions, got %d", len(subs))
+	if len(subs) != 10 {
+		t.Fatalf("expected 10 presets, got %d", len(subs))
 	}
 	for _, sub := range subs {
 		desc := model.PiSubscriptionDescription(sub)
 		if desc == "" {
 			t.Errorf("empty description for subscription %s", sub)
+		}
+		label := model.PiSubscriptionLabel(sub)
+		if label == "" {
+			t.Errorf("empty label for subscription %s", sub)
 		}
 	}
 }
@@ -59,19 +63,25 @@ func TestPiPresetsCompleteness(t *testing.T) {
 
 func TestPiPresetDefaultFallback(t *testing.T) {
 	preset := model.PiPresetForSubscription("unknown")
-	claude := model.PiPresetClaude()
+	claude := model.PiPresetForSubscription(model.PiPresetClaudeBalanced)
 
 	if len(preset) != len(claude) {
-		t.Fatalf("expected default fallback to Anthropic via API key, got len %d vs %d", len(preset), len(claude))
+		t.Fatalf("expected default fallback to Anthropic via API key Balanced, got len %d vs %d", len(preset), len(claude))
 	}
 }
 
-func TestPiAnthropicDescriptionEmphasizesAPIKey(t *testing.T) {
-	desc := model.PiSubscriptionDescription(model.PiSubscriptionClaude)
-	if !strings.Contains(desc, "Anthropic via API key") {
-		t.Fatalf("Claude preset description = %q, want Anthropic via API key", desc)
-	}
-	if strings.Contains(desc, "Pro/Team") || strings.Contains(desc, "Subscription") {
-		t.Fatalf("Claude preset description must not imply an Anthropic subscription: %q", desc)
+func TestPiAnthropicLabelsEmphasizeAPIKey(t *testing.T) {
+	for _, sub := range []model.PiSubscription{
+		model.PiPresetClaudeBalanced,
+		model.PiPresetClaudePremium,
+		model.PiPresetClaudeEconomy,
+	} {
+		label := model.PiSubscriptionLabel(sub)
+		if !strings.Contains(label, "Anthropic via API key") {
+			t.Fatalf("label for %s = %q, want Anthropic via API key", sub, label)
+		}
+		if strings.Contains(label, "Subscription") {
+			t.Fatalf("label for %s must not imply a subscription: %q", sub, label)
+		}
 	}
 }
