@@ -268,7 +268,7 @@ printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result",
 const posixOldRelayFixture = `#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
-  printf 'gentle-ai 2.1.0\n'
+  printf 'gentle-ai 1.9.0\n'
   exit 0
 fi
 exit 0
@@ -308,8 +308,8 @@ console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
 	}
 	for _, want := range []string{
 		"opencode_review_transport_binary_skew",
-		"2.1.0",
-		"2.4.0",
+		"1.9.0",
+		"2.0.0",
 		oldBin,
 		"which -a gentle-ai",
 	} {
