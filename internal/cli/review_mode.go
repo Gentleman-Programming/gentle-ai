@@ -891,21 +891,6 @@ func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
 	}
 }
 
-func reviewConsentEvidence(reasons []reviewtransaction.RiskReason) string {
-	phrases := reviewConsentEvidencePhrases(reasons)
-	switch len(phrases) {
-	case 0:
-		return ""
-	case 1:
-		return phrases[0]
-	case 2:
-		return phrases[0] + " and " + phrases[1]
-	default:
-		// Naming every path would bury the decision the user has to make.
-		return fmt.Sprintf("%s, %s, and %d more", phrases[0], phrases[1], len(phrases)-2)
-	}
-}
-
 // reviewConsentRiskEvidence projects an already-classified assessment into
 // the detailed risk_evidence phrases a non-interactive START result carries.
 // It remains separate from the brief generic consent reason: tier 2 names the

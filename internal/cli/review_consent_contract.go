@@ -126,20 +126,6 @@ func reviewConsentSpanishRiskEvidence(assessment reviewtransaction.RiskAssessmen
 	}
 }
 
-func reviewConsentSpanishEvidence(reasons []reviewtransaction.RiskReason) string {
-	phrases := reviewConsentSpanishEvidencePhrases(reasons)
-	switch len(phrases) {
-	case 0:
-		return ""
-	case 1:
-		return phrases[0]
-	case 2:
-		return phrases[0] + " y " + phrases[1]
-	default:
-		return fmt.Sprintf("%s, %s y %d más", phrases[0], phrases[1], len(phrases)-2)
-	}
-}
-
 func reviewConsentSpanishEvidencePhrases(reasons []reviewtransaction.RiskReason) []string {
 	var phrases []string
 	for _, reason := range reasons {
