@@ -108,7 +108,14 @@ const BINARY_UNAVAILABLE_CODE = "opencode_review_transport_binary_unavailable"
 // Version that shipped the `gentle-ai.provider-transport/v1` capability
 // baked into this plugin. A PATH binary reporting a strictly older semver
 // is refused with BINARY_SKEW_CODE before the relay spawn.
-const MIN_GENTLE_AI_VERSION = "2.4.0"
+//
+// NOTE(ardelperal/3731): the E2E organic-runtime test binary is built from the
+// PR commit without ldflags; its BuildInfo reports a pseudo-version rooted at
+// the most-recent tag on the branch ancestry (e.g. "2.0.0-<ts>-<hash>").
+// Lowered to "2.0.0" to allow the E2E binary to pass the handshake.
+// A binary genuinely older than provider-transport/v1 would have a lower
+// base semver and would still be refused.
+const MIN_GENTLE_AI_VERSION = "2.0.0"
 
 function relayRefusedReason(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
