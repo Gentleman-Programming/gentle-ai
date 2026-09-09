@@ -570,7 +570,7 @@ func normalizeReviewConsentLocale(value string) (reviewConsentLocale, error) {
 }
 
 const (
-	reviewConsentHeadline = "Review this change now?"
+	reviewConsentHeadline = "Gentle AI can review this change before you call it done."
 	reviewConsentValue    = "Reviewing takes a little longer and makes the result safer."
 
 	// reviewConsentAnswerRunLabel and reviewConsentAnswerNotNowLabel are the

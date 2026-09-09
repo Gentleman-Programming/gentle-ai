@@ -15,7 +15,7 @@ func TestRelayedConsentSpanishLocalizesHumanFieldsWithoutChangingMachineTokens(t
 		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
 		"--lineage", "review-consent-spanish", "--locale", "es", "--consent", "relay",
 	})).Bytes())
-	if question.Headline != "¿Revisar este cambio ahora?" ||
+	if question.Headline != "Gentle AI puede revisar este cambio antes de que lo des por terminado." ||
 		question.Value != "La revisión lleva un poco más de tiempo y hace que el resultado sea considerablemente más seguro." ||
 		question.Reason != "Estos cambios pueden afectar la ejecución; la revisión puede ayudar a detectar problemas." ||
 		strings.Contains(question.Reason, "scripts/deploy.sh") {

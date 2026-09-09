@@ -158,8 +158,8 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	}
 	// The envelope must carry the same semantic phrases the interactive question
 	// uses, so the orchestrator can localize the complete decision faithfully.
-	if question.Headline != "Review this change now?" {
-		t.Fatalf("consent headline = %q, want a direct question", question.Headline)
+	if question.Headline != "Gentle AI can review this change before you call it done." {
+		t.Fatalf("consent headline = %q, want the established offer", question.Headline)
 	}
 	if question.Value != "Reviewing takes a little longer and makes the result safer." {
 		t.Fatalf("consent value must remain one short benefit = %q", question.Value)
@@ -233,7 +233,7 @@ func TestRelayedConsentMediumRiskKeepsBriefDecisionAndRiskContext(t *testing.T) 
 		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
 		"--lineage", "review-consent-medium-copy", "--consent", "relay",
 	})).Bytes())
-	if question.RiskLevel != reviewtransaction.RiskMedium || question.Headline != "Review this change now?" {
+	if question.RiskLevel != reviewtransaction.RiskMedium || question.Headline != "Gentle AI can review this change before you call it done." {
 		t.Fatalf("medium consent identity/copy = %#v", question)
 	}
 	if question.Value != "Reviewing takes a little longer and makes the result safer." ||

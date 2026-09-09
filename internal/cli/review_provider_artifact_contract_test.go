@@ -56,7 +56,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "8d5e1a8491db1a5a2f6329e8c1d5cd210dd175e0525ff4d51fa914351d2fcf08",
-		"fixtures/consent.fixture.json":      "a5d0ac8add6947aae29c375894d38cb15906403d5ee015c2272f96308311b9c5",
+		"fixtures/consent.fixture.json":      "adcab6a3e2d2926be721df127ca7ad0539d3e2a1ed5b1c0add36000df23eae64",
 		// issue #3922 / #4199 / gentle-pi#543: the native-git reviewer_result
 		// collect input no longer inlines changed_path_manifest -- it is
 		// already committed to by artifact_subject.changed_path_manifest_sha256
@@ -86,7 +86,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// issue #2659: consent-v3 embeds a freshly minted target_identity;
 		// the purified identity domain legitimately changed that hash.
 		// Deliberate, not drift.
-		"fixtures/consent-v3.fixture.json":      "3af3cc530ba87d289778e09dba6c01c373e793031c23a09c3de29b1aa2d0ec62",
+		"fixtures/consent-v3.fixture.json":      "86c7af15a49a04c5d63755d1a9eb0eccc681ea4c0cd2d62145185fa165786cee",
 		"schemas/capabilities-v2.1.schema.json": "95d2b8b46e9be6e6fbc874fc763029cb7994951336c8974dc1694834d64bf06e",
 		// Cross-lane battery conformance fix: the schema pinned the choice
 		// invocations to `--agent claude-code`, but the live emitter omits the
