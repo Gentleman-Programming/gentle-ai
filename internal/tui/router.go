@@ -42,6 +42,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenSync:                           {Backward: ScreenWelcome},
 	ScreenUpgradeSync:                    {Backward: ScreenWelcome},
 	ScreenModelConfig:                    {Backward: ScreenWelcome},
+	ScreenPiModelPicker:                  {Backward: ScreenModelConfig},
 	ScreenProfiles:                       {Backward: ScreenWelcome},
 	ScreenProfileCreate:                  {Backward: ScreenProfiles},
 	ScreenProfileDelete:                  {Backward: ScreenProfiles},
