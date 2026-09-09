@@ -46,6 +46,7 @@ var foundationSkills = []model.SkillID{
 	model.SkillGitlabReleaseTag,
 	model.SkillERPDocsWrite,
 	model.SkillERPDocsPublish,
+	model.SkillQALocatorHunting,
 }
 
 // SkillsForPreset returns which skills should be installed for a given preset.
