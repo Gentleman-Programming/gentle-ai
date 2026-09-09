@@ -19,6 +19,8 @@ type Selection struct {
 	ClearCodexOrchestratorAssignment bool                             // true = clear persisted curated assignment while preserving config.toml
 	CodexCarrilModelAssignments      map[string]string                // key = carril profile (sdd-strong|sdd-mid|sdd-cheap); value = model id
 	CodexPhaseModelAssignments       map[string]string                // key = phase name; value = model id (Custom per-phase picker only)
+	PiModelAssignments               map[string]PiAgentModelEntry     // key = agent name; value = model+thinking
+	PiSubscription                   PiSubscription                   // active subscription preset (claude|codex|kiro|budget)
 	Profiles                         []Profile                        // named SDD profiles to generate/update during sync
 	OpenCodePlugins                  []OpenCodeCommunityPluginID      // optional community OpenCode TUI plugins
 	CommunityTools                   []CommunityToolID                // optional cross-agent community tools/plugins
@@ -106,4 +108,6 @@ type SyncOverrides struct {
 	SDDProfileStrategy               SDDProfileStrategyID             // "" = auto; otherwise explicit sync profile strategy
 	StrictTDD                        *bool                            // nil = no override; non-nil = override strict TDD mode
 	Profiles                         []Profile                        // NEW: profile creation/updates during sync
+	PiModelAssignments               map[string]PiAgentModelEntry     // nil = no override; empty map = reset to defaults
+	PiSubscription                   PiSubscription                   // "" = no override
 }

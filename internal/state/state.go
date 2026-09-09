@@ -39,6 +39,12 @@ type ClaudePhaseAssignmentState struct {
 	Effort string `json:"effort,omitempty"`
 }
 
+// PiModelEntryState is the JSON-serialisable form of a Pi agent model+thinking assignment.
+type PiModelEntryState struct {
+	Model    string `json:"model"`
+	Thinking string `json:"thinking,omitempty"`
+}
+
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
 	InstalledAgents        []string            `json:"installed_agents"`
@@ -95,6 +101,12 @@ type InstallState struct {
 
 	// ModelAssignments maps sub-agent names to provider/model pairs (OpenCode).
 	ModelAssignments map[string]ModelAssignmentState `json:"model_assignments,omitempty"`
+
+	// PiModelAssignments maps Pi agent names to model+thinking assignments.
+	PiModelAssignments map[string]PiModelEntryState `json:"pi_model_assignments,omitempty"`
+
+	// PiSubscription records the chosen preset name ("claude", "codex", "kiro", "budget").
+	PiSubscription string `json:"pi_subscription,omitempty"`
 
 	// Persona records the persona the user installed ("gentleman", "neutral",
 	// "custom"). Persisted so that `gentle-ai sync` regenerates the same persona
@@ -245,6 +257,8 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		CodexOrchestratorAssignment: existing.CodexOrchestratorAssignment,
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
+		PiModelAssignments:          existing.PiModelAssignments,
+		PiSubscription:              existing.PiSubscription,
 		Persona:                     existing.Persona,
 		PersonaPresent:              existing.PersonaPresent,
 		LastUpdateCheck:             existing.LastUpdateCheck,
