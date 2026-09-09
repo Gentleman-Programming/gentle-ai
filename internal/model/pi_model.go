@@ -1,10 +1,10 @@
 package model
 
-// PiSubscription represents a supported AI subscription preset for Pi agents.
+// PiSubscription represents a supported AI preset for Pi agents.
 type PiSubscription string
 
 const (
-	// PiSubscriptionClaude optimizes for Anthropic Claude (via Claude extension or key).
+	// PiSubscriptionClaude optimizes for Anthropic models via API key.
 	PiSubscriptionClaude PiSubscription = "claude"
 
 	// PiSubscriptionCodex optimizes for OpenAI / Codex (via Pi native login or key).
@@ -49,7 +49,7 @@ func PiConfigurableAgents() []string {
 	}
 }
 
-// PiSubscriptionsOrder returns the display order for Pi subscription presets.
+// PiSubscriptionsOrder returns the display order for Pi presets.
 func PiSubscriptionsOrder() []PiSubscription {
 	return []PiSubscription{
 		PiSubscriptionClaude,
@@ -63,7 +63,7 @@ func PiSubscriptionsOrder() []PiSubscription {
 func PiSubscriptionDescription(sub PiSubscription) string {
 	switch sub {
 	case PiSubscriptionClaude:
-		return "Claude Pro/Team: Opus/Sonnet for architecture & verify, Sonnet for code, Haiku for light work"
+		return "Anthropic via API key: Opus/Sonnet for architecture & verify, Sonnet for code, Haiku for light work"
 	case PiSubscriptionCodex:
 		return "Codex / ChatGPT: GPT-5.6 Sol for reasoning, Terra for code, Luna for light tasks"
 	case PiSubscriptionKiro:
@@ -75,7 +75,7 @@ func PiSubscriptionDescription(sub PiSubscription) string {
 	}
 }
 
-// PiPresetClaude returns the agent model mapping for Claude subscriptions.
+// PiPresetClaude returns the agent model mapping for Anthropic via API key.
 func PiPresetClaude() map[string]PiAgentModelEntry {
 	strong := PiAgentModelEntry{Model: "anthropic/claude-sonnet-4", Thinking: "high"}
 	code := PiAgentModelEntry{Model: "anthropic/claude-sonnet-4", Thinking: "medium"}
@@ -111,7 +111,7 @@ func PiPresetBudget() map[string]PiAgentModelEntry {
 	return mapRoles(strong, code, light)
 }
 
-// PiPresetForSubscription returns the preset mapping for a given subscription.
+// PiPresetForSubscription returns the preset mapping for a given provider preset.
 func PiPresetForSubscription(sub PiSubscription) map[string]PiAgentModelEntry {
 	switch sub {
 	case PiSubscriptionClaude:

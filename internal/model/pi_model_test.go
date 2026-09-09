@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -61,6 +62,16 @@ func TestPiPresetDefaultFallback(t *testing.T) {
 	claude := model.PiPresetClaude()
 
 	if len(preset) != len(claude) {
-		t.Fatalf("expected default fallback to Claude, got len %d vs %d", len(preset), len(claude))
+		t.Fatalf("expected default fallback to Anthropic via API key, got len %d vs %d", len(preset), len(claude))
+	}
+}
+
+func TestPiAnthropicDescriptionEmphasizesAPIKey(t *testing.T) {
+	desc := model.PiSubscriptionDescription(model.PiSubscriptionClaude)
+	if !strings.Contains(desc, "Anthropic via API key") {
+		t.Fatalf("Claude preset description = %q, want Anthropic via API key", desc)
+	}
+	if strings.Contains(desc, "Pro/Team") || strings.Contains(desc, "Subscription") {
+		t.Fatalf("Claude preset description must not imply an Anthropic subscription: %q", desc)
 	}
 }
