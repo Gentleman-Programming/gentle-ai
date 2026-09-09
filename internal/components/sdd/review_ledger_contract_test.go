@@ -347,7 +347,17 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// exploration worker). Kilocode embeds the same OpenCode conductor in
 	// `agent.gentle-orchestrator.prompt`, so the hash moved again. Deliberate,
 	// not drift.
-	const want = "fbd272c533090b2be254a39880ec750c13a8bd0cd934d49337ad6ee1dc7c7d47"
+	//
+	// QA-automation self-check consolidation (erp-docs-write follow-on): the
+	// narrow, scattered QA-route sentences from PR7 (buried mid-file, only 4
+	// literal trigger phrases) were replaced with a prominent MANDATORY
+	// self-check table at the top of "### Delegation Rules", covering 6
+	// intent categories (nuevo caso, test roto por cambio de flujo, análisis
+	// de impacto, test flaky/CI, refactor Screenplay/POM, consulta de
+	// cobertura) matched by intent rather than literal wording. Kilocode
+	// embeds the same OpenCode conductor in `agent.gentle-orchestrator.prompt`,
+	// so the hash moved again. Deliberate, not drift.
+	const want = "59fbf26c4fd040d3cc05e8d1a4c76e85664c98406a02f1e06718ec41197cad86"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

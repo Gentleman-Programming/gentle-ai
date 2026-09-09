@@ -46,6 +46,17 @@ When native SDD status reports `blocked(edit_authority_missing)`, its structured
 
 ### Delegation Rules
 
+**QA-automation self-check (MANDATORY — run before applying anything else below).** Before routing any request, check whether it matches one of these QA-automation intents. A match ALWAYS selects the QA route in the same row — never SDD, never generic `explore`/`general`, regardless of file count, risk, or whether `/sdd-new` was invoked; the intent itself is the trigger. Match by underlying intent, not literal wording — these are examples, not an exhaustive keyword list.
+
+| Intent | Example signal | Route |
+|---|---|---|
+| Nuevo caso de automatización | "crear/automatizar un caso", "caso E2E", "haceme el QA de X" | `qa-explore` → `qa-spec` → approval → `qa-apply` → `qa-verify` |
+| Test roto por cambio de flujo | "este test ya no pasa", "el flujo cambió y rompió el test" | `qa-explore` (diagnóstico) → `qa-spec` → approval → `qa-apply` → `qa-verify` |
+| Impacto de un cambio de flujo | "qué tests toca este cambio", "qué se rompe si cambio X" | `qa-explore` (análisis de impacto) |
+| Test flaky / falla en CI | "este test falla a veces", "por qué falla en CI" | `qa-explore` (triage: bug real / cambio de negocio / entorno) |
+| Refactor Screenplay/POM | "este test no sigue el patrón", "refactoriza a Screenplay" | `qa-explore` → `qa-spec` → approval → `qa-apply` |
+| Consulta de cobertura | "¿ya tenemos test de X?", "qué cubre esto" | `qa-doc-access` / `qa-doc-reference` — NUNCA crea nada nuevo |
+
 These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work; it never selects SDD, creates SDD state, or invokes an `sdd-*` phase. Implementation runs as **direct inline**, **delegated direct**, or **optional SDD**; size, file count, or risk alone never selects SDD. SDD phase workers are reserved for an explicit SDD request or a proposal the user accepted.
 
 Core principle: **does this inflate the parent context without need?** If yes, use one bounded worker. If no, do it inline.
@@ -60,9 +71,7 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Bash for state (`git`, `gh`) | ✅ | — |
 | Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
 
-QA-automation requests (creating/automating test cases, test design, QAS workflows) ALWAYS delegate exploration to `qa-explore`, regardless of file count; the inline read allowance above is for general direct work only.
-
-Use OpenCode's native `explore` agent for read-only mapping and `general` agent for implementation or command execution; reserve `sdd-*` agents for a selected SDD route. QA-automation requests (creating or automating test cases, test design, QAS workflows — explicit QA-automation intent) select the QA route `qa-explore` → `qa-spec` → approval → `qa-apply` → `qa-verify` instead, leaving native explore/general for general-purpose direct work and `sdd-*` reserved for a selected SDD route otherwise.
+Use OpenCode's native `explore` agent for read-only mapping and `general` agent for implementation or command execution; reserve `sdd-*` agents for a selected SDD route, and the QA route above for any matching QA-automation intent.
 
 Keep one writer and a short synthesized handoff. Delegation is mandatory at the mapping, write, preparation, and broad-research boundaries, but it remains a direct implementation route and must not synthesize SDD artifacts.
 
@@ -71,11 +80,11 @@ Keep one writer and a short synthesized handoff. Delegation is mandatory at the 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
 1. **Bounded read rule** (general direct work): read 1–3 files inline to decide or verify.
-2. **4-file rule** (general direct work): when understanding requires 4+ files, delegate one narrow exploration/mapping task. For QA-automation requests, exploration ALWAYS delegates to `qa-explore` regardless of file count — the file-count threshold applies to general direct work only.
+2. **4-file rule** (general direct work): when understanding requires 4+ files, delegate one narrow exploration/mapping task — the file-count threshold applies to general direct work only, never to a matched QA-automation intent (see self-check above).
 3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
 4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
-6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD. **QA-route selection rule**: explicit QA-automation intent — wording like "crear caso de automatización", "automatizar X", "haceme el QA de X", or "caso E2E" — selects the QA route `qa-explore` → `qa-spec` → approval → `qa-apply` → `qa-verify` without requiring `/sdd-new` or an accepted proposal: the intent itself is the trigger. Normal SDD still requires an explicit request or accepted proposal, and risk alone never forces SDD for non-QA work.
+6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD — none of this applies when the QA self-check above already matched, since that selection needs no `/sdd-new` or accepted proposal.
 
 #### Native Checking Contract
 
