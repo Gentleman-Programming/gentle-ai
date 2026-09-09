@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1229,6 +1230,164 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 		if !strings.Contains(string(content), want) {
 			t.Fatalf("profile %q: want model_reasoning_effort = %s; got:\n%s", p.name, want, string(content))
 		}
+	}
+}
+
+func TestInjectCodexWithoutCLIUpdatesSharedConfigAndPreservesProfiles(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
+	t.Cleanup(restore)
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const configBefore = "custom = \"preserve\"\n[unrelated]\nkeep = true\n"
+	if err := os.WriteFile(configPath, []byte(configBefore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profiles := map[string][]byte{
+		"sdd-strong.config.toml": []byte("user strong profile\n"),
+		"sdd-mid.config.toml":    []byte("user mid profile\n"),
+		"sdd-cheap.config.toml":  []byte("user cheap profile\n"),
+	}
+	for name, before := range profiles {
+		if err := os.WriteFile(filepath.Join(home, ".codex", name), before, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) with absent CLI error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(codex) with absent CLI changed = false")
+	}
+	configAfterFirst, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configAfterFirst), "custom = \"preserve\"") || !strings.Contains(string(configAfterFirst), "[mcp_servers.engram]") {
+		t.Fatalf("shared config was not preserved and updated:\n%s", configAfterFirst)
+	}
+	for name, before := range profiles {
+		got, readErr := os.ReadFile(filepath.Join(home, ".codex", name))
+		if readErr != nil || !bytes.Equal(got, before) {
+			t.Fatalf("profile %q changed with absent CLI: got=%q error=%v", name, got, readErr)
+		}
+	}
+
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("second Inject(codex) with absent CLI error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(codex) with absent CLI changed = true")
+	}
+	configAfterSecond, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(configAfterSecond, configAfterFirst) {
+		t.Fatalf("shared config was not idempotent: got=%q error=%v", configAfterSecond, err)
+	}
+}
+
+func TestInjectCodexWithoutCLIWritesSharedConfigWithoutCreatingProfiles(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
+	t.Cleanup(restore)
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	profiles := []string{
+		filepath.Join(home, ".codex", "sdd-strong.config.toml"),
+		filepath.Join(home, ".codex", "sdd-mid.config.toml"),
+		filepath.Join(home, ".codex", "sdd-cheap.config.toml"),
+	}
+	assertProfilesAbsent := func(stage string) {
+		t.Helper()
+		for _, path := range profiles {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("profile %q %s: stat error = %v; want absent", path, stage, err)
+			}
+		}
+	}
+	assertProfilesAbsent("before injection")
+
+	first, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) with absent CLI error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(codex) with absent CLI changed = false")
+	}
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	if !strings.Contains(string(config), "[mcp_servers.engram]") ||
+		!strings.Contains(string(config), "model_instructions_file") ||
+		!strings.Contains(string(config), "experimental_compact_prompt_file") {
+		t.Fatalf("shared MCP/instruction config was not written:\n%s", config)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".codex", "engram-instructions.md"),
+		filepath.Join(home, ".codex", "engram-compact-prompt.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("shared instruction file %q was not written: %v", path, err)
+		}
+	}
+	assertProfilesAbsent("after first injection")
+
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("second Inject(codex) with absent CLI error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject(codex) with absent CLI changed = true")
+	}
+	assertProfilesAbsent("after repeated injection")
+}
+
+func TestInjectCodexInvalidRuntimeDoesNotMutateFiles(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		err    error
+	}{
+		{name: "broken executable", err: &exec.Error{Name: "codex", Err: os.ErrPermission}},
+		{name: "malformed version", output: "codex-cli development"},
+		{name: "old version", output: "codex-cli 0.143.9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := codex.SetRuntimeVersionCommandForTest(tt.output, tt.err)
+			t.Cleanup(restore)
+
+			home := t.TempDir()
+			configPath := filepath.Join(home, ".codex", "config.toml")
+			profilePath := filepath.Join(home, ".codex", "sdd-strong.config.toml")
+			const configBefore = "user_setting = \"keep\"\n"
+			const profileBefore = "user profile bytes\n"
+			if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(configPath, []byte(configBefore), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(profilePath, []byte(profileBefore), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, codexAdapter()); err == nil {
+				t.Fatal("Inject(codex) error = nil")
+			}
+			if got, err := os.ReadFile(configPath); err != nil || string(got) != configBefore {
+				t.Fatalf("config changed after validation failure: got=%q error=%v", got, err)
+			}
+			if got, err := os.ReadFile(profilePath); err != nil || string(got) != profileBefore {
+				t.Fatalf("profile changed after validation failure: got=%q error=%v", got, err)
+			}
+		})
 	}
 }
 

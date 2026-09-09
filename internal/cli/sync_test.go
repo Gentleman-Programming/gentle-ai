@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -664,18 +665,21 @@ func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
 
 func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 	tests := []struct {
-		name    string
-		version string
-		wantErr bool
+		name             string
+		version          string
+		commandErr       error
+		wantErr          bool
+		preserveProfiles bool
 	}{
-		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true},
+		{name: "missing CLI writes shared config and leaves profiles untouched", commandErr: exec.ErrNotFound, preserveProfiles: true},
+		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true, preserveProfiles: true},
 		{name: "exact runtime writes profiles", version: "codex-cli 0.144.0"},
 		{name: "new runtime writes profiles", version: "codex-cli 0.145.1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			restore := codex.SetRuntimeVersionCommandForTest(tt.version, nil)
+			restore := codex.SetRuntimeVersionCommandForTest(tt.version, tt.commandErr)
 			t.Cleanup(restore)
 			home := t.TempDir()
 			codexDir := filepath.Join(home, ".codex")
@@ -699,11 +703,17 @@ func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if tt.wantErr && string(content) != "user-content\n" {
-					t.Errorf("old runtime modified %s: %q", name, content)
+				if tt.preserveProfiles && string(content) != "user-content\n" {
+					t.Errorf("runtime should preserve %s: %q", name, content)
 				}
-				if !tt.wantErr && !strings.Contains(string(content), "gpt-5.6-") {
+				if !tt.wantErr && !tt.preserveProfiles && !strings.Contains(string(content), "gpt-5.6-") {
 					t.Errorf("valid runtime did not write GPT-5.6 profile %s: %q", name, content)
+				}
+			}
+			if !tt.wantErr {
+				config, readErr := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+				if readErr != nil || !strings.Contains(string(config), "[mcp_servers.engram]") {
+					t.Fatalf("shared Codex config was not written: got=%q error=%v", config, readErr)
 				}
 			}
 		})

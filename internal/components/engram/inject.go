@@ -423,8 +423,9 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
-		if err := codex.ValidateGPT56Runtime(); err != nil {
-			return InjectionResult{}, err
+		runtimeErr := codex.ValidateGPT56Runtime()
+		if runtimeErr != nil && !codex.IsGPT56RuntimeUnavailable(runtimeErr) {
+			return InjectionResult{}, runtimeErr
 		}
 
 		// Determine instruction file paths before mutating the config.
@@ -488,18 +489,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		changed = changed || tomlWrite.Changed
 		files = append(files, configPath)
 
-		// Write gentle-ai SDD model-selection profile files into ~/.codex/.
-		// These use the separate-file mechanism from Codex >= 0.134.0 and are
-		// selected at runtime via `codex --profile <name>`.
-		// codexHomeDir is the ~/.codex directory (the parent of config.toml).
-		codexHomeDir := filepath.Dir(configPath)
-		profileAssignments := resolveProfileAssignments(opts.CodexCarrilModelAssignments, opts.CodexModelAssignments)
-		profilesChanged, profileFiles, profileErr := codex.WriteCodexProfiles(codexHomeDir, profileAssignments)
-		if profileErr != nil {
-			return InjectionResult{}, profileErr
+		// Write gentle-ai SDD model-selection profile files only when Codex is
+		// installed and supports GPT-5.6. Without the executable, shared config
+		// still works, but existing CLI-only profiles must remain untouched.
+		if runtimeErr == nil {
+			codexHomeDir := filepath.Dir(configPath)
+			profileAssignments := resolveProfileAssignments(opts.CodexCarrilModelAssignments, opts.CodexModelAssignments)
+			profilesChanged, profileFiles, profileErr := codex.WriteCodexProfiles(codexHomeDir, profileAssignments)
+			if profileErr != nil {
+				return InjectionResult{}, profileErr
+			}
+			changed = changed || profilesChanged
+			files = append(files, profileFiles...)
 		}
-		changed = changed || profilesChanged
-		files = append(files, profileFiles...)
 	}
 
 	// 2. Inject Engram memory protocol into system prompt (if supported).
