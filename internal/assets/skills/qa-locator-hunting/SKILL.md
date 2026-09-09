@@ -1,6 +1,6 @@
 ---
 name: qa-locator-hunting
-description: "Caza locators de UI en microfronts erp-mf-* para tests Playwright: POM primero, GitLab después, nunca inventa. Trigger: necesitas un locator/selector."
+description: "Caza locators de UI en microfronts erp-mf-*: POM, GitLab, DOM en vivo, nunca inventa. Trigger: necesitas un locator/selector."
 license: Apache-2.0
 metadata:
   author: JhuniorBrayan123
@@ -17,13 +17,19 @@ automatización. Su objetivo es **reutilizar** locators existentes y, solo si fa
 
 ## Rol
 
-Eres el cazador de locators del ecosistema QA. Trabajas en 2 niveles:
+Eres el cazador de locators del ecosistema QA. Trabajas en 3 niveles, siempre en
+este orden — nunca saltes a NIVEL 2 sin agotar NIVEL 1, ni a NIVEL 1 sin agotar
+NIVEL 0:
 
 - **NIVEL 0 (siempre primero)**: reutilizar los locators que ya existen en el proyecto
   de automatización (POM `src/pages/**`, tareas/questions del patrón Screenplay).
   No reinventes selectores que ya están resueltos y verdes.
-- **NIVEL 1 (solo si falta)**: cazar el locator en GitLab vía MCP, leyendo el template
-  real del microfront, y devolver el selector auténtico del componente.
+- **NIVEL 1 (si falta en el POM)**: cazar el locator en GitLab vía MCP, leyendo el
+  template real del microfront, y devolver el selector auténtico del componente.
+- **NIVEL 2 (si GitLab no alcanza)**: inspeccionar el DOM en vivo de la app
+  corriendo (dev/staging) para encontrar el atributo real — útil cuando el
+  elemento se genera dinámicamente (loop, componente de librería UI, contenido
+  cargado por API) y no aparece tal cual en el template fuente.
 
 ## NIVEL 0 — Reutilizar el POM (obligatorio primero)
 
@@ -72,18 +78,45 @@ Eres el cazador de locators del ecosistema QA. Trabajas en 2 niveles:
 7. Devuelve el selector con la estrategia de Playwright correspondiente
    (`getByTestId`, `getByRole`, `getByLabel`, `getByText`, `locator(...)`).
 
+## NIVEL 2 — Inspeccionar el DOM en vivo (solo si GitLab no alcanza)
+
+Se activa cuando el NIVEL 1 no encuentra el atributo en el template fuente (el
+elemento se genera en runtime — `*ngFor`/`.map()`, un componente de librería UI
+de terceros, contenido que llega por API) o cuando no hay acceso a GitLab pero
+sí a un entorno donde el ERP2 corre (dev/staging).
+
+1. Confirma con el humano la URL del entorno (nunca asumas producción) y que
+   tenés credenciales/sesión válidas para llegar a la pantalla del elemento.
+2. Navegá hasta la pantalla real del flujo (mismo camino que seguiría el test).
+3. Extraé el DOM de esa pantalla — con el Browser de Claude Code
+   (`read_page` para el árbol de accesibilidad con `ref_N`, o
+   `javascript_tool` para correr algo como
+   `document.querySelector('<contenedor aproximado>').outerHTML` y quedarte
+   solo con el fragmento relevante, nunca el documento completo) o, si el
+   agente lo corre por fuera de este entorno, un script Playwright que haga
+   `page.locator(...).evaluate(el => el.outerHTML)` sobre el contenedor.
+4. Del HTML extraído, aplicá la misma prioridad de atributos del NIVEL 1
+   (`data-testid > id > name > formControlName > aria-label > clases CSS`).
+5. **No navegues ni extraigas más DOM del que hace falta para identificar ese
+   elemento puntual** — no es una skill de scraping general, es puntual para
+   cazar un selector.
+
 ## Fallback honesto — NUNCA inventar
 
-- Sin acceso a GitLab (MCP no disponible o sin permisos): reporta
-  `"locator no encontrado — sin acceso GitLab"`.
-- Locator no encontrado tras la búsqueda: reporta `"locator no encontrado"` y
-  **pide al humano la URL/path del microfront** (o un screenshot del elemento).
+- Sin acceso a GitLab (MCP no disponible o sin permisos) y sin acceso al
+  entorno para NIVEL 2: reporta `"locator no encontrado — sin acceso a
+  GitLab ni al entorno"`.
+- Locator no encontrado tras agotar los 3 niveles: reporta `"locator no
+  encontrado"` y **pide al humano la URL/path del microfront** (o un
+  screenshot del elemento).
 - **PROHIBIDO** inventar selectores, `data-testid` que no existen o atributos
   adivinados: un selector inventado produce tests flaky o falsos positivos.
 
 ## Guardrails
 
-- NIVEL 0 primero, siempre. Solo se caza en GitLab cuando falta.
+- Orden estricto: NIVEL 0 → NIVEL 1 → NIVEL 2, nunca salteado.
 - Nunca inventes un locator ni un `data-testid`.
 - Nunca modifiques el microfront para "facilitar" el test (no es tu repo).
-- Si el elemento no se puede cazar con certeza, detente y pide evidencia.
+- NIVEL 2 nunca navega a producción sin confirmación explícita del humano.
+- Si el elemento no se puede cazar con certeza tras los 3 niveles, detente y
+  pide evidencia.
