@@ -158,11 +158,15 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	}
 	// The envelope must carry the same semantic phrases the interactive question
 	// uses, so the orchestrator can localize the complete decision faithfully.
-	if question.Headline != reviewConsentHeadline || question.Value != reviewConsentValue {
-		t.Fatalf("consent question dropped the interactive framing: %#v", question)
+	if question.Headline != "Review this change now?" {
+		t.Fatalf("consent headline = %q, want a direct question", question.Headline)
 	}
-	if !strings.Contains(question.Reason, "deeper review") {
-		t.Fatalf("consent question reason does not explain the tier: %q", question.Reason)
+	if question.Value != "Reviewing takes a little longer and makes the result safer." {
+		t.Fatalf("consent value must remain one short benefit = %q", question.Value)
+	}
+	if question.Reason != "These changes may affect execution; review can help detect problems." ||
+		strings.Contains(question.Reason, "scripts/deploy.sh") {
+		t.Fatalf("consent question reason is not generic execution copy: %q", question.Reason)
 	}
 	evidence := strings.Join(question.RiskEvidence, "\n")
 	if !strings.Contains(evidence, "shell scripting in scripts/deploy.sh") {
@@ -175,9 +179,13 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 		t.Fatalf("consent question offers %d choices, want exactly 2: %#v", len(question.Choices), question.Choices)
 	}
 	granted, declined := question.Choices[0], question.Choices[1]
-	if granted.Answer != "granted" || granted.Label != reviewConsentAnswerRunLabel ||
-		declined.Answer != "declined" || declined.Label != reviewConsentAnswerNotNowLabel {
+	if granted.Answer != "granted" || granted.Label != "Review this change" ||
+		declined.Answer != "declined" || declined.Label != "Skip this time" {
 		t.Fatalf("consent choices = %#v", question.Choices)
+	}
+	if granted.Effect != "Reviews only this change; later medium- or high-risk changes ask again, and delivery needs separate approval." ||
+		declined.Effect != "Skips only this change; no review record is created, and future reviews stay enabled." {
+		t.Fatalf("consent choice effects = %#v", question.Choices)
 	}
 	for _, choice := range question.Choices {
 		if !strings.Contains(choice.Invocation, "--consent "+choice.Answer) ||
@@ -190,11 +198,12 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 			t.Fatalf("consent choice states no effect: %#v", choice)
 		}
 	}
-	if !strings.Contains(declined.Effect, "not the kill switch") {
-		t.Fatalf("decline effect must say it is not the kill switch: %q", declined.Effect)
-	}
-	if !strings.Contains(granted.Effect, "exact frozen candidate") || !strings.Contains(granted.Effect, "asks again") {
-		t.Fatalf("grant effect must remain candidate-scoped: %q", granted.Effect)
+	for _, choice := range question.Choices {
+		for _, jargon := range []string{"frozen candidate", "lineage", "receipt", "grant scope"} {
+			if strings.Contains(strings.ToLower(choice.Label+" "+choice.Effect), jargon) {
+				t.Fatalf("primary choice copy leaked %q: %#v", jargon, choice)
+			}
+		}
 	}
 	if question.OffPath.Command != reviewConsentOffPathCommand || !strings.Contains(question.OffPath.Note, "for good") {
 		t.Fatalf("consent off path = %#v", question.OffPath)
@@ -211,6 +220,32 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	}
 	if console.Len() != 0 {
 		t.Fatalf("relay declaration must replace the console notice, not add to it:\n%s", console.String())
+	}
+}
+
+func TestRelayedConsentMediumRiskKeepsBriefDecisionAndRiskContext(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	stubReviewConsole(t, false, "")
+	writeReviewStartCandidate(t, repo, "internal/app.go", "package internal\n", 0o644)
+
+	question := decodeConsentQuestion(t, runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", "review-consent-medium-copy", "--consent", "relay",
+	})).Bytes())
+	if question.RiskLevel != reviewtransaction.RiskMedium || question.Headline != "Review this change now?" {
+		t.Fatalf("medium consent identity/copy = %#v", question)
+	}
+	if question.Value != "Reviewing takes a little longer and makes the result safer." ||
+		len(question.Choices) != 2 ||
+		question.Choices[0].Effect != "Reviews only this change; later medium- or high-risk changes ask again, and delivery needs separate approval." ||
+		question.Choices[1].Effect != "Skips only this change; no review record is created, and future reviews stay enabled." {
+		t.Fatalf("medium consent primary context/choices = %#v", question)
+	}
+	if question.Reason != "These changes alter behavior; review can help check for regressions." ||
+		strings.Contains(question.Reason, "internal/app.go") || len(question.RiskEvidence) == 0 ||
+		!strings.Contains(question.RiskEvidence[0], "consolidated review") {
+		t.Fatalf("medium consent did not separate generic reason from detailed risk context: %#v", question)
 	}
 }
 

@@ -570,15 +570,15 @@ func normalizeReviewConsentLocale(value string) (reviewConsentLocale, error) {
 }
 
 const (
-	reviewConsentHeadline = "Gentle AI can review this change before you call it done."
-	reviewConsentValue    = "Reviewing takes a bit longer, and it makes the result substantially safer."
+	reviewConsentHeadline = "Review this change now?"
+	reviewConsentValue    = "Reviewing takes a little longer and makes the result safer."
 
 	// reviewConsentAnswerRunLabel and reviewConsentAnswerNotNowLabel are the
 	// single wording source for the two offered answers: the interactive
 	// prompt and the relayed consent envelope both speak them, so the two
 	// surfaces cannot drift.
-	reviewConsentAnswerRunLabel    = "Run the review now"
-	reviewConsentAnswerNotNowLabel = "Not now, just this once"
+	reviewConsentAnswerRunLabel    = "Review this change"
+	reviewConsentAnswerNotNowLabel = "Skip this time"
 	reviewConsentAnswers           = "  1) " + reviewConsentAnswerRunLabel + "\n  2) " + reviewConsentAnswerNotNowLabel + "\n"
 
 	// reviewConsentOffPath keeps the permanent disable reachable but deliberate.
@@ -832,28 +832,63 @@ func reviewConsentPrompt(assessment reviewtransaction.RiskAssessment) string {
 		reviewConsentAnswers, reviewConsentOffPath, reviewConsentQuestion)
 }
 
-// reviewConsentMediumReason is the single wording source for the tier-1
-// reason: the interactive consent prompt speaks it and the machine-readable
-// START result relays it verbatim, so the two surfaces cannot drift.
+// reviewConsentMediumReason remains the first medium-tier risk_evidence item.
+// The brief consent reason below deliberately does not repeat this detailed
+// evidence, which stays available in its own field for relays that need it.
 const reviewConsentMediumReason = "this change is not purely passive documentation, so it gets one consolidated review."
 
-// reviewConsentReason states why this candidate is reviewed, in the user's own
-// terms. Both tiers name the evidence that triggered them through the same
-// phrasing helper, so neither review's cost is ever unexplained: tier 1 keeps
-// the consolidated-review sentence and appends what made the candidate
-// non-passive (issue #1827); tier 2 names what triggered the deeper review.
-func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
-	evidence := reviewConsentEvidence(assessment.Reasons)
-	if assessment.Level != reviewtransaction.RiskHigh {
-		if evidence == "" {
-			return reviewConsentMediumReason
+type reviewConsentReasonCategory string
+
+const (
+	reviewConsentReasonBehavior  reviewConsentReasonCategory = "behavior"
+	reviewConsentReasonSecurity  reviewConsentReasonCategory = "security"
+	reviewConsentReasonExecution reviewConsentReasonCategory = "execution"
+	reviewConsentReasonUpdates   reviewConsentReasonCategory = "updates"
+)
+
+// reviewConsentReasonCategoryFor uses only the classifier's structured signals,
+// never the human-readable evidence phrases. Security signals take precedence,
+// followed by execution and update signals; absent or unknown signals fall back
+// to behavior, so a high tier alone never claims a security concern.
+func reviewConsentReasonCategoryFor(reasons []reviewtransaction.RiskReason) reviewConsentReasonCategory {
+	security, execution, updates := false, false, false
+	for _, reason := range reasons {
+		switch reason.Signal {
+		case reviewtransaction.SignalAuth, reviewtransaction.SignalSecurity,
+			reviewtransaction.SignalPayments, reviewtransaction.SignalDataExposure,
+			reviewtransaction.SignalDataLoss, reviewtransaction.SignalPermissions:
+			security = true
+		case reviewtransaction.SignalShellProcess:
+			execution = true
+		case reviewtransaction.SignalUpdate:
+			updates = true
 		}
-		return reviewConsentMediumReason + " The review starts from " + evidence + "."
 	}
-	if evidence == "" {
-		return "this change touches something sensitive, so it gets a deeper review."
+	switch {
+	case security:
+		return reviewConsentReasonSecurity
+	case execution:
+		return reviewConsentReasonExecution
+	case updates:
+		return reviewConsentReasonUpdates
+	default:
+		return reviewConsentReasonBehavior
 	}
-	return "this change gets a deeper review because it touches " + evidence + "."
+}
+
+// reviewConsentReason explains the broad concern and review benefit without
+// exposing paths or duplicating detailed risk evidence.
+func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
+	switch reviewConsentReasonCategoryFor(assessment.Reasons) {
+	case reviewConsentReasonSecurity:
+		return "These changes may affect security; review can help detect problems."
+	case reviewConsentReasonExecution:
+		return "These changes may affect execution; review can help detect problems."
+	case reviewConsentReasonUpdates:
+		return "These changes may affect updates; review can help detect problems."
+	default:
+		return "These changes alter behavior; review can help check for regressions."
+	}
 }
 
 func reviewConsentEvidence(reasons []reviewtransaction.RiskReason) string {
@@ -872,13 +907,11 @@ func reviewConsentEvidence(reasons []reviewtransaction.RiskReason) string {
 }
 
 // reviewConsentRiskEvidence projects an already-classified assessment into
-// the risk_evidence phrases a non-interactive START result carries. It is an
-// output-only projection of facts the start already computed: tier 2 names
-// the triggering evidence, tier 1 leads with the exact consolidated-review
-// reason the consent prompt speaks and appends the same evidence phrases so
-// the path that made the candidate non-passive is named (issue #1827), and
-// tier 0 stays nil so the omitempty field is absent rather than empty-string
-// noise.
+// the detailed risk_evidence phrases a non-interactive START result carries.
+// It remains separate from the brief generic consent reason: tier 2 names the
+// triggering evidence, tier 1 retains its consolidated-review sentence and
+// appends the path that made the candidate non-passive (issue #1827), and tier
+// 0 stays nil so the omitempty field is absent rather than empty-string noise.
 func reviewConsentRiskEvidence(assessment reviewtransaction.RiskAssessment) []string {
 	switch assessment.Level {
 	case reviewtransaction.RiskHigh:
