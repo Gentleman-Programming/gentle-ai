@@ -88,3 +88,75 @@ func TestNegotiatedStatusPreservesUntrackedBindingThroughCorrectionLineage(t *te
 		}
 	}
 }
+
+// TestNegotiatedStatusPreservesUntrackedBindingWithUnselectedUntrackedFiles pins
+// issue #4435: correction_required status continuation must preserve the
+// frozen intended-untracked binding even when additional unselected untracked
+// files exist in the workspace, rather than dropping the binding and requiring
+// intended_untracked_selection_required recovery.
+func TestNegotiatedStatusPreservesUntrackedBindingWithUnselectedUntrackedFiles(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "correction-untracked-binding-4435"
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "notes.txt", "untracked but explicitly selected\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "unselected.txt", "untracked and unselected\n", 0o644)
+
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+		"--cwd", repo, "--lineage", lineage,
+		"--untracked-scope=select", "--expected-untracked-inventory=" + digest, "--intended-untracked", "notes.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedBytes, &started)
+	if len(started.SelectedLenses) != 1 {
+		t.Fatalf("started lenses = %v, want exactly one selected lens", started.SelectedLenses)
+	}
+
+	captureCLIReviewerResultWithFindings(t, repo, started, 0, []facadeFinding{{
+		Location: "candidate.go:1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
+		ProofRefs:     []string{"exact changed hunk", "reproduced candidate failure"},
+		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, &bytes.Buffer{})
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("lineage state = %q, want %q", record.State.State, reviewtransaction.StateCorrectionRequired)
+	}
+	if len(record.State.InitialSnapshot.IntendedUntracked) != 1 || record.State.InitialSnapshot.IntendedUntracked[0] != "notes.txt" {
+		t.Fatalf("fixture did not freeze the declared untracked selection: %#v", record.State.InitialSnapshot)
+	}
+
+	status := negotiatedReviewStatusForLineage(t, repo, lineage)
+	if status.NextTransition == nil {
+		t.Fatal("correction lineage STATUS produced no next transition")
+	}
+	if status.NextTransition.Kind != reviewNextTransitionCollect {
+		t.Fatalf("status next transition kind = %q, want %q", status.NextTransition.Kind, reviewNextTransitionCollect)
+	}
+	if status.NextTransition.ReasonCode == "intended_untracked_selection_required" {
+		t.Fatalf("correction lineage dead-ended into a fresh intended-untracked declaration: %#v", status.NextTransition)
+	}
+	if status.NextTransition.ReasonCode != "correction_plan_required" {
+		t.Fatalf("status next transition reason = %q, want correction_plan_required", status.NextTransition.ReasonCode)
+	}
+	if status.Action == reviewtransaction.TargetStatusActionRecover {
+		t.Fatalf("status action = %q, want not recover", status.Action)
+	}
+	if status.TargetIdentity != record.State.CurrentSnapshot.Identity {
+		t.Fatalf("status target identity = %q, want the authority's own bound target identity %q", status.TargetIdentity, record.State.CurrentSnapshot.Identity)
+	}
+}

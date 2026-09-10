@@ -150,6 +150,23 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 	return reviewCollectTransition("intended_untracked_selection_required", input)
 }
 
+// reviewContainsUntrackedPaths reports whether every path in subset is present in inventory.
+func reviewContainsUntrackedPaths(inventory, subset []string) bool {
+	if len(subset) == 0 {
+		return true
+	}
+	set := make(map[string]struct{}, len(inventory))
+	for _, path := range inventory {
+		set[path] = struct{}{}
+	}
+	for _, path := range subset {
+		if _, found := set[path]; !found {
+			return false
+		}
+	}
+	return true
+}
+
 // reviewSameUntrackedPaths reports whether two path lists name exactly the
 // same set, independent of order. Both `IntendedUntrackedInventory` and a
 // stored `IntendedUntracked` selection are canonicalized and sorted at their
