@@ -42,6 +42,32 @@ func TestRunSDDStatusAndContinueOmitExpectedPlanningBlockers(t *testing.T) {
 	}
 }
 
+func TestRunSDDStatusAndContinueKeepHistoricalVerificationNonblockingDuringApply(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedSDDStatusReadyChange(t, root, "historical", "- [ ] 1.1 Finish implementation\n")
+	writeSDDStatusFile(t, filepath.Join(changeRoot, "verify-report.md"), "## Verification\n\nVerdict: FAIL\n")
+
+	for name, run := range map[string]func([]string, io.Writer) error{
+		"sdd-status":   RunSDDStatus,
+		"sdd-continue": RunSDDContinue,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := run([]string{"historical", "--cwd", root, "--json"}, &stdout); err != nil {
+				t.Fatalf("command error = %v", err)
+			}
+
+			var status sddstatus.Status
+			if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+				t.Fatalf("JSON decode error = %v\n%s", err, stdout.String())
+			}
+			if status.Dependencies.Apply != sddstatus.DependencyReady || status.NextRecommended != "apply" || len(status.BlockedReasons) != 0 {
+				t.Fatalf("continuation contract = apply %q next %q blocked %v, want ready/apply/no blockers", status.Dependencies.Apply, status.NextRecommended, status.BlockedReasons)
+			}
+		})
+	}
+}
+
 func TestRunSDDStatusPrintsJSONWithInstructions(t *testing.T) {
 	root := t.TempDir()
 	seedSDDStatusReadyChange(t, root, "add-auth", "- [ ] 1.1 Wire routes\n")

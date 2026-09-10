@@ -812,6 +812,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, sddJourneys()...)
 	journeys = append(journeys, issue2891Journeys()...)
 	journeys = append(journeys, issue2696Journeys()...)
+	journeys = append(journeys, issue4210Journeys()...)
 	journeys = append(journeys, sddChainJourneys()...)
 	journeys = append(journeys, issue3094Journeys()...)
 	journeys = append(journeys, issue3065Journeys()...)

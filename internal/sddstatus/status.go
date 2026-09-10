@@ -645,8 +645,9 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	if artifacts["specs"] == ArtifactPartial {
 		blockedReasons.genuine = append(blockedReasons.genuine, openSpecSpecsLayoutReason(changeName))
 	}
-	if artifacts["verifyReport"] == ArtifactDone {
-		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
+	verifyRefreshReason := verifyReportRefreshReason(verifyResult)
+	if artifacts["verifyReport"] == ArtifactDone && taskProgress.AllComplete {
+		if reason := verifyRefreshReason; reason != "" {
 			blockedReasons.genuine = append(blockedReasons.genuine, reason)
 		}
 	}
@@ -705,6 +706,9 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
+	// Historical verification remains visible in verify instructions, but cannot
+	// block unfinished implementation before final verification is applicable.
+	status.verifyRefreshReason = verifyRefreshReason
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
@@ -945,8 +949,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
-	if artifacts["verifyReport"] == ArtifactDone {
-		if reason := verifyReportRefreshReason(verifyResult); reason != "" {
+	verifyRefreshReason := verifyReportRefreshReason(verifyResult)
+	if artifacts["verifyReport"] == ArtifactDone && taskProgress.AllComplete {
+		if reason := verifyRefreshReason; reason != "" {
 			blockedReasons.genuine = append(blockedReasons.genuine, reason)
 		}
 	}
@@ -987,6 +992,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
+	status.verifyRefreshReason = verifyRefreshReason
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
