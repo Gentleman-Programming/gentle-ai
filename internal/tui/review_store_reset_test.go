@@ -15,6 +15,7 @@ import (
 func reviewStoreResetModel(t *testing.T) Model {
 	t.Helper()
 	m := NewModel(system.DetectionResult{}, "dev")
+	m.ReviewStoreResetHasGitFn = func() bool { return true }
 	m.Screen = ScreenReviewStoreResetConfirm
 	m.Cursor = 0
 	return m
@@ -38,7 +39,7 @@ func settledStoreResetReport() reviewtransaction.StoreResetReport {
 // the TUI at all, and that it sits in the maintenance cluster at the bottom
 // rather than among the everyday entries.
 func TestWelcomeMenuOffersTheReviewStoreReset(t *testing.T) {
-	options := screens.WelcomeOptions(nil, true, false, 0, true)
+	options := screens.WelcomeOptions(nil, true, false, 0, true, true)
 	reset, backups, uninstall := -1, -1, -1
 	for index, option := range options {
 		switch option {
@@ -58,11 +59,63 @@ func TestWelcomeMenuOffersTheReviewStoreReset(t *testing.T) {
 	}
 }
 
+// TestWelcomeMenuShowsDisabledResetReviewStoreOutsideGit proves that outside a
+// Git repository, the welcome menu renders the row with the requires-git precondition.
+func TestWelcomeMenuShowsDisabledResetReviewStoreOutsideGit(t *testing.T) {
+	options := screens.WelcomeOptions(nil, true, false, 0, true, false)
+	found := false
+	for _, option := range options {
+		if option == "Reset review store (requires a Git repository)" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("welcome menu outside git does not show disabled option: %#v", options)
+	}
+}
+
+// TestWelcomeSelectionOutsideGitIsNoOp proves that pressing Enter on the
+// disabled reset row outside a Git repository is a no-op and never triggers the survey.
+func TestWelcomeSelectionOutsideGitIsNoOp(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.ReviewStoreResetHasGitFn = func() bool { return false }
+	surveyed := false
+	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
+		surveyed = true
+		return settledStoreResetReport(), nil
+	}
+	m.ReviewStoreResetFn = func() (reviewtransaction.StoreResetReport, error) {
+		t.Fatal("selecting the disabled menu entry applied a reset")
+		return reviewtransaction.StoreResetReport{}, nil
+	}
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), false)
+	for index, option := range options {
+		if strings.HasPrefix(option, "Reset review store") {
+			m.Cursor = index
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("screen = %v, want ScreenWelcome (no-op)", state.Screen)
+	}
+	if cmd != nil {
+		t.Fatalf("cmd = %v, want nil", cmd)
+	}
+	if surveyed {
+		t.Fatal("the survey function was called when selecting disabled reset row")
+	}
+}
+
 // TestWelcomeSelectionEntersTheSurvey proves the menu entry runs the read-only
 // survey and lands on the confirmation screen, never straight into a removal.
 func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
+	m.ReviewStoreResetHasGitFn = func() bool { return true }
 	surveyed := false
 	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
 		surveyed = true
@@ -72,7 +125,7 @@ func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 		t.Fatal("selecting the menu entry applied a reset")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), true)
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index
@@ -317,6 +370,7 @@ func TestReviewStoreResetResultIsNeverDropped(t *testing.T) {
 func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
+	m.ReviewStoreResetHasGitFn = func() bool { return true }
 	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
 		return settledStoreResetReport(), nil
 	}
@@ -324,7 +378,7 @@ func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 		t.Fatal("the second Enter after entering the screen destroyed the store")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), true)
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index

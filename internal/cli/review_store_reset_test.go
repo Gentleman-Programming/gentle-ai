@@ -409,3 +409,32 @@ func TestReviewStoreResetSparesTheAdapterReviewStoreByDefault(t *testing.T) {
 		t.Fatalf("the override did not remove the adapter review store: %v", err)
 	}
 }
+
+// TestReviewStoreResetRefusesNonGitRepositoryAndNamesTheContinuation proves that
+// running store-reset outside a Git repository returns a typed error containing
+// actionable guidance rather than exposing raw git rev-parse subprocess stderr.
+func TestReviewStoreResetRefusesNonGitRepositoryAndNamesTheContinuation(t *testing.T) {
+	nonGitDir := t.TempDir()
+	var output bytes.Buffer
+	err := RunReview([]string{"store-reset", "--cwd", nonGitDir}, &output)
+	if err == nil {
+		t.Fatalf("expected error running store-reset outside a Git repository; got nil, output: %s", output.String())
+	}
+	var nonGit *ReviewStoreResetRepositoryRequiredError
+	if !errors.As(err, &nonGit) {
+		t.Fatalf("error = %T %v, want *ReviewStoreResetRepositoryRequiredError", err, err)
+	}
+	if !errors.Is(err, ErrReviewStoreResetRequiresGitRepository) {
+		t.Fatalf("errors.Is(err, ErrReviewStoreResetRequiresGitRepository) = false for %v", err)
+	}
+	message := err.Error()
+	if !strings.Contains(message, "review store-reset requires a Git repository") {
+		t.Fatalf("error missing requirement statement: %q", message)
+	}
+	if !strings.Contains(message, "--cwd") {
+		t.Fatalf("error missing actionable continuation: %q", message)
+	}
+	if strings.Contains(message, "exit code 128") || strings.Contains(message, "rev-parse") {
+		t.Fatalf("error exposes raw git subprocess details: %q", message)
+	}
+}
