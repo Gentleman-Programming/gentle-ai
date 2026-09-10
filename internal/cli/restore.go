@@ -69,10 +69,18 @@ func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer
 			if strings.HasPrefix(a, "-") {
 				// Unknown flag — surface error via flag.FlagSet for consistent messages.
 				fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-				fs.SetOutput(ioDiscard{})
-				_ = fs.Bool("list", false, "")
-				_ = fs.Bool("yes", false, "")
-				if err := fs.Parse(args); err != nil {
+				// Descriptions are what the derived usage shows the operator,
+				// so they are the documentation rather than a placeholder.
+				_ = fs.Bool("list", false, "list available backups without restoring")
+				_ = fs.Bool("yes", false, "skip confirmation prompt")
+				// Parse only the flag actually detected. flag.Parse stops at
+				// the first non-flag token, so handing it the full args slice
+				// makes `restore <backup> --anything` return nil: the unknown
+				// flag is swallowed and the help request never seen.
+				if err := parseCommandFlags(fs, []string{a}); err != nil {
+					if writeHelpRequest(err, stdout) == nil {
+						return nil
+					}
 					return fmt.Errorf("parse restore flags: %w", err)
 				}
 				return nil

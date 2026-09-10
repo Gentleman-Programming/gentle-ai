@@ -26,7 +26,6 @@ func ParseUninstallFlags(args []string) (UninstallFlags, error) {
 	var opts UninstallFlags
 
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	fs.SetOutput(ioDiscard{})
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "component", &opts.Components)
@@ -35,7 +34,7 @@ func ParseUninstallFlags(args []string) (UninstallFlags, error) {
 	fs.BoolVar(&opts.Yes, "yes", false, "skip confirmation prompt")
 	fs.BoolVar(&opts.Yes, "y", false, "skip confirmation prompt")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args); err != nil {
 		return UninstallFlags{}, err
 	}
 	if fs.NArg() > 0 {
@@ -112,7 +111,9 @@ func RenderUninstallReport(result componentuninstall.Result) string {
 func runUninstallWithInput(args []string, stdout io.Writer, stdin io.Reader) (componentuninstall.Result, error) {
 	flags, err := ParseUninstallFlags(args)
 	if err != nil {
-		return componentuninstall.Result{}, err
+		// An explicit help request is answered here, where a writer exists;
+		// ParseUninstallFlags owns none of its own.
+		return componentuninstall.Result{}, writeHelpRequest(err, stdout)
 	}
 
 	homeDir, err := osUserHomeDir()
