@@ -1,12 +1,19 @@
 package catalog
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import (
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+)
 
 type Skill struct {
 	ID       model.SkillID
 	Name     string
 	Category string
 	Priority string
+
+	// RequiredCapabilities declares optional adapter mechanisms required to use
+	// this skill. Its zero value keeps existing skills compatible with all agents.
+	RequiredCapabilities capabilitymanifest.AgentFeatureClaims
 }
 
 var mvpSkills = []Skill{
