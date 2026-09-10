@@ -597,11 +597,6 @@ func TestRunSDDAttemptSettleRemediationEvidenceDropsEvidenceRevisionRequirement(
 	if failed.State != "proceed" {
 		t.Fatalf("failed settle = %#v", failed)
 	}
-	acquired2, _ := runCompactSDDAttempt(t, []string{
-		"acquire", "--cwd", repo, "--change", change, "--request-id", "cli-rem-acquire-2",
-		"--work-unit", "verify", "--evidence-goal", "prove CLI remediation evidence",
-		"--max-attempts", "5", "--max-changed-lines", "800", "--remediates-evidence-revision", failedEvidence,
-	})
 	trackedFile := filepath.Join(repo, "tracked.txt")
 	existing, err := os.ReadFile(trackedFile)
 	if err != nil {
@@ -610,6 +605,17 @@ func TestRunSDDAttemptSettleRemediationEvidenceDropsEvidenceRevisionRequirement(
 	if err := os.WriteFile(trackedFile, append(existing, []byte("corrected\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	failedStatus := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	reset := runSDDAttemptStatus(t, []string{
+		"reset", "--cwd", repo, "--change", change, "--expected-revision", failedStatus.Revision,
+		"--request-id", "cli-rem-reset", "--reason", "maintainer records the corrected candidate", "--actor", "maintainer",
+	})
+	acquired2, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--expected-revision", reset.Revision,
+		"--request-id", "cli-rem-acquire-2", "--work-unit", "verify",
+		"--evidence-goal", "prove CLI remediation evidence", "--max-attempts", "5", "--max-changed-lines", "800",
+		"--remediates-evidence-revision", failedEvidence,
+	})
 	evidence := `{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"` + failedEvidence + `",` +
 		`"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}],` +
 		`"runtime_harness":{"status":"not_applicable","na_reason":"no runtime harness because this change is test-only"},` +

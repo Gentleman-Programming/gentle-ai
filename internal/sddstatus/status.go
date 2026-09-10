@@ -2023,6 +2023,7 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		fmt.Sprintf("After a failed or passed run, call `gentle-ai sdd-attempt settle --cwd %s --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`.", pathquote.Quote(workspace), change),
 		fmt.Sprintf("After an interrupted run, call `gentle-ai sdd-attempt settle --cwd %s --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome interrupted --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"` and omit --evidence-revision.", pathquote.Quote(workspace), change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
+		"After a terminal attempt's candidate drifts, run `gentle-ai sdd-attempt status` to obtain the current revision, then have a maintainer record that drift with an audited `gentle-ai sdd-attempt reset --expected-revision <the revision that status prints> --request-id \"<unique-request-id>\" --reason \"<why-the-candidate-drifted>\" --actor \"<actor>\"` before reacquire. Use `sdd-attempt rescope` only when its narrower-successor contract applies.",
 	}
 	if status.RemediationState.Required && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil {
 		evidence, found := runtimeChainFailedEvidence(status.RuntimeStatus.Attempts)
@@ -2030,7 +2031,7 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 			objective := status.RuntimeStatus.Objective
 			instructions = append(instructions,
 				fmt.Sprintf("For failed SDD evidence %s, run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", evidence, pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, evidence),
-				fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; fresh independent verification is required before archive.", evidence),
+				fmt.Sprintf("Correct the candidate before acquire. After a terminal candidate drift, run status and then the audited reset above before reissuing this acquire; use rescope only when its narrower-successor contract applies. After the candidate changes, settle that token with `--remediates-evidence-revision %s`; fresh independent verification is required before archive.", evidence),
 			)
 		}
 	}
