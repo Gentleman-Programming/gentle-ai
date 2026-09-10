@@ -53,10 +53,9 @@ func TestCaptureResultHostMediatedRefusalsAreDistinguishable(t *testing.T) {
 			// gentle-pi report into a checkable question.
 			name: "materialize omitted for the pi host relay",
 			argv: append(slices.Clone(binding), "--agent", string(model.AgentPi)),
-			want: `review capture-result --agent "pi" without --materialize has no in-process reviewer to run: ` +
+			want: `review capture-result --agent "pi" without --materialize or --execute has no in-process reviewer to run: ` +
 				`its compiled transport is "pi_host_relay", whose host owns the reviewer subprocess; ` +
-				`print the provider task with --materialize=true, run it in the host, ` +
-				`then submit the raw result with --input and the same binding`,
+				`use --execute=true for the Go-owned corrective retry route`,
 		},
 		{
 			// Same branch as above, different runtime: OpenCode has no

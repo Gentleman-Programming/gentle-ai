@@ -75,6 +75,16 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	runtimeAgent := flags.String("agent", "", "host-relay runtime identity, required for both --materialize and --execute")
 	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider role task without capturing anything; mutually exclusive with --execute")
 	execute := flags.Bool("execute", false, "run the Go-owned locked-down pi process on the Go-materialized role request and capture its raw result")
+	// Provider-runtime metadata arguments (provider-cost-version,
+	// provider-model-runs-min, provider-model-runs-max, provider-retry-reasons)
+	// are emitted by the negotiated collect transition alongside the host-relay
+	// binding; they are accepted for the parser's argv shape only and never
+	// consulted here, since admission and retry stay Go-owned in
+	// reviewProviderCaptureWithOneCorrection.
+	_ = flags.String("provider-cost-version", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
+	_ = flags.String("provider-model-runs-min", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
+	_ = flags.String("provider-model-runs-max", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
+	_ = flags.String("provider-retry-reasons", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return nil, err
 	}
@@ -204,14 +214,8 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 		if err := reviewProviderCaptureRefuterWithOneCorrection(ctx, binding, adapter, store, state, request); err != nil {
 			return err
 		}
-	} else {
-		raw, hostErr := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
-		if hostErr != nil {
-			return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", hostErr))
-		}
-		if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw); err != nil {
-			return reviewPreflightError(err)
-		}
+	} else if err := reviewProviderCaptureRefuterWithOneCorrection(ctx, binding, reviewProviderRoleHostAdapter(), store, state, request); err != nil {
+		return err
 	}
 	currentRecord, currentErr := store.LoadContext(ctx)
 	if currentErr != nil {
@@ -296,11 +300,10 @@ type reviewProviderCaptureRefuterAdmission struct {
 	result facadeRefuterResult
 }
 
-// reviewProviderCaptureRefuterWithOneCorrection grants the compiled runtime
-// (claude, codex) the same single corrective re-invocation the lens role
-// already had (issue #4061): a malformed refuter document is retried once
-// with the exact admission error before it is durably captured. The Pi host
-// relay keeps its own reviewer process and is not routed through this path.
+// reviewProviderCaptureRefuterWithOneCorrection grants every Go-owned provider
+// runtime, including the Pi host relay, the same single corrective re-invocation
+// the lens role already had (issue #4061): a malformed refuter document is
+// retried once with the exact admission error before it is durably captured.
 func reviewProviderCaptureRefuterWithOneCorrection(ctx context.Context, binding *reviewProviderRoleCaptureBinding, adapter reviewerprovider.Adapter, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, request reviewProviderRefuterRequest) error {
 	admit := func(_ context.Context, raw []byte) (reviewProviderCaptureRefuterAdmission, error) {
 		result, err := reviewProviderAdmitRefuterRaw(request, raw)

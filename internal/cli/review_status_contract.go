@@ -1198,22 +1198,27 @@ func (transition ReviewNextTransition) Validate() error {
 					argumentCount++
 				}
 				if hostRelayMaterialize {
-					// A host-relay capture input carries both --agent and
-					// --materialize=true: the host materializes first, then
-					// advances authority through the submission descriptor.
+					// The Pi host relay uses the Go-owned execute form. It invokes
+					// the exact materialized request and shares the bounded admission
+					// retry, so no caller-authored --input submission exists.
 					argumentCount += 2
-					expected := make([]string, 0, len(input.Arguments)-1)
-					for _, argument := range input.Arguments {
-						if argument.Name != "materialize" {
-							expected = append(expected, reviewTransitionArgumentToken(argument))
-						}
-					}
-					expected = append(expected, "--input="+reviewSubmissionValuePlaceholder)
-					if input.Submission == nil || !reflect.DeepEqual(input.Submission.ArgumentTokens, expected) {
-						return errors.New("host-relay capture transition submission does not advance the reviewed binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					if input.Submission != nil {
+						return errors.New("host-relay capture transition must not carry a caller submission") // refusal:by-design world-action: host execution and admission remain provider-owned
 					}
 				} else if input.Submission != nil {
 					return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
+				}
+				// When the lens host relay materializes, allow exactly the trailing
+				// provider-runtime metadata block; the parser rejects any shape that
+				// diverges from the canonical four-argument schema, so a hostile or
+				// stale envelope still fails closed with the same refusal an unknown
+				// version would produce.
+				if hostRelayMaterialize && len(arguments) > argumentCount {
+					metadataArguments := input.Arguments[argumentCount:]
+					if _, _, parseErr := reviewProviderParseRuntimeMetadataArguments(metadataArguments); parseErr != nil {
+						return fmt.Errorf("review capture transition host-relay metadata is invalid: %w", parseErr)
+					}
+					argumentCount += providerRuntimeMetadataArgumentCount
 				}
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
@@ -1227,7 +1232,7 @@ func (transition ReviewNextTransition) Validate() error {
 					input.ArtifactSubject == nil || legacyTransport && input.ChangedPathManifest == nil ||
 					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
 					providerRuntime != "" && !providerCapture && !hostRelayMaterialize ||
-					hostRelayMaterialize && arguments["materialize"] != "true" ||
+					hostRelayMaterialize && arguments["execute"] != "true" ||
 					legacyTransport && input.CandidateDiff == nil || nativeGitTransport && (!validReviewGitTree(input.BaseTree) || !validReviewGitTree(input.CandidateTree)) ||
 					(!legacyTransport && !nativeGitTransport) {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
@@ -1268,7 +1273,12 @@ func (transition ReviewNextTransition) Validate() error {
 				// --agent and --execute=true. Go materializes the role
 				// request, spawns its own locked-down pi process, and admits
 				// the raw bytes, so no submission descriptor may exist for a
-				// caller to author a verdict through.
+				// caller to author a verdict through. The trailing
+				// provider-runtime metadata block (provider_cost_version,
+				// provider_model_runs_min/max, provider_retry_reasons) is the
+				// single shape a corrected retry render carries; the parser
+				// fails closed on any divergence, so a hostile or stale
+				// envelope still produces the canonical refusal.
 				providerRuntime := model.AgentID(arguments["agent"])
 				argumentCount, schema := 6, reviewRefuterSchemaID
 				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
@@ -1277,6 +1287,19 @@ func (transition ReviewNextTransition) Validate() error {
 				// Fail closed on the argument count BEFORE any arithmetic over
 				// it: a hostile envelope with a truncated (or empty) argument
 				// vector must produce this refusal, never a panic.
+				if len(input.Arguments) < argumentCount || len(arguments) < argumentCount {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				if len(input.Arguments) > argumentCount {
+					metadataArguments := input.Arguments[argumentCount:]
+					if len(metadataArguments) != providerRuntimeMetadataArgumentCount {
+						return errors.New("provider role capture transition host-relay metadata block is invalid") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+					if _, _, parseErr := reviewProviderParseRuntimeMetadataArguments(metadataArguments); parseErr != nil {
+						return fmt.Errorf("provider role capture transition host-relay metadata is invalid: %w", parseErr)
+					}
+					argumentCount += providerRuntimeMetadataArgumentCount
+				}
 				if len(input.Arguments) != argumentCount || len(arguments) != argumentCount {
 					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
 				}

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -154,6 +155,17 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "validate the capture binding and, when --input is supplied, the result admission without persisting anything")
 	materialize := flags.Bool("materialize", false, "print the exact Go-materialized opaque provider task for a host-relay --agent runtime without capturing anything; mutually exclusive with --input and --preflight")
+	execute := flags.Bool("execute", false, "run the Go-owned host-relay provider process and admit its raw result; mutually exclusive with --input and --materialize")
+	// Provider-runtime metadata arguments (provider-cost-version,
+	// provider-model-runs-min, provider-model-runs-max, provider-retry-reasons)
+	// are emitted by the negotiated collect transition alongside the host-relay
+	// binding; they are accepted for the parser's own argv shape only and never
+	// consulted here, since admission and retry stay Go-owned in
+	// reviewProviderCaptureWithOneCorrection.
+	_ = flags.String("provider-cost-version", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
+	_ = flags.String("provider-model-runs-min", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
+	_ = flags.String("provider-model-runs-max", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
+	_ = flags.String("provider-retry-reasons", "", "provider-owned runtime metadata, emitted by the negotiated collect transition; ignored at capture")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -165,12 +177,12 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	rawInputSupplied := strings.TrimSpace(*input) != ""
 	providerExecution := providerRuntimeSupplied && !rawInputSupplied
 	hostRelaySubmission := providerRuntimeSupplied && rawInputSupplied
-	if *materialize {
-		if *preflight || strings.TrimSpace(*input) != "" {
-			return reviewPreflightError(errors.New("review capture-result --materialize only prints the Go-materialized provider task and cannot be combined with --input or --preflight")) // refusal:by-design world-action: materialization is read-only and never authors or admits reviewer output
+	if *materialize || *execute {
+		if *preflight || strings.TrimSpace(*input) != "" || (*materialize && *execute) {
+			return reviewPreflightError(errors.New("review capture-result --materialize and --execute are mutually exclusive and cannot be combined with --input or --preflight")) // refusal:by-design world-action: provider execution and materialization are distinct Go-owned routes
 		}
 		if !providerExecution {
-			return reviewPreflightError(errors.New("review capture-result --materialize requires --agent naming the host-relay runtime")) // refusal:by-design operator-knowledge: only a compiled host-relay runtime identity selects the materialize form
+			return reviewPreflightError(errors.New("review capture-result --materialize or --execute requires --agent naming the provider runtime")) // refusal:by-design operator-knowledge: provider execution is a Go-owned route
 		}
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
@@ -217,9 +229,9 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			if !isHostRelayMaterializeTransport {
 				return reviewPreflightError(fmt.Errorf("review capture-result --agent %q with --input is unavailable: only a compiled host-relay runtime may submit its raw reviewer result with the provider-owned runtime binding; this runtime's compiled transport is %q", providerRuntime, providerTransport)) // refusal:by-design world-action: caller input cannot impersonate an in-process provider runtime
 			}
-		} else if !reviewProviderCaptureRuntime(providerRuntime) {
+		} else if !reviewProviderCaptureRuntime(providerRuntime) && !(isHostRelayMaterializeTransport && *execute) {
 			if isHostRelayMaterializeTransport {
-				return reviewPreflightError(fmt.Errorf("review capture-result --agent %q without --materialize has no in-process reviewer to run: its compiled transport is %q, whose host owns the reviewer subprocess; print the provider task with --materialize=true, run it in the host, then submit the raw result with --input and the same binding", providerRuntime, providerTransport)) // refusal:by-design world-action: the host relay owns the reviewer subprocess this process cannot launch
+				return reviewPreflightError(fmt.Errorf("review capture-result --agent %q without --materialize or --execute has no in-process reviewer to run: its compiled transport is %q, whose host owns the reviewer subprocess; use --execute=true for the Go-owned corrective retry route", providerRuntime, providerTransport)) // refusal:by-design world-action: the host relay must use the provider-owned execution route for bounded corrective admission retries
 			}
 			return reviewPreflightError(fmt.Errorf("review capture-result --agent %q has no compiled in-process reviewer adapter: its compiled transport is %q; collect its reviewer result through that live host transport instead", providerRuntime, providerTransport)) // refusal:by-design world-action: only compiled subprocess adapters use this capture path
 		}
@@ -325,16 +337,22 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			}
 			return nil
 		}
-		adapter, adapterErr := reviewProviderAdapter(reviewProviderRoleLens, providerRuntime)
-		if adapterErr != nil {
-			return reviewPreflightError(adapterErr)
+		var adapter reviewerprovider.Adapter = reviewProviderRoleHostAdapter()
+		if reviewProviderCaptureRuntime(providerRuntime) {
+			adapter, err = reviewProviderAdapter(reviewProviderRoleLens, providerRuntime)
 		}
-		// --agent is refused together with --preflight above, so this branch
-		// never runs under preflight and its preservation needs no guard.
+		if err != nil {
+			return reviewPreflightError(err)
+		}
 		admitted, rawPayload, err = reviewProviderCaptureWithOneCorrection(ctx, reviewProviderCapture{
 			root: root, runtime: providerRuntime, adapter: adapter, state: state, frozen: frozen, subject: subject,
+			preserveRawPayload: reviewProviderHostRelayMaterializeRuntime(providerRuntime) && *execute,
 		}, request.Invocation)
 		if err != nil {
+			var refused *reviewProviderCaptureRefusedError
+			if reviewProviderHostRelayMaterializeRuntime(providerRuntime) && *execute && errors.As(err, &refused) {
+				return reviewPreflightRefusal(reviewPreflightProviderCaptureRefusedReason, err)
+			}
 			return reviewPreflightError(err)
 		}
 	} else {

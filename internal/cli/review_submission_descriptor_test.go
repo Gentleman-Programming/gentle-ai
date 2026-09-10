@@ -36,12 +36,11 @@ func TestReviewerCaptureDescriptorUsesCaptureResult(t *testing.T) {
 		RepositoryContext: "rctx1_" + strings.Repeat("c", 64),
 	}
 	input := reviewCaptureInput(binding, reviewtransaction.LensReliability, 0, nil, model.AgentPi)
-	if input.CaptureOperation != reviewCaptureResultCaptureOperation || input.Submission == nil ||
-		input.Submission.OperationToken != "capture-result" || input.Submission.Value == nil ||
-		input.Submission.Value.Slot != "reviewer_result" {
-		t.Fatalf("reviewer capture descriptor = %#v", input)
+	if input.CaptureOperation != reviewCaptureResultCaptureOperation || input.Submission != nil {
+		t.Fatalf("reviewer capture descriptor = %#v, want provider-owned execute route", input)
 	}
-	if err := input.Submission.validateCaptureResult(); err != nil {
-		t.Fatalf("current reviewer capture descriptor = %v", err)
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil || arguments["agent"] != string(model.AgentPi) || arguments["execute"] != "true" {
+		t.Fatalf("reviewer capture arguments = %#v, want agent=pi and execute=true", input.Arguments)
 	}
 }

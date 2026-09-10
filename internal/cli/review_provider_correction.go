@@ -26,20 +26,25 @@ const (
 	reviewProviderCorrectiveFeedbackHeader = "GENTLE_AI_REVIEW_ADMISSION_FEEDBACK"
 )
 
-// reviewProviderCapture is everything one in-process lens capture needs to
-// invoke, admit, preserve, and name its continuation.
+// reviewProviderCapture is everything one Go-owned lens capture needs to
+// invoke, admit, preserve, and name its continuation. Host-relay execution sets
+// preserveRawPayload so strict admission sees exactly the provider's bytes.
 type reviewProviderCapture struct {
-	root    string
-	runtime model.AgentID
-	adapter reviewerprovider.Adapter
-	state   reviewtransaction.CompactState
-	frozen  reviewtransaction.FrozenCandidateContext
-	subject reviewtransaction.ArtifactSubject
+	root               string
+	runtime            model.AgentID
+	adapter            reviewerprovider.Adapter
+	state              reviewtransaction.CompactState
+	frozen             reviewtransaction.FrozenCandidateContext
+	subject            reviewtransaction.ArtifactSubject
+	preserveRawPayload bool
 }
 
 func (capture reviewProviderCapture) admit(ctx context.Context, raw []byte) (reviewProviderAdmittedResult, error) {
-	corrected := reviewProviderCorrectSubjectHashEcho(raw, capture.state.InitialSnapshot.Identity, capture.subject.SubjectHash)
-	return reviewProviderAdmitRaw(ctx, capture.root, capture.state, capture.state.CapturePhaseRevision, capture.frozen, capture.subject, corrected)
+	payload := raw
+	if !capture.preserveRawPayload {
+		payload = reviewProviderCorrectSubjectHashEcho(raw, capture.state.InitialSnapshot.Identity, capture.subject.SubjectHash)
+	}
+	return reviewProviderAdmitRaw(ctx, capture.root, capture.state, capture.state.CapturePhaseRevision, capture.frozen, capture.subject, payload)
 }
 
 // reviewProviderCorrectSubjectHashEcho rewrites a raw in-process reviewer
