@@ -24,6 +24,7 @@ type reviewLastEventClosureResult struct {
 	TargetedValidatorEvidence *reviewtransaction.CompactTargetedValidatorEvidence `json:"targeted_validator_evidence,omitempty"`
 	Escalation                *reviewtransaction.CompactEscalationEvidence        `json:"escalation,omitempty"`
 	AdvisoryFindings          *reviewtransaction.AdvisoryFindingSet               `json:"advisory_findings,omitempty"`
+	ReviewerResults           *[]reviewtransaction.LensResult                     `json:"reviewer_results,omitempty"`
 	StatusContinuation        *ReviewTransitionExecution                          `json:"status_continuation,omitempty"`
 	Acknowledgement           *ReviewTransitionExecution                          `json:"acknowledgement,omitempty"`
 	StoreRevision             string                                              `json:"store_revision"`
@@ -136,7 +137,13 @@ func closeCorrectionOnCapturedValidator(
 	}
 	switch state.State {
 	case reviewtransaction.StateApproved:
+		view, err := state.CompactReviewView()
+		if err != nil {
+			return nil, fmt.Errorf("derive approved reviewer results for terminal validator closure: %w", err)
+		}
+		reviewerResults := append([]reviewtransaction.LensResult(nil), view.LensResults...)
 		result.Action = reviewApprovedLastEventAcknowledgementAction
+		result.ReviewerResults = &reviewerResults
 		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
 		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateEscalated:
@@ -280,8 +287,10 @@ func closeReviewOnLastCapturedLens(
 	}
 	switch state.State {
 	case reviewtransaction.StateApproved:
+		reviewerResults := append([]reviewtransaction.LensResult(nil), view.LensResults...)
 		result.Action = reviewApprovedLastEventAcknowledgementAction
 		result.AdvisoryFindings = reviewtransaction.AdvisoryFindingSetFor(state)
+		result.ReviewerResults = &reviewerResults
 		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
 		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateCorrectionRequired:
