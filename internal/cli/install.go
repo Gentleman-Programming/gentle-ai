@@ -16,7 +16,10 @@ type InstallFlags struct {
 	SDDMode    string
 	Scope      string
 	Channel    string
+	ReviewMode string
 	DryRun     bool
+
+	ReviewModeSet bool
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
@@ -40,6 +43,7 @@ FLAGS
   --sdd-mode single|multi            SDD orchestrator mode
   --scope global|workspace           Install scope (env: GENTLE_AI_INSTALL_SCOPE)
   --channel stable|beta|nightly      Release channel; nightly is an alias for beta (env: GENTLE_AI_CHANNEL)
+  --review-mode on|off               Persist the global review mode after a successful install
   --opencode-background-subagents=auto|on|off
                                      Resolve OpenCode capability and manage a launcher when eligible; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
                                      auto inherits managed on/off, unsupported/unknown stays foreground, off removes only owned launchers
@@ -67,6 +71,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.StringVar(&opts.Scope, "scope", "", "install scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
 	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
+	fs.StringVar(&opts.ReviewMode, "review-mode", "", "persist global review mode after a successful install: on or off")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
@@ -84,6 +89,8 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 			opts.OpenCodeBackgroundSubagentsSet = true
 		case "pi-background-subagents":
 			opts.PiBackgroundSubagentsSet = true
+		case "review-mode":
+			opts.ReviewModeSet = true
 		}
 	})
 

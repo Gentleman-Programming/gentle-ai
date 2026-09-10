@@ -13,10 +13,11 @@ import (
 )
 
 type InstallInput struct {
-	Selection model.Selection
-	Scope     InstallScope
-	Channel   InstallChannel
-	DryRun    bool
+	Selection           model.Selection
+	Scope               InstallScope
+	Channel             InstallChannel
+	ReviewModeOperation string
+	DryRun              bool
 }
 
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
@@ -79,7 +80,12 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 		return InstallInput{}, err
 	}
 
-	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
+	reviewModeOperation, err := normalizeInstallReviewMode(flags.ReviewMode, flags.ReviewModeSet)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	return InstallInput{Selection: selection, Scope: scope, Channel: channel, ReviewModeOperation: reviewModeOperation, DryRun: flags.DryRun}, nil
 }
 
 // personaAliasRemapNotice is printed whenever the legacy
@@ -163,6 +169,21 @@ func normalizeSkills(values []string) ([]model.SkillID, error) {
 	}
 
 	return unique(skills), nil
+}
+
+func normalizeInstallReviewMode(value string, set bool) (string, error) {
+	if !set {
+		return "", nil
+	}
+
+	switch value {
+	case "on":
+		return "enable", nil
+	case "off":
+		return "disable", nil
+	default:
+		return "", fmt.Errorf("unsupported review-mode %q (valid: on, off); rerun `gentle-ai install --review-mode on` or `gentle-ai install --review-mode off`", value)
+	}
 }
 
 func normalizeSDDMode(value string) (model.SDDModeID, error) {
