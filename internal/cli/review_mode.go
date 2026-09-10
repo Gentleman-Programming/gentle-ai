@@ -881,13 +881,13 @@ func reviewConsentReasonCategoryFor(reasons []reviewtransaction.RiskReason) revi
 func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
 	switch reviewConsentReasonCategoryFor(assessment.Reasons) {
 	case reviewConsentReasonSecurity:
-		return "These changes may affect security; review can help detect problems."
+		return "Review can help identify potential security issues."
 	case reviewConsentReasonExecution:
-		return "These changes may affect execution; review can help detect problems."
+		return "Review can help detect execution issues in these changes."
 	case reviewConsentReasonUpdates:
-		return "These changes may affect updates; review can help detect problems."
+		return "Review can help detect update-related issues."
 	default:
-		return "These changes alter behavior; review can help check for regressions."
+		return "Review can help detect regressions in these changes."
 	}
 }
 

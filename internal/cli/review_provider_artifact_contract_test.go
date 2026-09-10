@@ -17,6 +17,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
+		"fixtures/consent.fixture.json":           "110eb39e2326e9472368b77a2c2545d4856bdafe50bd0b3f714f6a137141482a",
 		"fixtures/start.fixture.json":             "3b963b221cd1560eb8872cbabbb5407096f593ced2f13eb9cb06eb61e4cca4d1",
 		// issue #2659: start-v2/status-v2 embed a freshly minted target_identity,
 		// and the purified identity domain legitimately changed that hash for
@@ -56,7 +57,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "8d5e1a8491db1a5a2f6329e8c1d5cd210dd175e0525ff4d51fa914351d2fcf08",
-		"fixtures/consent.fixture.json":      "adcab6a3e2d2926be721df127ca7ad0539d3e2a1ed5b1c0add36000df23eae64",
+		"fixtures/consent.fixture.json":      "66a3a9d7d3fe1b8956739616f333f8e38c2515bf8e0030e65f5213b415d48ad2",
 		// issue #3922 / #4199 / gentle-pi#543: the native-git reviewer_result
 		// collect input no longer inlines changed_path_manifest -- it is
 		// already committed to by artifact_subject.changed_path_manifest_sha256
@@ -86,7 +87,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// issue #2659: consent-v3 embeds a freshly minted target_identity;
 		// the purified identity domain legitimately changed that hash.
 		// Deliberate, not drift.
-		"fixtures/consent-v3.fixture.json":      "86c7af15a49a04c5d63755d1a9eb0eccc681ea4c0cd2d62145185fa165786cee",
+		"fixtures/consent-v3.fixture.json":      "8479e6248535bc315e43a3cb9e1862d1bf37ff988ca36f959f5ed2733cbbbdfd",
 		"schemas/capabilities-v2.1.schema.json": "95d2b8b46e9be6e6fbc874fc763029cb7994951336c8974dc1694834d64bf06e",
 		// Cross-lane battery conformance fix: the schema pinned the choice
 		// invocations to `--agent claude-code`, but the live emitter omits the

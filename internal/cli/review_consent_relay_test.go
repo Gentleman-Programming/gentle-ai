@@ -164,7 +164,7 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	if question.Value != "Reviewing takes a little longer and makes the result safer." {
 		t.Fatalf("consent value must remain one short benefit = %q", question.Value)
 	}
-	if question.Reason != "These changes may affect execution; review can help detect problems." ||
+	if question.Reason != "Review can help detect execution issues in these changes." ||
 		strings.Contains(question.Reason, "scripts/deploy.sh") {
 		t.Fatalf("consent question reason is not generic execution copy: %q", question.Reason)
 	}
@@ -242,7 +242,7 @@ func TestRelayedConsentMediumRiskKeepsBriefDecisionAndRiskContext(t *testing.T) 
 		question.Choices[1].Effect != "Skips only this change; no review record is created, and future reviews stay enabled." {
 		t.Fatalf("medium consent primary context/choices = %#v", question)
 	}
-	if question.Reason != "These changes alter behavior; review can help check for regressions." ||
+	if question.Reason != "Review can help detect regressions in these changes." ||
 		strings.Contains(question.Reason, "internal/app.go") || len(question.RiskEvidence) == 0 ||
 		!strings.Contains(question.RiskEvidence[0], "consolidated review") {
 		t.Fatalf("medium consent did not separate generic reason from detailed risk context: %#v", question)

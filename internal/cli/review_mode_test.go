@@ -644,7 +644,7 @@ func TestTierOneReviewStartAsksOnceForOneConsolidatedReview(t *testing.T) {
 	if started.RiskLevel != reviewtransaction.RiskMedium || len(started.SelectedLenses) != 1 {
 		t.Fatalf("tier 1 START = %#v", started)
 	}
-	assertReviewConsentPrompt(t, console.String(), "These changes alter behavior; review can help check for regressions.")
+	assertReviewConsentPrompt(t, console.String(), "Review can help detect regressions in these changes.")
 	// Accepting the review is the safe direction, so it is the only answer that
 	// is persisted: later candidates are reviewed silently.
 	if asked, err := reviewtransaction.RDDConsentAsked(context.Background(), repo); err != nil || !asked {
@@ -677,7 +677,7 @@ func TestTierTwoReviewStartAsksOnceWithGenericExecutionReason(t *testing.T) {
 	if started.RiskLevel != reviewtransaction.RiskHigh || len(started.SelectedLenses) != 4 {
 		t.Fatalf("tier 2 START = %#v", started)
 	}
-	prompt := assertReviewConsentPrompt(t, console.String(), "These changes may affect execution; review can help detect problems.")
+	prompt := assertReviewConsentPrompt(t, console.String(), "Review can help detect execution issues in these changes.")
 	if strings.Contains(prompt, "scripts/deploy.sh") || strings.Contains(prompt, "shell scripting") {
 		t.Fatalf("tier 2 prompt leaked detailed evidence:\n%s", prompt)
 	}
@@ -754,7 +754,7 @@ func TestReviewConsentUnrecognizedAnswerReviewsAndAsksAgain(t *testing.T) {
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-unknown-second"}, &output); err != nil {
 		t.Fatalf("second start after an unrecognized answer: %v\n%s", err, output.String())
 	}
-	assertReviewConsentPrompt(t, console.String(), "These changes alter behavior; review can help check for regressions.")
+	assertReviewConsentPrompt(t, console.String(), "Review can help detect regressions in these changes.")
 }
 
 // TestReviewConsentNotNowIsNotPersisted pins the asymmetric latch and the
@@ -805,7 +805,7 @@ func TestReviewConsentNotNowIsNotPersisted(t *testing.T) {
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-not-now-second"}, &output); err != nil {
 		t.Fatalf("the next candidate after not-now must ask again without an error: %v\n%s", err, output.String())
 	}
-	assertReviewConsentPrompt(t, console.String(), "These changes alter behavior; review can help check for regressions.")
+	assertReviewConsentPrompt(t, console.String(), "Review can help detect regressions in these changes.")
 	var second ReviewFacadeStartResult
 	decodeStrictReviewJSON(t, output.Bytes(), &second)
 	if second.Consent != ReviewStartConsentDeclinedThisCandidate {

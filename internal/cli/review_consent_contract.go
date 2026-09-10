@@ -105,13 +105,13 @@ func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewt
 func reviewConsentSpanishReason(assessment reviewtransaction.RiskAssessment) string {
 	switch reviewConsentReasonCategoryFor(assessment.Reasons) {
 	case reviewConsentReasonSecurity:
-		return "Estos cambios pueden afectar la seguridad; la revisión puede ayudar a detectar problemas."
+		return "La revisión puede ayudar a identificar posibles problemas de seguridad."
 	case reviewConsentReasonExecution:
-		return "Estos cambios pueden afectar la ejecución; la revisión puede ayudar a detectar problemas."
+		return "La revisión puede ayudar a detectar problemas de ejecución en estos cambios."
 	case reviewConsentReasonUpdates:
-		return "Estos cambios pueden afectar las actualizaciones; la revisión puede ayudar a detectar problemas."
+		return "La revisión puede ayudar a detectar problemas relacionados con las actualizaciones."
 	default:
-		return "Estos cambios alteran el comportamiento; la revisión puede ayudar a detectar regresiones."
+		return "La revisión puede ayudar a detectar regresiones en estos cambios."
 	}
 }
 

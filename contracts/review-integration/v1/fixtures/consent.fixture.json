@@ -10,7 +10,7 @@
   "changed_files": 1,
   "changed_lines": 1,
   "headline": "Gentle AI can review this change before you call it done.",
-  "reason": "These changes may affect execution; review can help detect problems.",
+  "reason": "Review can help detect execution issues in these changes.",
   "value": "Reviewing takes a little longer and makes the result safer.",
   "risk_evidence": [
     "shell scripting in scripts/deploy.sh"

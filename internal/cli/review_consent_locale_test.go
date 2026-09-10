@@ -17,7 +17,7 @@ func TestRelayedConsentSpanishLocalizesHumanFieldsWithoutChangingMachineTokens(t
 	})).Bytes())
 	if question.Headline != "Gentle AI puede revisar este cambio antes de que lo des por terminado." ||
 		question.Value != "La revisión lleva un poco más de tiempo y hace que el resultado sea considerablemente más seguro." ||
-		question.Reason != "Estos cambios pueden afectar la ejecución; la revisión puede ayudar a detectar problemas." ||
+		question.Reason != "La revisión puede ayudar a detectar problemas de ejecución en estos cambios." ||
 		strings.Contains(question.Reason, "scripts/deploy.sh") {
 		t.Fatalf("Spanish consent envelope did not localize its generic reason and brief benefit: %#v", question)
 	}

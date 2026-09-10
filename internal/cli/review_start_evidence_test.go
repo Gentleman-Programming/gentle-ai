@@ -132,7 +132,7 @@ func TestReviewConsentRiskEvidenceMediumNamesEvidencePath(t *testing.T) {
 
 	// The interactive Why line is intentionally generic; detailed evidence stays
 	// in risk_evidence for relays that need it.
-	if reason := reviewConsentReason(assessment); reason != "These changes alter behavior; review can help check for regressions." ||
+	if reason := reviewConsentReason(assessment); reason != "Review can help detect regressions in these changes." ||
 		strings.Contains(reason, "internal/counter/counter.go") {
 		t.Fatalf("consent reason did not stay generic and path-free: %q", reason)
 	}
@@ -148,7 +148,7 @@ func TestReviewConsentRiskEvidenceMediumWithoutSpeakableReasonsStaysSingle(t *te
 	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
 		t.Fatalf("medium risk_evidence without speakable reasons = %#v, want %#v", got, want)
 	}
-	if reason := reviewConsentReason(assessment); reason != "These changes alter behavior; review can help check for regressions." {
+	if reason := reviewConsentReason(assessment); reason != "Review can help detect regressions in these changes." {
 		t.Fatalf("consent reason without specific signals = %q", reason)
 	}
 }
@@ -180,20 +180,20 @@ func TestReviewConsentReasonUsesAuthoritativeRiskSignals(t *testing.T) {
 		{
 			name: "security signal", level: reviewtransaction.RiskHigh,
 			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalSecurity, Path: "security.go"}},
-			english: "These changes may affect security; review can help detect problems.",
-			spanish: "Estos cambios pueden afectar la seguridad; la revisión puede ayudar a detectar problemas.",
+			english: "Review can help identify potential security issues.",
+			spanish: "La revisión puede ayudar a identificar posibles problemas de seguridad.",
 		},
 		{
 			name: "execution signal", level: reviewtransaction.RiskHigh,
 			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonShellSource, Signal: reviewtransaction.SignalShellProcess, Path: "scripts/deploy.sh"}},
-			english: "These changes may affect execution; review can help detect problems.",
-			spanish: "Estos cambios pueden afectar la ejecución; la revisión puede ayudar a detectar problemas.",
+			english: "Review can help detect execution issues in these changes.",
+			spanish: "La revisión puede ayudar a detectar problemas de ejecución en estos cambios.",
 		},
 		{
 			name: "update signal", level: reviewtransaction.RiskHigh,
 			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalUpdate, Path: "update.go"}},
-			english: "These changes may affect updates; review can help detect problems.",
-			spanish: "Estos cambios pueden afectar las actualizaciones; la revisión puede ayudar a detectar problemas.",
+			english: "Review can help detect update-related issues.",
+			spanish: "La revisión puede ayudar a detectar problemas relacionados con las actualizaciones.",
 		},
 		{
 			name: "security takes precedence", level: reviewtransaction.RiskHigh,
@@ -201,26 +201,26 @@ func TestReviewConsentReasonUsesAuthoritativeRiskSignals(t *testing.T) {
 				{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalUpdate, Path: "update.go"},
 				{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalSecurity, Path: "security.go"},
 			},
-			english: "These changes may affect security; review can help detect problems.",
-			spanish: "Estos cambios pueden afectar la seguridad; la revisión puede ayudar a detectar problemas.",
+			english: "Review can help identify potential security issues.",
+			spanish: "La revisión puede ayudar a identificar posibles problemas de seguridad.",
 		},
 		{
 			name: "no specific signal", level: reviewtransaction.RiskMedium,
 			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonExecutableChange, Path: "internal/app.go"}},
-			english: "These changes alter behavior; review can help check for regressions.",
-			spanish: "Estos cambios alteran el comportamiento; la revisión puede ayudar a detectar regresiones.",
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
 		},
 		{
 			name: "unsupported signal", level: reviewtransaction.RiskHigh,
 			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.RiskSignal("unsupported"), Path: "unknown.go"}},
-			english: "These changes alter behavior; review can help check for regressions.",
-			spanish: "Estos cambios alteran el comportamiento; la revisión puede ayudar a detectar regresiones.",
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
 		},
 		{
 			name:    "high without evidence is not security",
 			level:   reviewtransaction.RiskHigh,
-			english: "These changes alter behavior; review can help check for regressions.",
-			spanish: "Estos cambios alteran el comportamiento; la revisión puede ayudar a detectar regresiones.",
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
