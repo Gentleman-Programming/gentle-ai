@@ -1721,6 +1721,9 @@ func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.
 			latest.PiBackgroundIntent = piBackground
 			shouldWrite = true
 		}
+		now := time.Now().UTC()
+		latest.LastSyncedAt = &now
+		shouldWrite = true
 		if !shouldWrite {
 			return nil
 		}
