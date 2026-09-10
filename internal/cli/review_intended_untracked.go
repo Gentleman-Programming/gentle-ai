@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -161,27 +160,6 @@ func reviewContainsUntrackedPaths(inventory, subset []string) bool {
 	}
 	for _, path := range subset {
 		if _, found := set[path]; !found {
-			return false
-		}
-	}
-	return true
-}
-
-// reviewSameUntrackedPaths reports whether two path lists name exactly the
-// same set, independent of order. Both `IntendedUntrackedInventory` and a
-// stored `IntendedUntracked` selection are canonicalized and sorted at their
-// own source, but this comparison does not depend on that: it sorts its own
-// copies so a caller never has to reason about either side's ordering.
-func reviewSameUntrackedPaths(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	sortedLeft := append([]string{}, left...)
-	sortedRight := append([]string{}, right...)
-	sort.Strings(sortedLeft)
-	sort.Strings(sortedRight)
-	for index, path := range sortedLeft {
-		if path != sortedRight[index] {
 			return false
 		}
 	}
