@@ -26,6 +26,54 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
+func TestOpenCodeThemeUninstallPreservesUserSelection(t *testing.T) {
+	for _, selection := range []string{`"gentleman"`, `"replacement"`, `"Gentleman"`, `null`, `{"custom":true}`} {
+		t.Run(selection, func(t *testing.T) {
+			home := t.TempDir()
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter, _ := svc.registry.Get(model.AgentOpenCode)
+			configDir := adapter.GlobalConfigDir(home)
+			themePath := filepath.Join(configDir, "themes", "gentleman.json")
+			tuiPath := filepath.Join(configDir, "tui.json")
+			if err := os.MkdirAll(filepath.Dir(themePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			before := []byte("{\n // user config\n \"keep\": true, \"theme\": " + selection + ",\n}\n")
+			for path, raw := range map[string][]byte{tuiPath: before, themePath: []byte(`{"theme":{}}`)} {
+				if err := os.WriteFile(path, raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, []model.ComponentID{model.ComponentTheme}); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(tuiPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selection == `"gentleman"` {
+				root, err := unmarshalJSONObject(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, exists := root["theme"]; exists || root["keep"] != true {
+					t.Fatalf("unexpected config: %s", raw)
+				}
+			} else if string(raw) != string(before) {
+				t.Fatalf("user config changed: %s", raw)
+			}
+			for _, path := range []string{themePath, filepath.Dir(themePath)} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("managed path %q remains: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 type stubSnapshotter struct{}
 
 func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
@@ -569,6 +617,14 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 	}
 	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	themePath := filepath.Join(opencodeAdapter.GlobalConfigDir(homeDir), "themes", "gentleman.json")
+	if err := os.MkdirAll(filepath.Dir(themePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(theme dir) error = %v", err)
+	}
+	if err := os.WriteFile(themePath, []byte(`{"$schema":"https://opencode.ai/theme.json"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(theme) error = %v", err)
 	}
 
 	logoPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")

@@ -5,25 +5,28 @@ import (
 	"testing"
 )
 
-func TestComponentsForPresetFullGentlemanUsesInstallSafeVisualInventory(t *testing.T) {
+func TestComponentsForPresetFullGentlemanThemeFollowsOpenCodeSelection(t *testing.T) {
 	tests := []struct {
-		name    string
-		persona PersonaID
+		name      string
+		persona   PersonaID
+		agents    []AgentID
+		wantTheme bool
 	}{
-		{name: "gentleman persona", persona: PersonaGentleman},
-		{name: "custom persona", persona: PersonaCustom},
+		{name: "OpenCode gentleman persona", persona: PersonaGentleman, agents: []AgentID{AgentOpenCode}, wantTheme: true},
+		{name: "OpenCode custom persona", persona: PersonaCustom, agents: []AgentID{AgentOpenCode}, wantTheme: true},
+		{name: "non-OpenCode", persona: PersonaGentleman, agents: []AgentID{AgentClaudeCode}, wantTheme: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ComponentsForPreset(PresetFullGentleman, tt.persona)
+			got := ComponentsForPreset(PresetFullGentleman, tt.persona, tt.agents...)
 
-			if slices.Contains(got, ComponentTheme) {
-				t.Fatalf("ComponentsForPreset() includes generic ComponentTheme: %v", got)
+			if themeIncluded := slices.Contains(got, ComponentTheme); themeIncluded != tt.wantTheme {
+				t.Fatalf("ComponentsForPreset() theme included = %v, want %v: %v", themeIncluded, tt.wantTheme, got)
 			}
 			for _, want := range []ComponentID{ComponentClaudeTheme, ComponentOpenCodeGentleLogo} {
 				if !slices.Contains(got, want) {
-					t.Errorf("ComponentsForPreset() missing safe visual component %q: %v", want, got)
+					t.Errorf("ComponentsForPreset() missing visual component %q: %v", want, got)
 				}
 			}
 		})
