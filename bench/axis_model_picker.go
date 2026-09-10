@@ -89,8 +89,8 @@ func modelPickerAfter(sandbox *Sandbox, observation Observation) error {
 	if result.PersistedModel != result.SelectedAssignment {
 		return fmt.Errorf("persisted model = %q, want %q", result.PersistedModel, result.SelectedAssignment)
 	}
-	if !result.VariantPresent || result.PersistedVariant != "" {
-		return fmt.Errorf("persisted variant = %q (present=%t), want present empty variant", result.PersistedVariant, result.VariantPresent)
+	if result.VariantPresent {
+		return fmt.Errorf("persisted variant present = %q, want absent", result.PersistedVariant)
 	}
 	if !result.DescriptionPreserved {
 		return fmt.Errorf("custom-agent description was not preserved: %+v", result)
