@@ -2,13 +2,21 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Go 1.25.10, Bubbletea TUI (charmbracelet/bubbletea v1.3.10), lipgloss v1.1.0
-  Architecture: cmd/ entrypoints, internal/ packages (agents, tui, model, pipeline, catalog, system, planner, verify, update, opencode, installcmd, cli, app, components, state, backup, assets, agentbuilder)
-  Feature branch: feat/claude-contextual-skill-loading — contextual skill loading from Claude Code
-  Agents: multi-agent support (claude, opencode, cursor, codex, gemini, vscode, windsurf, antigravity)
-  Skills catalog: internal/catalog/skills.go — known skill registry; project skills in skills/
-  Build: goreleaser (.goreleaser.yaml), CI: GitHub Actions (ci.yml, pr-check.yml, release.yml)
-  Style: gofmt (standard), go vet, no golangci-lint config found
+  Tech stack: Go 1.25.10, module github.com/gentleman-programming/gentle-ai/v2
+  Bubbletea TUI (charmbracelet/bubbletea v1.3.10), lipgloss v1.1.0
+  Architecture: cmd/gentle-ai entrypoint, internal/ packages (agents, tui, model,
+  pipeline, catalog, system, planner, verify, update, opencode, installcmd, cli,
+  app, components, state, backup, assets, agentbuilder), contracts/ (review-
+  integration, review-provider-contract, sdd-integration)
+  Secondary module: bench/ (github.com/gentleman-programming/gentle-ai/bench) —
+  deliberately separate go.mod; root `go test/vet/build ./...` never covers it
+  Agents: multi-agent support (claude, opencode, cursor, codex, gemini, vscode,
+  windsurf, antigravity)
+  Skills catalog: internal/catalog/skills.go; project skills in skills/
+  Build: goreleaser (.goreleaser.yaml), CI: GitHub Actions (ci.yml, pr-check.yml,
+  release.yml, promote-stable-rc.yml, windows-full-suite.yml)
+  Style: go run ./internal/gofmtcheck (custom AST-based formatting gate, not
+  plain gofmt -l), go vet, no golangci-lint config found
 
 strict_tdd: true
 
@@ -41,24 +49,43 @@ rules:
 
 testing:
   strict_tdd: true
-  detected: "2026-05-05"
+  detected: "2026-09-02"
+
+  projects:
+    - path: "."
+      stack: "Go 1.25.10 (module .../gentle-ai/v2) — CLI/TUI product"
+      test_command: "go test ./..."
+      framework: "Go standard testing"
+      note: "725 _test.go files repo-wide; CI-required on every PR (ci.yml unit-tests job)"
+    - path: "bench/"
+      stack: "Go 1.25.10 (module .../gentle-ai/bench) — benchmark/journey harness"
+      test_command: "cd bench && go test ./..."
+      framework: "Go standard testing"
+      note: >-
+        Deliberately independent go.mod (see bench/README.md); root
+        go build/vet/test ./... never sees it. CI builds and tests it in a
+        separate step. Not required for every change — CONTRIBUTING.md scopes
+        benchmark validation to review-lifecycle/gate/recovery/delivery/
+        benchmark-affecting changes and marks it N/A otherwise. Excluded from
+        the workspace-level strict_tdd gate below by explicit project design.
 
   runner:
     command: "go test ./..."
     framework: "Go standard testing"
+    note: "Workspace-level gate scoped to the root module (`.`); see testing.projects for bench/'s independent command."
 
   layers:
     unit:
       available: true
       tool: "go test"
-      note: "132 test files across internal/ packages"
+      note: "725 _test.go files across internal/, cmd/, contracts/, bench/"
     integration:
       available: true
       tool: "net/http/httptest (built-in)"
     e2e:
       available: true
-      tool: "Docker-based E2E (e2e/docker-test.sh)"
-      note: "Dockerfile.ubuntu, Dockerfile.fedora, Dockerfile.arch — triggered by RUN_FULL_E2E=1"
+      tool: "Docker-based E2E (e2e/docker-test.sh, e2e/e2e_test.sh)"
+      note: "Dockerfile.ubuntu, Dockerfile.fedora, Dockerfile.arch, Dockerfile.claude-network-none — Tier 1 always runs; Tier 2 (RUN_FULL_E2E=1) and backup tests (RUN_BACKUP_TESTS=1) are opt-in"
     tui:
       available: true
       tool: "bubbletea tea.KeyMsg simulation (no teatest — direct model.Update() testing)"
@@ -77,4 +104,5 @@ testing:
       command: "go vet ./..."
     formatter:
       available: true
-      command: "gofmt"
+      command: "go run ./internal/gofmtcheck"
+      note: "Custom formatting gate (internal/gofmtcheck), enforced in CI's go-format job; not plain `gofmt -l`"
