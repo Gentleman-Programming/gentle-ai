@@ -103,4 +103,16 @@ var Tools = []ToolInfo{
 		InstallMethod: InstallOpenCodePlugin,
 		NpmPackage:    "opencode-sdd-engram-manage",
 	},
+	{
+		Name:          "codegraph",
+		Owner:         "colbymchenry",
+		Repo:          "codegraph",
+		DetectCmd:     []string{"codegraph", "--version"},
+		VersionPrefix: "v",
+		// codegraph: globally-installed npm CLI. The latest version is resolved
+		// from the npm registry over HTTPS (not GitHub releases), and upgrades
+		// run `npm install -g @colbymchenry/codegraph@latest`.
+		InstallMethod: InstallNpmGlobal,
+		NpmPackage:    "@colbymchenry/codegraph",
+	},
 }
