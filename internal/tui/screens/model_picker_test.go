@@ -233,6 +233,39 @@ func TestRenderModelPickerShowsConfigWarning(t *testing.T) {
 	}
 }
 
+func TestRenderModelPicker_StatesOpenCodeAgentScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		forProfile bool
+		want       string
+	}{
+		{
+			name: "normal mode includes review agents",
+			want: "Configure model assignments for OpenCode's SDD, JD, and review agents:",
+		},
+		{
+			name:       "profile mode excludes review agents",
+			forProfile: true,
+			want:       "Configure model assignments for OpenCode's SDD and JD agents:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := RenderModelPicker(nil, ModelPickerState{
+				AvailableIDs: []string{"openai"},
+				ForProfile:   tt.forProfile,
+			}, 0)
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("expected scope text %q in render output, got:\n%s", tt.want, out)
+			}
+			if strings.Contains(out, "Kiro") {
+				t.Errorf("generic picker must not claim Kiro scope, got:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestFilteredModelEntriesSortsNewestFirst(t *testing.T) {
 	state := ModelPickerState{
 		SelectedProvider: "anthropic",
