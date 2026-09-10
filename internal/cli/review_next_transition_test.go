@@ -15,6 +15,7 @@ import (
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -1017,3 +1018,232 @@ func reviewSchemaRegexpEngine(pattern string) (jsonschema.Regexp, error) {
 	}
 	return reviewSchemaRegexp{pattern: pattern, re: re}, nil
 }
+
+// transitionArgumentByName returns the value of the first argument whose name
+// matches, plus an "ok" flag that distinguishes a missing argument from an
+// empty one. It is the single read shape every metadata-bearing transition
+// test uses so the assertions stay mechanical.
+func transitionArgumentByName(arguments []ReviewTransitionArgument, name string) (string, bool) {
+	for _, argument := range arguments {
+		if argument.Name == name {
+			return argument.Value, true
+		}
+	}
+	return "", false
+}
+
+// trailingRuntimeMetadataArguments returns the trailing four-argument metadata
+// block a host-relay collect input appends to its base binding. It fails the
+// test when the tail is the wrong shape so the contract violation stays loud.
+func trailingRuntimeMetadataArguments(t *testing.T, arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
+	t.Helper()
+	if len(arguments) < providerRuntimeMetadataArgumentCount {
+		t.Fatalf("transition has %d arguments, want at least %d for metadata tail", len(arguments), providerRuntimeMetadataArgumentCount)
+	}
+	tail := arguments[len(arguments)-providerRuntimeMetadataArgumentCount:]
+	names := []string{"provider_cost_version", "provider_model_runs_min", "provider_model_runs_max", "provider_retry_reasons"}
+	for index, argument := range tail {
+		if argument.Name != names[index] {
+			t.Fatalf("metadata tail[%d].Name = %q, want %q", index, argument.Name, names[index])
+		}
+	}
+	return tail
+}
+
+// TestReviewNextTransitionLensHostRelayCollectAppendsRuntimeMetadata is the
+// canonical collect lens host-relay contract: the rendered input carries the
+// existing --agent/--execute arguments plus the four canonical metadata
+// arguments at the end. The metadata block is the only admission signal a
+// parent uses to forecast a host-relay capture binding.
+func TestReviewNextTransitionLensHostRelayCollectAppendsRuntimeMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, started, _, _ := newArtifactReview(t, false)
+	status := hostReviewStatus(t, repo, started.LineageID, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" || status.NextTransition.Collect == nil {
+		t.Fatalf("pi host relay lens transition = %#v", status.NextTransition)
+	}
+	input := soleHostCollectInput(t, status, reviewCaptureResultCaptureOperation)
+	if err := status.NextTransition.Validate(); err != nil {
+		t.Fatalf("pi host relay lens transition is invalid: %v", err)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "agent"); !ok || value != string(model.AgentPi) {
+		t.Fatalf("lens agent argument = %q (present=%v), want %q", value, ok, model.AgentPi)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "execute"); !ok || value != "true" {
+		t.Fatalf("lens execute argument = %q (present=%v), want \"true\"", value, ok)
+	}
+	tail := trailingRuntimeMetadataArguments(t, input.Arguments)
+	if value := tail[0].Value; value != reviewProviderRuntimeMetadataVersion {
+		t.Fatalf("lens metadata cost-version = %q, want %q", value, reviewProviderRuntimeMetadataVersion)
+	}
+	if value := tail[1].Value; value != "1" {
+		t.Fatalf("lens metadata model-runs-min = %q, want \"1\"", value)
+	}
+	if value := tail[2].Value; value == "" {
+		t.Fatalf("lens metadata model-runs-max is empty")
+	}
+	if !strings.Contains(tail[3].Value, "provider_admission_refused") ||
+		!strings.Contains(tail[3].Value, "provider_role_contract_violation") {
+		t.Fatalf("lens metadata retry-reasons = %q, want the canonical admission classes", tail[3].Value)
+	}
+}
+
+// TestReviewNextTransitionRefuterHostRelayCollectAppendsRuntimeMetadata pins
+// the same trailing block on the refuter capture operation. The Go-owned
+// capture retry admits raw bytes, so the metadata is the only truthful forecast
+// the host relay can publish for one binding.
+func TestReviewNextTransitionRefuterHostRelayCollectAppendsRuntimeMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, _ := piRefuterReview(t)
+	status := hostReviewStatus(t, repo, record.State.LineageID, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "provider_refuter_required" {
+		t.Fatalf("pi host relay refuter transition = %#v", status.NextTransition)
+	}
+	input := soleHostCollectInput(t, status, reviewCaptureRefuterCaptureOperation)
+	if err := status.NextTransition.Validate(); err != nil {
+		t.Fatalf("pi host relay refuter transition is invalid: %v", err)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "agent"); !ok || value != string(model.AgentPi) {
+		t.Fatalf("refuter agent argument = %q (present=%v), want %q", value, ok, model.AgentPi)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "execute"); !ok || value != "true" {
+		t.Fatalf("refuter execute argument = %q (present=%v), want \"true\"", value, ok)
+	}
+	tail := trailingRuntimeMetadataArguments(t, input.Arguments)
+	if tail[0].Value != reviewProviderRuntimeMetadataVersion {
+		t.Fatalf("refuter metadata cost-version = %q, want %q", tail[0].Value, reviewProviderRuntimeMetadataVersion)
+	}
+	// Finalize the refuter slot so a subsequent re-collect stays eligible.
+	if _, err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReviewNextTransitionValidationHostRelayCollectAppendsRuntimeMetadata
+// covers the targeted-validator host-relay collect operation. The metadata
+// block must appear in the same trailing position so a parent reading the
+// binding sees a canonical, role-agnostic shape.
+func TestReviewNextTransitionValidationHostRelayCollectAppendsRuntimeMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	status := hostReviewStatus(t, repo, lineage, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "targeted_validation_required" {
+		t.Fatalf("pi host relay validator transition = %#v", status.NextTransition)
+	}
+	input := soleHostCollectInput(t, status, reviewCaptureValidationCaptureOperation)
+	if err := status.NextTransition.Validate(); err != nil {
+		t.Fatalf("pi host relay validator transition is invalid: %v", err)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "agent"); !ok || value != string(model.AgentPi) {
+		t.Fatalf("validator agent argument = %q (present=%v), want %q", value, ok, model.AgentPi)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "execute"); !ok || value != "true" {
+		t.Fatalf("validator execute argument = %q (present=%v), want \"true\"", value, ok)
+	}
+	if value, ok := transitionArgumentByName(input.Arguments, "request-hash"); !ok || value != request.RequestHash {
+		t.Fatalf("validator request-hash = %q (present=%v), want %q", value, ok, request.RequestHash)
+	}
+	tail := trailingRuntimeMetadataArguments(t, input.Arguments)
+	if tail[0].Value != reviewProviderRuntimeMetadataVersion {
+		t.Fatalf("validator metadata cost-version = %q, want %q", tail[0].Value, reviewProviderRuntimeMetadataVersion)
+	}
+}
+
+// TestReviewNextTransitionValidateRejectsMalformedLensHostRelayMetadata is the
+// refusal path: a lens host-relay collect input whose trailing metadata block
+// carries an unknown version must fail closed with the canonical parser
+// refusal, never silently accept the divergence.
+func TestReviewNextTransitionValidateRejectsMalformedLensHostRelayMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, started, _, _ := newArtifactReview(t, false)
+	status := hostReviewStatus(t, repo, started.LineageID, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil {
+		t.Fatalf("missing pi host relay lens transition: %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	for index := len(input.Arguments) - providerRuntimeMetadataArgumentCount; index < len(input.Arguments); index++ {
+		if input.Arguments[index].Name == "provider_cost_version" {
+			input.Arguments[index].Value = "gentle-ai.review-provider-runtime-cost/v9"
+		}
+	}
+	if err := status.NextTransition.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "unsupported provider_cost_version") {
+		t.Fatalf("malformed lens metadata err = %v, want unsupported provider_cost_version refusal", err)
+	}
+}
+
+// TestReviewNextTransitionValidateRejectsMalformedRefuterHostRelayMetadata
+// applies the same parser-refusal contract to the refuter capture operation.
+func TestReviewNextTransitionValidateRejectsMalformedRefuterHostRelayMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, _, record, _ := piRefuterReview(t)
+	status := hostReviewStatus(t, repo, record.State.LineageID, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil {
+		t.Fatalf("missing pi host relay refuter transition: %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	for index := len(input.Arguments) - providerRuntimeMetadataArgumentCount; index < len(input.Arguments); index++ {
+		if input.Arguments[index].Name == "provider_model_runs_max" {
+			input.Arguments[index].Value = "0"
+		}
+	}
+	if err := status.NextTransition.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "provider_model_runs_max must be >= provider_model_runs_min") {
+		t.Fatalf("malformed refuter metadata err = %v, want max>=min refusal", err)
+	}
+}
+
+// TestReviewNextTransitionValidateRejectsMalformedValidatorHostRelayMetadata
+// applies the same parser-refusal contract to the targeted-validator capture
+// operation.
+func TestReviewNextTransitionValidateRejectsMalformedValidatorHostRelayMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
+	status := hostReviewStatus(t, repo, lineage, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil {
+		t.Fatalf("missing pi host relay validator transition: %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	for index := len(input.Arguments) - providerRuntimeMetadataArgumentCount; index < len(input.Arguments); index++ {
+		if input.Arguments[index].Name == "provider_model_runs_min" {
+			input.Arguments[index].Value = "not-an-integer"
+		}
+	}
+	if err := status.NextTransition.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "provider_model_runs_min is not a non-negative integer") {
+		t.Fatalf("malformed validator metadata err = %v, want min-not-integer refusal", err)
+	}
+}
+
+// TestReviewNextTransitionValidateAcceptsLensHostRelayWithoutMetadata is the
+// inherited transition: a host-relay collect input whose trailing block is
+// absent must validate unchanged, so existing transitions keep working
+// without a parallel metadata contract.
+func TestReviewNextTransitionValidateAcceptsLensHostRelayWithoutMetadata(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, started, _, _ := newArtifactReview(t, false)
+	status := hostReviewStatus(t, repo, started.LineageID, model.AgentPi)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil {
+		t.Fatalf("missing pi host relay lens transition: %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	input.Arguments = input.Arguments[:len(input.Arguments)-providerRuntimeMetadataArgumentCount]
+	if err := status.NextTransition.Validate(); err != nil {
+		t.Fatalf("metadata-stripped lens host-relay transition rejected: %v", err)
+	}
+	if _, present := transitionArgumentByName(input.Arguments, "provider_cost_version"); present {
+		t.Fatal("stripped transition still carries provider_cost_version")
+	}
+}
+
+// touchRefs intentionally removed; the existing imports above are referenced
+// transitively by every test in this file, and a dead-reference block was
+// introducing noise the formatter then had to defend.

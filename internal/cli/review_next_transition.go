@@ -470,6 +470,9 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	input.Arguments = append(arguments,
 		ReviewTransitionArgument{Name: "agent", Value: string(runtime)},
 		ReviewTransitionArgument{Name: "execute", Value: "true"})
+	if meta, ok := reviewProviderRuntimeMetadataFor(role); ok {
+		input.Arguments = reviewProviderAppendRuntimeMetadataArguments(input.Arguments, meta)
+	}
 	return input, nil
 }
 
@@ -640,34 +643,16 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 		case reviewProviderCaptureRuntime(runtime[0]):
 			input.Arguments = append(input.Arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])})
 		case reviewProviderHostRelayMaterializeRuntime(runtime[0]):
-			// The Pi host relay learns the whole flow from this one input: the
-			// materialize arguments are only the prelude that prints the
-			// Go-issued opaque prompt bytes for its fresh locked-down reviewer
-			// subprocess, and the submission descriptor -- the same binding and
-			// runtime tokens with the raw result substituted into --input -- is
-			// what actually advances reviewing authority. Keeping the runtime in
-			// the provider-owned submission lets a terminal closure issue its exact
-			// runtime-bound STATUS continuation without host reconstruction.
-			// Snapshot only the binding arguments; runtime and materialize are appended after the submission is complete.
-			bindingArguments := input.Arguments
-			tokens := make([]string, 0, len(bindingArguments)+2)
-			for _, argument := range bindingArguments {
-				tokens = append(tokens, reviewTransitionArgumentToken(argument))
-			}
-			tokens = append(tokens,
-				reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])}),
-				"--input="+reviewSubmissionValuePlaceholder,
-			)
-			input.Submission = &ReviewTransitionSubmission{
-				OperationToken: "capture-result", ArgumentTokens: tokens,
-				Value: &ReviewTransitionSubmissionValue{
-					Slot: "reviewer_result", Domain: "artifact_path_or_stdin", Schema: reviewReviewerSchemaID,
-					SubstitutionLocation: len(tokens) - 1,
-				},
-			}
+			// Keep the lens route inside the Go-owned provider contract. The host
+			// adapter invokes Pi and the shared capture retry admits raw bytes; this
+			// avoids the old materialize/--input split, which could not re-invoke the
+			// host after strict admission rejected its first payload.
 			input.Arguments = append(input.Arguments,
 				ReviewTransitionArgument{Name: "agent", Value: string(runtime[0])},
-				ReviewTransitionArgument{Name: "materialize", Value: "true"})
+				ReviewTransitionArgument{Name: "execute", Value: "true"})
+			if meta, ok := reviewProviderRuntimeMetadataFor(reviewerprovider.Role(reviewProviderRoleLens)); ok {
+				input.Arguments = reviewProviderAppendRuntimeMetadataArguments(input.Arguments, meta)
+			}
 		}
 	}
 	return input

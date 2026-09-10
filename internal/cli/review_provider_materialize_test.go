@@ -222,7 +222,7 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 	}
 }
 
-func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T) {
+func TestNegotiatedStatusRendersPiHostRelayExecuteCaptureInput(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, _, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
@@ -251,22 +251,11 @@ func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T)
 	for _, argument := range input.Arguments {
 		tokens[argument.Name] = argument.Token
 	}
-	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" {
+	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["execute"] != "--execute=true" || tokens["materialize"] != "" {
 		t.Fatalf("pi host relay capture arguments = %#v", input.Arguments)
 	}
-	wantTokens := make([]string, 0, len(input.Arguments))
-	for _, argument := range input.Arguments {
-		if argument.Name != "materialize" {
-			wantTokens = append(wantTokens, argument.Token)
-		}
-	}
-	wantTokens = append(wantTokens, "--input={{value}}")
-	if input.Submission == nil || input.Submission.OperationToken != "capture-result" ||
-		!slices.Equal(input.Submission.ArgumentTokens, wantTokens) || len(input.Submission.Values) != 0 ||
-		input.Submission.Value == nil || input.Submission.Value.Slot != "reviewer_result" ||
-		input.Submission.Value.Domain != "artifact_path_or_stdin" || input.Submission.Value.Schema != reviewReviewerSchemaID ||
-		input.Submission.Value.SubstitutionLocation != len(wantTokens)-1 {
-		t.Fatalf("pi host relay submission = %#v, want tokens %v", input.Submission, wantTokens)
+	if input.Submission != nil {
+		t.Fatalf("pi host relay execute route must not carry caller submission: %#v", input.Submission)
 	}
 
 	var compiled bytes.Buffer
