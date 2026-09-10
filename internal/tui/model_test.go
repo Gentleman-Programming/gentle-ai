@@ -3054,19 +3054,36 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 4 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting cursor 5 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
-// Index 3 is now "Configure Codex models"; Back moved to index 4.
+// Index 3 is Codex, index 4 is Pi; Back moved to index 5.
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Back is now at index 4
+	m.Cursor = 5 // Back is now at index 5
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=4 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=5 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+}
+
+// TestModelConfig_EnterPiPicker verifies that selecting cursor 4 enters ScreenPiModelPicker.
+func TestModelConfig_EnterPiPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 4 // Configure Pi models
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenPiModelPicker {
+		t.Fatalf("ModelConfig cursor=4 (Pi): screen = %v, want %v", state.Screen, ScreenPiModelPicker)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering Pi picker from ModelConfig")
 	}
 }
 
@@ -3114,6 +3131,46 @@ func TestModelConfig_KiroPickerBackReturnsToModelConfig(t *testing.T) {
 
 	if state.Screen != ScreenModelConfig {
 		t.Fatalf("KiroModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+// TestPiModelPicker_SelectPreset verifies that selecting a preset in PiModelPicker
+// stages the override and transitions to ScreenSync.
+func TestPiModelPicker_SelectPreset(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPiModelPicker
+	m.ModelConfigMode = true
+	m.PiModelPicker = screens.NewPiModelPickerState(model.PiSubscriptionClaude)
+	m.Cursor = 1 // Codex
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("PiModelPicker enter preset: screen = %v, want %v", state.Screen, ScreenSync)
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("PendingSyncOverrides is nil")
+	}
+	if state.PendingSyncOverrides.PiSubscription != model.PiSubscriptionCodex {
+		t.Errorf("expected subscription codex, got %s", state.PendingSyncOverrides.PiSubscription)
+	}
+	if len(state.PendingSyncOverrides.PiModelAssignments) == 0 {
+		t.Errorf("expected non-empty PiModelAssignments")
+	}
+}
+
+// TestPiModelPicker_EscReturnsToModelConfig verifies Esc in PiModelPicker returns to ModelConfig.
+func TestPiModelPicker_EscReturnsToModelConfig(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPiModelPicker
+	m.ModelConfigMode = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("PiModelPicker esc: screen = %v, want %v", state.Screen, ScreenModelConfig)
 	}
 }
 

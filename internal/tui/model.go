@@ -504,6 +504,7 @@ const (
 	ScreenClaudeModelPicker
 	ScreenKiroModelPicker
 	ScreenCodexModelPicker
+	ScreenPiModelPicker
 	ScreenSDDMode
 	ScreenStrictTDD
 	ScreenOpenCodePlugins
@@ -593,6 +594,7 @@ type Model struct {
 	ClaudeModelPicker              screens.ClaudeModelPickerState
 	KiroModelPicker                screens.KiroModelPickerState
 	CodexModelPicker               screens.CodexModelPickerState
+	PiModelPicker                  screens.PiModelPickerState
 	SkillPicker                    []model.SkillID
 	Err                            error
 
@@ -1525,6 +1527,8 @@ func (m Model) View() string {
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenCodexModelPicker:
 		return screens.RenderCodexModelPicker(m.CodexModelPicker, m.Cursor)
+	case ScreenPiModelPicker:
+		return screens.RenderPiModelPicker(m.PiModelPicker, m.Cursor)
 	case ScreenSDDMode:
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
 	case ScreenStrictTDD:
@@ -1787,6 +1791,27 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
 					return m, m.advanceToNextPickerScreen(next)
+				}
+			}
+			return m, nil
+		}
+	}
+
+	if m.Screen == ScreenPiModelPicker {
+		handled, selectedPreset := screens.HandlePiModelPickerNav(keyStr, &m.PiModelPicker, m.Cursor)
+		if handled {
+			if selectedPreset != "" {
+				m.Selection.PiSubscription = selectedPreset
+				m.Selection.PiModelAssignments = model.PiPresetForSubscription(selectedPreset)
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:       []model.AgentID{model.AgentPi},
+						PiSubscription:     selectedPreset,
+						PiModelAssignments: m.Selection.PiModelAssignments,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
 				}
 			}
 			return m, nil
@@ -2434,7 +2459,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.ModelConfigMode = true
 			m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 			m.setScreen(ScreenCodexModelPicker)
-		case 4: // Back
+		case 4: // Configure Pi models
+			m.ModelConfigMode = true
+			m.PiModelPicker = screens.NewPiModelPickerState(m.Selection.PiSubscription)
+			m.setScreen(ScreenPiModelPicker)
+		case 5: // Back
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -2538,6 +2567,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			if prev, ok := m.pickerPreviousScreen(); ok {
 				m.applyPickerEntry(prev)
+			}
+			return m, nil
+		}
+	case ScreenPiModelPicker:
+		if m.Cursor == screens.PiModelPickerOptionCount()-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
 			}
 			return m, nil
 		}
@@ -3948,7 +3986,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker || m.Screen == ScreenPiModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
@@ -4302,6 +4340,8 @@ func (m Model) optionCount() int {
 		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
 	case ScreenCodexModelPicker:
 		return screens.CodexModelPickerOptionCount(m.CodexModelPicker)
+	case ScreenPiModelPicker:
+		return screens.PiModelPickerOptionCount()
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
 	case ScreenStrictTDD:

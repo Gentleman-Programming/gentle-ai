@@ -279,6 +279,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		CodexOrchestratorAssignment: codexOrchestratorToState(input.Selection.CodexOrchestratorAssignment),
 		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
+		PiModelAssignments:          piModelAssignmentsToState(input.Selection.PiModelAssignments),
+		PiSubscription:              string(input.Selection.PiSubscription),
 		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
 		Persona:                     string(input.Selection.Persona),
 	}
@@ -395,6 +397,12 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	}
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
+	}
+	if newState.PiModelAssignments != nil {
+		merged.PiModelAssignments = newState.PiModelAssignments
+	}
+	if newState.PiSubscription != "" {
+		merged.PiSubscription = newState.PiSubscription
 	}
 	if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
@@ -3050,6 +3058,17 @@ func codexOrchestratorToState(a *model.CodexOrchestratorAssignment) *state.Codex
 		return nil
 	}
 	return &state.CodexOrchestratorAssignmentState{Model: a.Model, Effort: string(a.Effort)}
+}
+
+func piModelAssignmentsToState(m map[string]model.PiAgentModelEntry) map[string]state.PiModelEntryState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.PiModelEntryState, len(m))
+	for k, v := range m {
+		out[k] = state.PiModelEntryState{Model: v.Model, Thinking: v.Thinking}
+	}
+	return out
 }
 
 func codexOrchestratorFromState(a *state.CodexOrchestratorAssignmentState) *model.CodexOrchestratorAssignment {
