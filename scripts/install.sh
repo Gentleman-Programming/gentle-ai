@@ -57,6 +57,45 @@ homebrew_trust_gentle_ai_formula() {
     fi
 }
 
+# atomic_publish_binary src dest
+# Atomically publishes src to dest using a staging file in dest's directory
+# followed by a same-filesystem rename(2). The staging file lives in the
+# same directory as dest by construction, so the rename is atomic and
+# either fully applies or leaves the destination byte-for-byte unchanged.
+# On any failure (copy, chmod, rename) the staging file is removed before
+# returning. Returns 0 on success, 1 on failure. Does not emit user-facing
+# output; the caller handles messaging and fatal exit. See #1728.
+atomic_publish_binary() {
+    local src="$1"
+    local dest="$2"
+    local dest_dir
+    dest_dir="$(dirname -- "$dest")"
+
+    local staging
+    staging="$(mktemp "${dest}.staging.XXXXXX")" || return 1
+
+    # Stage 1: copy src -> staging. Permission errors fall through to the
+    # chmod stage below, which also uses the same sudo fallback.
+    if ! cp -- "$src" "$staging" 2>/dev/null; then
+        rm -f -- "$staging" 2>/dev/null || true
+        return 1
+    fi
+
+    # Stage 2: set executable mode on the staging file BEFORE publication.
+    if ! chmod +x -- "$staging" 2>/dev/null; then
+        rm -f -- "$staging" 2>/dev/null || true
+        return 1
+    fi
+
+    # Stage 3: atomic publish — same-filesystem rename(2) is atomic. If
+    # this fails, dest is unchanged and staging is removed.
+    if ! mv -- "$staging" "$dest" 2>/dev/null; then
+        rm -f -- "$staging" 2>/dev/null || true
+        return 1
+    fi
+    return 0
+}
+
 print_homebrew_failure_help() {
     local output="$1"
     local lower
@@ -456,16 +495,19 @@ install_binary() {
     # Create install dir if needed
     mkdir -p "$install_dir"
 
-    # Install binary
+    # Install binary atomically: stage in dest's directory, set mode, then
+    # publish via same-filesystem rename(2). A copy/mode/rename failure
+    # leaves the previous executable byte-for-byte unchanged. See #1728.
     info "Installing to ${install_dir}/${BINARY_NAME}..."
-    if cp "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
-        chmod +x "${install_dir}/${BINARY_NAME}"
-    elif command -v sudo &>/dev/null; then
-        warn "Permission denied. Trying with sudo..."
-        sudo cp "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"
-        sudo chmod +x "${install_dir}/${BINARY_NAME}"
-    else
-        fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
+    if ! atomic_publish_binary "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"; then
+        if command -v sudo &>/dev/null; then
+            warn "Permission denied. Retrying with sudo..."
+            if ! sudo bash -c "$(declare -f atomic_publish_binary); atomic_publish_binary \"${tmpdir}/${BINARY_NAME}\" \"${install_dir}/${BINARY_NAME}\""; then
+                fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
+            fi
+        else
+            fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
+        fi
     fi
 
     success "Installed ${BINARY_NAME} to ${install_dir}/${BINARY_NAME}"
