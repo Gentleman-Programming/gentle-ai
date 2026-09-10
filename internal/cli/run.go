@@ -2308,9 +2308,13 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
 					paths = append(paths, p)
-					// Track the gentle-ai SDD profile files written alongside
-					// the Codex config.toml so they are removed on uninstall.
+					// Track the gentle-ai files written alongside the Codex config.toml
+					// so they are restored on rollback and removed on uninstall.
 					codexHomeDir := filepath.Dir(p)
+					paths = append(paths,
+						filepath.Join(codexHomeDir, "engram-instructions.md"),
+						filepath.Join(codexHomeDir, "engram-compact-prompt.md"),
+					)
 					paths = append(paths, codexagent.SddProfilePaths(codexHomeDir)...)
 				}
 			}

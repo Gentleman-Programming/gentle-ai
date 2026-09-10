@@ -1291,6 +1291,51 @@ func TestInjectCodexWithoutCLIUpdatesSharedConfigAndPreservesProfiles(t *testing
 	}
 }
 
+func TestInjectCodexReportsInstructionOnlyRepairsWithoutCLI(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
+	t.Cleanup(restore)
+
+	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			if _, err := Inject(home, codexAdapter()); err != nil {
+				t.Fatalf("initial Inject(codex) error = %v", err)
+			}
+
+			path := filepath.Join(home, ".codex", name)
+			if err := os.WriteFile(path, []byte("stale instruction\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := Inject(home, codexAdapter())
+			if err != nil {
+				t.Fatalf("instruction-only repair error = %v", err)
+			}
+			if !result.Changed {
+				t.Fatal("instruction-only repair changed = false")
+			}
+			found := false
+			for _, file := range result.Files {
+				if file == path {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("instruction-only repair files = %v, want %q", result.Files, path)
+			}
+
+			second, err := Inject(home, codexAdapter())
+			if err != nil {
+				t.Fatalf("idempotent Inject(codex) error = %v", err)
+			}
+			if second.Changed {
+				t.Fatal("idempotent instruction-only repair changed = true")
+			}
+		})
+	}
+}
+
 func TestInjectCodexWithoutCLIWritesSharedConfigWithoutCreatingProfiles(t *testing.T) {
 	restore := codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound)
 	t.Cleanup(restore)

@@ -429,10 +429,12 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		}
 
 		// Determine instruction file paths before mutating the config.
-		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(configHomeDir)
+		instructionsPath, compactPath, instructionsChanged, instructionFiles, instrErr := writeCodexInstructionFiles(configHomeDir)
 		if instrErr != nil {
 			return InjectionResult{}, instrErr
 		}
+		changed = changed || instructionsChanged
+		files = append(files, instructionFiles...)
 
 		// Read existing config and apply all mutations in a single pass.
 		//
@@ -666,8 +668,8 @@ func ensureAntigravitySettings(homeDir string, adapter agents.Adapter) (settings
 }
 
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt
-// files to ~/.codex/ and returns their paths.
-func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, err error) {
+// files to ~/.codex/ and returns their paths and write results.
+func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, changed bool, files []string, err error) {
 	codexDir := filepath.Join(homeDir, ".codex")
 	instructionsPath = filepath.Join(codexDir, "engram-instructions.md")
 	compactPath = filepath.Join(codexDir, "engram-compact-prompt.md")
@@ -675,18 +677,20 @@ func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath s
 	instrContent := codexInstructions()
 	instrWrite, err := filemerge.WriteFileAtomic(instructionsPath, []byte(instrContent), 0o644)
 	if err != nil {
-		return "", "", fmt.Errorf("write codex engram-instructions.md: %w", err)
+		return "", "", false, nil, fmt.Errorf("write codex engram-instructions.md: %w", err)
 	}
-	_ = instrWrite
+	changed = instrWrite.Changed
+	files = append(files, instructionsPath)
 
 	compactContent := codexCompact()
 	compactWrite, err := filemerge.WriteFileAtomic(compactPath, []byte(compactContent), 0o644)
 	if err != nil {
-		return "", "", fmt.Errorf("write codex engram-compact-prompt.md: %w", err)
+		return "", "", false, nil, fmt.Errorf("write codex engram-compact-prompt.md: %w", err)
 	}
-	_ = compactWrite
+	changed = changed || compactWrite.Changed
+	files = append(files, compactPath)
 
-	return instructionsPath, compactPath, nil
+	return instructionsPath, compactPath, changed, files, nil
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
