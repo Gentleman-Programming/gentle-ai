@@ -1,0 +1,13 @@
+# Default Gentle AI maintainers.
+* @Alan-TheGentleman @dnlrsls @decode2
+
+# Engram integration.
+/internal/components/engram/ @Alan-TheGentleman @dnlrsls
+/internal/assets/engram/ @Alan-TheGentleman @dnlrsls
+/internal/assets/skills/_shared/engram-convention.md @Alan-TheGentleman @dnlrsls
+/docs/engram.md @Alan-TheGentleman @dnlrsls
+
+# Gentle Pi integration owned inside this repository.
+/internal/agents/pi/ @Alan-TheGentleman @barbatdev
+/internal/components/communitytool/pi_codegraph* @Alan-TheGentleman @barbatdev
+/docs/pi.md @Alan-TheGentleman @barbatdev
