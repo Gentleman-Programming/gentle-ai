@@ -6,10 +6,10 @@ The new Antigravity implementation is compatible with the desktop product, not o
 
 ## Relevant surfaces
 
-- CLI/Desktop config root: `~/.gemini/antigravity-cli/`
+- Resolved config root: `<variantDir>` (IDE → Desktop → CLI fallback)
 - Shared prompt file: `~/.gemini/GEMINI.md`
-- Skills root: `~/.gemini/antigravity-cli/skills/`
-- MCP config: `~/.gemini/antigravity-cli/mcp_config.json`
+- Skills root: `<variantDir>/skills/`
+- MCP config: `~/.gemini/config/mcp_config.json`
 - Dynamic subagent tools: `define_subagent`, `invoke_subagent`
 
 ## Recommendation
