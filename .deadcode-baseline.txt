@@ -7,6 +7,15 @@ internal/agents/discovery.go	ConfigRootsForBackup
 internal/agents/errors.go	CapabilityNotSupportedError.Error
 internal/agents/errors.go	CapabilityNotSupportedError.Is
 internal/agents/factory.go	NewMVPRegistry
+internal/agents/pi/capabilities.go	CapabilitiesError.Error
+internal/agents/pi/capabilities.go	CapabilitiesError.Unwrap
+internal/agents/pi/capabilities.go	ParseCapabilitiesResponse
+internal/agents/pi/capabilities.go	capabilitiesError
+internal/agents/pi/capabilities.go	hasNestedAlternativeOperationRepresentation
+internal/agents/pi/capabilities.go	hasTopLevelAlternativeOperationRepresentation
+internal/agents/pi/capabilities.go	malformedCapabilities
+internal/agents/pi/capabilities.go	requiredCapabilitiesOperation
+internal/agents/pi/capabilities.go	validateCapabilitiesOperations
 internal/agents/pi/model_routing.go	BinError.Error
 internal/agents/pi/model_routing.go	BinError.Unwrap
 internal/agents/pi/model_routing.go	ManifestError.Error
