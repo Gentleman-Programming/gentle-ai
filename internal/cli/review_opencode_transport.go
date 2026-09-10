@@ -505,7 +505,7 @@ func decodeOpenCodeTransportBinding(prompt string) (openCodeTransportTaskBinding
 	}
 	encoded, found := strings.CutPrefix(line, reviewLensContextBindingHeader+" ")
 	if !found {
-		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt has no provider-issued review binding")
+		return openCodeTransportTaskBinding{}, openCodeTransportBindingInvalid("Task prompt has no provider-issued review binding; for an ordinary non-authoritative advisory review, dispatch native `explore` with exact candidate evidence, requested focus, and acceptance criteria")
 	}
 	decoder := json.NewDecoder(strings.NewReader(encoded))
 	decoder.DisallowUnknownFields()
