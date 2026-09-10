@@ -40,6 +40,7 @@ j4040-untracked-inventory-recovery-loop
 j41-kill-switch-versus-sdd-pre-verify
 j42-kill-switch-versus-sdd-archive
 j44-sdd-historical-requirement-stale-pass
+j4435-selected-untracked-correction-continuation-is-selectorless
 j47-disabled-mode-archives-discovered-scope-changed-authority
 j49-status-without-cwd-honors-kill-switch
 j51-negotiated-status-correction-continuation

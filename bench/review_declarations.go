@@ -65,6 +65,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j42-kill-switch-versus-sdd-archive":                                        reviewOptedIn,
 	"j43-recovery-guard-rails-as-an-operator-meets-them":                        reviewOptedIn,
 	"j44-corrected-current-changes-delivery":                                    reviewOptedIn,
+	"j4435-selected-untracked-correction-continuation-is-selectorless":          reviewOptedIn,
 	"j44-sdd-historical-requirement-stale-pass":                                 reviewOptedIn,
 	"j45-completed-final-verification-retry":                                    reviewOptedIn,
 	"j46-correction-required-staged-recovery":                                   reviewOptedIn,
