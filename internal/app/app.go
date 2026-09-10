@@ -635,6 +635,8 @@ func tuiExecuteWithBackground(
 			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
 			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
 			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+			installState.PiModelAssignments = piModelAssignmentsToState(selection.PiModelAssignments)
+			installState.PiSubscription = string(selection.PiSubscription)
 			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
 			installState.Persona = string(selection.Persona)
 			installState.SetSelection(selection)
@@ -819,6 +821,12 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.CodexPhaseModelAssignments != nil {
 		selection.CodexPhaseModelAssignments = overrides.CodexPhaseModelAssignments
 	}
+	if overrides.PiModelAssignments != nil {
+		selection.PiModelAssignments = overrides.PiModelAssignments
+	}
+	if overrides.PiSubscription != "" {
+		selection.PiSubscription = overrides.PiSubscription
+	}
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
 	}
@@ -905,6 +913,12 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.CodexPhaseModelAssignments = m
 	}
+	if len(selection.PiModelAssignments) == 0 && len(s.PiModelAssignments) > 0 {
+		selection.PiModelAssignments = piModelAssignmentsFromState(s.PiModelAssignments)
+	}
+	if selection.PiSubscription == "" && s.PiSubscription != "" {
+		selection.PiSubscription = model.PiSubscription(s.PiSubscription)
+	}
 	if !selection.ClearCodexOrchestratorAssignment && selection.CodexOrchestratorAssignment == nil && s.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(s.CodexOrchestratorAssignment)
 	}
@@ -934,8 +948,10 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		selection.CodexOrchestratorAssignment != nil ||
 		selection.ClearCodexOrchestratorAssignment ||
 		selection.CodexCarrilModelAssignments != nil ||
-		selection.CodexPhaseModelAssignments != nil
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
+		selection.CodexPhaseModelAssignments != nil ||
+		selection.PiModelAssignments != nil ||
+		selection.PiSubscription != ""
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && len(selection.PiModelAssignments) == 0 && !hasAssignmentSignal {
 		return nil
 	}
 	current, err := state.Read(homeDir)
@@ -1002,6 +1018,16 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		} else {
 			current.ModelAssignments = nil
 		}
+	}
+	if selection.PiModelAssignments != nil {
+		if len(selection.PiModelAssignments) > 0 {
+			current.PiModelAssignments = piModelAssignmentsToState(selection.PiModelAssignments)
+		} else {
+			current.PiModelAssignments = nil
+		}
+	}
+	if selection.PiSubscription != "" {
+		current.PiSubscription = string(selection.PiSubscription)
 	}
 	return state.Write(homeDir, current)
 }
@@ -1081,6 +1107,28 @@ func modelAssignmentsToState(m map[string]model.ModelAssignment) map[string]stat
 	out := make(map[string]state.ModelAssignmentState, len(m))
 	for k, v := range m {
 		out[k] = state.ModelAssignmentState{ProviderID: v.ProviderID, ModelID: v.ModelID, Effort: v.Effort}
+	}
+	return out
+}
+
+func piModelAssignmentsToState(m map[string]model.PiAgentModelEntry) map[string]state.PiModelEntryState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.PiModelEntryState, len(m))
+	for k, v := range m {
+		out[k] = state.PiModelEntryState{Model: v.Model, Thinking: v.Thinking}
+	}
+	return out
+}
+
+func piModelAssignmentsFromState(m map[string]state.PiModelEntryState) map[string]model.PiAgentModelEntry {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]model.PiAgentModelEntry, len(m))
+	for k, v := range m {
+		out[k] = model.PiAgentModelEntry{Model: v.Model, Thinking: v.Thinking}
 	}
 	return out
 }
