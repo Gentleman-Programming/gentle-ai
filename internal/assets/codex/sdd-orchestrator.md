@@ -159,22 +159,22 @@ explicitly requested background execution.
 For each phase:
 
 1. Look up the phase's `reasoning_effort` **AND** `model` values in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers). This applies both for preset (per-carril) tables and Custom (per-phase) tables — always pass the model and effort shown in the table for that phase.
-2. `spawn_agent` with `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
-3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
+2. Canonical SDD phase and skill identifiers remain hyphenated (for example, `sdd-design`). `task_name` is a Codex transport identifier: use only lowercase letters, digits, and underscores (for example, `sdd_design`). `spawn_agent` with that `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
+3. Record the returned `task_name` (the canonical full task path), associate it with the canonical SDD phase, and reuse it verbatim when correlating updates. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
 4. Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.
    `wait_agent` returns on any mailbox update, so an update from another agent or a timeout
    does not prove that the target completed.
-5. After each wait, correlate the notification with the canonical task name returned by
-   `spawn_agent` and inspect that target's current state in `list_agents()`.
+5. After each wait, correlate the notification using that returned `task_name` to the canonical phase,
+   then inspect that target's current state in `list_agents()`.
 6. If the target reaches a non-success terminal state, stop and surface its final output or status;
    do not verify artifacts or launch dependent work.
 7. Only after successful terminal completion, verify the artifact was persisted before
    launching the next phase.
 
-Example — launching `sdd-design` with the values from its generated table row:
+Example — launching canonical phase `sdd-design` with the values from its generated table row:
 
 ```
-spawn_agent(task_name="sdd-design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
+spawn_agent(task_name="sdd_design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
 repeat:
   wait_agent(timeout_ms=300000)
   list_agents()

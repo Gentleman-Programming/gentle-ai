@@ -5718,9 +5718,23 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 		"`close_agent`",
 		"`send_input`",
 		"`wait_agent(task_name=",
+		"spawn_agent(task_name=\"sdd-design\"",
 	} {
 		if strings.Contains(text, stale) {
 			t.Errorf("agents.md retained legacy Codex multi-agent lifecycle fragment %q", stale)
+		}
+	}
+	for _, want := range []string{
+		"Canonical SDD phase and skill identifiers remain hyphenated (for example, `sdd-design`).",
+		"`sdd-apply`",
+		"`sdd-verify`",
+		"`task_name` is a Codex transport identifier: use only lowercase letters, digits, and underscores (for example, `sdd_design`).",
+		"Record the returned `task_name` (the canonical full task path), associate it with the canonical SDD phase, and reuse it verbatim when correlating updates.",
+		"After each wait, correlate the notification using that returned `task_name` to the canonical phase",
+		"spawn_agent(task_name=\"sdd_design\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("agents.md missing Codex task-name contract %q", want)
 		}
 	}
 
