@@ -25,7 +25,7 @@ var assignGitProcessToJob = windows.AssignProcessToJobObject
 // opened, and a child that could not be bound is killed instead of being left
 // suspended forever (#4081, #4128, #4152).
 func startGitProcessTree(command *exec.Cmd) (func() error, error) {
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW}
 	if err := command.Start(); err != nil {
 		return nil, err
 	}

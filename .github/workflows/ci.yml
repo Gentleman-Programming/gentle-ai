@@ -236,10 +236,10 @@ jobs:
         shell: pwsh
         timeout-minutes: 6
         run: |
-          $selector = '^(TestStartGitProcessTreeSurvivesRepeatedLaunches|TestStartGitProcessTreeKillsUnboundChildOnFailure)$'
+          $selector = '^(TestStartGitProcessTreeSurvivesRepeatedLaunches|TestStartGitProcessTreeKillsUnboundChildOnFailure|TestRunGitStartsWithoutAttachedConsole|TestRequireNoAttachedConsoleRejectsAttachedConsole)$'
           $selected = @(go test ./internal/reviewtransaction -list $selector | Where-Object { $_ -match '^Test' })
           if ($LASTEXITCODE -ne 0) { throw 'Could not list native Windows git process tree tests' }
-          if ($selected.Count -ne 2) { throw "Missing native Windows git process tree tests: $($selected -join ', ')" }
+          if ($selected.Count -ne 4) { throw "Missing native Windows git process tree tests: $($selected -join ', ')" }
           go test -v ./internal/reviewtransaction -count=1 -run $selector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

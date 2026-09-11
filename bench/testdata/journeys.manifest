@@ -40,6 +40,7 @@ j40-sdd-attempt-reset-after-drift
 j4040-untracked-inventory-recovery-loop
 j41-kill-switch-versus-sdd-pre-verify
 j42-kill-switch-versus-sdd-archive
+j4395-telemetry-trigger-resolves-rdd-repository
 j44-sdd-historical-requirement-stale-pass
 j4435-selected-untracked-correction-continuation-is-selectorless
 j47-disabled-mode-archives-discovered-scope-changed-authority
