@@ -242,15 +242,26 @@ func TestV21RejectsDuplicateRuntimeAgentsBeforeRepositoryAccess(t *testing.T) {
 
 // TestRegisteredRuntimeIdentitiesMatchCompiledTransportBoundary pins the
 // published provider-contract runtime inventory to the compiled capability:
-// the bundle may only declare what the boundary actually admits.
+// the bundle may only declare what the boundary actually admits, in the
+// documented stable lexical order without sorting before comparison.
 func TestRegisteredRuntimeIdentitiesMatchCompiledTransportBoundary(t *testing.T) {
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	registered := reviewerprovider.RegisteredRuntimeIdentities()
+	if len(registered) == 0 {
+		t.Fatal("RegisteredRuntimeIdentities() is empty, want non-empty supported runtime inventory")
+	}
+	for index := 1; index < len(registered); index++ {
+		if registered[index-1] >= registered[index] {
+			t.Fatalf("RegisteredRuntimeIdentities() is not strictly sorted: %q comes before %q", registered[index-1], registered[index])
+		}
+	}
 	supported := reviewTransportSupportedRuntimeIDs()
-	sort.Strings(registered)
+	if len(supported) == 0 {
+		t.Fatal("reviewTransportSupportedRuntimeIDs() is empty, want non-empty supported runtime inventory")
+	}
 	sort.Strings(supported)
 	if !slices.Equal(registered, supported) {
-		t.Fatalf("RegisteredRuntimeIdentities() = %q, want the compiled supported runtimes %q", registered, supported)
+		t.Fatalf("RegisteredRuntimeIdentities() = %q, want the compiled supported runtimes in stable lexical order %q", registered, supported)
 	}
 }
 

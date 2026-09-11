@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 )
 
 // currentShapeContractSemver labels fixtures built by generatedFiles/Generate
@@ -31,6 +33,9 @@ import (
 // own minimal legacy-shaped manifest instead of using this label.
 const currentShapeContractSemver = "1.2.0"
 
+// TestGenerateIsDeterministicAndVerifiable verifies that Generate produces
+// deterministic manifest, schema, and vector contents matching canonical
+// references, including ordered runtime inventory and staging verification.
 func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 	first := filepath.Join(t.TempDir(), "first")
 	second := filepath.Join(t.TempDir(), "second")
@@ -74,6 +79,21 @@ func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 		if info.Mode().Perm() != wantMode || !info.ModTime().Equal(bundleTimestamp) {
 			t.Fatalf("generated %s metadata = %s %s, want %04o %s", name, info.Mode(), info.ModTime(), wantMode, bundleTimestamp)
 		}
+	}
+	var decodedManifest manifest
+	if err := json.Unmarshal(firstFiles["manifest.json"], &decodedManifest); err != nil {
+		t.Fatalf("unmarshal generated manifest.json: %v", err)
+	}
+	if len(decodedManifest.Runtimes) == 0 {
+		t.Fatal("manifest.json has empty runtimes inventory, want non-empty")
+	}
+	for index := 1; index < len(decodedManifest.Runtimes); index++ {
+		if decodedManifest.Runtimes[index-1] >= decodedManifest.Runtimes[index] {
+			t.Fatalf("manifest.json runtimes is not strictly sorted: %q comes before %q", decodedManifest.Runtimes[index-1], decodedManifest.Runtimes[index])
+		}
+	}
+	if !slices.Equal(decodedManifest.Runtimes, reviewerprovider.RegisteredRuntimeIdentities()) {
+		t.Fatalf("manifest.json runtimes = %q, want %q", decodedManifest.Runtimes, reviewerprovider.RegisteredRuntimeIdentities())
 	}
 	if err := VerifyStaging(first); err != nil {
 		t.Fatalf("VerifyStaging(%s): %v", first, err)
@@ -283,6 +303,8 @@ func TestVerifyArchiveRejectsDamagedAndExpandedStreams(t *testing.T) {
 	}
 }
 
+// TestVerifyArchiveRejectsOversizedPAXMetadata verifies that VerifyArchive
+// rejects archives containing PAX extended headers exceeding size bounds.
 func TestVerifyArchiveRejectsOversizedPAXMetadata(t *testing.T) {
 	files, err := generatedFiles("1.0.0")
 	if err != nil {
@@ -302,6 +324,57 @@ func TestVerifyArchiveRejectsOversizedPAXMetadata(t *testing.T) {
 	}
 }
 
+// TestVerifyArchiveRejectsMismatchedRuntimeInventory verifies that VerifyArchive
+// fails closed with errInvalidBundle whenever manifest runtimes are reordered,
+// empty, nil, or contain unknown runtime identities.
+func TestVerifyArchiveRejectsMismatchedRuntimeInventory(t *testing.T) {
+	files, err := generatedFiles(currentShapeContractSemver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := reviewerprovider.RegisteredRuntimeIdentities()
+	if len(canonical) < 2 {
+		t.Fatalf("need at least 2 canonical runtimes for test, got %d", len(canonical))
+	}
+	reordered := slices.Clone(canonical)
+	reordered[0], reordered[1] = reordered[1], reordered[0]
+	unknown := append(slices.Clone(canonical), "unknown-runtime")
+
+	cases := []struct {
+		name     string
+		runtimes []string
+	}{
+		{name: "reordered runtimes", runtimes: reordered},
+		{name: "empty runtimes", runtimes: []string{}},
+		{name: "nil runtimes", runtimes: nil},
+		{name: "unknown runtime", runtimes: unknown},
+	}
+	for _, test := range cases {
+		archive := filepath.Join(t.TempDir(), "mismatched-runtimes.tar.gz")
+		copyFiles := cloneFiles(files)
+		var doc manifest
+		if err := json.Unmarshal(copyFiles["manifest.json"], &doc); err != nil {
+			t.Fatal(err)
+		}
+		doc.Runtimes = test.runtimes
+		tampered, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		copyFiles["manifest.json"] = append(tampered, '\n')
+		writeArchive(t, archive, copyFiles, nil, false)
+		err = VerifyArchive(archive)
+		if err == nil {
+			t.Fatalf("%s: VerifyArchive accepted manifest with mismatched runtime inventory", test.name)
+		}
+		if !errors.Is(err, errInvalidBundle) {
+			t.Fatalf("%s: VerifyArchive returned %v, want errInvalidBundle", test.name, err)
+		}
+	}
+}
+
+// TestReadContractSemverRejectsNonCanonicalInput verifies that ReadContractSemver
+// rejects semver values with non-canonical formatting.
 func TestReadContractSemverRejectsNonCanonicalInput(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "CONTRACT_SEMVER")
 	for _, value := range []string{"v1.0.0\n", "1.0\n", "01.0.0\n", "1.0.0"} {
