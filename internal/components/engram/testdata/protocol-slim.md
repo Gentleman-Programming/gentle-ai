@@ -15,3 +15,13 @@ MCP server instructions and the SessionStart hook. Always-on rules:
   answer into a "saved / done" acknowledgement.
 - If a memory call fails or times out, deliver the answer anyway — memory
   failures never block or replace the reply.
+- If `mem_session_start` fails with `ambiguous_project`: resolve the intended
+  repository root and retry `mem_session_start` with that root as `directory`.
+  The session ID remains unregistered until registration succeeds; never attach
+  an unregistered session ID to writes. Do not pass `project`,
+  `project_choice_reason`, or `recovery_token` to `mem_session_start`.
+- On `ambiguous_project` from write tools (`mem_save`, `mem_save_prompt`,
+  `mem_session_summary`): never guess. Ask the user to choose exactly one value
+  from `available_projects`, then retry the write tool with `project`,
+  `project_choice_reason=user_selected_after_ambiguous_project`, and the
+  returned `recovery_token`.

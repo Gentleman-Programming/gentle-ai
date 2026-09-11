@@ -66,6 +66,13 @@ Memory lifecycle rule (when Engram exposes lifecycle metadata/tooling):
 - When a retrieved memory is marked `needs_review`, surface that stale context to the user and verify it against current evidence before relying on it.
 - Do NOT call `mem_review` with action `mark_reviewed` automatically. Only call `mark_reviewed` after explicit user confirmation or through a dedicated memory maintenance command.
 
+Session registration and ambiguous project recovery rules:
+- `mem_session_start` accepts a caller-supplied session ID and optional `directory`; it does not accept `project`, `project_choice_reason`, or `recovery_token`.
+- If `mem_session_start` fails with `ambiguous_project`, resolve the intended repository root and retry `mem_session_start` with that root as `directory`.
+- A failed start leaves the session ID unregistered; it is not permanently invalidated, but must never be attached to `mem_save` or another write until registration succeeds.
+- For `ambiguous_project` returned by supported write tools (`mem_save`, `mem_save_prompt`, or `mem_session_summary`), never guess. Ask the user to choose exactly one value from `available_projects`, then retry the same write tool with `project`, `project_choice_reason=user_selected_after_ambiguous_project`, and the returned `recovery_token`.
+- Do not apply the write-tool recovery shape (`project`, `project_choice_reason`, `recovery_token`) to `mem_session_start`.
+
 ### WHEN TO SEARCH MEMORY
 
 On any variation of "remember", "recall", "what did we do", "how did we solve", or references to past work (in any language the user writes in):
