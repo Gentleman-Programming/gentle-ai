@@ -2312,10 +2312,44 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			"gentle-ai sdd-attempt begin",
 			"gentle-ai sdd-attempt finish",
 			"gentle-ai sdd-attempt reset",
+			"Settle defines no other flag",
 		} {
 			if strings.Contains(section, forbidden) {
 				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
 			}
+		}
+	}
+}
+
+func TestSDDStatusContractSpecifiesSameIDUntrackedSettleRecovery(t *testing.T) {
+	status := MustRead("skills/_shared/sdd-status-contract.md")
+	if !strings.Contains(status, "retry compact `sdd-attempt settle` with the same `<settle-id>`") {
+		t.Fatal("sdd-status-contract.md missing same-ID settle retry guidance")
+	}
+	if strings.Contains(status, "review status --next-transition") {
+		t.Fatal("sdd-status-contract.md routes settle recovery to Review STATUS")
+	}
+	if !strings.Contains(status, "never routing through acquire or Review STATUS") {
+		t.Fatal("sdd-status-contract.md missing prohibition on acquire/Review STATUS routing")
+	}
+
+	orchestrator := MustRead("skills/_shared/sdd-orchestrator-sections.md")
+	if strings.Contains(orchestrator, "Settle defines no other flag") {
+		t.Fatal("sdd-orchestrator-sections.md falsely claims settle defines no other flag")
+	}
+	if !strings.Contains(orchestrator, "retry compact `sdd-attempt settle` with the same `<settle-id>`") {
+		t.Fatal("sdd-orchestrator-sections.md missing same-ID settle retry guidance")
+	}
+
+	for name, content := range map[string]string{
+		"sdd-status-contract.md":       status,
+		"sdd-orchestrator-sections.md": orchestrator,
+	} {
+		if strings.Contains(content, "review status --next-transition") {
+			t.Fatalf("%s routes settle recovery to Review STATUS", name)
+		}
+		if !strings.Contains(content, "never routing through acquire or Review STATUS") && !strings.Contains(content, "never route through acquire or Review STATUS") {
+			t.Fatalf("%s missing prohibition on acquire/Review STATUS routing", name)
 		}
 	}
 }
