@@ -51,6 +51,9 @@ Writes name a mechanism because writing a file and saving an observation are dif
 - **openspec**: follow `skills/_shared/openspec-convention.md`; mark `[x]` in the file at the `tasks` locator.
 - **hybrid**: both mechanisms, against that artifact's locators.
 - **none**: return progress only. Do not update project artifacts.
+<--:openrecord-->
+- **record store**: when status reports `recordStore.resolved: openrecord`, read and follow `skills/_shared/openrecord-convention.md`.
+<--:/openrecord-->
 
 ## Status and Workspace Guard
 

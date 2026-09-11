@@ -44,6 +44,9 @@ From the orchestrator:
 - **openspec**: Read and follow `skills/_shared/openspec-convention.md`.
 - **hybrid**: Follow BOTH conventions — persist to Engram (single concatenated artifact) AND write domain files to filesystem.
 - **none**: Return result only. Never create or modify project files.
+<--:openrecord-->
+- **record store**: when status reports `recordStore.resolved: openrecord`, read and follow `skills/_shared/openrecord-convention.md`.
+<--:/openrecord-->
 
 ## What to Do
 

@@ -44,6 +44,9 @@ From the orchestrator:
 - **openspec**: Read and follow `skills/_shared/openspec-convention.md`.
 - **hybrid**: Follow BOTH conventions — persist to Engram AND write `design.md` to filesystem. Retrieve dependencies from Engram (primary) with filesystem fallback.
 - **none**: Return result only. Never create or modify project files.
+<--:openrecord-->
+- **record store**: when status reports `recordStore.resolved: openrecord`, read and follow `skills/_shared/openrecord-convention.md`.
+<--:/openrecord-->
 
 ## What to Do
 
