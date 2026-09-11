@@ -633,6 +633,46 @@ func TestCommunityToolInstallStepUsesInjectableInstaller(t *testing.T) {
 	}
 }
 
+// TestCommunityToolInstallStepRunsOpenRecordBranch proves task 3.3's own
+// criteria: a non-interactive apply selecting openrecord reaches
+// installOpenRecordWithHome with the step's own homeDir and agents, not the
+// generic installCommunityToolWithHome path every other test here exercises.
+func TestCommunityToolInstallStepRunsOpenRecordBranch(t *testing.T) {
+	previousOpenRecordInstall := installOpenRecordWithHome
+	previousInstall := installCommunityToolWithHome
+	t.Cleanup(func() {
+		installOpenRecordWithHome = previousOpenRecordInstall
+		installCommunityToolWithHome = previousInstall
+	})
+
+	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+		t.Fatal("communityToolInstallStep should route openrecord through installOpenRecordWithHome, not the generic installer")
+		return communitytool.Result{}, nil
+	}
+
+	var gotHome string
+	var gotAgents []model.AgentID
+	installOpenRecordWithHome = func(homeDir string, selectedAgents []model.AgentID, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+		gotHome = homeDir
+		gotAgents = selectedAgents
+		return communitytool.Result{Tool: model.CommunityToolOpenRecord}, nil
+	}
+
+	wantAgents := []model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI}
+	step := communityToolInstallStep{
+		id:      "community-tool:openrecord",
+		tool:    model.CommunityToolOpenRecord,
+		homeDir: "/tmp/openrecord-home",
+		agents:  wantAgents,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if gotHome != "/tmp/openrecord-home" || !slices.Equal(gotAgents, wantAgents) {
+		t.Fatalf("installer args = (%q, %#v), want (/tmp/openrecord-home, %#v)", gotHome, gotAgents, wantAgents)
+	}
+}
+
 func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })

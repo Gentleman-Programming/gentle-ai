@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/openrecord"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -106,6 +107,8 @@ var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
+var installOpenRecordFn = openrecord.Install
+var openRecordStatusFn = openrecord.DetectStatus
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
@@ -3506,10 +3509,23 @@ func (m Model) spinnerTickOpenCodePluginUninstall() Model {
 func (m Model) startCommunityToolInstallation() tea.Cmd {
 	tools := append([]model.CommunityToolID(nil), m.Selection.CommunityTools...)
 	workspaceDir, _ := osGetwdFn()
+	home := homeDir()
+	selectedAgents := append([]model.AgentID(nil), m.Selection.Agents...)
 	runner := communitytool.RunnerFunc(runCommunityToolCommand)
 	return func() tea.Msg {
 		results := make([]communitytool.Result, 0, len(tools))
 		for _, tool := range tools {
+			if tool == model.CommunityToolOpenRecord {
+				result, err := installOpenRecordFn(home, selectedAgents, runner, nil)
+				if err != nil {
+					if hasCommunityToolResultContext(result) {
+						results = append(results, result)
+					}
+					return CommunityToolInstallationDoneMsg{Results: results, Err: err}
+				}
+				results = append(results, result)
+				continue
+			}
 			result, err := communityToolInstallFn(tool, workspaceDir, runner)
 			if err != nil {
 				if hasCommunityToolResultContext(result) {
@@ -3524,15 +3540,20 @@ func (m Model) startCommunityToolInstallation() tea.Cmd {
 }
 
 func (m Model) startCommunityToolStatusDetection() tea.Cmd {
-	tools := []model.CommunityToolID{model.CommunityToolCodeGraph}
+	tools := []model.CommunityToolID{model.CommunityToolCodeGraph, model.CommunityToolOpenRecord}
 	home := homeDir()
 	detector := communitytool.DetectorFunc(func(name string) (string, error) {
 		path, err := exec.LookPath(name)
 		return path, err
 	})
+	runner := communitytool.RunnerFunc(runCommunityToolCommand)
 	return func() tea.Msg {
 		statuses := make([]communitytool.Status, 0, len(tools))
 		for _, tool := range tools {
+			if tool == model.CommunityToolOpenRecord {
+				statuses = append(statuses, openRecordStatusFn(home, detector, runner))
+				continue
+			}
 			statuses = append(statuses, communityToolStatusFn(tool, home, detector))
 		}
 		return CommunityToolStatusLoadedMsg{Statuses: statuses}

@@ -2,6 +2,8 @@ package update
 
 import (
 	"path/filepath"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/openrecord"
 )
 
 // Tools is the static registry of managed tools that can be checked for updates.
@@ -86,6 +88,22 @@ var Tools = []ToolInfo{
 			}
 			return paths
 		},
+	},
+	{
+		Name:              "openrecord",
+		Owner:             "franwerner",
+		Repo:              "open-record",
+		DetectCmd:         []string{"openrecord", "version"},
+		VersionPrefix:     "v",
+		ReleaseTagPattern: `^v[0-9]+\.[0-9]+\.[0-9]+$`,
+		// openrecord: InstallMethod option (B) — the install script plus a Go
+		// import path, so effectiveMethod routes a machine with Go on PATH to
+		// go-install and every other machine to the script. Both destinations
+		// are listed in FallbackPaths so detection finds whichever exists.
+		InstallMethod: InstallScript,
+		GoImportPath:  "github.com/franwerner/openrecord/cmd/openrecord",
+		FallbackPaths: openrecord.FallbackPaths,
+		PostUpgrade:   openrecord.PostUpgrade,
 	},
 	{
 		Name:          "opencode-subagent-statusline",
