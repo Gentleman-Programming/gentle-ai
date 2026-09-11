@@ -12,6 +12,12 @@ context: |
 
 strict_tdd: true
 
+# sdd.record_store declares where durable decision/spec records live, separate
+# from artifact_store (which governs in-flight SDD artifacts only). Undeclared
+# here: this repo's own records stay in Engram until openrecord is installed
+# and this key is set to `openrecord`.
+# record_store: openrecord
+
 rules:
   proposal:
     - Include rollback plan for risky changes

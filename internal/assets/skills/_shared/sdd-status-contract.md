@@ -36,6 +36,9 @@ schemaName: gentle-ai.sdd-status
 schemaVersion: 2
 changeName: <change-name-or-null>
 artifactStore: openspec | engram | hybrid | none
+recordStore:
+  declared: <verbatim sdd.record_store value from openspec/config.yaml, empty when absent>
+  resolved: openrecord | <empty>
 planningHome:
   mode: repo-local
   path: <absolute path to openspec>

@@ -31,6 +31,28 @@ const (
 	ArtifactStoreNone   ArtifactStore = "none"
 )
 
+// RecordStore is the durable-record declaration axis. It is a separate axis
+// from ArtifactStore: artifact_store governs in-flight SDD artifacts,
+// record_store governs where decision/spec records live once a change is
+// applied. Declared, never presence-detected — an openrecord store directory
+// on disk does not activate it.
+type RecordStore string
+
+const (
+	RecordStoreUndeclared RecordStore = ""
+	RecordStoreOpenRecord RecordStore = "openrecord"
+)
+
+// RecordStoreDeclaration keeps the raw declaration beside the resolved value
+// so "no key at all" and "a value we do not recognise" stay distinguishable
+// from outside — collapsing both into one empty value (as declaredRecordStore
+// itself does for its resolved half) would make an unrecognised value
+// unobservable on the public status document.
+type RecordStoreDeclaration struct {
+	Declared string      `json:"declared"`
+	Resolved RecordStore `json:"resolved"`
+}
+
 type ArtifactState string
 
 const (
@@ -158,6 +180,7 @@ type Status struct {
 	SchemaVersion    int                      `json:"schemaVersion"`
 	ChangeName       *string                  `json:"changeName"`
 	ArtifactStore    ArtifactStore            `json:"artifactStore"`
+	RecordStore      RecordStoreDeclaration   `json:"recordStore"`
 	PlanningHome     PlanningHome             `json:"planningHome"`
 	ChangeRoot       *string                  `json:"changeRoot"`
 	ArtifactPaths    ArtifactPaths            `json:"artifactPaths"`
@@ -1073,6 +1096,36 @@ func declaredArtifactStore(workspaceRoot string) (ArtifactStore, bool) {
 	return "", false
 }
 
+// declaredRecordStore reads the record store a workspace declares in
+// openspec/config.yaml, mirroring declaredArtifactStore's file lookup and
+// key-casing tolerance. Unlike declaredArtifactStore, it always returns the
+// raw declared string alongside the resolved value: an absent key and an
+// unrecognised one both resolve empty, and without the raw string they would
+// be indistinguishable from outside.
+func declaredRecordStore(workspaceRoot string) (raw string, resolved RecordStore) {
+	for _, path := range []string{filepath.Join(workspaceRoot, "openspec", "config.yaml"), filepath.Join(workspaceRoot, "openspec", "config.yml")} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			trimmed := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+			if !strings.HasPrefix(trimmed, "record_store:") && !strings.HasPrefix(trimmed, "recordStore:") {
+				continue
+			}
+			value := strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
+			raw = strings.Trim(value, `"'`)
+			switch RecordStore(strings.ToLower(raw)) {
+			case RecordStoreOpenRecord:
+				return raw, RecordStoreOpenRecord
+			default:
+				return raw, RecordStoreUndeclared
+			}
+		}
+	}
+	return "", RecordStoreUndeclared
+}
+
 func exportEngramObservations(workspaceRoot string) ([]engramObservation, error) {
 	tmp, err := os.CreateTemp("", "gentle-ai-sdd-engram-*.json")
 	if err != nil {
@@ -1506,11 +1559,13 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 	if reasons == nil {
 		reasons = []string{}
 	}
+	recordStoreRaw, recordStoreResolved := declaredRecordStore(workspaceRoot)
 	return Status{
 		SchemaName:    SchemaName,
 		SchemaVersion: SchemaVersion,
 		ChangeName:    changeName,
 		ArtifactStore: store,
+		RecordStore:   RecordStoreDeclaration{Declared: recordStoreRaw, Resolved: recordStoreResolved},
 		PlanningHome: PlanningHome{
 			Mode: ActionModeRepoLocal,
 			Path: filepath.Join(workspaceRoot, "openspec"),
