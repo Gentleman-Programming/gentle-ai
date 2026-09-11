@@ -1326,12 +1326,12 @@ func (store RuntimeStore) settlementUntrackedSelection(ctx context.Context, acti
 		return nil, "", runtimeBornDuringUntrackedRefusal(undecided, digest)
 	}
 	if request.ExpectedUntrackedInventory != digest {
-		return nil, "", fmt.Errorf("%w: this declaration was made against untracked inventory %s but the workspace now holds %s; rerun `gentle-ai review status --next-transition` for the current inventory, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --expected-untracked-inventory=%s", ErrRuntimeUndeclaredUntracked, request.ExpectedUntrackedInventory, digest, digest)
+		return nil, "", fmt.Errorf("%w: this declaration was made against untracked inventory %s but the workspace now holds %s; retry `gentle-ai sdd-attempt settle` with the same --request-id, the retained intended-untracked selection as floor, and --expected-untracked-inventory=%s, or rerun `gentle-ai sdd-attempt finish` with --expected-untracked-inventory=%s", ErrRuntimeUndeclaredUntracked, request.ExpectedUntrackedInventory, digest, digest, digest)
 	}
 	selection := *request.IntendedUntracked
 	for _, path := range selection {
 		if !slices.Contains(inventory, path) {
-			return nil, "", fmt.Errorf("%w: intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition` to see what is eligible, then rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with only those paths", ErrRuntimeUndeclaredUntracked, path)
+			return nil, "", fmt.Errorf("%w: intended-untracked path %q is not in the current eligible inventory; retry `gentle-ai sdd-attempt settle` or rerun `gentle-ai sdd-attempt finish` with only eligible paths", ErrRuntimeUndeclaredUntracked, path)
 		}
 	}
 	// A path selected at begin is already in the begin tree. Dropping it here

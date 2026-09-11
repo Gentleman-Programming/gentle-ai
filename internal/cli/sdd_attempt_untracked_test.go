@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -478,6 +479,9 @@ func TestRunSDDAttemptFinishAndSettleSurfaceLedgerUntrackedFreshnessMessage(t *t
 			if !strings.Contains(message, "this declaration was made against untracked inventory") {
 				t.Fatalf("%s stale digest message = %q, want the ledger's provenance message", operation, message)
 			}
+			if strings.Contains(message, "gentle-ai review status --next-transition") {
+				t.Fatalf("%s stale digest message routed to Review STATUS: %q", operation, message)
+			}
 			if strings.Contains(message, "untracked inventory changed") {
 				t.Fatalf("%s stale digest message = %q, want the ledger's message, not the CLI's generic preflight message", operation, message)
 			}
@@ -599,5 +603,53 @@ func TestRunSDDAttemptRescopeAdmitsFreshUntrackedSelection(t *testing.T) {
 	})
 	if began.State != "proceed" || began.Token == "" {
 		t.Fatalf("acquire with the rescope-admitted selection was refused: %#v", began)
+	}
+}
+
+func TestRunSDDAttemptSettleSameIDUntrackedRecovery(t *testing.T) {
+	fixture := newSDDAttemptFinishSettleFixture(t, "settle", "same-id-untracked-recovery")
+
+	writeUndeclaredWorkspaceFile(t, fixture.repo, "born.txt", "one\n", 0o644)
+	_, staleDigest, err := (reviewtransaction.SnapshotBuilder{Repo: fixture.repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeUndeclaredWorkspaceFile(t, fixture.repo, "another.txt", "two\n", 0o644)
+	_, freshDigest, err := (reviewtransaction.SnapshotBuilder{Repo: fixture.repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const settleID = "settle-recovery-id"
+	staleArgs := append(fixture.settlementArgs("settle", settleID),
+		"--untracked-scope", "select", "--expected-untracked-inventory", staleDigest, "--intended-untracked", "born.txt")
+
+	staleResult, _ := runCompactSDDAttempt(t, staleArgs)
+	if staleResult.State != "blocked" || staleResult.Reason != string(sddstatus.CompactBlockUndeclaredUntracked) {
+		t.Fatalf("stale settle = %#v, want blocked/%s", staleResult, sddstatus.CompactBlockUndeclaredUntracked)
+	}
+	if strings.Contains(staleResult.Exit, "gentle-ai review status --next-transition") {
+		t.Fatalf("stale settle exit routed to Review STATUS: %q", staleResult.Exit)
+	}
+	if !strings.Contains(staleResult.Exit, "retry `gentle-ai sdd-attempt settle` with the same --request-id") {
+		t.Fatalf("stale settle exit missing same request-id guidance: %q", staleResult.Exit)
+	}
+
+	retryArgs := append(fixture.settlementArgs("settle", settleID),
+		"--untracked-scope", "select", "--expected-untracked-inventory", freshDigest,
+		"--intended-untracked", "born.txt", "--intended-untracked", "another.txt")
+
+	retryResult, _ := runCompactSDDAttempt(t, retryArgs)
+	if retryResult.State != "proceed" && retryResult.State != "complete" {
+		t.Fatalf("same-id settle retry = %#v, want proceed/complete", retryResult)
+	}
+
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), fixture.repo, fixture.change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Status()
+	if err != nil || status.ActiveAttempt != nil || len(status.Attempts) != 1 || !slices.Contains(status.Attempts[0].IntendedUntracked, "born.txt") {
+		t.Fatalf("unexpected post-settle status: %#v err=%v", status, err)
 	}
 }

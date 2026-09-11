@@ -2317,10 +2317,37 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			"gentle-ai sdd-attempt begin",
 			"gentle-ai sdd-attempt finish",
 			"gentle-ai sdd-attempt reset",
+			"Settle defines no other flag",
 		} {
 			if strings.Contains(section, forbidden) {
 				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
 			}
+		}
+	}
+}
+
+func TestSDDStatusContractSpecifiesSameIDUntrackedSettleRecovery(t *testing.T) {
+	for name, content := range map[string]string{
+		"sdd-status-contract.md":       MustRead("skills/_shared/sdd-status-contract.md"),
+		"sdd-orchestrator-sections.md": MustRead("skills/_shared/sdd-orchestrator-sections.md"),
+	} {
+		if !strings.Contains(content, "retry compact `sdd-attempt settle` with the same `<settle-id>`") {
+			t.Fatalf("%s missing same-ID settle retry guidance", name)
+		}
+		if strings.Contains(content, "review status --next-transition") {
+			t.Fatalf("%s routes settle recovery to Review STATUS", name)
+		}
+		if !strings.Contains(content, "never routing through acquire or Review STATUS") && !strings.Contains(content, "never route through acquire or Review STATUS") {
+			t.Fatalf("%s missing prohibition on acquire/Review STATUS routing", name)
+		}
+		if !strings.Contains(strings.ToLower(content), "a successful settlement commits its request record so any replay with that id must be an exact idempotent replay") {
+			t.Fatalf("%s missing successful settlement committed request record distinction", name)
+		}
+		if !strings.Contains(content, "a refused attempt records no request record and permits a corrected same-ID retry") {
+			t.Fatalf("%s missing refused attempt no-record distinction", name)
+		}
+		if strings.Contains(content, "Settle defines no other flag") {
+			t.Fatalf("%s falsely claims settle defines no other flag", name)
 		}
 	}
 }
