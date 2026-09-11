@@ -84,6 +84,7 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 		model.SkillGoTesting,
 		model.SkillSystemicIssueTriage,
 		model.SkillGentleAIBench,
+		model.SkillDesignMinimality,
 	}
 
 	skillSet := make(map[model.SkillID]struct{}, len(all))
@@ -110,6 +111,7 @@ func TestRequestedBundledSkillsAreInPresetSkillSets(t *testing.T) {
 		model.SkillRDDDefectWorkflow,
 		model.SkillSystemicIssueTriage,
 		model.SkillGentleAIBench,
+		model.SkillDesignMinimality,
 	}
 
 	for _, preset := range []model.PresetID{model.PresetEcosystemOnly, model.PresetFullGentleman} {

@@ -143,6 +143,7 @@ const (
 	SkillRDDDefectWorkflow   SkillID = "rdd-defect-workflow"
 	SkillSystemicIssueTriage SkillID = "systemic-issue-triage"
 	SkillGentleAIBench       SkillID = "gentle-ai-bench"
+	SkillDesignMinimality    SkillID = "design-minimality"
 )
 
 type PersonaID string

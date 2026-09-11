@@ -2854,10 +2854,38 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain gentle-orchestrator + 2 native fallback agents +
-	// 11 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 23 agents.
-	if len(agentMap) != 23 {
-		t.Fatalf("agent count = %d, want 23", len(agentMap))
+	// Multi overlay must contain gentle-orchestrator + 3 native fallback agents +
+	// 11 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 24 agents.
+	if len(agentMap) != 24 {
+		t.Fatalf("agent count = %d, want 24", len(agentMap))
+	}
+
+	// Verify design-minimality sub-agent contract in multi mode.
+	minimalityRaw, ok := agentMap["design-minimality"]
+	if !ok {
+		t.Fatal("missing design-minimality sub-agent")
+	}
+	minimalityAgent, ok := minimalityRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("design-minimality has unexpected type: %T", minimalityRaw)
+	}
+	if mode, _ := minimalityAgent["mode"].(string); mode != "subagent" {
+		t.Fatalf("design-minimality mode = %q, want %q", mode, "subagent")
+	}
+	if hidden, _ := minimalityAgent["hidden"].(bool); !hidden {
+		t.Fatal("design-minimality must be hidden")
+	}
+	if prompt, _ := minimalityAgent["prompt"].(string); !strings.Contains(prompt, "minimality ladder") {
+		t.Fatalf("design-minimality prompt missing minimality ladder: %q", prompt)
+	}
+	minimalityPerms, ok := minimalityAgent["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("design-minimality permission has unexpected type: %T", minimalityAgent["permission"])
+	}
+	for _, deniedTool := range []string{"bash", "edit", "task", "write"} {
+		if got := minimalityPerms[deniedTool]; got != "deny" {
+			t.Fatalf("design-minimality permission[%s] = %v, want deny", deniedTool, got)
+		}
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -2871,6 +2899,22 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 	if _, exists := orchestratorAgent["tools"]; exists {
 		t.Fatalf("gentle-orchestrator emits deprecated tools: %#v", orchestratorAgent)
+	}
+
+	permissionRaw, ok := orchestratorAgent["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("gentle-orchestrator permission has unexpected type: %T", orchestratorAgent["permission"])
+	}
+	taskRaw, ok := permissionRaw["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("gentle-orchestrator permission.task has unexpected type: %T", permissionRaw["task"])
+	}
+	taskAllowlist := taskRaw
+	if taskReplace, ok := taskRaw["__replace__"].(map[string]any); ok {
+		taskAllowlist = taskReplace
+	}
+	if got := taskAllowlist["design-minimality"]; got != "allow" {
+		t.Fatalf("gentle-orchestrator permission.task[design-minimality] = %v, want allow", got)
 	}
 
 	// Verify representative sub-agents are present.
@@ -3221,13 +3265,13 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
-	// 11 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 23 agents.
+	// Empty mode defaults to single — gentle-orchestrator + 3 native fallback agents +
+	// 11 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 24 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 23 {
-		t.Fatalf("agent count = %d, want 23", len(agentMap))
+	if len(agentMap) != 24 {
+		t.Fatalf("agent count = %d, want 24", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -3272,9 +3316,37 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", subAgent, taskAllowlist[subAgent])
 		}
 	}
-	for _, builtIn := range []string{"general", "explore"} {
+	for _, builtIn := range []string{"general", "explore", "design-minimality"} {
 		if got := taskAllowlist[builtIn]; got != "allow" {
 			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", builtIn, got)
+		}
+	}
+
+	// Verify design-minimality sub-agent contract in single mode.
+	minimalitySingleRaw, ok := agentMap["design-minimality"]
+	if !ok {
+		t.Fatal("missing design-minimality sub-agent in single mode")
+	}
+	minimalitySingleAgent, ok := minimalitySingleRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("design-minimality has unexpected type: %T", minimalitySingleRaw)
+	}
+	if mode, _ := minimalitySingleAgent["mode"].(string); mode != "subagent" {
+		t.Fatalf("design-minimality single mode = %q, want %q", mode, "subagent")
+	}
+	if hidden, _ := minimalitySingleAgent["hidden"].(bool); !hidden {
+		t.Fatal("design-minimality must be hidden in single mode")
+	}
+	if prompt, _ := minimalitySingleAgent["prompt"].(string); !strings.Contains(prompt, "minimality ladder") {
+		t.Fatalf("design-minimality single mode prompt missing minimality ladder: %q", prompt)
+	}
+	minimalitySinglePerms, ok := minimalitySingleAgent["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("design-minimality single mode permission has unexpected type: %T", minimalitySingleAgent["permission"])
+	}
+	for _, deniedTool := range []string{"bash", "edit", "task", "write"} {
+		if got := minimalitySinglePerms[deniedTool]; got != "deny" {
+			t.Fatalf("design-minimality single mode permission[%s] = %v, want deny", deniedTool, got)
 		}
 	}
 	assertOpenCodeSubAgentReadOnlyTools(t, agentMap, "review-refuter")

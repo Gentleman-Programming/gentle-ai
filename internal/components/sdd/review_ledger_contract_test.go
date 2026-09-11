@@ -505,7 +505,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Kilocode inherits that metadata, not additional native RDD support.
 	// #4324 appends canonical remote authorization to managed executor prompts;
 	// native permissions and the primary orchestrator remain unchanged.
-	const want = "d2f4aad13b3930df018219bd91ea56ef8ddac3bc3978cd0374b1857e2a1c5944"
+	// #3986 adds the design-minimality subagent to the OpenCode overlay assets.
+	// Kilocode inherits the subagent and permission allowlist entry.
+	const want = "6b8023737cb120351ec568e555ebe61b7d9c7e20f3ba220dcc739988d510b17b"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
