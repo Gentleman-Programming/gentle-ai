@@ -658,6 +658,18 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		}
 		base.Status = UpgradeSucceeded
 		base.ExitRequested = outcome.exitRequested
+
+		if r.Tool.PostUpgrade != nil {
+			if postErr := r.Tool.PostUpgrade(ctx); postErr != nil {
+				// The binary really did upgrade, so UpgradeFailed would lie about
+				// it — and it would strand the user, since a re-run of `gentle-ai
+				// upgrade` sees the binary is current and never retries this step.
+				// UpgradeSkipped + ManualHint is the executor's existing "the
+				// binary moved but this tool still needs your attention" channel.
+				base.Status = UpgradeSkipped
+				base.ManualHint = fmt.Sprintf("%s upgraded to %s, but its post-upgrade step failed: %v. Re-run it by reselecting %s in the community tools screen.", r.Tool.Name, base.NewVersion, postErr, r.Tool.Name)
+			}
+		}
 	}
 
 	return base
