@@ -112,6 +112,7 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentVSCodeCopilot,
+		model.AgentGitHubCopilotCLI,
 		model.AgentCodex,
 		model.AgentAntigravity,
 		model.AgentWindsurf,

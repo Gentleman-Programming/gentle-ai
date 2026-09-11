@@ -3323,7 +3323,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes", "github-copilot-cli"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -4108,6 +4108,7 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 		{"vscode-copilot", model.AgentVSCodeCopilot},
 		{"codex", model.AgentCodex},
 		{"hermes", model.AgentHermes},
+		{"github-copilot-cli", model.AgentGitHubCopilotCLI},
 	}
 
 	for _, tt := range tests {

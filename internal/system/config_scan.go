@@ -3,6 +3,9 @@ package system
 import (
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/copilotconfig"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -45,25 +48,52 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "pi", Path: filepath.Join(homeDir, ".pi")},
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
 		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
+		{Agent: "github-copilot-cli", Path: copilotconfig.Root(homeDir)},
 	}
 }
 
-// vscodeCopilotGlobalConfigDir returns ~/.copilot, the GlobalConfigDir used by
-// the vscode-copilot adapter across all platforms. The vscode adapter's
-// SystemPromptDir and SettingsPath are OS-dependent, but GlobalConfigDir is not.
+// vscodeCopilotGlobalConfigDir returns ~/.vscode to report VS Code Copilot root.
 func vscodeCopilotGlobalConfigDir(homeDir string) string {
-	return filepath.Join(homeDir, ".copilot")
+	return filepath.Join(homeDir, ".vscode")
+}
+
+// isCopilotExtensionDir checks if name matches github.copilot or github.copilot-<version>,
+// explicitly excluding github.copilot-chat-*.
+func isCopilotExtensionDir(name string) bool {
+	if name == "github.copilot" {
+		return true
+	}
+	return strings.HasPrefix(name, "github.copilot-") && !strings.HasPrefix(name, "github.copilot-chat")
+}
+
+// hasVSCodeCopilotExtension checks for github.copilot extension under .vscode/extensions.
+func hasVSCodeCopilotExtension(homeDir string) (bool, bool) {
+	extDir := filepath.Join(homeDir, ".vscode", "extensions")
+	entries, err := os.ReadDir(extDir)
+	if err != nil {
+		return false, false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && isCopilotExtensionDir(entry.Name()) {
+			return true, true
+		}
+	}
+	return false, false
 }
 
 // ScanConfigs returns the presence state of every known managed agent's global
-// This is a compatibility shim: it preserves the ConfigState contract for TUI
-// and validation callers while the canonical discovery (agents.DiscoverInstalled)
-// is used by sync and upgrade flows. Full delegation is deferred until the
-// system ← agents import cycle is resolved (follow-up change).
+// configuration directory.
 func ScanConfigs(homeDir string) []ConfigState {
 	states := knownAgentConfigDirs(homeDir)
 
 	for idx := range states {
+		if states[idx].Agent == "vscode-copilot" {
+			exists, isDir := hasVSCodeCopilotExtension(homeDir)
+			states[idx].Exists = exists
+			states[idx].IsDirectory = isDir
+			continue
+		}
+
 		info, err := os.Stat(states[idx].Path)
 		if err != nil {
 			continue

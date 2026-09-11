@@ -95,3 +95,9 @@ func TestIsSupportedAgentAcceptsHermes(t *testing.T) {
 		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentHermes)
 	}
 }
+
+func TestIsSupportedAgentAcceptsGitHubCopilotCLI(t *testing.T) {
+	if !IsSupportedAgent(model.AgentGitHubCopilotCLI) {
+		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentGitHubCopilotCLI)
+	}
+}

@@ -172,6 +172,7 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 		{model.AgentPi, "generic/sdd-orchestrator.md"},
 		{model.AgentTrae, "generic/sdd-orchestrator.md"},
 		{model.AgentHermes, "hermes/sdd-orchestrator.md"},
+		{model.AgentGitHubCopilotCLI, "generic/sdd-orchestrator.md"},
 	}
 
 	for _, tc := range tests {
@@ -5728,6 +5729,7 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentOpenCode, want: "opencode/sdd-orchestrator.md"},
 		{agent: model.AgentKilocode, want: "opencode/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
+		{agent: model.AgentGitHubCopilotCLI, want: "generic/sdd-orchestrator.md"},
 	}
 
 	for _, tt := range tests {
