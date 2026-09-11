@@ -32,6 +32,7 @@ type Server struct {
 func (s *Server) NewMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/events", s.handleEvents)
+	mux.HandleFunc("POST /v1/runtime-events", s.handleRuntimeEvents)
 	mux.HandleFunc("GET /v1/summary", s.handleSummary)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux

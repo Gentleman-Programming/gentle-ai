@@ -220,14 +220,28 @@ func TestLastReviewerCaptureReturnsAdvisoriesBeforeBurn(t *testing.T) {
 
 	var terminal struct {
 		State            reviewtransaction.State               `json:"state"`
+		ReviewerResults  []reviewtransaction.LensResult        `json:"reviewer_results"`
 		AdvisoryFindings *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings"`
 	}
 	if err := json.Unmarshal(terminalOutput.Bytes(), &terminal); err != nil {
 		t.Fatal(err)
 	}
-	if terminal.State != reviewtransaction.StateApproved || terminal.AdvisoryFindings == nil ||
-		len(terminal.AdvisoryFindings.Findings) != 1 || terminal.AdvisoryFindings.Findings[0].ID != "R3-W01" {
-		t.Fatalf("last capture advisories = %#v, want the admitted warning before burn", terminal)
+	if terminal.State != reviewtransaction.StateApproved || len(terminal.ReviewerResults) != len(started.SelectedLenses) {
+		t.Fatalf("last capture reviewer results = %#v, want every admitted selected lens before burn", terminal.ReviewerResults)
+	}
+	for order, result := range terminal.ReviewerResults {
+		if result.Lens != started.SelectedLenses[order] || len(result.Evidence) != 1 ||
+			result.Evidence[0] != "inspected the complete frozen candidate scope named by the capture binding" ||
+			!strings.HasPrefix(result.ResultHash, "sha256:") || len(result.ResultHash) != len("sha256:")+64 {
+			t.Fatalf("last capture reviewer result %d = %#v, want the canonical admitted result", order, result)
+		}
+	}
+	warning := terminal.ReviewerResults[len(terminal.ReviewerResults)-1].Findings
+	if len(warning) != 1 || !reflect.DeepEqual(warning[0], reviewtransaction.Finding{
+		ID: "R3-W01", Lens: "reliability", Location: "internal/auth/session.go:4", Severity: "WARNING",
+		Claim: "the token check could be easier to read", ProofRefs: []string{"the exact changed line was inspected"},
+	}) || terminal.AdvisoryFindings == nil || len(terminal.AdvisoryFindings.Findings) != 1 || terminal.AdvisoryFindings.Findings[0].ID != "R3-W01" {
+		t.Fatalf("last capture reviewer readback = %#v, want the admitted warning narrative and advisory before burn", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
@@ -253,15 +267,16 @@ func TestLastReviewerCaptureOpensBoundedCorrectionForSevereFinding(t *testing.T)
 	}}, &correctionOutput)
 
 	var correction struct {
-		Operation string                  `json:"operation"`
-		State     reviewtransaction.State `json:"state"`
-		Action    string                  `json:"action"`
+		Operation       string                  `json:"operation"`
+		State           reviewtransaction.State `json:"state"`
+		Action          string                  `json:"action"`
+		ReviewerResults json.RawMessage         `json:"reviewer_results"`
 	}
 	if err := json.Unmarshal(correctionOutput.Bytes(), &correction); err != nil {
 		t.Fatal(err)
 	}
 	if correction.Operation != "review/capture-result" || correction.State != reviewtransaction.StateCorrectionRequired ||
-		!strings.Contains(correction.Action, "bounded correction") {
+		len(correction.ReviewerResults) != 0 || !strings.Contains(correction.Action, "bounded correction") {
 		t.Fatalf("last capture correction result = %#v", correction)
 	}
 	record, err := store.Load()
@@ -467,7 +482,8 @@ func TestCompiledTargetedValidatorCaptureClosesOnItsTerminalEvent(t *testing.T) 
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved ||
-		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
+		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil ||
+		terminal.ReviewerResults == nil || len(*terminal.ReviewerResults) != 1 {
 		t.Fatalf("compiled validator terminal closure = %#v", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, lineage)
@@ -857,16 +873,17 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		t.Fatalf("capture rejected targeted validator: %v\n%s", err, terminalOutput.String())
 	}
 	var terminal struct {
-		Operation string                  `json:"operation"`
-		State     reviewtransaction.State `json:"state"`
-		Action    string                  `json:"action"`
-		Evidence  json.RawMessage         `json:"targeted_validator_evidence"`
+		Operation       string                  `json:"operation"`
+		State           reviewtransaction.State `json:"state"`
+		Action          string                  `json:"action"`
+		Evidence        json.RawMessage         `json:"targeted_validator_evidence"`
+		ReviewerResults json.RawMessage         `json:"reviewer_results"`
 	}
 	if err := json.Unmarshal(terminalOutput.Bytes(), &terminal); err != nil {
 		t.Fatal(err)
 	}
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateEscalated ||
-		!strings.Contains(terminal.Action, "rejected") || len(terminal.Evidence) == 0 {
+		len(terminal.ReviewerResults) != 0 || !strings.Contains(terminal.Action, "rejected") || len(terminal.Evidence) == 0 {
 		t.Fatalf("rejected validator terminal result = %#v", terminal)
 	}
 	after, err := store.Load()

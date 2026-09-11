@@ -100,6 +100,17 @@ func NewState() (State, error) {
 // exists for read-only checks that must not create a file as a side effect
 // (e.g. deciding whether telemetry is disabled before touching disk at all).
 func Load(homeDir string) (State, error) {
+	return loadState(homeDir, false)
+}
+
+// LoadPolicyState reads without repair or legacy default-enabled enrollment.
+// Only the policy-bearing fields must be present; counters and send history
+// do not determine collection permission.
+func LoadPolicyState(homeDir string) (State, error) {
+	return loadState(homeDir, true)
+}
+
+func loadState(homeDir string, strict bool) (State, error) {
 	data, err := os.ReadFile(Path(homeDir))
 	if err != nil {
 		return State{}, err
@@ -107,6 +118,18 @@ func Load(homeDir string) (State, error) {
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
 		return State{}, err
+	}
+	if strict {
+		var policy struct {
+			Enabled     *bool `json:"enabled"`
+			NoticeShown *bool `json:"notice_shown"`
+		}
+		if err := json.Unmarshal(data, &policy); err != nil {
+			return State{}, err
+		}
+		if s.InstallID == "" || policy.Enabled == nil || policy.NoticeShown == nil {
+			return State{}, fmt.Errorf("incomplete telemetry policy state")
+		}
 	}
 	return s, nil
 }

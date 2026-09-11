@@ -104,6 +104,19 @@ func TestPublishedLastEventClosureSchemaAcceptsApprovedTerminalCapture(t *testin
 	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
 	validatePublishedReviewSchema(t, schema, output.Bytes())
 	closure := decodeJSONObjectCopy(t, output.Bytes())
+	if results, found := closure["reviewer_results"].([]any); !found || len(results) != len(started.SelectedLenses) {
+		t.Fatalf("approved last-event closure reviewer_results = %#v, want every selected lens", closure["reviewer_results"])
+	}
+	closure["reviewer_results"] = []any{}
+	if err := schema.Validate(closure); err != nil {
+		t.Fatalf("published last-event closure schema rejected an approved zero-lens readback: %v", err)
+	}
+	closure = decodeJSONObjectCopy(t, output.Bytes())
+	delete(closure, "reviewer_results")
+	if err := schema.Validate(closure); err == nil {
+		t.Fatal("published last-event closure schema accepted approved output without reviewer_results")
+	}
+	closure = decodeJSONObjectCopy(t, output.Bytes())
 	closure["escalation"] = map[string]any{"cause": "unresolved_severe_findings", "finding_ids": []any{}}
 	if err := schema.Validate(closure); err == nil {
 		t.Fatal("published last-event closure schema accepted escalation on approved state")
@@ -143,9 +156,14 @@ func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t
 	if !ok || closure["state"] != string(reviewtransaction.StateCorrectionRequired) {
 		t.Fatalf("real correction closure = %#v", closure)
 	}
+	closure["reviewer_results"] = []any{}
+	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	if err := schema.Validate(closure); err == nil {
+		t.Fatal("published last-event closure schema accepted reviewer_results on correction-required state")
+	}
+	delete(closure, "reviewer_results")
 	continuation["operation"] = "review.start"
 
-	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
 	if err := schema.Validate(closure); err == nil {
 		t.Fatalf("published last-event closure schema accepted non-STATUS correction continuation: %#v", closure)
 	}

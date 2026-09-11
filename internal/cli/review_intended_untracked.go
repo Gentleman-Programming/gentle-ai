@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -150,21 +149,20 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 	return reviewCollectTransition("intended_untracked_selection_required", input)
 }
 
-// reviewSameUntrackedPaths reports whether two path lists name exactly the
-// same set, independent of order. Both `IntendedUntrackedInventory` and a
-// stored `IntendedUntracked` selection are canonicalized and sorted at their
-// own source, but this comparison does not depend on that: it sorts its own
-// copies so a caller never has to reason about either side's ordering.
-func reviewSameUntrackedPaths(left, right []string) bool {
-	if len(left) != len(right) {
+// reviewUntrackedInventoryContainsSelection reports whether every frozen
+// selected path remains eligible in the live untracked inventory. Additional
+// unselected paths stay outside the immutable review target and therefore do
+// not invalidate a correction lineage that never had authority to add them.
+func reviewUntrackedInventoryContainsSelection(inventory, selected []string) bool {
+	if len(selected) == 0 || len(inventory) < len(selected) {
 		return false
 	}
-	sortedLeft := append([]string{}, left...)
-	sortedRight := append([]string{}, right...)
-	sort.Strings(sortedLeft)
-	sort.Strings(sortedRight)
-	for index, path := range sortedLeft {
-		if path != sortedRight[index] {
+	available := make(map[string]struct{}, len(inventory))
+	for _, path := range inventory {
+		available[path] = struct{}{}
+	}
+	for _, path := range selected {
+		if _, ok := available[path]; !ok {
 			return false
 		}
 	}

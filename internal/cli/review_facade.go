@@ -939,19 +939,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					// Only an approved compact authority that still owns its
 					// acknowledgement can resume its immutable terminal target. A
 					// correction-required authority that already froze a non-empty
-					// intended-untracked SELECTION resumes it too, but only while the
-					// live workspace's eligible untracked population is still exactly
-					// that declared set: the exact bound STATUS continuation
+					// intended-untracked SELECTION resumes it too while every selected
+					// path remains eligible. Additional unselected paths stay outside
+					// the immutable target and cannot expand a bounded correction: the
+					// exact bound STATUS continuation
 					// `review.capture-correction-plan` itself returns carries no
 					// untracked-scope flags, so demanding a fresh declaration on that
 					// plain re-entry dead-ended the correction lineage and bound the
 					// resulting collect input to a different (live, declaration-less)
 					// target identity than the one the authority is bound to (issue
-					// #3849). A frozen EXCLUDE declaration (empty selection) is left
-					// alone here -- it is indistinguishable on its own from "nothing
-					// was ever declared", and a brand new untracked artifact appearing
-					// mid-correction must still force a fresh declaration exactly as
-					// before (design intent: "detect new untracked artifacts").
+					// #3849 and #4435). A frozen EXCLUDE declaration (empty selection)
+					// is left alone here because it is indistinguishable on its own from
+					// "nothing was ever declared"; that path still requires a fresh live
+					// declaration when eligible untracked files exist.
 					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
@@ -960,7 +960,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						if inventoryErr != nil {
 							return reviewPreflightError(inventoryErr)
 						}
-						resumeCorrectionUntracked = reviewSameUntrackedPaths(inventory, declaredUntracked)
+						resumeCorrectionUntracked = reviewUntrackedInventoryContainsSelection(inventory, declaredUntracked)
 					}
 					if pendingApproval || resumeCorrectionUntracked {
 						intendedScope = reviewIntendedUntrackedScope{

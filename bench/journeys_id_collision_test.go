@@ -27,6 +27,7 @@ func journeySources() []journeySource {
 		{"journeys_sdd.go", sddJourneys()},
 		{"journeys_issue_2891.go", issue2891Journeys()},
 		{"journeys_issue2696.go", issue2696Journeys()},
+		{"journeys_issue4210.go", issue4210Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_issue3094.go", issue3094Journeys()},
 		{"journeys_issue_3065.go", issue3065Journeys()},

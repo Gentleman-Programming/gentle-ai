@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -54,6 +55,39 @@ var telemetryTestSpawnRecorder *telemetry.RecordingSpawner
 // TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
 // deliberately-kept case.
 func TestMain(m *testing.M) {
+	// Subprocess stand-in (#4434 regression): re-executed with the CLI
+	// arguments of an emitted continuation command, this test binary must
+	// run the real CLI dispatch (flag parsing, agent selection, sync
+	// execution), not the test harness below -- which would swap HOME out
+	// from under the captured environment the continuation was emitted
+	// against. The same LookPath stubs as the harness keep agent discovery
+	// hermetic, and DO_NOT_TRACK is inherited so telemetry stays offline.
+	if os.Getenv("GENTLE_AI_TEST_CLI_STANDIN") == "1" {
+		if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+			panic(err)
+		}
+		agentPresent := func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+		claude.LookPathOverride = agentPresent
+		opencode.LookPathOverride = agentPresent
+		gemini.LookPathOverride = agentPresent
+		qwen.LookPathOverride = agentPresent
+		kilocode.LookPathOverride = agentPresent
+		openclaw.LookPathOverride = agentPresent
+		// The same routing app.RunArgs performs for the sync subcommand
+		// (internal/app/app.go: cli.RunSync(args[1:]) -- it cannot be imported
+		// here without an import cycle): strip the verb, reject anything else,
+		// and run the real flag parsing and sync execution.
+		args := os.Args[1:]
+		if len(args) == 0 || args[0] != "sync" {
+			fmt.Fprintf(os.Stderr, "stand-in: unsupported CLI arguments %q\n", args)
+			os.Exit(1)
+		}
+		if _, err := RunSync(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}

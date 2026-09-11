@@ -60,8 +60,18 @@ func TestCompactSettlePassesFinalVerificationAfterResetAndDischargedRemediation(
 	}
 
 	// 2. A passed remediation discharges that failure.
-	remediation := acquire("post-reset-remediation-acquire", "payments-apply", "implement payments", runtimeTestHash('f'))
 	appendRuntimeLedgerFile(t, repo, "correction that converged\n")
+	resetStatus, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reset(ctx, ResetObjectiveRequest{
+		ExpectedRevision: resetStatus.Revision, RequestID: "post-reset-remediation-authorization",
+		Reason: "maintainer authorized the changed correction candidate", Actor: "maintainer",
+	}); err != nil {
+		t.Fatalf("reset for changed correction candidate: %v", err)
+	}
+	remediation := acquire("post-reset-remediation-acquire", "payments-apply", "implement payments", runtimeTestHash('f'))
 	discharged := settle("post-reset-remediation-settle", remediation.Token, AttemptPassed, runtimeTestHash('b'), runtimeTestHash('f'))
 	if discharged.State != CompactStateComplete && discharged.State != CompactStateProceed {
 		t.Fatalf("remediation settle = %#v", discharged)

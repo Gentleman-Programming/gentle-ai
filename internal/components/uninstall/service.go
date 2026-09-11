@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
@@ -510,6 +511,15 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		}
 	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
+		adapter, _ := s.registry.Get(model.AgentOpenCode)
+		configDir := adapter.GlobalConfigDir(s.homeDir)
+		if err := telemetryruntime.CheckManaged(configDir); err != nil {
+			return plan{}, err
+		}
+		for _, op := range removeOwnedTelemetryRuntime(configDir) {
+			backupTargets[op.path] = struct{}{}
+			operationsByKey[operationKey(op)] = op
+		}
 		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
 			backupTargets[path] = struct{}{}
 			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
@@ -850,6 +860,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeDirIfEmpty(filepath.Dir(paths[0])))
 		}
 	case model.ComponentOpenCodeGentleLogo:
+		if adapter.Agent() != model.AgentOpenCode {
+			break
+		}
 		pluginPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
 		targets = append(targets, pluginPath)
 		ops = append(ops, removeFile(pluginPath), removeDirIfEmpty(filepath.Dir(pluginPath)))
@@ -1672,6 +1685,29 @@ func globalBackupTargets(homeDir string) []string {
 		gga.ConfigPath(homeDir),
 		gga.AgentsTemplatePath(homeDir),
 	}
+}
+
+// One transactional removal of the pair, projected as two file results for the
+// existing uninstall reporter. Validation happens at execution, not plan time.
+func removeOwnedTelemetryRuntime(configDir string) []operation {
+	var attempted bool
+	var removed []string
+	var err error
+	var operations []operation
+	for _, path := range telemetryruntime.ManagedPaths(configDir) {
+		operations = append(operations, operation{
+			typeID: opRemoveFile, path: path, agents: []model.AgentID{model.AgentOpenCode},
+			apply: func(path string) (bool, bool, error) {
+				if !attempted {
+					attempted = true
+					removed, err = telemetryruntime.RemoveManaged(configDir)
+				}
+				changed := slices.Contains(removed, path)
+				return changed, changed, err
+			},
+		})
+	}
+	return operations
 }
 
 func removeOwnedOpenCodeLauncher(path string) operation {

@@ -728,6 +728,11 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		!(result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "managed_assets_outdated") {
 		return errors.New("next_transition.continuation is valid only on a managed_assets_outdated stop") // refusal:by-design world-action: a producer that attaches this continuation to any other transition built a malformed envelope and requires a code fix, not an operator command
 	}
+	if continuation := result.NextTransition.Continuation; continuation != nil {
+		if err := validateManagedAssetsContinuation(continuation); err != nil {
+			return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
+		}
+	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 		if result.rddModeResolved && !result.rddMode.Enabled() {
 			// The kill switch answers before any selector-dependent invariant:

@@ -203,10 +203,10 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json": "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		// issue #4226: last-event-closure documents the CompactEscalationEvidence
-		// contract (cause, finding_ids, refuter_outcomes) for terminal escalation.
+		// issues #4226/#4453: last-event-closure documents terminal escalation
+		// and exposes complete admitted reviewer results before acknowledgement.
 		// Deliberate, not drift.
-		"schemas/last-event-closure.schema.json": "1c720e2bf6e5363fd6138a4da8cd5f65c55bf7bad5ab863838f9d43b8294f8a1",
+		"schemas/last-event-closure.schema.json": "08a94def144d70c0c1e84b73a1a245cd36bc73dc1ade4aa733b42097b05593eb",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
@@ -319,6 +319,17 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	if err := failureSchema.Validate(unrelatedCode); err == nil {
 		t.Fatal("failure.schema.json accepted a continuation on an unrelated failure code")
 	}
+	for _, command := range []string{
+		"'/tmp/gentle\nai' sync --agent opencode",
+		"\"C:\\\\gentle\r-ai.exe\" sync --agent opencode",
+	} {
+		multilineCommand := decodeJSONObjectCopy(t, startOutput.Bytes())
+		multilineContinuation := multilineCommand["continuation"].(map[string]any)
+		multilineContinuation["command"] = command
+		if err := failureSchema.Validate(multilineCommand); err == nil {
+			t.Fatalf("failure.schema.json accepted multiline continuation command %q", command)
+		}
+	}
 
 	// --- status-v7.schema.json, exercised against the real STATUS stop transition ---
 	var stopOutput bytes.Buffer
@@ -358,6 +369,18 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	unrelatedReason["next_transition"] = unrelatedTransition
 	if err := statusV7Schema.Validate(unrelatedReason); err == nil {
 		t.Fatal("status-v7.schema.json accepted a continuation attached to an unrelated stop reason code")
+	}
+	for _, command := range []string{
+		"'/tmp/gentle\nai' sync --agent opencode",
+		"\"C:\\\\gentle\r-ai.exe\" sync --agent opencode",
+	} {
+		multilineCommand := decodeJSONObjectCopy(t, stopOutput.Bytes())
+		multilineTransition := multilineCommand["next_transition"].(map[string]any)
+		multilineContinuation := multilineTransition["continuation"].(map[string]any)
+		multilineContinuation["command"] = command
+		if err := statusV7Schema.Validate(multilineCommand); err == nil {
+			t.Fatalf("status-v7.schema.json accepted multiline continuation command %q", command)
+		}
 	}
 }
 

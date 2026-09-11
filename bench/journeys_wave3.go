@@ -233,6 +233,12 @@ func requireExplicitAtomicFourLensStatus(r *journeyRun) error {
 }
 
 func captureAtomicReviewerSlots(r *journeyRun, lineageID string, includeCorrectableFinding bool) error {
+	return captureAtomicReviewerSlotsWithTerminalVerifier(r, lineageID, includeCorrectableFinding, nil)
+}
+
+func captureAtomicReviewerSlotsWithTerminalVerifier(r *journeyRun, lineageID string, includeCorrectableFinding bool, verifyTerminal func(Observation, []string) error) error {
+	capturedLenses := make([]string, 0, 4)
+	var terminal Observation
 	for capture := 0; capture < 4; capture++ {
 		status, err := readAtomicReviewStatus(r, lineageID)
 		if err != nil {
@@ -261,6 +267,7 @@ func captureAtomicReviewerSlots(r *journeyRun, lineageID string, includeCorrecta
 		if lineage != lineageID || target == "" || revision == "" || lens == "" || order == "" {
 			return fmt.Errorf("atomic capture %d binding = %+v", capture, input)
 		}
+		capturedLenses = append(capturedLenses, lens)
 
 		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, status.paths())
 		if err != nil {
@@ -292,6 +299,43 @@ func captureAtomicReviewerSlots(r *journeyRun, lineageID string, includeCorrecta
 		}, true)
 		if observation.ExitCode != 0 {
 			return fmt.Errorf("capture atomic reviewer slot %d: %s", capture, firstLine(observation.Stderr))
+		}
+		terminal = observation
+	}
+	if verifyTerminal != nil {
+		return verifyTerminal(terminal, capturedLenses)
+	}
+	return nil
+}
+
+// requireAtomicLastCaptureReviewerResults proves #4453 at the driven boundary:
+// the final capture exposes every canonical admitted lens result before its
+// acknowledgement can burn the approved authority.
+func requireAtomicLastCaptureReviewerResults(observation Observation, lenses []string) error {
+	var closure struct {
+		Schema          string          `json:"schema"`
+		State           string          `json:"state"`
+		Acknowledgement json.RawMessage `json:"acknowledgement"`
+		ReviewerResults []struct {
+			Lens       string            `json:"lens"`
+			Findings   []json.RawMessage `json:"findings"`
+			Evidence   []string          `json:"evidence"`
+			ResultHash string            `json:"result_hash"`
+		} `json:"reviewer_results"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &closure); err != nil {
+		return fmt.Errorf("decode final reviewer capture closure: %w", err)
+	}
+	expectedLenses := []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}
+	if closure.Schema != "gentle-ai.review-last-event-closure/v1" || closure.State != "approved" || len(closure.Acknowledgement) == 0 ||
+		len(lenses) != len(expectedLenses) || len(closure.ReviewerResults) != len(expectedLenses) {
+		return fmt.Errorf("final reviewer capture closure = %+v, want approved acknowledgement with every canonical selected-lens result", closure)
+	}
+	for order, result := range closure.ReviewerResults {
+		if lenses[order] != expectedLenses[order] || result.Lens != expectedLenses[order] || len(result.Findings) != 0 || len(result.Evidence) != 1 ||
+			result.Evidence[0] != "inspected the complete frozen candidate scope named by the capture binding" ||
+			!strings.HasPrefix(result.ResultHash, "sha256:") || len(result.ResultHash) != len("sha256:")+64 {
+			return fmt.Errorf("final reviewer result %d = %+v, want the canonical selected-lens readback", order, result)
 		}
 	}
 	return nil

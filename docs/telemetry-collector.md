@@ -68,11 +68,37 @@ constraints. The result is a dataset that is statistical only: no field in
 it can carry user-authored text, which is what makes it safe to aggregate
 and report on in the first place.
 
+## Runtime observations
+
+`POST /v1/runtime-events` accepts the separate
+[runtime event schema](../contracts/telemetry/runtime/v1/schemas/event.schema.json):
+exactly `schema`, `registry`, a fresh independent `delivery_id`, `host`, and public
+`rows`, bounded to 16 KiB and 32 rows. No batch/session/task/install/user identity,
+activity timestamp, private name, prompt, code, path, or raw error is accepted.
+See [runtime fields and native command](telemetry.md#runtime-metrics-one-attempt-no-client-storage).
+
+Native clients send once over HTTPS, without redirects, with a 3-second network
+budget and bounded acknowledgement. Failure discards metrics; no client queue,
+outbox, retry, cooldown, daemon, or migration cleanup exists. Server deduplication
+remains defensive: HTTP 200 returns exactly
+`{"schema":"gentle-ai.telemetry-runtime-delivery/v1","decision":"stored"}` or
+`duplicate`. A conflicting identity returns 409; invalid, oversized, rate-limited,
+and unavailable requests return 400, 413, 429, and 500 respectively. Clients do
+not retry any of them or retain the event after a lost response.
+
+Existing SQLite `runtime_deliveries`/`runtime_rows`, `user_version=1`, transactional
+storage, shared rate limiting, and startup/daily retention remain unchanged.
+`received_at` is delivery time, not activity time. Existing `--retention-days`
+purges whole deliveries strictly before the UTC cutoff; deduplication ends when
+the corresponding delivery is purged. No runtime daily rollup, new scheduler,
+production configuration change, or deployment is included.
+
 ## HTTP API
 
 | Endpoint | Method | Auth | Notes |
 |---|---|---|---|
 | `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, per-IP rate limit. `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
+| `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations. `200` with `stored`/`duplicate`; one client attempt only. |
 | `/v1/summary` | GET | `Authorization: Bearer <token>` | Returns the JSON described below. `401` without a valid token. |
 | `/healthz` | GET | none | Liveness check for the reverse proxy / process supervisor. |
 
@@ -449,6 +475,42 @@ curl -sH "Authorization: Bearer $(sudo cat /etc/gentle-telemetry/summary.token)"
 - **Upgrade lag**: `version_distribution`.
 
 ## Grafana dashboards
+
+### Runtime received observations
+
+Four runtime tables read retained `runtime_rows` joined to `runtime_deliveries`:
+
+| Panel | Values grouped by UTC receipt day |
+|---|---|
+| Runtime received observations — responses | Response occurrences by public provider/model, model evidence, and tool host |
+| Runtime received observations — launches | Launch occurrences by agent class, selected effort, and separately effective effort |
+| Runtime received observations — tokens and coverage | Six independent token sums, each with reported/unavailable/unsupported counts |
+| Runtime received observations — duration and errors | Measured count and millisecond sum by request/message/unavailable kind and error category |
+
+These are received observations, not complete consumption or reconstructed
+sessions. A null token sum means no reported values; a reported zero remains zero.
+`total_tokens` is never derived from other fields. Duration sums with no measured
+observations are null; timing kinds are never combined into a latency estimate.
+Occurrence sums include only reported integers, never coercing `unsupported` to
+zero. SQLite uses floating-point arithmetic for fractional duration sums; these
+are not arbitrary-precision decimal totals. Integer sums retain SQLite's signed
+64-bit limit, and Grafana numeric display may round very large values.
+
+The dashboard range applies inclusive bounds to server receipt time:
+`d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000`.
+Grafana supplies milliseconds; storage uses signed Unix nanoseconds. Whole
+millisecond bounds from 0 through 9223372036854 (2262-04-11 UTC) multiply exactly
+as SQLite integers. Use ranges within that supported epoch, not later dates.
+UTC day grouping converts nanoseconds to seconds, as the existing dashboard does.
+Each table returns at most 1000 groups in receipt-day order; narrow the range if
+that limit is reached. Empty ranges show no observations, not synthetic zeros.
+
+The existing service retains raw observations for 90 days and purges them through
+the existing retention job. These panels add no durable daily aggregates or
+retention setting. SQL and JSON1 are tested against the actual dashboard queries
+with the collector's SQLite driver; no production Grafana deployment is required.
+
+### Grafana setup
 
 `--with-grafana` installs Grafana OSS (free, self-hosted) on the same VPS
 with a read-only view over the collector's own SQLite database — no second

@@ -155,7 +155,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// --intended-untracked=x` into a select, or accept `--untracked-scope=bogus`.
 	var settlementUntracked *[]string
 	settlementInventory := ""
-	if (operation == "finish" || operation == "settle" || operation == "rescope") && declaredUntracked {
+	if (operation == "finish" || operation == "settle" || operation == "rescope" || operation == "supersede") && declaredUntracked {
 		if shapeErr := intendedUntrackedDeclarationShape(untrackedScope, intendedUntracked, expectedUntrackedInventory, expectedUntrackedInventory.value, reviewIntendedUntrackedInventoryCommand, "gentle-ai sdd-attempt "+operation); shapeErr != nil {
 			return shapeErr
 		}
@@ -223,6 +223,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
 			Relation:          sddstatus.RuntimeObjectiveRelation(*objectiveRelation),
 			IntendedUntracked: settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
+		})
+	case "supersede":
+		result, err = store.Supersede(ctx, sddstatus.SupersedeObjectiveRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+			Relation: sddstatus.RuntimeObjectiveRelation(*objectiveRelation), IntendedUntracked: settlementUntracked, ExpectedUntrackedInventory: settlementInventory,
 		})
 	case "repair":
 		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
@@ -379,6 +385,20 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		// terminal settlement, outside any active attempt, which the
 		// predecessor's recorded selection could never include. Omitting all
 		// three keeps replaying the predecessor's recorded selection.
+		{name: "untracked-scope", usage: "optional; declares a fresh successor selection instead of replaying history; select or exclude"},
+		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
+		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},
+	}},
+	{name: "supersede", purpose: "Open a distinct terminal zero-drift successor without claiming narrowing", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "work-unit", required: true, usage: "required; declared successor label, at most 160 bytes"},
+		{name: "evidence-goal", required: true, usage: "required; declared successor objective, at most 240 bytes"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..100, above carried attempts"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, above carried lines"},
+		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"}, {name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "objective-relation", usage: "optional; remediation (default) or independent — independent suppresses inherited failed evidence observably"},
 		{name: "untracked-scope", usage: "optional; declares a fresh successor selection instead of replaying history; select or exclude"},
 		{name: "expected-untracked-inventory", usage: "required with untracked-scope; inventory digest"},
 		{name: "intended-untracked", kind: sddAttemptRepeatableStringFlag, usage: "repeatable selected repo-relative untracked path"},

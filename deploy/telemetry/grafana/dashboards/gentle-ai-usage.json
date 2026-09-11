@@ -10,11 +10,58 @@
   "refresh": "5m",
   "panels": [
     {
+      "id": 19, "title": "Runtime observations",
+      "type": "row", "collapsed": false, "panels": [],
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+    },
+    {
+      "id": 20, "title": "Runtime overview",
+      "description": "Retained runtime observations received within the dashboard time range (inclusive collector receipt time, not client activity time). Observations are not sessions, users or people. Occurrence sums include integer reports only; total tokens are explicitly reported, never inferred. Error observations exclude category none and include unknown. Missing values are not zero. No prompts, paths or identities.",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 1, "w": 24, "h": 5 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT COUNT(*) AS \"Received observations\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END) AS \"Response occurrences\", SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END) AS \"Launch occurrences\", SUM(CASE WHEN json_extract(r.row_json, '$.total_tokens.reported') > 0 THEN json_extract(r.row_json, '$.total_tokens.sum') END) AS \"Reported total tokens\", SUM(CASE WHEN json_extract(r.row_json, '$.error_category') <> 'none' THEN 1 ELSE 0 END) AS \"Error observations\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
+        "rawQueryText": "SELECT COUNT(*) AS \"Received observations\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END) AS \"Response occurrences\", SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END) AS \"Launch occurrences\", SUM(CASE WHEN json_extract(r.row_json, '$.total_tokens.reported') > 0 THEN json_extract(r.row_json, '$.total_tokens.sum') END) AS \"Reported total tokens\", SUM(CASE WHEN json_extract(r.row_json, '$.error_category') <> 'none' THEN 1 ELSE 0 END) AS \"Error observations\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+      }],
+      "options": { "orientation": "horizontal", "textMode": "value_and_name", "graphMode": "none", "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" } },
+      "fieldConfig": { "defaults": { "min": 0, "noValue": "Not reported", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "id": 21, "title": "Reported tokens",
+      "description": "Reported token sums within inclusive collector receipt-time bounds. Model observation shows tool host · provider/model · model evidence; Effort shows selected → effective effort. Groups retain every underlying dimension. Each metric includes only its own reported values. Total is explicitly reported, never added from overlapping categories. — means not reported; it is not zero. Reported zero remains zero. Cache write displays cache creation tokens. See Token coverage for reported/unavailable/unsupported counts. At most 1000 combinations in label order.",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 10 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT json_extract(d.canonical_payload, '$.host') || ' · ' || json_extract(r.row_json, '$.model.provider') || '/' || json_extract(r.row_json, '$.model.id') || ' · ' || json_extract(r.row_json, '$.model_evidence') AS \"Model observation\", json_extract(r.row_json, '$.selected_effort') || ' → ' || json_extract(r.row_json, '$.effective_effort') AS \"Selected → effective\", SUM(CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN json_extract(r.row_json, '$.input_tokens.sum') END) AS Input, SUM(CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN json_extract(r.row_json, '$.output_tokens.sum') END) AS Output, SUM(CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN json_extract(r.row_json, '$.cache_read_tokens.sum') END) AS \"Cache read\", SUM(CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN json_extract(r.row_json, '$.cache_creation_tokens.sum') END) AS \"Cache creation\", SUM(CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN json_extract(r.row_json, '$.reasoning_tokens.sum') END) AS Reasoning, SUM(CASE WHEN json_extract(r.row_json, '$.total_tokens.reported') > 0 THEN json_extract(r.row_json, '$.total_tokens.sum') END) AS Total FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY json_extract(d.canonical_payload, '$.host'), json_extract(r.row_json, '$.model.provider'), json_extract(r.row_json, '$.model.id'), json_extract(r.row_json, '$.model_evidence'), json_extract(r.row_json, '$.selected_effort'), json_extract(r.row_json, '$.effective_effort') ORDER BY 1, 2 LIMIT 1000",
+        "rawQueryText": "SELECT json_extract(d.canonical_payload, '$.host') || ' · ' || json_extract(r.row_json, '$.model.provider') || '/' || json_extract(r.row_json, '$.model.id') || ' · ' || json_extract(r.row_json, '$.model_evidence') AS \"Model observation\", json_extract(r.row_json, '$.selected_effort') || ' → ' || json_extract(r.row_json, '$.effective_effort') AS \"Selected → effective\", SUM(CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN json_extract(r.row_json, '$.input_tokens.sum') END) AS Input, SUM(CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN json_extract(r.row_json, '$.output_tokens.sum') END) AS Output, SUM(CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN json_extract(r.row_json, '$.cache_read_tokens.sum') END) AS \"Cache read\", SUM(CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN json_extract(r.row_json, '$.cache_creation_tokens.sum') END) AS \"Cache creation\", SUM(CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN json_extract(r.row_json, '$.reasoning_tokens.sum') END) AS Reasoning, SUM(CASE WHEN json_extract(r.row_json, '$.total_tokens.reported') > 0 THEN json_extract(r.row_json, '$.total_tokens.sum') END) AS Total FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY json_extract(d.canonical_payload, '$.host'), json_extract(r.row_json, '$.model.provider'), json_extract(r.row_json, '$.model.id'), json_extract(r.row_json, '$.model_evidence'), json_extract(r.row_json, '$.selected_effort'), json_extract(r.row_json, '$.effective_effort') ORDER BY 1, 2 LIMIT 1000"
+      }],
+      "options": { "showHeader": true, "cellHeight": "sm", "enablePagination": true },
+      "fieldConfig": { "defaults": { "min": 0, "decimals": 0, "noValue": "Not reported", "custom": { "minWidth": 80 } }, "overrides": [{ "matcher": { "id": "byName", "options": "Model observation" }, "properties": [{ "id": "custom.width", "value": 340 }] }, { "matcher": { "id": "byName", "options": "Selected → effective" }, "properties": [{ "id": "custom.width", "value": 180 }] }, { "matcher": { "id": "byRegexp", "options": "^(Input|Output|Cache read|Cache creation|Reasoning|Total)$" }, "properties": [{ "id": "mappings", "value": [{ "type": "special", "options": { "match": "null", "result": { "text": "—" } } }] }] }, { "matcher": { "id": "byName", "options": "Cache creation" }, "properties": [{ "id": "displayName", "value": "Cache write" }] }] }
+    },
+    {
+      "id": 22, "title": "Error observations",
+      "description": "Observation counts by bounded error category in the selected receipt-time range, not failed response counts or an error rate. Category none is excluded; unknown is retained without inferring a cause. No error text. At most 1000 groups in label order.",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT json_extract(r.row_json, '$.error_category') AS Category, COUNT(*) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.error_category') <> 'none' GROUP BY Category ORDER BY Category LIMIT 1000",
+        "rawQueryText": "SELECT json_extract(r.row_json, '$.error_category') AS Category, COUNT(*) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.error_category') <> 'none' GROUP BY Category ORDER BY Category LIMIT 1000"
+      }],
+      "options": { "orientation": "horizontal", "legend": { "showLegend": false } },
+      "fieldConfig": { "defaults": { "min": 0, "decimals": 0 }, "overrides": [] }
+    },
+    {
       "id": 10,
       "title": "Installs today (UTC)",
       "description": "Distinct install ids that sent an install event since 00:00 UTC today, read live from the events table (the rollup panels below lag one day).",
       "type": "stat",
-      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 8 },
+      "gridPos": { "x": 0, "y": 48, "w": 4, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -31,7 +78,7 @@
       "title": "Heartbeats today (UTC)",
       "description": "Heartbeat events received since 00:00 UTC today: installs that were used again after their first report.",
       "type": "stat",
-      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 8 },
+      "gridPos": { "x": 4, "y": 48, "w": 4, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -48,7 +95,7 @@
       "title": "Platforms today",
       "description": "Distinct installs seen today by operating system, live from the events table.",
       "type": "bargauge",
-      "gridPos": { "x": 8, "y": 0, "w": 5, "h": 8 },
+      "gridPos": { "x": 8, "y": 48, "w": 5, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -66,7 +113,7 @@
       "title": "Installs per hour (last 48 h)",
       "description": "New install events per UTC hour over the last 48 hours, live from the events table.",
       "type": "timeseries",
-      "gridPos": { "x": 13, "y": 0, "w": 11, "h": 8 },
+      "gridPos": { "x": 13, "y": 48, "w": 11, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -84,7 +131,7 @@
       "title": "Unique installs per month (12 months)",
       "description": "Distinct install ids active in each of the last 12 calendar months: live from the events table for the retention window, from rollups_daily.active_install beyond it. Matches GET /v1/summary's installs_per_month.",
       "type": "barchart",
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 56, "w": 12, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -101,7 +148,7 @@
       "title": "Weekly active installs (12 weeks)",
       "description": "Distinct install ids active per week, from rollups_daily.active_install. Uses SQLite's strftime('%W') (Monday-based week-of-year); this can disagree with the API's ISO week numbering right at a year boundary, so treat this as a trend view rather than a byte-for-byte match to /v1/summary.",
       "type": "barchart",
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 56, "w": 12, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -118,7 +165,7 @@
       "title": "Agent distribution (trailing 30 days)",
       "description": "Install-days per agent over the trailing 30 rolled-up days: an install active on 10 different days contributes 10, once per day it reported that agent. Not distinct installs. Matches GET /v1/summary's agent_distribution.",
       "type": "bargauge",
-      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
+      "gridPos": { "x": 0, "y": 64, "w": 8, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -136,7 +183,7 @@
       "title": "Component distribution (trailing 30 days)",
       "description": "Install-days per component over the trailing 30 rolled-up days, same install-days semantics as agent distribution. Matches GET /v1/summary's component_distribution.",
       "type": "bargauge",
-      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
+      "gridPos": { "x": 8, "y": 64, "w": 8, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -154,7 +201,7 @@
       "title": "RDD enabled ratio (trailing 30 days)",
       "description": "Share of install-days over the trailing 30 rolled-up days reporting rdd_enabled=true. Matches GET /v1/summary's rdd_enabled_ratio.",
       "type": "stat",
-      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "gridPos": { "x": 16, "y": 64, "w": 8, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
       "targets": [
@@ -171,7 +218,7 @@
       "title": "Version distribution (trailing 30 days)",
       "description": "Install-days per reported version over the trailing 30 rolled-up days. A useful proxy for upgrade lag. Matches GET /v1/summary's version_distribution.",
       "type": "bargauge",
-      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 72, "w": 12, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -189,7 +236,7 @@
       "title": "Events per day",
       "description": "Raw event volume (install + heartbeat), bounded by --retention-days: older raw rows are purged, so this panel only ever shows the retention window, unlike the rollup-backed panels above which cover full history.",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 72, "w": 12, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -206,7 +253,7 @@
       "title": "npm downloads per day (gentle-pi, gentle-engram)",
       "description": "Daily download counts from the npm registry's public API (api.npmjs.org) — a public count, not telemetry from any gentle-ai install. Matches GET /v1/summary's downloads.npm. The gentle_pi and gentle_engram columns mirror the collector's default --npm-package list; any other package it is configured to fetch lands in other_packages so nothing is silently dropped.",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 80, "w": 12, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -223,7 +270,7 @@
       "title": "gentle-ai release downloads (cumulative per tag)",
       "description": "Cumulative GitHub release asset download counts per tag, from the public GitHub API (api.github.com) — a public count, not telemetry from any gentle-ai install. Each bar is the latest known total for that tag, not a per-day delta. Matches GET /v1/summary's downloads.github.",
       "type": "bargauge",
-      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 80, "w": 12, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -241,7 +288,7 @@
       "title": "Agents declared today",
       "description": "Distinct installs seen today that declare each agent, live from the events table (json_each over agents_json). One install can declare several agents.",
       "type": "bargauge",
-      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 8 },
+      "gridPos": { "x": 0, "y": 88, "w": 24, "h": 8 },
       "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
       "targets": [
         {
@@ -253,6 +300,71 @@
       ],
       "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true, "reduceOptions": { "values": true, "calcs": ["lastNotNull"], "fields": "" } },
       "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 15,
+      "title": "Responses by model",
+      "description": "Response occurrences in the selected receipt-time range, not client activity time. Response evidence identifies the model reported by a response; selected evidence is configuration only, not proof of execution. Public model and host labels only. At most 1000 groups in label order.",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT json_extract(r.row_json, '$.model.provider') || '/' || json_extract(r.row_json, '$.model.id') || ' · ' || json_extract(r.row_json, '$.model_evidence') || ' · ' || json_extract(d.canonical_payload, '$.host') AS Model, SUM(json_extract(r.row_json, '$.responses')) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_type(r.row_json, '$.responses') = 'integer' GROUP BY Model ORDER BY Model LIMIT 1000",
+        "rawQueryText": "SELECT json_extract(r.row_json, '$.model.provider') || '/' || json_extract(r.row_json, '$.model.id') || ' · ' || json_extract(r.row_json, '$.model_evidence') || ' · ' || json_extract(d.canonical_payload, '$.host') AS Model, SUM(json_extract(r.row_json, '$.responses')) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_type(r.row_json, '$.responses') = 'integer' GROUP BY Model ORDER BY Model LIMIT 1000"
+      }],
+      "options": { "orientation": "horizontal", "xTickLabelMaxLength": 45, "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "fieldConfig": { "defaults": { "min": 0, "noValue": "Not reported" }, "overrides": [] }
+    },
+    {
+      "id": 16, "title": "Usage by agent, model, and effort",
+      "description": "Integer occurrences from observations within inclusive collector receipt-time bounds; these are not sessions, users or people. Responses and launches are separate independent sums, including orchestrator responses and subagent launches. Labels show public agent class/kind, host · provider/model · model evidence, and selected → effective effort, grouped by every dimension. Response evidence identifies the model reported by a response. Selected evidence identifies the configured model, not proof that it ran. Effective effort is never inferred from selected effort. unknown is retained without identity inference. No custom or private names. — means not reported; it is not zero. Groups without either integer count are excluded. At most 1000 groups, ranked by total available occurrences only, then stable agent/model/effort labels; no combined metric is displayed.",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT json_extract(r.row_json, '$.agent_class') || ' / ' || json_extract(r.row_json, '$.agent_kind') AS \"Agent observation\", json_extract(d.canonical_payload, '$.host') || ' · ' || json_extract(r.row_json, '$.model.provider') || '/' || json_extract(r.row_json, '$.model.id') || ' · ' || json_extract(r.row_json, '$.model_evidence') AS \"Model observation\", json_extract(r.row_json, '$.selected_effort') || ' → ' || json_extract(r.row_json, '$.effective_effort') AS \"Selected → effective\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END) AS Responses, SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END) AS Launches FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND (json_type(r.row_json, '$.responses') = 'integer' OR json_type(r.row_json, '$.launches') = 'integer') GROUP BY json_extract(r.row_json, '$.agent_class'), json_extract(r.row_json, '$.agent_kind'), json_extract(d.canonical_payload, '$.host'), json_extract(r.row_json, '$.model.provider'), json_extract(r.row_json, '$.model.id'), json_extract(r.row_json, '$.model_evidence'), json_extract(r.row_json, '$.selected_effort'), json_extract(r.row_json, '$.effective_effort') ORDER BY COALESCE(Responses, 0) + COALESCE(Launches, 0) DESC, \"Agent observation\" ASC, \"Model observation\" ASC, \"Selected → effective\" ASC LIMIT 1000",
+        "rawQueryText": "SELECT json_extract(r.row_json, '$.agent_class') || ' / ' || json_extract(r.row_json, '$.agent_kind') AS \"Agent observation\", json_extract(d.canonical_payload, '$.host') || ' · ' || json_extract(r.row_json, '$.model.provider') || '/' || json_extract(r.row_json, '$.model.id') || ' · ' || json_extract(r.row_json, '$.model_evidence') AS \"Model observation\", json_extract(r.row_json, '$.selected_effort') || ' → ' || json_extract(r.row_json, '$.effective_effort') AS \"Selected → effective\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END) AS Responses, SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END) AS Launches FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND (json_type(r.row_json, '$.responses') = 'integer' OR json_type(r.row_json, '$.launches') = 'integer') GROUP BY json_extract(r.row_json, '$.agent_class'), json_extract(r.row_json, '$.agent_kind'), json_extract(d.canonical_payload, '$.host'), json_extract(r.row_json, '$.model.provider'), json_extract(r.row_json, '$.model.id'), json_extract(r.row_json, '$.model_evidence'), json_extract(r.row_json, '$.selected_effort'), json_extract(r.row_json, '$.effective_effort') ORDER BY COALESCE(Responses, 0) + COALESCE(Launches, 0) DESC, \"Agent observation\" ASC, \"Model observation\" ASC, \"Selected → effective\" ASC LIMIT 1000"
+      }],
+      "options": { "cellHeight": "sm", "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "min": 0, "decimals": 0, "custom": { "minWidth": 100 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Agent observation" }, "properties": [{ "id": "custom.width", "value": 240 }] },
+          { "matcher": { "id": "byName", "options": "Model observation" }, "properties": [{ "id": "custom.width", "value": 360 }] },
+          { "matcher": { "id": "byName", "options": "Selected → effective" }, "properties": [{ "id": "custom.width", "value": 200 }] },
+          { "matcher": { "id": "byRegexp", "options": "^(Responses|Launches)$" }, "properties": [{ "id": "custom.width", "value": 120 }, { "id": "mappings", "value": [{ "type": "special", "options": { "match": "null", "result": { "text": "—" } } }] }] }
+        ]
+      }
+    },
+    {
+      "id": 17, "title": "Token coverage",
+      "description": "Exact reported, unavailable and unsupported observation counts for each token metric in the selected receipt-time range. Coverage is not a token sum. Reported zero is still reported; metrics are independent.",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT CASE t.key WHEN 'input_tokens' THEN 'Input' WHEN 'output_tokens' THEN 'Output' WHEN 'cache_read_tokens' THEN 'Cache read' WHEN 'cache_creation_tokens' THEN 'Cache creation' WHEN 'reasoning_tokens' THEN 'Reasoning' WHEN 'total_tokens' THEN 'Total' END AS Metric, SUM(json_extract(t.value, '$.reported')) AS Reported, SUM(json_extract(t.value, '$.unavailable')) AS Unavailable, SUM(json_extract(t.value, '$.unsupported')) AS Unsupported FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id JOIN json_each(r.row_json) t WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND t.key IN ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'reasoning_tokens', 'total_tokens') GROUP BY t.key ORDER BY t.key LIMIT 1000",
+        "rawQueryText": "SELECT CASE t.key WHEN 'input_tokens' THEN 'Input' WHEN 'output_tokens' THEN 'Output' WHEN 'cache_read_tokens' THEN 'Cache read' WHEN 'cache_creation_tokens' THEN 'Cache creation' WHEN 'reasoning_tokens' THEN 'Reasoning' WHEN 'total_tokens' THEN 'Total' END AS Metric, SUM(json_extract(t.value, '$.reported')) AS Reported, SUM(json_extract(t.value, '$.unavailable')) AS Unavailable, SUM(json_extract(t.value, '$.unsupported')) AS Unsupported FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id JOIN json_each(r.row_json) t WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND t.key IN ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'reasoning_tokens', 'total_tokens') GROUP BY t.key ORDER BY t.key LIMIT 1000"
+      }],
+      "options": { "cellHeight": "sm", "showHeader": true },
+      "fieldConfig": { "defaults": { "custom": { "minWidth": 80 }, "noValue": "Not reported" }, "overrides": [] }
+    },
+    {
+      "id": 18, "title": "Measured duration",
+      "description": "Sum of measured milliseconds, separately for request and message timing in the selected receipt-time range. Not per-response latency. Unavailable timing is excluded, never shown as zero. No data means no measurements.",
+      "type": "barchart",
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 7 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "gentle-telemetry-sqlite" },
+      "targets": [{
+        "refId": "A", "queryType": "table",
+        "queryText": "SELECT json_extract(r.row_json, '$.duration.kind') AS Timing, SUM(json_extract(r.row_json, '$.duration.sum_ms')) AS Milliseconds FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.duration.measured_count') > 0 AND json_extract(r.row_json, '$.duration.kind') IN ('request', 'message') GROUP BY Timing ORDER BY Timing LIMIT 1000",
+        "rawQueryText": "SELECT json_extract(r.row_json, '$.duration.kind') AS Timing, SUM(json_extract(r.row_json, '$.duration.sum_ms')) AS Milliseconds FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.duration.measured_count') > 0 AND json_extract(r.row_json, '$.duration.kind') IN ('request', 'message') GROUP BY Timing ORDER BY Timing LIMIT 1000"
+      }],
+      "options": { "orientation": "horizontal", "legend": { "showLegend": false } },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0, "noValue": "No measurements" }, "overrides": [] }
     }
   ]
 }

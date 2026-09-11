@@ -66,6 +66,13 @@ func OpenStorage(path string) (*Storage, error) {
 	}
 	db.SetMaxOpenConns(1)
 
+	// Admission precedes even persistent PRAGMAs: rejected databases must not
+	// acquire legacy tables or have their journal mode changed.
+	if err := migrateRuntimeStorage(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=DELETE;",
 		"PRAGMA synchronous=NORMAL;",
@@ -76,11 +83,6 @@ func OpenStorage(path string) (*Storage, error) {
 			db.Close()
 			return nil, fmt.Errorf("apply pragma %q: %w", pragma, err)
 		}
-	}
-
-	if _, err := db.Exec(schemaDDL); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 
 	return &Storage{db: db}, nil
@@ -292,15 +294,31 @@ type rollupRow struct {
 	Value int64
 }
 
-// PurgeOlderThan deletes raw events received before cutoff and reports how
-// many rows were removed. Rollups are never purged by this call: they are
-// the durable historical record once raw events age out.
+// PurgeOlderThan atomically deletes legacy events and whole runtime deliveries
+// received strictly before cutoff. Its count remains legacy events only, not
+// runtime rows, deliveries, observations, or people. Rollups are never purged.
+// Runtime delivery identities expire with their rows; retries do not renew age.
 func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE received_at < ?`, receivedAtKey(cutoff))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM events WHERE received_at < ?`, receivedAtKey(cutoff))
 	if err != nil {
 		return 0, fmt.Errorf("purge events before %s: %w", cutoff, err)
 	}
-	return res.RowsAffected()
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := purgeRuntimeOlderThan(ctx, tx, cutoff); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, errRuntimeStorage
+	}
+	return count, nil
 }
 
 // receivedAtKey and parseReceivedAtKey convert between time.Time and the

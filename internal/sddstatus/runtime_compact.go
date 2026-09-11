@@ -34,8 +34,10 @@ const (
 	// the caller declared a correction for failed evidence the immutable
 	// attempt chain does not hold unremediated (nothing failed, the failure
 	// was already corrected by a passed settlement, or a different revision
-	// was declared), so the settlement that declaration promises is
-	// structurally impossible and no token may be issued for it.
+	// was declared), or the candidate still equals the failed baseline without
+	// an audited reset/rescope authorizing an evidence-only retry. The settlement
+	// that declaration promises is structurally impossible and no token may be
+	// issued for it.
 	CompactBlockRemediationUnsatisfiable CompactBlockReason = "remediation_unsatisfiable"
 	// CompactBlockUndeclaredUntracked is the settlement-side untracked ruling
 	// block (#3881): the attempt authority is intact and unmutated, and what
@@ -122,8 +124,9 @@ type CompactAcquireRequest struct {
 	// intent Settle expresses through --remediates-evidence-revision (#2564).
 	// Before this, remediation intent was settle-only: an acquire whose
 	// eventual failed-evidence settlement was already structurally unsatisfiable
-	// (no unremediated failed evidence in the immutable attempt chain, or a
-	// different revision declared) still returned proceed, and the refusal
+	// (no unremediated failed evidence in the immutable attempt chain, a
+	// different revision declared, or an unchanged failed baseline without an
+	// audited evidence-only retry) still returned proceed, and the refusal
 	// only arrived after the correction work was done. Empty leaves every
 	// existing acquire path unchanged.
 	RemediatesEvidenceRevision string
@@ -295,11 +298,28 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		return result, nil
 	}
 	// A declared correction must be structurally settleable before it spends an
-	// attempt. Satisfiability is derived only from the immutable failed-evidence
-	// chain, so an audited reset remains a legitimate predecessor.
-	if request.RemediatesEvidenceRevision != "" &&
-		!failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
-		return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
+	// attempt. The immutable failed-evidence chain owns the binding, while the
+	// existing candidate and audited reset/rescope/supersede predicates decide whether an
+	// unchanged retry is already authorized. Calling Begin's read-only admission
+	// predicate here captures the exact candidate it would record without opening
+	// an attempt or issuing a token.
+	if request.RemediatesEvidenceRevision != "" {
+		if !failedEvidenceRemediationSettleable(replay.Status, request.RemediatesEvidenceRevision) {
+			return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
+		}
+		failed, _ := runtimeChainFailedAttempt(replay.Status.Attempts)
+		admission, admissionErr := store.runtimeBeginAdmission(ctx, replay.Status, begin)
+		if admissionErr != nil {
+			return store.compactMutationFailure(admissionErr, false, begin), nil
+		}
+		active := RuntimeAttempt{
+			BeginCandidateIdentity: admission.Snapshot.Identity,
+			BeginCandidateTree:     admission.Snapshot.CandidateTree,
+		}
+		if !runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, replay.Status.LastSupersede, failed, admission.Snapshot.CandidateTree) &&
+			runtimeRemediationCandidateUnchanged(failed, active, admission.Snapshot.Identity, admission.Snapshot.CandidateTree) {
+			return compactBlocked(CompactBlockRemediationUnsatisfiable, ""), nil
+		}
 	}
 	// #4160: a caller-declared --expected-revision is CAS-checked against the
 	// live ledger revision before this fresh begin claims it -- the same
@@ -703,8 +723,8 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 			"` to your own `sdd-attempt acquire` call to continue that exact attempt, or to your " +
 			"`sdd-attempt settle` call to close it before starting a new one"
 	case CompactBlockRemediationUnsatisfiable:
-		return "this acquire declares a correction for failed evidence the attempt chain does not hold unremediated (nothing failed, the failure was already corrected by a passed settlement, or the declared revision differs from the chain's), so its settle could never succeed and no token is issued; run " +
-			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the attempt chain and its most recent unremediated failed evidence, then either reissue this acquire declaring that exact revision, or drop --remediates-evidence-revision and continue through a fresh verification objective whose own failed settlement records new evidence a bounded correction can name"
+		return "this acquire declares a correction that cannot settle: the attempt chain either does not hold the declared failed evidence unremediated, or the candidate still matches the state that failed without an audited evidence-only retry; no token is issued. Run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the chain and candidate provenance, then correct the candidate and reissue this acquire through any reset or rescope the current objective requires; if an unchanged retry is justified, use an audited reset or rescope where structurally applicable before reissuing it"
 	default:
 		return ""
 	}

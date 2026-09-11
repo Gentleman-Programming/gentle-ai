@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+func TestLoadPolicyStateRejectsLegacyDefaultWithoutChangingLoad(t *testing.T) {
+	home := t.TempDir()
+	if _, err := LoadPolicyState(home); !os.IsNotExist(err) {
+		t.Fatalf("missing policy state: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(Path(home))); !os.IsNotExist(err) {
+		t.Fatalf("policy created directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"install_id":"existing","notice_shown":true}`
+	if err := os.WriteFile(Path(home), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicyState(home); err == nil {
+		t.Fatal("policy accepted implicit legacy enabled default")
+	}
+	legacy, err := Load(home)
+	if err != nil || !legacy.Enabled {
+		t.Fatalf("legacy Load behavior changed: %+v, %v", legacy, err)
+	}
+	got, err := os.ReadFile(Path(home))
+	if err != nil || string(got) != data {
+		t.Fatalf("policy repaired state: %q, %v", got, err)
+	}
+}
+
 func TestLoadMissingStateReturnsNotExist(t *testing.T) {
 	home := t.TempDir()
 	if _, err := Load(home); !os.IsNotExist(err) {
