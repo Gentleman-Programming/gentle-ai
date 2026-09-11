@@ -69,6 +69,41 @@ func TestRenderUninstallConfirmIncludesEngramProjectScopeDetails(t *testing.T) {
 	}
 }
 
+func TestRenderUninstallResultDistinguishesRetainedPiResourcesAndCommands(t *testing.T) {
+	out := RenderUninstallResult(componentuninstall.Result{
+		RetainedPiResources: []string{"/home/test/.pi/gentle-ai"},
+		OptionalPiPackageCleanupCommands: []string{
+			"pi remove npm:gentle-pi",
+			"pi remove npm:gentle-engram",
+			"pi remove npm:pi-mcp-adapter",
+			"pi remove npm:@juicesharp/rpiv-ask-user-question",
+			"pi remove npm:pi-web-access",
+			"pi remove npm:pi-btw",
+		},
+	}, nil, model.UninstallModePartial, nil, model.EngramUninstallScopeGlobal, false, nil, nil)
+
+	for _, want := range []string{
+		"Pi resources retained for review",
+		"Retained Pi resources (not deleted)",
+		"/home/test/.pi/gentle-ai",
+		"Optional Pi package cleanup",
+		"Review shared or user-modified packages/resources before removing them",
+		"pi remove npm:gentle-pi",
+		"pi remove npm:gentle-engram",
+		"pi remove npm:pi-mcp-adapter",
+		"pi remove npm:@juicesharp/rpiv-ask-user-question",
+		"pi remove npm:pi-web-access",
+		"pi remove npm:pi-btw",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderUninstallResult() missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "✓ Uninstall complete") {
+		t.Fatalf("RenderUninstallResult() reports a complete uninstall despite retained Pi state:\n%s", out)
+	}
+}
+
 func TestRenderUninstallResultIncludesSelectedProfiles(t *testing.T) {
 	out := RenderUninstallResult(componentuninstall.Result{}, nil, model.UninstallModePartial, []string{"cheap", "fast"}, model.EngramUninstallScopeGlobal, false, nil, nil)
 

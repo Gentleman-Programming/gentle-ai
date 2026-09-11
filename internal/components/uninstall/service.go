@@ -15,6 +15,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
@@ -40,13 +41,15 @@ type Snapshotter interface {
 }
 
 type Result struct {
-	Manifest               backup.Manifest
-	BackupPath             string
-	ChangedFiles           []string
-	RemovedFiles           []string
-	RemovedDirectories     []string
-	ManualActions          []string
-	AgentsRemovedFromState []model.AgentID
+	Manifest                         backup.Manifest
+	BackupPath                       string
+	ChangedFiles                     []string
+	RemovedFiles                     []string
+	RemovedDirectories               []string
+	RetainedPiResources              []string
+	OptionalPiPackageCleanupCommands []string
+	ManualActions                    []string
+	AgentsRemovedFromState           []model.AgentID
 	// FailedAgents lists the agents whose cleanup did not complete. They are
 	// deliberately left in state.json so the recorded state keeps matching the
 	// disk, and each one is named in ManualActions with the command that
@@ -633,6 +636,11 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	if slices.Contains(agentsToRemove, model.AgentPi) {
+		result.RetainedPiResources = retainedPiResources(s.homeDir, s.workspaceDir)
+		result.OptionalPiPackageCleanupCommands = optionalPiPackageCleanupCommands()
+	}
+
 	result.FailedAgents = failedAgents(failures, agentsToRemove)
 	result.ManualActions = append(result.ManualActions, failureManualActions(failures, agentsToRemove, s.homeDir)...)
 
@@ -737,6 +745,42 @@ func firstOrEmpty(items []string) string {
 		return ""
 	}
 	return items[0]
+}
+
+// retainedPiResources returns existing Pi-owned runtime and configuration paths
+// that gentle-ai deliberately leaves intact because they can be shared with Pi,
+// gentle-pi packages, or user-managed configuration.
+func retainedPiResources(homeDir, workspaceDir string) []string {
+	paths := []string{
+		filepath.Join(homeDir, ".pi", "agent", "agents"),
+		filepath.Join(homeDir, ".pi", "agent", "chains"),
+		filepath.Join(homeDir, ".pi", "agent", "gentle-ai"),
+		filepath.Join(homeDir, ".pi", "agent", "subagents.json"),
+		filepath.Join(homeDir, ".pi", "gentle-ai"),
+	}
+	if workspaceDir != "" {
+		paths = append(paths, filepath.Join(workspaceDir, ".pi", "gentle-ai"))
+	}
+
+	retained := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
+			retained = append(retained, path)
+		}
+	}
+	return retained
+}
+
+// optionalPiPackageCleanupCommands mirrors the Pi adapter's canonical package
+// sources. Each command remains separate because Pi 0.85.1 supports
+// `pi remove <source>`, not a bulk remove form.
+func optionalPiPackageCleanupCommands() []string {
+	sources := pi.ManagedPackageSources()
+	commands := make([]string, 0, len(sources))
+	for _, source := range sources {
+		commands = append(commands, "pi remove "+source)
+	}
+	return commands
 }
 
 func manualActionForNonEmptyDirectory(path string) (string, bool) {

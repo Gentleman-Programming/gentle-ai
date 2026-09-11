@@ -254,6 +254,25 @@ func TestAdapterDetectMissingPiBinary(t *testing.T) {
 	}
 }
 
+func TestManagedPackageSourcesReturnsCanonicalCopy(t *testing.T) {
+	want := []string{
+		"npm:gentle-pi",
+		"npm:gentle-engram",
+		"npm:pi-mcp-adapter",
+		"npm:@juicesharp/rpiv-ask-user-question",
+		"npm:pi-web-access",
+		"npm:pi-btw",
+	}
+	got := ManagedPackageSources()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ManagedPackageSources() = %v, want %v", got, want)
+	}
+	got[0] = "changed"
+	if sources := ManagedPackageSources(); sources[0] != want[0] {
+		t.Fatalf("ManagedPackageSources() exposed mutable adapter state: %v", sources)
+	}
+}
+
 func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {

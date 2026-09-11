@@ -589,6 +589,99 @@ func TestExecutePlanPiUninstallPreservesDriftedChildAndGentlePiSource(t *testing
 	}
 }
 
+func TestPartialUninstallPiReportsRetainedResourcesAndOptionalCleanup(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	retainedPaths := []string{
+		filepath.Join(homeDir, ".pi", "agent", "agents"),
+		filepath.Join(homeDir, ".pi", "agent", "chains"),
+		filepath.Join(homeDir, ".pi", "agent", "gentle-ai"),
+		filepath.Join(homeDir, ".pi", "agent", "subagents.json"),
+		filepath.Join(homeDir, ".pi", "gentle-ai"),
+		filepath.Join(workspaceDir, ".pi", "gentle-ai"),
+	}
+	for _, path := range retainedPaths {
+		if filepath.Ext(path) == ".json" {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`{"user":"owned"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.RetainedPiResources, retainedPaths) {
+		t.Fatalf("RetainedPiResources = %v, want %v", result.RetainedPiResources, retainedPaths)
+	}
+	wantCommands := []string{
+		"pi remove npm:gentle-pi",
+		"pi remove npm:gentle-engram",
+		"pi remove npm:pi-mcp-adapter",
+		"pi remove npm:@juicesharp/rpiv-ask-user-question",
+		"pi remove npm:pi-web-access",
+		"pi remove npm:pi-btw",
+	}
+	if !slices.Equal(result.OptionalPiPackageCleanupCommands, wantCommands) {
+		t.Fatalf("OptionalPiPackageCleanupCommands = %v, want %v", result.OptionalPiPackageCleanupCommands, wantCommands)
+	}
+	for _, path := range retainedPaths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("retained Pi resource %q was deleted: %v", path, err)
+		}
+		if slices.Contains(result.RemovedDirectories, path) || slices.Contains(result.RemovedFiles, path) {
+			t.Fatalf("retained Pi resource %q was reported as removed: %#v", path, result)
+		}
+	}
+}
+
+func TestPartialUninstallPiDoesNotReportAbsentRetainedResources(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.RetainedPiResources) != 0 {
+		t.Fatalf("RetainedPiResources = %v, want none for absent paths", result.RetainedPiResources)
+	}
+}
+
+func TestCompleteUninstallKeepsExecutableRemovalAction(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.CompleteUninstall()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "To completely remove gentle-ai from your system, delete the executable (e.g., rm -f $(which gentle-ai))"
+	if !slices.Contains(result.ManualActions, want) {
+		t.Fatalf("ManualActions = %v, want %q", result.ManualActions, want)
+	}
+}
+
 func piCodeGraphProbeForServiceTest(string) (communitytool.PiCodeGraphMCPProbeResult, error) {
 	return communitytool.PiCodeGraphMCPProbeResult{
 		AdapterAvailable: true,
