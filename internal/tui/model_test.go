@@ -409,6 +409,28 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 	}
 }
 
+func TestModelPickerView_ForwardsMeasuredViewportToNormalAndProfileFlows(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelPicker = screens.ModelPickerState{AvailableIDs: []string{"openai"}}
+	m.Width, m.Height = 100, 30
+	if out := m.View(); !strings.Contains(out, "Role:") {
+		t.Fatalf("roomy normal picker omitted guidance:\n%s", out)
+	}
+	m.Width, m.Height = 40, 12
+	if out := m.View(); strings.Contains(out, "Role:") {
+		t.Fatalf("constrained normal picker retained guidance:\n%s", out)
+	}
+
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ModelPicker.ForProfile = true
+	m.Width, m.Height = 80, 14
+	if out := m.View(); strings.Contains(out, "Role:") {
+		t.Fatalf("profile frame was not reserved from the picker viewport:\n%s", out)
+	}
+}
+
 func TestProfileCreateContinueSanitizesStaleEffort(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenProfileCreate

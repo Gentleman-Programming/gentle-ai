@@ -1484,6 +1484,8 @@ func (m Model) View() string {
 	case ScreenProfiles:
 		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
 	case ScreenProfileCreate:
+		picker := m.ModelPicker
+		picker.Viewport = screens.ModelPickerViewport{Width: m.Width, Height: m.Height, ReservedRows: 7}
 		return screens.RenderProfileCreate(
 			m.ProfileCreateStep,
 			m.ProfileDraft,
@@ -1492,7 +1494,7 @@ func (m Model) View() string {
 			m.ProfileNameErr,
 			m.ProfileEditMode,
 			m.Selection.ModelAssignments,
-			m.ModelPicker,
+			picker,
 			m.Cursor,
 		)
 	case ScreenProfileDelete:
@@ -1549,7 +1551,9 @@ func (m Model) View() string {
 	case ScreenCommunityToolResult:
 		return screens.RenderCommunityToolResult(m.CommunityToolResults, m.CommunityToolErr)
 	case ScreenModelPicker:
-		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
+		picker := m.ModelPicker
+		picker.Viewport = screens.ModelPickerViewport{Width: m.Width, Height: m.Height}
+		return screens.RenderModelPicker(m.Selection.ModelAssignments, picker, m.Cursor)
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenSkillPicker:
