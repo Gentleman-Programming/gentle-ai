@@ -539,6 +539,8 @@ const (
 	ScreenProfiles
 	ScreenProfileCreate
 	ScreenProfileDelete
+	ScreenCustomAgents
+	ScreenCustomAgentDelete
 	ScreenAgentBuilderEngine
 	ScreenAgentBuilderPrompt
 	ScreenAgentBuilderSDD

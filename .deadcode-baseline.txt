@@ -1,6 +1,11 @@
 internal/agentbuilder/engine.go	MockEngine.Agent
 internal/agentbuilder/engine.go	MockEngine.Available
 internal/agentbuilder/engine.go	MockEngine.Generate
+internal/agentbuilder/uninstall.go	Uninstall
+internal/agentbuilder/uninstall.go	removeIfEmpty
+internal/agentbuilder/uninstall.go	supportedSkillsDirs
+internal/agentbuilder/uninstall.go	uninstallSkillDir
+internal/agentbuilder/uninstall.go	validateTargetName
 internal/agents/codex/runtime_version.go	SetRuntimeVersionCommandForTest
 internal/agents/codex/runtime_version.go	SetRuntimeVersionProbeForTest
 internal/agents/discovery.go	ConfigRootsForBackup
@@ -246,6 +251,11 @@ internal/tui/router.go	NextScreen
 internal/tui/screens/claude_model_picker.go	NewClaudeModelPickerStateFromAssignments
 internal/tui/screens/codex_model_picker.go	CodexPresetDescription
 internal/tui/screens/codex_model_picker.go	HandleCodexCustomNav
+internal/tui/screens/custom_agents.go	CustomAgentDeleteOptionCount
+internal/tui/screens/custom_agents.go	CustomAgentsOptionCount
+internal/tui/screens/custom_agents.go	RenderCustomAgentDelete
+internal/tui/screens/custom_agents.go	RenderCustomAgents
+internal/tui/screens/custom_agents.go	sanitizeLabel
 internal/tui/screens/model_picker.go	ModelPickerRows
 internal/tui/screens/model_picker.go	SeparatorRowIdx
 internal/tui/screens/upgrade.go	RenderUpgrade

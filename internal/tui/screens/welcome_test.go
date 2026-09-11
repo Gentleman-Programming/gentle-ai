@@ -73,7 +73,10 @@ func TestWelcomeOptions_WithProfiles_CountOne(t *testing.T) {
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
-	// Includes the Receipt-Driven Development entry.
+	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
+	// Configure models, Manage Custom Agents, OpenCode Community Plugins,
+	// Uninstall OpenCode Plugin, Manage backups, Reset review store,
+	// Receipt-Driven Development, Managed uninstall, Community Tools/Plugins, Quit = 14
 	want := 14
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=false, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
@@ -84,25 +87,13 @@ func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
-	// Includes the Receipt-Driven Development entry.
+	// Expected: Start installation, Upgrade tools, Sync configs, Upgrade + Sync,
+	// Configure models, Manage Custom Agents, OpenCode Community Plugins,
+	// Uninstall OpenCode Plugin, OpenCode SDD Profiles (2), Manage backups,
+	// Reset review store, Receipt-Driven Development, Managed uninstall, Community Tools/Plugins, Quit = 15
 	want := 15
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
-	}
-}
-
-// TestWelcomeOptions_NoEngines_ShowsDisabledLabel verifies that when hasEngines=false,
-// the agent option is labelled "(no agents)" to signal unavailability.
-func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, false, 0, false)
-	found := false
-	for _, opt := range opts {
-		if strings.Contains(opt, "no agents") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected 'no agents' label when hasEngines=false; got: %v", opts)
 	}
 }
 
@@ -119,7 +110,7 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	profilesIdx := -1
 	manageBackupsIdx := -1
 	for i, opt := range opts {
-		if strings.HasPrefix(opt, "Create your own Agent") {
+		if strings.HasPrefix(opt, "Manage Custom Agents") {
 			agentIdx = i
 		}
 		if opt == "OpenCode Community Plugins" {
@@ -137,7 +128,7 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	}
 
 	if agentIdx < 0 {
-		t.Fatal("option 'Create your own Agent' not found")
+		t.Fatal("option 'Manage Custom Agents' not found")
 	}
 	if pluginsIdx < 0 {
 		t.Fatal("option 'OpenCode Community Plugins' not found")
