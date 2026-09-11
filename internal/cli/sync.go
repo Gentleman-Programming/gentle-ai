@@ -19,6 +19,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
@@ -628,6 +629,15 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
 
+	if r.selection.HasAgent(model.AgentPi) && len(r.selection.PiModelAssignments) > 0 {
+		apply = append(apply, piModelConfigSyncStep{
+			id:           "sync:pi:model-config",
+			homeDir:      r.homeDir,
+			assignments:  r.selection.PiModelAssignments,
+			changedFiles: &r.changedFiles,
+		})
+	}
+
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
@@ -640,6 +650,10 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // the selected file).
 func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
+	if selection.HasAgent(model.AgentPi) && len(selection.PiModelAssignments) > 0 {
+		paths[pi.ModelsConfigPath(homeDir)] = struct{}{}
+		paths[pi.SubagentsConfigPath(homeDir)] = struct{}{}
+	}
 	for _, component := range selection.Components {
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
@@ -929,6 +943,31 @@ func (s piCodeGraphSyncStep) Run() error {
 	}
 	if configured && result.Changed && s.changedFiles != nil {
 		*s.changedFiles = append(*s.changedFiles, result.Files...)
+	}
+	return nil
+}
+
+type piModelConfigSyncStep struct {
+	id           string
+	homeDir      string
+	assignments  map[string]model.PiAgentModelEntry
+	changedFiles *[]string
+}
+
+func (s piModelConfigSyncStep) ID() string { return s.id }
+
+func (s piModelConfigSyncStep) Run() error {
+	if len(s.assignments) == 0 {
+		return nil
+	}
+	if err := pi.WriteModelsConfig(s.homeDir, s.assignments); err != nil {
+		return fmt.Errorf("sync Pi models config: %w", err)
+	}
+	if err := pi.UpdateSubagentsModelProfiles(s.homeDir, s.assignments); err != nil {
+		return fmt.Errorf("sync Pi subagents model profiles: %w", err)
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, pi.ModelsConfigPath(s.homeDir), pi.SubagentsConfigPath(s.homeDir))
 	}
 	return nil
 }
@@ -1854,6 +1893,16 @@ func RunSync(args []string) (SyncResult, error) {
 			m[k] = v
 		}
 		selection.CodexPhaseModelAssignments = m
+	}
+	if len(selection.PiModelAssignments) == 0 && len(persistedState.PiModelAssignments) > 0 {
+		m := make(map[string]model.PiAgentModelEntry, len(persistedState.PiModelAssignments))
+		for k, v := range persistedState.PiModelAssignments {
+			m[k] = model.PiAgentModelEntry{Model: v.Model, Thinking: v.Thinking}
+		}
+		selection.PiModelAssignments = m
+	}
+	if selection.PiSubscription == "" && persistedState.PiSubscription != "" {
+		selection.PiSubscription = model.PiSubscription(persistedState.PiSubscription)
 	}
 
 	// Resolve persona from the already-read state. This covers both the dry-run
