@@ -2351,6 +2351,12 @@ func TestSDDStatusContractSpecifiesSameIDUntrackedSettleRecovery(t *testing.T) {
 		if !strings.Contains(content, "a refused attempt records no request record and permits a corrected same-ID retry") {
 			t.Fatalf("%s missing refused attempt no-record distinction", name)
 		}
+		if strings.Contains(content, "review status --next-transition") {
+			t.Fatalf("%s routes settle recovery to Review STATUS", name)
+		}
+		if !strings.Contains(content, "never routing through acquire or Review STATUS") && !strings.Contains(content, "never route through acquire or Review STATUS") {
+			t.Fatalf("%s missing prohibition on acquire/Review STATUS routing", name)
+		}
 	}
 }
 
