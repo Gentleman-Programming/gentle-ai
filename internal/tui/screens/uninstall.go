@@ -381,7 +381,7 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 			b.WriteString(styles.SubtextStyle.Render(result.Manifest.DisplayLabel()))
 		}
 	} else {
-		if len(result.RetainedPiResources) > 0 || len(result.OptionalPiPackageCleanupCommands) > 0 {
+		if len(result.RetainedPiResources) > 0 {
 			b.WriteString(styles.SuccessStyle.Render("✓ Managed uninstall finished; Pi resources retained for review"))
 		} else {
 			b.WriteString(styles.SuccessStyle.Render("✓ Uninstall complete"))
@@ -402,24 +402,6 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 		if len(result.AgentsRemovedFromState) > 0 {
 			b.WriteString("\n")
 			b.WriteString(styles.UnselectedStyle.Render("Updated state.json: " + strings.Join(uninstallAgentLabels(result.AgentsRemovedFromState), ", ")))
-		}
-		if len(result.RetainedPiResources) > 0 {
-			b.WriteString("\n\n")
-			b.WriteString(styles.WarningStyle.Render("Retained Pi resources (not deleted):"))
-			for _, path := range result.RetainedPiResources {
-				b.WriteString("\n")
-				b.WriteString(styles.UnselectedStyle.Render("  • " + path))
-			}
-		}
-		if len(result.OptionalPiPackageCleanupCommands) > 0 {
-			b.WriteString("\n\n")
-			b.WriteString(styles.WarningStyle.Render("Optional Pi package cleanup:"))
-			b.WriteString("\n")
-			b.WriteString(styles.UnselectedStyle.Render("  Review shared or user-modified packages/resources before removing them:"))
-			for _, command := range result.OptionalPiPackageCleanupCommands {
-				b.WriteString("\n")
-				b.WriteString(styles.UnselectedStyle.Render("  • " + command))
-			}
 		}
 		if len(result.ManualActions) > 0 {
 			b.WriteString("\n\n")
@@ -462,6 +444,24 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 	}
 
 	b.WriteString("\n\n")
+	if len(result.RetainedPiResources) > 0 {
+		b.WriteString(styles.WarningStyle.Render("Retained Pi resources (not deleted):"))
+		for _, path := range result.RetainedPiResources {
+			b.WriteString("\n")
+			b.WriteString(styles.UnselectedStyle.Render("  • " + path))
+		}
+		b.WriteString("\n\n")
+	}
+	if len(result.OptionalPiPackageCleanupCommands) > 0 {
+		b.WriteString(styles.WarningStyle.Render("Optional Pi package cleanup:"))
+		b.WriteString("\n")
+		b.WriteString(styles.UnselectedStyle.Render("  Review shared or user-modified packages/resources before removing them:"))
+		for _, command := range result.OptionalPiPackageCleanupCommands {
+			b.WriteString("\n")
+			b.WriteString(styles.UnselectedStyle.Render("  • " + command))
+		}
+		b.WriteString("\n\n")
+	}
 	b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
 	return b.String()
 }

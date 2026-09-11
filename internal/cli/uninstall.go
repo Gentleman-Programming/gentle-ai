@@ -88,7 +88,7 @@ func RenderUninstallReport(result componentuninstall.Result) string {
 	// printed further down under manual cleanup.
 	if len(result.FailedAgents) > 0 {
 		_, _ = fmt.Fprintf(&b, "Managed uninstall partially complete: %s failed\n", strings.Join(agentLabels(result.FailedAgents), ", "))
-	} else if len(result.RetainedPiResources) > 0 || len(result.OptionalPiPackageCleanupCommands) > 0 {
+	} else if len(result.RetainedPiResources) > 0 {
 		_, _ = fmt.Fprintln(&b, "Managed uninstall finished; Pi resources retained for review")
 	} else {
 		_, _ = fmt.Fprintln(&b, "Managed uninstall complete")

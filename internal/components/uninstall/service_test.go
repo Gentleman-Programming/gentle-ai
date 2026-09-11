@@ -2,6 +2,7 @@ package uninstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -663,6 +665,22 @@ func TestPartialUninstallPiDoesNotReportAbsentRetainedResources(t *testing.T) {
 	if len(result.RetainedPiResources) != 0 {
 		t.Fatalf("RetainedPiResources = %v, want none for absent paths", result.RetainedPiResources)
 	}
+	t.Run("dangling link", func(t *testing.T) {
+		path := filepath.Join(svc.homeDir, ".pi", "gentle-ai")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(svc.homeDir, "missing"), path); err != nil {
+			if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+				t.Skipf("symlink privilege unavailable: %v", err)
+			}
+			t.Fatal(err)
+		}
+		result, err := svc.PartialUninstall([]model.AgentID{model.AgentPi}, nil)
+		if target, linkErr := os.Readlink(path); err != nil || linkErr != nil || target != filepath.Join(svc.homeDir, "missing") || !slices.Contains(result.RetainedPiResources, path) {
+			t.Fatalf("dangling link must remain and be reported: result=%+v err=%v linkErr=%v", result, err, linkErr)
+		}
+	})
 }
 
 func TestCompleteUninstallKeepsExecutableRemovalAction(t *testing.T) {

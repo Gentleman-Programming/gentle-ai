@@ -1,6 +1,8 @@
 package screens
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -66,6 +68,31 @@ func TestRenderUninstallConfirmIncludesEngramProjectScopeDetails(t *testing.T) {
 	}
 	if !strings.Contains(out, ".engram/") {
 		t.Fatalf("RenderUninstallConfirm() should mention .engram project data removal; got:\n%s", out)
+	}
+}
+
+func TestRenderUninstallResultPiAdviceStatus(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("retained=%t/failed=%t", retained, failed), func(t *testing.T) {
+				result := componentuninstall.Result{OptionalPiPackageCleanupCommands: []string{"pi remove npm:gentle-pi"}}
+				result.Manifest.ID = "backup-test"
+				if retained {
+					result.RetainedPiResources = []string{"/retained/pi"}
+				}
+				var err error
+				if failed {
+					err = errors.New("cleanup failed")
+				}
+				out := RenderUninstallResult(result, err, "", nil, "", false, nil, nil)
+				if !strings.Contains(out, "pi remove npm:gentle-pi") || !strings.Contains(out, "backup-test") || strings.Contains(out, "/retained/pi") != retained || strings.Contains(out, "Pi resources retained for review") != (retained && !failed) || strings.Contains(out, "✓ Uninstall complete") != (!retained && !failed) {
+					t.Fatalf("incorrect Pi report:\n%s", out)
+				}
+				if failed && (!strings.Contains(out, "✗ Uninstall failed") || !strings.Contains(out, "cleanup failed") || !strings.Contains(out, "Backup created before failure")) {
+					t.Fatalf("missing failure details:\n%s", out)
+				}
+			})
+		}
 	}
 }
 

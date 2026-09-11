@@ -764,7 +764,7 @@ func retainedPiResources(homeDir, workspaceDir string) []string {
 
 	retained := make([]string, 0, len(paths))
 	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
+		if _, err := os.Lstat(path); err == nil || !os.IsNotExist(err) {
 			retained = append(retained, path)
 		}
 	}
