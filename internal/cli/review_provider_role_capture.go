@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -29,7 +30,19 @@ type reviewProviderRoleCaptureArtifact struct {
 // reviewProviderRoleHostAdapter is the one seam through which role capture
 // spawns the Go-owned pi process. Tests substitute a fake transport here; the
 // lens path keeps its host-mediated refusal in reviewProviderAdapterFor.
-var reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return reviewerprovider.NewPiAdapter() }
+var reviewProviderRoleHostAdapter = func(role reviewerprovider.Role, root string) (reviewerprovider.Adapter, error) {
+	key := "review-refuter"
+	if role == reviewerprovider.RoleTargetedValidator {
+		key = "review-validator"
+	}
+	route, err := pi.ResolveReviewRouting(root, key)
+	if err != nil {
+		return nil, err
+	}
+	adapter := reviewerprovider.NewPiAdapter()
+	adapter.Model, adapter.Thinking = route.Model, route.Thinking
+	return adapter, nil
+}
 
 // reviewProviderRoleCaptureTimeout bounds one role capture operation so a full
 // Go-owned adversarial pi run fits while a stalled provider cannot hang --execute
@@ -205,7 +218,11 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 			return err
 		}
 	} else {
-		raw, hostErr := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+		adapter, routingErr := reviewProviderRoleHostAdapter(reviewerprovider.RoleRefuter, binding.root)
+		if routingErr != nil {
+			return reviewPreflightError(routingErr)
+		}
+		raw, hostErr := adapter.Review(ctx, request.Invocation)
 		if hostErr != nil {
 			return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", hostErr))
 		}
@@ -278,7 +295,11 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 		}
 		return encodeReviewJSON(stdout, closure)
 	}
-	raw, hostErr := reviewProviderRoleHostAdapter().Review(ctx, request.Invocation)
+	adapter, routingErr := reviewProviderRoleHostAdapter(reviewerprovider.RoleTargetedValidator, binding.root)
+	if routingErr != nil {
+		return reviewPreflightError(routingErr)
+	}
+	raw, hostErr := adapter.Review(ctx, request.Invocation)
 	if hostErr != nil {
 		return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", hostErr))
 	}

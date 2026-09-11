@@ -408,10 +408,10 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 	}
 
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 
@@ -502,10 +502,10 @@ func TestTargetedValidationCaptureClosesWithoutVerificationEvidence(t *testing.T
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 	var terminalOutput bytes.Buffer
@@ -537,10 +537,10 @@ func TestConcurrentAndReplayedTargetedValidatorCaptureHasOneCloser(t *testing.T)
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 	args := []string{
@@ -630,10 +630,10 @@ func TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize(t *testing
 	}
 
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 
@@ -853,10 +853,10 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return failedPayload, nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 
@@ -1279,10 +1279,10 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return failedPayload, nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 

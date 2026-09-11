@@ -18,8 +18,9 @@ const piReviewerWaitDelay = 5 * time.Second
 // PiAdapter invokes a brand-new print-mode pi process with an opaque provider
 // invocation and returns its raw final bytes without interpreting them.
 type PiAdapter struct {
-	LookPath       func(string) (string, error)
-	commandContext func(context.Context, string, ...string) *exec.Cmd
+	Model, Thinking string
+	LookPath        func(string) (string, error)
+	commandContext  func(context.Context, string, ...string) *exec.Cmd
 }
 
 // NewPiAdapter returns an adapter using the pi binary resolved from PATH.
@@ -48,9 +49,16 @@ func (adapter *PiAdapter) Review(ctx context.Context, invocation Invocation) ([]
 	if commandContext == nil {
 		commandContext = exec.CommandContext
 	}
-	command := commandContext(ctx, binary,
+	arguments := []string{
 		"--print", "--mode", "text", "--no-session", "--no-tools", "--no-extensions",
-		"--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve")
+		"--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve"}
+	if adapter.Model != "" {
+		arguments = append(arguments, "--model", adapter.Model)
+	}
+	if adapter.Thinking != "" {
+		arguments = append(arguments, "--thinking", adapter.Thinking)
+	}
+	command := commandContext(ctx, binary, arguments...)
 	command.Dir = scratch
 	command.Env = piRuntimeEnvironment()
 	command.WaitDelay = piReviewerWaitDelay
